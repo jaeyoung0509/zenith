@@ -13,9 +13,11 @@
 
   let { item }: Props = $props();
 
-  let isSelected = $derived(!!scanStore.selectedMap[item.id]);
+  let isManual = $derived(item.risk === 'manual');
+  let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual);
 
   function handleToggle() {
+    if (isManual) return;
     scanStore.toggleItem(item.id);
   }
 
@@ -31,12 +33,19 @@
     : ''}"
 >
   <div class="flex items-start space-x-3 flex-1 min-w-0 pr-3">
-    <input
-      type="checkbox"
-      checked={isSelected}
-      onchange={handleToggle}
-      class="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring cursor-pointer accent-primary shrink-0"
-    />
+    {#if isManual}
+      <div
+        class="mt-1 h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center shrink-0 opacity-40 cursor-not-allowed"
+        title="Manual item: requires dedicated adapter (manage in Local Models or Containers view)"
+      ></div>
+    {:else}
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onchange={handleToggle}
+        class="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring cursor-pointer accent-primary shrink-0"
+      />
+    {/if}
 
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2">

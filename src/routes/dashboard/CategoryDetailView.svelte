@@ -41,21 +41,24 @@
     );
   });
 
+  let cleanableFilteredItems = $derived(filteredItems.filter((i) => i.risk !== 'manual'));
+
   let allFilteredSelected = $derived.by(() => {
-    if (filteredItems.length === 0) return false;
-    return filteredItems.every((i) => scanStore.selectedMap[i.id]);
+    if (cleanableFilteredItems.length === 0) return false;
+    return cleanableFilteredItems.every((i) => scanStore.selectedMap[i.id]);
   });
 
   let categorySelectedBytes = $derived.by(() =>
     categoryResult.items.reduce(
-      (total, item) => total + (scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
+      (total, item) => total + (item.risk !== 'manual' && scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
       0
     )
   );
 
   function toggleAllFiltered() {
+    if (cleanableFilteredItems.length === 0) return;
     const next = !allFilteredSelected;
-    for (const item of filteredItems) {
+    for (const item of cleanableFilteredItems) {
       scanStore.setItemSelected(item.id, next);
     }
   }
@@ -89,6 +92,7 @@
       <Button
         variant="outline"
         size="sm"
+        disabled={cleanableFilteredItems.length === 0}
         onclick={toggleAllFiltered}
         class="gap-1.5 text-xs"
       >
