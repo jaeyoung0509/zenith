@@ -173,43 +173,64 @@ impl CleanExecutor {
             }
         }
 
-        // 3b. Stale Temp Directory TOCTOU: re-verify directory stats to ensure no newly written files
-        if target.signature_id.starts_with("dev.system.temp") && path.is_dir() {
-            let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
-                path,
-                &target.exclusions,
-                0,
-                32,
-            );
-            if !stats.complete {
-                return CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                    error_message: Some(
-                        "Directory structure changed during clean; aborted to protect active files"
-                            .to_string(),
-                    ),
+        // 3b. Stale Temp Directory TOCTOU: re-verify freshness invariant if target has min_age_days
+        if let Some(days) = target.min_age_days {
+            if path.is_dir() {
+                let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+                    path,
+                    &target.exclusions,
+                    0,
+                    32,
+                );
+                if !stats.complete {
+                    return CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                        error_message: Some(
+                            "Directory structure could not be fully verified; aborted to protect active files"
+                                .to_string(),
+                        ),
+                    };
+                }
+                let Some(newest) = stats.newest_mtime else {
+                    return CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                        error_message: Some(
+                            "Directory modification timestamp unavailable; aborted to protect active files"
+                                .to_string(),
+                        ),
+                    };
                 };
-            }
-            if let (Some(newest), Some(identity)) = (stats.newest_mtime, target.identity) {
-                if let Ok(dur) = newest.duration_since(std::time::SystemTime::UNIX_EPOCH) {
-                    if dur.as_secs() > identity.mtime_secs {
-                        return CleanItemResult {
-                            item_id: target.item_id.clone(),
-                            name: target.name.clone(),
-                            path: path.to_string_lossy().to_string(),
-                            status: CleanStatus::Failed,
-                            success: false,
-                            bytes_reclaimed: 0,
-                            failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                            error_message: Some("Directory was modified since scan; aborted deletion to protect active files".to_string()),
-                        };
-                    }
+                let minimum_age = std::time::Duration::from_secs(days as u64 * 86_400);
+                if std::time::SystemTime::now()
+                    .duration_since(newest)
+                    .unwrap_or_default()
+                    < minimum_age
+                {
+                    return CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                        error_message: Some(format!(
+                            "Directory contains files modified within the last {} day(s); aborted to protect active files",
+                            days
+                        )),
+                    };
                 }
             }
         }

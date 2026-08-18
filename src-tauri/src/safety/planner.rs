@@ -74,49 +74,49 @@ impl SafetyPlanner {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
-            // 2. Resolve target path
+            // 2. Resolve target path and strategy
             let path = PathBuf::from(&item.path);
-
-            // A scan item must remain inside the path scope declared by its signature.
-            // Age-filtered temp signatures emit direct children; normal signatures
-            // may only target the declared root itself.
-            if !signature.paths.is_empty() {
-                let resolved_roots = registry.resolve_paths(signature);
-                let allowed = resolved_roots.iter().any(|root| {
-                    path == *root
-                        || (signature.min_age_days.is_some()
-                            && path.parent() == Some(root.as_path()))
-                });
-                if !allowed {
-                    return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
-                }
-
-                // 2b. Ancestor symlink escape protection: ensure no directory between anchor/root and path is a symlink
-                for root in &resolved_roots {
-                    if path.starts_with(root) {
-                        SymlinkGuard::validate_no_symlink_ancestors(&path, root)?;
-                    }
-                }
-            } else {
-                SymlinkGuard::validate_anchored_path(&path)?;
-            }
-
-            // 3. Hard Blacklist check (lexical & canonical)
-            Blacklist::validate(&path)?;
-            SymlinkGuard::validate_canonical_blacklist(&path)?;
-
-            // 4. Symlink Target check
-            SymlinkGuard::validate_symlink_target(&path)?;
-
-            // 5. Strategy resolution
             let strategy = signature.strategy;
+            let mut identity = None;
 
-            // 6. Capture current file identity for TOCTOU protection
-            let identity = if path.exists() || SymlinkGuard::is_symlink(&path) {
-                ToctouGuard::capture(&path)
+            if strategy == CleanStrategy::DockerPrune {
+                // DockerPrune uses pseudo paths (e.g. docker://images/dangling) and dedicated Docker CLI adapters.
+                // It does not operate on arbitrary host filesystem paths.
             } else {
-                None
-            };
+                // Filesystem strategies: DeleteContents, DeleteDirectory, ExternalCommand
+                if !signature.paths.is_empty() {
+                    let resolved_roots = registry.resolve_paths(signature);
+                    let allowed = resolved_roots.iter().any(|root| {
+                        path == *root
+                            || (signature.min_age_days.is_some()
+                                && path.parent() == Some(root.as_path()))
+                    });
+                    if !allowed {
+                        return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
+                    }
+
+                    // 2b. Ancestor symlink escape protection: ensure no directory between anchor/root and path is a symlink
+                    for root in &resolved_roots {
+                        if path.starts_with(root) {
+                            SymlinkGuard::validate_no_symlink_ancestors(&path, root)?;
+                        }
+                    }
+                } else {
+                    SymlinkGuard::validate_anchored_path(&path)?;
+                }
+
+                // 3. Hard Blacklist check (lexical & canonical)
+                Blacklist::validate(&path)?;
+                SymlinkGuard::validate_canonical_blacklist(&path)?;
+
+                // 4. Symlink Target check
+                SymlinkGuard::validate_symlink_target(&path)?;
+
+                // 5. Capture current file identity for TOCTOU protection
+                if path.exists() || SymlinkGuard::is_symlink(&path) {
+                    identity = ToctouGuard::capture(&path);
+                }
+            }
 
             let bytes = item.size.reclaimable();
             expected_reclaim_bytes += bytes;
@@ -132,6 +132,7 @@ impl SafetyPlanner {
                 risk: item.risk,
                 identity,
                 exclusions: signature.exclusions.clone(),
+                min_age_days: signature.min_age_days,
             });
         }
 

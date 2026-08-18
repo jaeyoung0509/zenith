@@ -80,6 +80,13 @@
     </Button>
   </div>
 
+  {#if dockerStore.error}
+    <div class="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-500 flex items-center justify-between">
+      <span>{dockerStore.error}</span>
+      <Button variant="ghost" size="sm" onclick={() => (dockerStore.error = null)} class="text-xs h-6 px-2 text-rose-400">Dismiss</Button>
+    </div>
+  {/if}
+
   {#if !status?.is_running}
     <Card class="p-8 text-center space-y-3 bg-secondary/30">
       <div class="h-12 w-12 rounded-full bg-muted flex items-center justify-center mx-auto text-muted-foreground">

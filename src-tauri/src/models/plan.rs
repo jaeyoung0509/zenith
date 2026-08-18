@@ -24,6 +24,7 @@ pub struct DeleteTarget {
     pub risk: RiskTier,
     pub identity: Option<FileIdentity>,
     pub exclusions: Vec<String>,
+    pub min_age_days: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

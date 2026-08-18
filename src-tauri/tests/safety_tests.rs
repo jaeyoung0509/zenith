@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
-    Category, CategoryResult, CleanStrategy, FileSize, RiskTier, ScanItem, ScanResult, Signature,
-    ZenithError,
+    Category, CategoryResult, CleanFailureReason, CleanStrategy, FileSize, RiskTier, ScanItem,
+    ScanResult, Signature, ZenithError,
 };
 use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
 use zenith_lib::scanner::SizeCalculator;
@@ -468,4 +468,82 @@ fn test_signature_root_itself_symlink_rejection() {
 
         assert!(precious.exists());
     }
+}
+
+#[test]
+fn test_docker_prune_target_can_create_plan() {
+    let registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
+    let docker_item = ScanItem {
+        id: "container.docker.builder".to_string(),
+        signature_id: "container.docker.builder".to_string(),
+        name: "Docker Build Cache".to_string(),
+        category: Category::Container,
+        risk: RiskTier::Safe,
+        path: "docker://buildkit/cache".to_string(),
+        size: FileSize::new(1024 * 1024, Some(1024 * 1024)),
+        file_count: 1,
+        description: "Docker build cache".to_string(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+
+    let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
+        .expect("DockerPrune target must successfully create a plan");
+    assert_eq!(plan.targets.len(), 1);
+    assert_eq!(plan.targets[0].strategy, CleanStrategy::DockerPrune);
+}
+
+#[test]
+fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
+    let dir = tempdir().expect("create temp dir");
+    let temp_child = dir.path().join("active_tool_cache");
+    fs::create_dir(&temp_child).unwrap();
+
+    // Create a file modified right now
+    let new_file = temp_child.join("active.log");
+    fs::write(&new_file, b"actively writing").unwrap();
+
+    let mut registry = SignatureRegistry::load_embedded().unwrap();
+    registry.register(Signature {
+        id: "test.stale_temp".into(),
+        name: "Test stale temp".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteDirectory,
+        paths: vec![dir.path().to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "stale temp test".into(),
+        min_age_days: Some(3),
+        include_prefixes: vec![],
+    });
+
+    let scan_item = ScanItem {
+        id: "test.stale_temp.0.active_tool_cache".into(),
+        signature_id: "test.stale_temp".into(),
+        name: "active_tool_cache".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        path: temp_child.to_string_lossy().into_owned(),
+        size: FileSize::new(1024, Some(1024)),
+        file_count: 1,
+        description: "test".into(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+
+    let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
+    assert_eq!(plan.targets[0].min_age_days, Some(3));
+
+    let clean_res = CleanExecutor::execute(plan, |_| {});
+    assert_eq!(clean_res.items.len(), 1);
+    assert!(!clean_res.items[0].success);
+    assert_eq!(
+        clean_res.items[0].failure_reason,
+        Some(CleanFailureReason::ChangedSinceScan)
+    );
+    // Active directory must be preserved
+    assert!(temp_child.exists());
+    assert!(new_file.exists());
 }

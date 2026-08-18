@@ -102,6 +102,13 @@
     </div>
   </div>
 
+  {#if localModelsStore.error}
+    <div class="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-500 flex items-center justify-between">
+      <span>{localModelsStore.error}</span>
+      <Button variant="ghost" size="sm" onclick={() => (localModelsStore.error = null)} class="text-xs h-6 px-2 text-rose-400">Dismiss</Button>
+    </div>
+  {/if}
+
   <!-- Search Toolbar -->
   <div class="relative w-full sm:w-80">
     <Search
