@@ -1,0 +1,57 @@
+# Zenith Signatures - Local LLM Models
+# Local models are ALWAYS classified as 'manual' risk and NEVER auto-selected.
+
+[[signatures]]
+id = "model.ollama.manifests"
+name = "Ollama Model Manifests"
+category = "model"
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/.ollama/models/manifests"
+]
+description = "Model tags and layer mapping configurations in Ollama."
+
+[[signatures]]
+id = "model.ollama.blobs"
+name = "Ollama Model Blobs"
+category = "model"
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/.ollama/models/blobs"
+]
+description = "GGUF and safetensors weights downloaded by Ollama."
+
+[[signatures]]
+id = "model.huggingface.hub"
+name = "HuggingFace Hub Cache"
+category = "model"
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/.cache/huggingface/hub"
+]
+description = "Pre-trained transformer weights, tokenizers, and datasets from HuggingFace."
+
+[[signatures]]
+id = "model.lmstudio.models"
+name = "LM Studio Models"
+category = "model"
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/.cache/lm-studio/models"
+]
+description = "Downloaded GGUF models managed through LM Studio."
+
+[[signatures]]
+id = "model.mlx.cache"
+name = "Apple MLX Cache"
+category = "model"
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/.cache/mlx"
+]
+description = "Converted Apple Silicon MLX format weights and caches."

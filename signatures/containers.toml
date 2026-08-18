@@ -1,0 +1,60 @@
+# Zenith Signatures - Container Tools
+# Defines scanning patterns and safety rules for Docker, Podman, and Colima.
+
+[[signatures]]
+id = "container.docker.builder"
+name = "Docker Build Cache"
+category = "container"
+risk = "safe"
+strategy = "docker_prune"
+paths = []
+description = "Unused BuildKit cache layers on the local Docker daemon."
+
+[[signatures]]
+id = "container.docker.dangling_images"
+name = "Docker Dangling Images"
+category = "container"
+risk = "safe"
+strategy = "docker_prune"
+paths = []
+description = "Untagged intermediate image layers not referenced by any container."
+
+[[signatures]]
+id = "container.docker.stopped_containers"
+name = "Docker Stopped Containers"
+category = "container"
+risk = "rebuild"
+strategy = "docker_prune"
+paths = []
+description = "Containers in exited/stopped state that retain write-layer data."
+
+[[signatures]]
+id = "container.docker.unused_volumes"
+name = "Docker Unused Volumes"
+category = "container"
+risk = "manual"
+strategy = "manual"
+paths = []
+description = "Anonymous or orphan persistent storage volumes."
+
+[[signatures]]
+id = "container.podman.cache"
+name = "Podman Temporary Storage"
+category = "container"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.local/share/containers/storage/tmp"
+]
+description = "Temporary scratch space for rootless Podman image pulls."
+
+[[signatures]]
+id = "container.colima.cache"
+name = "Colima VM Cache"
+category = "container"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.colima/_cache"
+]
+description = "Downloaded ISOs and Lima VM images."

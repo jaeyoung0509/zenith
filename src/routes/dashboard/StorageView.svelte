@@ -1,0 +1,191 @@
+<script lang="ts">
+  import type { CategoryResult } from '../../lib/models/types';
+  import { scanStore } from '../../lib/stores/scan.svelte';
+  import { memoryStore } from '../../lib/stores/memory.svelte';
+  import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import Button from '../../lib/components/Button.svelte';
+  import Card from '../../lib/components/Card.svelte';
+  import ProgressBar from '../../lib/components/ProgressBar.svelte';
+  import CategoryCard from '../../lib/components/CategoryCard.svelte';
+  import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import {
+    RotateCw,
+    Trash2,
+    CheckSquare,
+    Square,
+    ShieldCheck,
+    AlertCircle,
+  } from 'lucide-svelte';
+
+  interface Props {
+    onSelectCategory: (category: CategoryResult) => void;
+  }
+
+  let { onSelectCategory }: Props = $props();
+
+  let disk = $derived(memoryStore.disk);
+  let scan = $derived(scanStore.lastScan);
+  let showResultModal = $state(false);
+
+  function handleCleanSelected() {
+    scanStore.cleanSelected().then((res) => {
+      if (res) showResultModal = true;
+    });
+  }
+</script>
+
+<div class="space-y-6">
+  <!-- Storage & Cleanable Overview Card -->
+  <Card class="p-6 bg-card/70 border-border/80 relative overflow-hidden">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <!-- Left: Disk Space -->
+      <div class="flex-1 space-y-2">
+        <div class="flex justify-between items-baseline">
+          <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Mac Primary Storage
+          </span>
+          {#if disk}
+            <span class="font-mono text-sm font-semibold text-foreground">
+              {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({disk.percent_used}%)
+            </span>
+          {/if}
+        </div>
+        {#if disk}
+          <ProgressBar value={disk.percent_used} height="h-2.5" />
+          <div class="flex justify-between text-[11px] text-muted-foreground font-mono">
+            <span>Free: {formatBytes(disk.free_bytes)}</span>
+            <span>Used: {formatBytes(disk.used_bytes)}</span>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Divider -->
+      <div class="hidden md:block w-px h-16 bg-border/60"></div>
+
+      <!-- Right: Reclaimable Space -->
+      <div class="space-y-1 md:text-right min-w-[200px]">
+        <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          Selected Reclaimable
+        </span>
+        <div class="text-3xl font-bold font-mono text-foreground">
+          {formatBytes(scanStore.reclaimableBytes)}
+        </div>
+        <div class="text-[11px] text-muted-foreground">
+          {#if scan}
+            <span>Last scan {formatTimeAgo(scan.finished_at)}</span>
+          {:else}
+            <span>No scan completed yet</span>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Toolbar -->
+    <div class="mt-6 pt-4 border-t border-border/60 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={scanStore.isScanning}
+          onclick={() => scanStore.runScan()}
+          class="gap-1.5"
+        >
+          <RotateCw size={13} class={scanStore.isScanning ? 'animate-spin' : ''} />
+          <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Storage'}</span>
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onclick={() => scanStore.selectAllSafe()}
+          class="text-xs"
+        >
+          <CheckSquare size={13} class="mr-1 text-emerald-500" />
+          <span>Select Safe Only</span>
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onclick={() => scanStore.deselectAll()}
+          class="text-xs text-muted-foreground"
+        >
+          <Square size={13} class="mr-1" />
+          <span>Deselect All</span>
+        </Button>
+      </div>
+
+      <Button
+        variant="primary"
+        size="md"
+        disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
+        onclick={handleCleanSelected}
+        class="gap-2 px-5"
+      >
+        <Trash2 size={14} />
+        <span>Clean {formatBytes(scanStore.reclaimableBytes)}</span>
+      </Button>
+    </div>
+  </Card>
+
+  <!-- Cleaning In Progress Bar -->
+  {#if scanStore.isCleaning}
+    <Card class="p-4 bg-secondary/50 border-primary/30 animate-pulse">
+      <div class="space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-medium text-foreground">
+            Cleaning: {scanStore.cleanProgress.currentItem}
+          </span>
+          <span class="font-mono text-muted-foreground">
+            {scanStore.cleanProgress.index} / {scanStore.cleanProgress.total} ({scanStore.cleanProgress.percent}%)
+          </span>
+        </div>
+        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" />
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Error Alert -->
+  {#if scanStore.error}
+    <div class="p-3.5 rounded-xl bg-destructive/15 border border-destructive/30 text-destructive flex items-center gap-2.5 text-xs">
+      <AlertCircle size={16} class="shrink-0" />
+      <span>{scanStore.error}</span>
+    </div>
+  {/if}
+
+  <!-- Categories Grid -->
+  <div class="space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-foreground tracking-tight">
+        Storage Categories
+      </h2>
+      <div class="flex items-center gap-1 text-xs text-muted-foreground">
+        <ShieldCheck size={14} class="text-emerald-500" />
+        <span>Protected by Safety Engine</span>
+      </div>
+    </div>
+
+    {#if scan}
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {#each scan.categories as categoryResult}
+          <CategoryCard
+            {categoryResult}
+            onSelectCategory={(cat) => onSelectCategory(cat)}
+          />
+        {/each}
+      </div>
+    {:else}
+      <div class="py-12 text-center text-muted-foreground text-sm space-y-3">
+        <RotateCw size={24} class="animate-spin mx-auto opacity-50" />
+        <p>Scanning known development caches...</p>
+      </div>
+    {/if}
+  </div>
+
+  {#if showResultModal && scanStore.lastCleanResult}
+    <CleanResultModal
+      result={scanStore.lastCleanResult}
+      onClose={() => (showResultModal = false)}
+    />
+  {/if}
+</div>

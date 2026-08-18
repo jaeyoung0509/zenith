@@ -1,0 +1,152 @@
+# Zenith Signatures - AI Tools
+# Defines scanning patterns and safety rules for AI assistant caches and transient files.
+
+[[signatures]]
+id = "ai.claude.logs"
+name = "Claude Code Logs"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.claude/logs",
+    "~/.claude/mcp-logs"
+]
+exclusions = [
+    "~/.claude/config.json",
+    "~/.claude/credentials.json",
+    "~/.claude/auth.json"
+]
+description = "Diagnostic and MCP interaction logs generated during Claude Code sessions."
+
+[[signatures]]
+id = "ai.claude.cache"
+name = "Claude Code Cache"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.claude/cache",
+    "~/.claude/tmp"
+]
+exclusions = [
+    "~/.claude/config.json",
+    "~/.claude/settings.json",
+    "~/.claude/prompts",
+    "~/.claude/skills"
+]
+description = "Temporary context cache and downloaded transient assets."
+
+[[signatures]]
+id = "ai.cursor.cache"
+name = "Cursor Editor Cache"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/Library/Caches/Cursor",
+    "~/Library/Application Support/Cursor/Cache",
+    "~/Library/Application Support/Cursor/Code Cache",
+    "~/Library/Application Support/Cursor/GPUCache"
+]
+exclusions = [
+    "~/Library/Application Support/Cursor/User/settings.json",
+    "~/Library/Application Support/Cursor/User/keybindings.json",
+    "~/Library/Application Support/Cursor/User/snippets"
+]
+description = "V8 code cache, GPU shader cache, and webview temporary storage for Cursor."
+
+[[signatures]]
+id = "ai.cursor.logs"
+name = "Cursor Session Logs"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/Library/Application Support/Cursor/logs"
+]
+description = "Log files from editor sessions and language server background tasks."
+
+[[signatures]]
+id = "ai.cursor.extensions.cache"
+name = "Cursor Extensions Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+paths = [
+    "~/.cursor/extensions/cache"
+]
+description = "Downloaded extension VSIX packages and uncompressed asset caches."
+
+[[signatures]]
+id = "ai.gemini.cache"
+name = "Gemini CLI & Antigravity Cache"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.gemini/antigravity-cli/tmp",
+    "~/.gemini/antigravity-cli/cache",
+    "~/.gemini/cache"
+]
+exclusions = [
+    "~/.gemini/config.json",
+    "~/.gemini/credentials.json",
+    "~/.gemini/antigravity-cli/settings.json"
+]
+description = "Temporary session files and cached search/API tokens."
+
+[[signatures]]
+id = "ai.gemini.logs"
+name = "Gemini CLI Logs"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.gemini/antigravity-cli/logs"
+]
+description = "Historical CLI operation logs."
+
+[[signatures]]
+id = "ai.codex.cache"
+name = "Codex CLI Cache"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.codex/cache",
+    "~/.codex/tmp",
+    "~/.codex/sessions"
+]
+exclusions = [
+    "~/.codex/auth.json",
+    "~/.codex/config.toml"
+]
+description = "Codex prompt caches and temporary scratchpads."
+
+[[signatures]]
+id = "ai.aider.cache"
+name = "Aider Chat Cache"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.aider.tags.cache.v3",
+    "~/.aider.cache"
+]
+description = "Tree-sitter tag index cache and syntax map caches."
+
+[[signatures]]
+id = "ai.opencode.cache"
+name = "OpenCode Assistant Cache"
+category = "ai"
+risk = "safe"
+strategy = "delete_contents"
+paths = [
+    "~/.opencode/cache",
+    "~/.opencode/logs"
+]
+exclusions = [
+    "~/.opencode/auth.json",
+    "~/.opencode/config.json"
+]
+description = "Temporary telemetry and API response caches."

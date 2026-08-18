@@ -1,0 +1,38 @@
+[package]
+name = "zenith-core"
+version = "0.1.0"
+description = "Zenith - macOS AI & Developer System Manager"
+authors = ["Zenith Team"]
+edition = "2021"
+
+[lib]
+name = "zenith_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "Zenith"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = ["tray-icon", "image-png"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+rayon = "1.10"
+sysinfo = "0.33"
+walkdir = "2.5"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.13"
+
+[features]
+# Plain `cargo build` must produce a self-contained desktop binary. The
+# Tauri CLI disables default features for `tauri dev`, so development still
+# uses `build.devUrl`, while direct/release builds serve the embedded `dist`.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
