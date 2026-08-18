@@ -232,7 +232,7 @@ class ScanStore {
       .map((item) => ({ ...item, is_selected: true }));
 
     if (selectedItems.length === 0) {
-      this.error = 'No items selected for cleaning';
+      this.error = 'No eligible safe or rebuild items selected for cleaning';
       return null;
     }
 

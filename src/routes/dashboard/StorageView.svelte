@@ -1,8 +1,14 @@
 <script lang="ts">
-  import type { CategoryResult } from '../../lib/models/types';
+  import { onMount } from 'svelte';
+  import type { CategoryResult, DiskVolume } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import {
+    tauriGetDiskVolumes,
+    tauriOpenDiskUtility,
+    tauriRevealInFinder,
+  } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
@@ -16,6 +22,9 @@
     Square,
     ShieldCheck,
     AlertCircle,
+    HardDrive,
+    ExternalLink,
+    FolderOpen,
   } from 'lucide-svelte';
 
   interface Props {
@@ -27,6 +36,23 @@
   let disk = $derived(memoryStore.disk);
   let scan = $derived(scanStore.lastScan);
   let showResultModal = $state(false);
+  let volumes = $state<DiskVolume[]>([]);
+  let isLoadingVolumes = $state(false);
+
+  async function loadVolumes() {
+    isLoadingVolumes = true;
+    try {
+      volumes = await tauriGetDiskVolumes();
+    } catch {
+      // Ignore or fallback
+    } finally {
+      isLoadingVolumes = false;
+    }
+  }
+
+  onMount(() => {
+    void loadVolumes();
+  });
 
   function handleCleanSelected() {
     scanStore.cleanSelected().then((res) => {
@@ -37,12 +63,13 @@
 
 <div class="space-y-6">
   <!-- Storage & Cleanable Overview Card -->
-  <Card class="p-6 bg-card/70 border-border/80 relative overflow-hidden">
+  <Card class="p-6 bg-card/70 border-border/80 relative overflow-hidden space-y-6">
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
-      <!-- Left: Disk Space -->
+      <!-- Left: Primary Disk Space -->
       <div class="flex-1 space-y-2">
         <div class="flex justify-between items-baseline">
-          <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <HardDrive size={13} class="text-cyan-400" />
             Mac Primary Storage
           </span>
           {#if disk}
@@ -81,8 +108,46 @@
       </div>
     </div>
 
+    <!-- Mounted Volumes (if multiple or external attached) -->
+    {#if volumes.length > 1}
+      <div class="pt-3 border-t border-border/40 space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Mounted Volumes</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {#each volumes as volume (volume.mount_point)}
+            <div class="p-2.5 rounded-lg border border-border/50 bg-secondary/20 flex items-center justify-between text-xs">
+              <div class="min-w-0 pr-2">
+                <div class="flex items-center gap-1.5">
+                  <span class="font-medium truncate">{volume.name || volume.mount_point}</span>
+                  {#if volume.is_primary}
+                    <span class="px-1 py-0.2 rounded text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Primary</span>
+                  {/if}
+                  {#if volume.is_removable}
+                    <span class="px-1 py-0.2 rounded text-[9px] bg-secondary text-muted-foreground border border-border">External</span>
+                  {/if}
+                </div>
+                <p class="text-[10px] font-mono text-muted-foreground mt-0.5">
+                  {formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)} ({volume.percent_used.toFixed(0)}%)
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-6 w-6 text-muted-foreground shrink-0"
+                title="Reveal in Finder"
+                onclick={() => tauriRevealInFinder(volume.mount_point)}
+              >
+                <FolderOpen size={12} />
+              </Button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <!-- Action Toolbar -->
-    <div class="mt-6 pt-4 border-t border-border/60 flex flex-wrap items-center justify-between gap-3">
+    <div class="pt-4 border-t border-border/60 flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-2">
         <Button
           variant="outline"
@@ -115,6 +180,17 @@
         >
           <Square size={13} class="mr-1" />
           <span>Deselect All</span>
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onclick={() => tauriOpenDiskUtility()}
+          class="text-xs text-muted-foreground gap-1"
+          title="Open macOS Disk Utility"
+        >
+          <ExternalLink size={12} />
+          <span>Disk Utility</span>
         </Button>
       </div>
 
