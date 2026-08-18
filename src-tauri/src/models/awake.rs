@@ -26,6 +26,13 @@ pub struct AwakeRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectedApplication {
+    pub name: String,
+    pub executable_pattern: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AwakeState {
     pub is_active: bool,
     pub behavior: Option<AwakeBehavior>,

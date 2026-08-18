@@ -5,10 +5,10 @@ use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
     DeletePlan, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, ScanEvent,
-    ScanItem, ScanResult, ZenithSettings,
+    ScanItem, ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::LocalModelScanner;
-use crate::power::KeepAwakeManager;
+use crate::power::{ApplicationPicker, KeepAwakeManager};
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
 use crate::signatures::SignatureRegistry;
@@ -98,6 +98,18 @@ pub async fn execute_clean(
 #[tauri::command]
 pub fn get_memory_metrics() -> Result<MemoryMetrics, String> {
     Ok(MemoryInspector::get_metrics())
+}
+
+#[tauri::command]
+pub fn terminate_process_group(name: String, force: bool) -> Result<usize, String> {
+    MemoryInspector::terminate_group(&name, force)
+}
+
+#[tauri::command]
+pub async fn pick_keep_awake_application() -> Result<Option<SelectedApplication>, String> {
+    tauri::async_runtime::spawn_blocking(ApplicationPicker::pick)
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

@@ -94,6 +94,21 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
   but intentionally opt-in because the next tool run may need network downloads
   or recompilation.
 
+### Memory inspector
+
+- Termination is available only for recognized user applications. Keep the
+  action visually secondary until row hover and always show a confirmation with
+  process count, estimated memory, and unsaved-work warning.
+- Offer normal Quit before the red Force Quit action. Explain that displayed
+  memory is an estimate and macOS may retain released pages as reusable cache.
+
+### Keep Awake
+
+- “Add Rule” leads with a native Applications picker and automatically fills the
+  app name and executable. Manual fields remain below a divider for CLI tools.
+- Show the selected bundle path so the user can verify the application before
+  saving the rule.
+
 ## Visual QA checklist
 
 - Compare both the main window and quick panel at their baseline sizes.

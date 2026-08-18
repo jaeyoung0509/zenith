@@ -39,6 +39,12 @@ safety conventions below when changing Zenith.
 - Window labels are `main` and `quick`. Closing the quick panel hides it; it
   must not terminate the background app. Every frameless window needs an
   obvious keyboard-accessible close control.
+- Never expose arbitrary PID kill commands. Memory actions must resolve a fresh
+  process snapshot from an allowlisted user-app group, protect system/terminal/
+  Zenith processes, and offer graceful termination before force termination.
+- Native app selection for Keep Awake starts in `/Applications`, reads
+  `CFBundleExecutable`, and returns only the display name, executable name, and
+  bundle path. Cancellation is a normal empty result, not an error.
 
 ## Svelte conventions
 

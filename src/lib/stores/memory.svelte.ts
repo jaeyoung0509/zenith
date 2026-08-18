@@ -1,5 +1,9 @@
 import type { DiskMetrics, MemoryMetrics } from '../models/types';
-import { tauriGetDiskMetrics, tauriGetMemoryMetrics } from '../utils/tauri';
+import {
+  tauriGetDiskMetrics,
+  tauriGetMemoryMetrics,
+  tauriTerminateProcessGroup,
+} from '../utils/tauri';
 
 class MemoryStore {
   memory = $state<MemoryMetrics | null>(null);
@@ -7,6 +11,8 @@ class MemoryStore {
   isLoading = $state(false);
   isPolling = $state(false);
   error = $state<string | null>(null);
+  terminating = $state<string | null>(null);
+  lastAction = $state<string | null>(null);
 
   private timer: number | null = null;
   private subscriberCount = 0;
@@ -25,6 +31,23 @@ class MemoryStore {
       this.error = e?.toString() || 'Failed to fetch metrics';
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  async terminateProcessGroup(name: string, force: boolean) {
+    if (this.terminating) return;
+    this.terminating = name;
+    this.error = null;
+    this.lastAction = null;
+    try {
+      const count = await tauriTerminateProcessGroup(name, force);
+      this.lastAction = `${force ? 'Force quit' : 'Quit'} requested for ${name} (${count} processes).`;
+      await new Promise((resolve) => window.setTimeout(resolve, force ? 300 : 900));
+      await this.refresh();
+    } catch (error: any) {
+      this.error = error?.toString() || `Could not terminate ${name}`;
+    } finally {
+      this.terminating = null;
     }
   }
 

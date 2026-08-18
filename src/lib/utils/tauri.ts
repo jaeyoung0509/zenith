@@ -17,6 +17,7 @@ import type {
   ScanEvent,
   ScanItem,
   ScanResult,
+  SelectedApplication,
   ZenithSettings,
 } from '../models/types';
 
@@ -163,17 +164,33 @@ export async function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
       swap_total_bytes: 2 * 1024 * 1024 * 1024,
       pressure: 'normal',
       top_processes: [
-        { pid: 101, name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14 },
-        { pid: 102, name: 'Google Chrome', memory_bytes: 2.2 * 1024 * 1024 * 1024, process_count: 22 },
-        { pid: 103, name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4 },
-        { pid: 104, name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2 },
-        { pid: 105, name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6 },
+        { pid: 102, name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true },
+        { pid: 101, name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true },
+        { pid: 103, name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true },
+        { pid: 104, name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true },
+        { pid: 105, name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true },
       ],
       timestamp: Math.floor(Date.now() / 1000),
     };
   }
 
   return await invoke<MemoryMetrics>('get_memory_metrics');
+}
+
+export async function tauriTerminateProcessGroup(name: string, force: boolean): Promise<number> {
+  if (!isTauri) return name === 'Google Chrome' ? 109 : 1;
+  return await invoke<number>('terminate_process_group', { name, force });
+}
+
+export async function tauriPickKeepAwakeApplication(): Promise<SelectedApplication | null> {
+  if (!isTauri) {
+    return {
+      name: 'Blender',
+      executable_pattern: 'Blender',
+      path: '/Applications/Blender.app',
+    };
+  }
+  return await invoke<SelectedApplication | null>('pick_keep_awake_application');
 }
 
 export async function tauriGetDiskMetrics(): Promise<DiskMetrics> {

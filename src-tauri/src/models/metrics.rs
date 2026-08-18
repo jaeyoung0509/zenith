@@ -24,6 +24,7 @@ pub struct ProcessMemory {
     pub name: String,
     pub memory_bytes: u64,
     pub process_count: usize,
+    pub can_terminate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -54,10 +54,12 @@
 - Displays Physical RAM, Compressed Memory (macOS in-RAM compression), and Swap usage.
 - Top developer process memory breakdown (Cursor, Chrome, Docker, Claude, Node, Xcode).
 - **Lifecycle Polling**: Polling timer runs only while the inspector UI is visible; turns off completely when closed.
+- Gracefully quits recognized user applications—or force quits after explicit confirmation—without exposing arbitrary PID termination.
 
 ### 7. ☕ Keep Awake Engine (IOKit Power Assertions)
 - Uses native macOS `IOKit` `IOPMAssertionCreateWithName` with RAII `PowerAssertion` structs (automatically drops assertion when finished).
 - **App-Triggered Automation**: Automatically keeps Mac awake when long-running tools (e.g. Claude Code, Docker, Terminal) are executing.
+- **Native App Picker**: Selects apps from the macOS Applications folder and reads their bundle executable automatically; CLI patterns remain available for terminal tools.
 - **Quick Manual Timers**: 30m, 1h, 2h, or Indefinite caffeinate mode.
 
 ### 8. 📈 AI Usage

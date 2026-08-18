@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { ProcessMemory } from '../../lib/models/types';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import Button from '../../lib/components/Button.svelte';
@@ -13,6 +14,8 @@
     Cpu,
     Database,
     Zap,
+    LogOut,
+    TriangleAlert,
   } from 'lucide-svelte';
 
   onMount(() => {
@@ -23,6 +26,14 @@
   });
 
   let memory = $derived(memoryStore.memory);
+  let pendingProcess = $state<ProcessMemory | null>(null);
+
+  async function terminatePending(force: boolean) {
+    if (!pendingProcess) return;
+    const name = pendingProcess.name;
+    pendingProcess = null;
+    await memoryStore.terminateProcessGroup(name, force);
+  }
 
   const pressureColors = {
     normal: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
@@ -64,6 +75,12 @@
       <span>Refresh</span>
     </Button>
   </div>
+
+  {#if memoryStore.error}
+    <div class="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-500">{memoryStore.error}</div>
+  {:else if memoryStore.lastAction}
+    <div class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-600 dark:text-emerald-400">{memoryStore.lastAction} macOS may retain some memory as reusable cache.</div>
+  {/if}
 
   {#if memory}
     <!-- Key Memory Gauges -->
@@ -133,7 +150,7 @@
 
       <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
         {#each memory.top_processes as proc}
-          <div class="flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
+          <div class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
             <div class="flex items-center gap-3">
               <div class="font-mono text-[11px] text-muted-foreground w-12">
                 PID {proc.pid}
@@ -152,6 +169,18 @@
               <span class="font-mono font-semibold text-foreground">
                 {formatBytes(proc.memory_bytes)}
               </span>
+              {#if proc.can_terminate}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="gap-1.5 opacity-70 group-hover:opacity-100"
+                  disabled={memoryStore.terminating !== null}
+                  onclick={() => (pendingProcess = proc)}
+                >
+                  <LogOut size={12} />
+                  Quit
+                </Button>
+              {/if}
             </div>
           </div>
         {/each}
@@ -161,6 +190,34 @@
     <div class="py-16 text-center text-xs text-muted-foreground space-y-2">
       <RotateCw size={20} class="animate-spin mx-auto opacity-50" />
       <p>Reading macOS memory statistics...</p>
+    </div>
+  {/if}
+
+  {#if pendingProcess}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="terminate-title">
+      <Card class="w-full max-w-md space-y-4 border-border bg-card p-5 shadow-2xl">
+        <div class="flex items-start gap-3">
+          <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-500">
+            <TriangleAlert size={17} />
+          </div>
+          <div>
+            <h3 id="terminate-title" class="text-sm font-semibold">Quit {pendingProcess.name}?</h3>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              This group contains {pendingProcess.process_count} processes using approximately {formatBytes(pendingProcess.memory_bytes)}. Unsaved work, active downloads, or running tasks may be lost.
+            </p>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-border/70 bg-secondary/40 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+          Try normal Quit first. Force Quit stops every matching process immediately and should only be used when the app does not respond.
+        </div>
+
+        <div class="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" size="sm" onclick={() => (pendingProcess = null)}>Cancel</Button>
+          <Button variant="outline" size="sm" onclick={() => terminatePending(false)}>Quit Normally</Button>
+          <Button variant="destructive" size="sm" onclick={() => terminatePending(true)}>Force Quit</Button>
+        </div>
+      </Card>
     </div>
   {/if}
 </div>

@@ -128,6 +128,7 @@ export interface ProcessMemory {
   name: string;
   memory_bytes: number;
   process_count: number;
+  can_terminate: boolean;
 }
 
 export interface MemoryMetrics {
@@ -233,6 +234,12 @@ export interface AwakeRule {
   executable_pattern: string;
   behavior: AwakeBehavior;
   enabled: boolean;
+}
+
+export interface SelectedApplication {
+  name: string;
+  executable_pattern: string;
+  path: string;
 }
 
 export interface AwakeState {

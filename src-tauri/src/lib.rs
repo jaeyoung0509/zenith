@@ -206,6 +206,8 @@ pub fn run() {
             commands::create_delete_plan,
             commands::execute_clean,
             commands::get_memory_metrics,
+            commands::terminate_process_group,
+            commands::pick_keep_awake_application,
             commands::get_disk_metrics,
             commands::get_disk_volumes,
             commands::open_disk_utility,
