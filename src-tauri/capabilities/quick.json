@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick",
+  "description": "Read-mostly menu-bar panel with backend-owned safe cleanup plans.",
+  "windows": ["quick"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "allow-get-ai-usage",
+    "allow-start-scan",
+    "allow-get-last-scan",
+    "allow-create-delete-plan",
+    "allow-execute-clean",
+    "allow-get-memory-metrics",
+    "allow-get-disk-metrics",
+    "allow-get-awake-state",
+    "allow-get-settings",
+    "allow-open-dashboard-window",
+    "allow-toggle-quick-panel"
+  ]
+}

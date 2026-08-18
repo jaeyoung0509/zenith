@@ -1,15 +1,20 @@
 use crate::models::{AwakeBehavior, AwakeRule, AwakeState, ZenithError};
 use crate::power::PowerAssertion;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime};
 use sysinfo::{ProcessesToUpdate, System};
 
 pub struct KeepAwakeManager {
     rules: Arc<Mutex<Vec<AwakeRule>>>,
     active_assertion: Arc<Mutex<Option<PowerAssertion>>>,
-    manual_mode: Arc<Mutex<Option<(AwakeBehavior, Option<u64>)>>>, // (behavior, expires_at_timestamp)
+    manual_mode: Arc<Mutex<ManualMode>>,
     last_trigger_app: Arc<Mutex<Option<String>>>,
+    wake_generation: AtomicU64,
+    wake_signal: (Mutex<()>, Condvar),
 }
+
+type ManualMode = Option<(AwakeBehavior, Option<u64>)>;
 
 impl Default for KeepAwakeManager {
     fn default() -> Self {
@@ -24,6 +29,8 @@ impl KeepAwakeManager {
             active_assertion: Arc::new(Mutex::new(None)),
             manual_mode: Arc::new(Mutex::new(None)),
             last_trigger_app: Arc::new(Mutex::new(None)),
+            wake_generation: AtomicU64::new(0),
+            wake_signal: (Mutex::new(()), Condvar::new()),
         }
     }
 
@@ -32,6 +39,7 @@ impl KeepAwakeManager {
         let mut r = self.rules.lock().unwrap();
         *r = rules;
         drop(r);
+        self.notify_watcher();
         self.evaluate();
     }
 
@@ -53,6 +61,7 @@ impl KeepAwakeManager {
         *manual = Some((behavior, expires_at));
         drop(manual);
 
+        self.notify_watcher();
         self.evaluate();
         Ok(())
     }
@@ -63,6 +72,7 @@ impl KeepAwakeManager {
         *manual = None;
         drop(manual);
 
+        self.notify_watcher();
         self.evaluate();
     }
 
@@ -104,30 +114,24 @@ impl KeepAwakeManager {
             .as_secs();
 
         // 1. Check manual mode
-        let mut manual = self.manual_mode.lock().unwrap();
-        if let Some((behavior, expires_at)) = *manual {
-            if let Some(exp) = expires_at {
-                if now >= exp {
-                    // Expired
+        let manual_snapshot = {
+            let mut manual = self.manual_mode.lock().unwrap();
+            match *manual {
+                Some((_, Some(expires_at))) if now >= expires_at => {
                     *manual = None;
-                } else {
-                    self.ensure_assertion(
-                        behavior,
-                        "Zenith Manual Keep Awake",
-                        Some("Manual".to_string()),
-                    );
-                    return;
+                    None
                 }
-            } else {
-                self.ensure_assertion(
-                    behavior,
-                    "Zenith Manual Keep Awake",
-                    Some("Manual".to_string()),
-                );
-                return;
+                value => value,
             }
+        };
+        if let Some((behavior, _)) = manual_snapshot {
+            self.ensure_assertion(
+                behavior,
+                "Zenith Manual Keep Awake",
+                Some("Manual".to_string()),
+            );
+            return;
         }
-        drop(manual);
 
         // 2. Check rules
         let rules = self.rules.lock().unwrap().clone();
@@ -147,7 +151,7 @@ impl KeepAwakeManager {
                 .split('|')
                 .map(|s| s.trim())
                 .collect();
-            for (_, proc) in sys.processes() {
+            for proc in sys.processes().values() {
                 let name = proc.name().to_string_lossy();
                 for pat in &patterns {
                     if name.to_lowercase().contains(&pat.to_lowercase()) {
@@ -164,6 +168,38 @@ impl KeepAwakeManager {
 
         // No matching app found
         self.release_assertion();
+    }
+
+    pub fn wait_for_next_evaluation(&self) {
+        let observed = self.wake_generation.load(Ordering::Acquire);
+        let has_work = self.manual_mode.lock().unwrap().is_some()
+            || self.rules.lock().unwrap().iter().any(|rule| rule.enabled);
+        let guard = self.wake_signal.0.lock().unwrap();
+        if self.wake_generation.load(Ordering::Acquire) != observed {
+            return;
+        }
+        if has_work {
+            let _ = self
+                .wake_signal
+                .1
+                .wait_timeout_while(guard, Duration::from_secs(5), |_| {
+                    self.wake_generation.load(Ordering::Acquire) == observed
+                });
+        } else {
+            drop(
+                self.wake_signal
+                    .1
+                    .wait_while(guard, |_| {
+                        self.wake_generation.load(Ordering::Acquire) == observed
+                    })
+                    .unwrap(),
+            );
+        }
+    }
+
+    fn notify_watcher(&self) {
+        self.wake_generation.fetch_add(1, Ordering::Release);
+        self.wake_signal.1.notify_one();
     }
 
     fn ensure_assertion(
@@ -194,5 +230,33 @@ impl KeepAwakeManager {
         let mut last_trig = self.last_trigger_app.lock().unwrap();
         *assertion = None;
         *last_trig = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeepAwakeManager;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+
+    #[test]
+    fn state_reads_and_evaluation_do_not_deadlock() {
+        let manager = Arc::new(KeepAwakeManager::new());
+        let (finished_tx, finished_rx) = mpsc::channel();
+
+        for _ in 0..2 {
+            let manager = manager.clone();
+            let finished_tx = finished_tx.clone();
+            std::thread::spawn(move || {
+                for _ in 0..200 {
+                    manager.evaluate();
+                    let _ = manager.get_state();
+                }
+                finished_tx.send(()).unwrap();
+            });
+        }
+
+        assert!(finished_rx.recv_timeout(Duration::from_secs(2)).is_ok());
+        assert!(finished_rx.recv_timeout(Duration::from_secs(2)).is_ok());
     }
 }

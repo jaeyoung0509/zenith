@@ -46,3 +46,25 @@ pub struct AiUsageSnapshot {
     pub providers: Vec<AiProviderUsage>,
     pub fetched_at: u64,
 }
+
+impl AiUsageSnapshot {
+    pub fn is_fresh_at(&self, now: u64, ttl_secs: u64) -> bool {
+        now.saturating_sub(self.fetched_at) < ttl_secs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AiUsageSnapshot;
+
+    #[test]
+    fn snapshot_freshness_honors_ttl_boundary_and_clock_skew() {
+        let snapshot = AiUsageSnapshot {
+            providers: vec![],
+            fetched_at: 100,
+        };
+        assert!(snapshot.is_fresh_at(159, 60));
+        assert!(!snapshot.is_fresh_at(160, 60));
+        assert!(snapshot.is_fresh_at(90, 60));
+    }
+}

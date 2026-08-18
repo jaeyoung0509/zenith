@@ -8,7 +8,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
-  DeletePlan,
+  PlanPreview,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -21,7 +21,7 @@ import type {
   ZenithSettings,
 } from '../models/types';
 
-export async function tauriGetAiUsage(): Promise<AiUsageSnapshot> {
+export async function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {
   if (!isTauri) {
     return {
       fetched_at: Math.floor(Date.now() / 1000),
@@ -60,7 +60,7 @@ export async function tauriGetAiUsage(): Promise<AiUsageSnapshot> {
       ],
     };
   }
-  return await invoke<AiUsageSnapshot>('get_ai_usage');
+  return await invoke<AiUsageSnapshot>('get_ai_usage', { force });
 }
 
 export async function tauriConnectOpenRouter(): Promise<void> {
@@ -95,16 +95,13 @@ export async function tauriGetLastScan(): Promise<ScanResult | null> {
   return await invoke<ScanResult | null>('get_last_scan');
 }
 
-export async function tauriCreatePlan(items: ScanItem[]): Promise<DeletePlan> {
+export async function tauriCreatePlan(scanId: string, items: ScanItem[]): Promise<PlanPreview> {
   if (!isTauri) {
     return {
       id: 'mock-plan-1',
       targets: items.map((i) => ({
         item_id: i.id,
-        signature_id: i.signature_id,
         name: i.name,
-        path: i.path,
-        strategy: 'delete_contents',
         expected_bytes: i.size.allocated ?? i.size.logical,
         risk: i.risk,
       })),
@@ -126,15 +123,18 @@ export async function tauriCreatePlan(items: ScanItem[]): Promise<DeletePlan> {
           .filter((i) => i.risk === 'manual')
           .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
       },
-      created_at: Math.floor(Date.now() / 1000),
+      expires_at: Math.floor(Date.now() / 1000) + 300,
     };
   }
 
-  return await invoke<DeletePlan>('create_delete_plan', { items });
+  return await invoke<PlanPreview>('create_delete_plan', {
+    scanId,
+    selectedItemIds: items.map((item) => item.id),
+  });
 }
 
 export async function tauriExecuteClean(
-  plan: DeletePlan,
+  plan: PlanPreview,
   onEvent: (event: CleanEvent) => void
 ): Promise<CleanResult> {
   if (!isTauri) {
@@ -147,7 +147,7 @@ export async function tauriExecuteClean(
   };
 
   return await invoke<CleanResult>('execute_clean', {
-    plan,
+    planId: plan.id,
     onEvent: channel,
   });
 }
@@ -252,12 +252,12 @@ export async function tauriGetDockerStatus(): Promise<DockerStatus> {
       is_running: true,
       version: 'Docker version 27.0.3',
       overview: {
-        images_bytes: 7.2 * 1024 * 1024 * 1024,
-        dangling_images_bytes: 2.1 * 1024 * 1024 * 1024,
-        build_cache_bytes: 8.1 * 1024 * 1024 * 1024,
-        stopped_containers_bytes: 1.4 * 1024 * 1024 * 1024,
-        volumes_bytes: 1.6 * 1024 * 1024 * 1024,
+        images: { total_bytes: 7.2 * 1024 * 1024 * 1024, reclaimable_bytes: 2.1 * 1024 * 1024 * 1024 },
+        build_cache: { total_bytes: 8.1 * 1024 * 1024 * 1024, reclaimable_bytes: 8.1 * 1024 * 1024 * 1024 },
+        containers: { total_bytes: 1.4 * 1024 * 1024 * 1024, reclaimable_bytes: 1.4 * 1024 * 1024 * 1024 },
+        volumes: { total_bytes: 1.6 * 1024 * 1024 * 1024, reclaimable_bytes: 600 * 1024 * 1024 },
         total_bytes: 18.3 * 1024 * 1024 * 1024,
+        total_reclaimable_bytes: 12.2 * 1024 * 1024 * 1024,
         safe_cleanable_bytes: 10.2 * 1024 * 1024 * 1024,
       },
       images: [],
@@ -310,9 +310,9 @@ export async function tauriGetLocalModels(): Promise<LocalModelItem[]> {
   return await invoke<LocalModelItem[]>('get_local_models');
 }
 
-export async function tauriDeleteLocalModel(path: string): Promise<number> {
+export async function tauriDeleteLocalModel(modelId: string): Promise<number> {
   if (!isTauri) return 4.2 * 1024 * 1024 * 1024;
-  return await invoke<number>('delete_local_model', { path });
+  return await invoke<number>('delete_local_model', { modelId });
 }
 
 export async function tauriGetAwakeState(): Promise<AwakeState> {
@@ -355,6 +355,8 @@ export async function tauriGetSettings(): Promise<ZenithSettings> {
       include_rebuild_caches: false,
       theme: 'system',
       excluded_signatures: [],
+      quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+      quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       awake_rules: [
         {
           id: 'rule.claude',
@@ -371,7 +373,10 @@ export async function tauriGetSettings(): Promise<ZenithSettings> {
 }
 
 export async function tauriSaveSettings(settings: ZenithSettings): Promise<void> {
-  if (!isTauri) return;
+  if (!isTauri) {
+    localStorage.setItem('zenith.settings', JSON.stringify(settings));
+    return;
+  }
   await invoke('save_settings', { settings });
 }
 
@@ -391,6 +396,12 @@ export async function tauriOpenDashboard(): Promise<void> {
 export async function tauriToggleQuick(): Promise<void> {
   if (!isTauri) return;
   await invoke('toggle_quick_panel');
+}
+
+export async function tauriHideCurrentWindow(): Promise<void> {
+  if (!isTauri) return;
+  const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+  await getCurrentWebviewWindow().hide();
 }
 
 // Fallback browser mock helpers
@@ -565,7 +576,7 @@ function mockScan(onEvent: (event: ScanEvent) => void): Promise<ScanResult> {
 }
 
 function mockClean(
-  plan: DeletePlan,
+  plan: PlanPreview,
   onEvent: (event: CleanEvent) => void
 ): Promise<CleanResult> {
   return new Promise((resolve) => {
@@ -598,7 +609,7 @@ function mockClean(
           items.push({
             item_id: t.item_id,
             name: t.name,
-            path: t.path,
+            path: '',
             success: true,
             bytes_reclaimed: t.expected_bytes,
           });
@@ -606,7 +617,7 @@ function mockClean(
           if (items.length === plan.targets.length) {
             const res: CleanResult = {
               plan_id: plan.id,
-              started_at: plan.created_at,
+              started_at: plan.expires_at - 300,
               finished_at: Math.floor(Date.now() / 1000),
               total_reclaimed_bytes: plan.expected_reclaim_bytes,
               total_failed_bytes: 0,

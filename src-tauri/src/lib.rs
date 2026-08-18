@@ -8,11 +8,14 @@ pub mod models_inventory;
 pub mod power;
 pub mod safety;
 pub mod scanner;
+pub mod settings_store;
 pub mod signatures;
+pub mod tooling;
 
 use commands::AppState;
 use power::KeepAwakeManager;
 use signatures::SignatureRegistry;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -69,40 +72,16 @@ fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosit
     let _ = window.set_focus();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::quick_panel_position;
-    use tauri::{PhysicalPosition, PhysicalSize};
-
-    #[test]
-    fn quick_panel_is_right_aligned_below_tray_icon() {
-        let position = quick_panel_position(
-            PhysicalPosition::new(1_500.0, 48.0),
-            PhysicalSize::new(720, 1_040),
-            PhysicalPosition::new(0, 0),
-            PhysicalSize::new(3_456, 2_234),
-        );
-        assert_eq!(position, PhysicalPosition::new(780, 54));
-    }
-
-    #[test]
-    fn quick_panel_is_clamped_inside_active_display() {
-        let position = quick_panel_position(
-            PhysicalPosition::new(100.0, 1_900.0),
-            PhysicalSize::new(720, 1_040),
-            PhysicalPosition::new(0, 0),
-            PhysicalSize::new(3_456, 2_234),
-        );
-        assert_eq!(position, PhysicalPosition::new(0, 1_194));
-    }
-}
-
 pub fn run() {
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
     let last_scan = Arc::new(Mutex::new(None));
     let openrouter_key = Arc::new(Mutex::new(None));
+    let ai_usage_cache = Arc::new(Mutex::new(None));
+    let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
+    let delete_plans = Arc::new(Mutex::new(HashMap::new()));
+    let operation_lock = Arc::new(Mutex::new(()));
 
     let app_state = AppState {
         registry,
@@ -110,6 +89,10 @@ pub fn run() {
         settings,
         last_scan,
         openrouter_key,
+        ai_usage_cache,
+        ai_usage_refresh_lock,
+        delete_plans,
+        operation_lock,
     };
 
     tauri::Builder::default()
@@ -123,6 +106,13 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                let loaded = settings_store::load(&config_dir);
+                app.state::<AppState>()
+                    .awake_manager
+                    .set_rules(loaded.awake_rules.clone());
+                *app.state::<AppState>().settings.lock().unwrap() = loaded;
+            }
             // Create exactly one macOS menu-bar icon. It is a monochrome
             // template image so macOS can adapt it to light/dark menu bars.
             let open_dashboard =
@@ -192,7 +182,7 @@ pub fn run() {
             // Optional background thread for Keep Awake watcher (~5s interval, only checks when rules exist)
             let watcher_ref = awake_manager.clone();
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
+                watcher_ref.wait_for_next_evaluation();
                 watcher_ref.evaluate();
             });
 
@@ -227,4 +217,32 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running zenith application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quick_panel_position;
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    #[test]
+    fn quick_panel_is_right_aligned_below_tray_icon() {
+        let position = quick_panel_position(
+            PhysicalPosition::new(1_500.0, 48.0),
+            PhysicalSize::new(720, 1_040),
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(3_456, 2_234),
+        );
+        assert_eq!(position, PhysicalPosition::new(780, 54));
+    }
+
+    #[test]
+    fn quick_panel_is_clamped_inside_active_display() {
+        let position = quick_panel_position(
+            PhysicalPosition::new(100.0, 1_900.0),
+            PhysicalSize::new(720, 1_040),
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(3_456, 2_234),
+        );
+        assert_eq!(position, PhysicalPosition::new(0, 1_194));
+    }
 }

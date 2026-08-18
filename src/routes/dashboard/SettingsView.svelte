@@ -1,8 +1,24 @@
 <script lang="ts">
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import type { AiProviderId, QuickPanelSection } from '../../lib/models/types';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
-  import { Settings, Shield, Sparkles, Moon, Sun, Monitor, Laptop } from 'lucide-svelte';
+  import { Settings, Sparkles, Moon, Sun, Monitor, ChevronUp, ChevronDown, PanelTop } from 'lucide-svelte';
+
+  const sectionOptions: { id: QuickPanelSection; label: string; description: string }[] = [
+    { id: 'storage', label: 'Storage', description: 'Primary disk capacity and usage.' },
+    { id: 'cleanup', label: 'Quick Clean', description: 'Safe reclaimable storage and clean action.' },
+    { id: 'ai_usage', label: 'AI Usage', description: 'Connected provider limits and local activity.' },
+    { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
+    { id: 'memory', label: 'Memory', description: 'Memory pressure and current usage.' },
+  ];
+  const providerOptions: { id: AiProviderId; label: string }[] = [
+    { id: 'codex', label: 'Codex' },
+    { id: 'claude', label: 'Claude Code' },
+    { id: 'opencode', label: 'OpenCode' },
+    { id: 'openrouter', label: 'OpenRouter' },
+    { id: 'antigravity', label: 'Antigravity' },
+  ];
 
   let settings = $derived(settingsStore.settings);
 
@@ -14,6 +30,20 @@
 
   function handleTheme(theme: string) {
     settingsStore.save({ theme });
+  }
+
+  function orderedSections() {
+    const selected = settings.quick_panel_sections
+      .map((id) => sectionOptions.find((option) => option.id === id))
+      .filter((option): option is (typeof sectionOptions)[number] => Boolean(option));
+    return [...selected, ...sectionOptions.filter((option) => !settings.quick_panel_sections.includes(option.id))];
+  }
+
+  function orderedProviders() {
+    const selected = settings.quick_panel_ai_providers
+      .map((id) => providerOptions.find((option) => option.id === id))
+      .filter((option): option is (typeof providerOptions)[number] => Boolean(option));
+    return [...selected, ...providerOptions.filter((option) => !settings.quick_panel_ai_providers.includes(option.id))];
   }
 </script>
 
@@ -33,6 +63,12 @@
     </div>
   </div>
 
+  {#if settingsStore.error}
+    <div class="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-500">
+      {settingsStore.error}
+    </div>
+  {/if}
+
   <!-- General Preferences -->
   <div class="space-y-3">
     <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -41,20 +77,80 @@
     <Card class="p-4 space-y-4 bg-card/70">
       <div class="flex items-center justify-between text-xs">
         <div>
-          <div class="font-medium text-foreground">Launch Zenith at login</div>
-          <div class="text-[11px] text-muted-foreground">Start menu bar agent automatically on system startup.</div>
+          <div class="flex items-center gap-2 font-medium text-foreground">Launch Zenith at login <Badge variant="outline">Planned</Badge></div>
+          <div class="text-[11px] text-muted-foreground">Autostart is not enabled in this build.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-pointer">
+        <label class="relative inline-flex items-center cursor-not-allowed opacity-60">
           <input
             type="checkbox"
             checked={settings.launch_at_login}
-            onchange={() => handleToggle('launch_at_login')}
+            disabled
             class="sr-only peer"
           />
           <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"
+            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
           ></div>
         </label>
+      </div>
+    </Card>
+  </div>
+
+  <!-- Quick Panel Customization -->
+  <div class="space-y-3">
+    <div>
+      <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Menu Bar Quick Panel
+      </h3>
+      <p class="text-[11px] text-muted-foreground mt-1">
+        Choose what appears below the menu bar icon and set the display priority.
+      </p>
+    </div>
+    <Card class="p-4 bg-card/70 space-y-5">
+      <div class="space-y-2">
+        <div class="flex items-center gap-2 text-xs font-medium text-foreground">
+          <PanelTop size={14} /> Sections
+        </div>
+        {#each orderedSections() as option}
+          {@const enabled = settings.quick_panel_sections.includes(option.id)}
+          {@const index = settings.quick_panel_sections.indexOf(option.id)}
+          <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={enabled && settings.quick_panel_sections.length === 1}
+              onchange={() => settingsStore.toggleQuickPanelSection(option.id)}
+              aria-label={`Show ${option.label} in quick panel`}
+              class="h-3.5 w-3.5 accent-primary"
+            />
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-medium text-foreground">{option.label}</div>
+              <div class="text-[10px] text-muted-foreground">{option.description}</div>
+            </div>
+            {#if enabled}
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelSection(option.id, -1)} aria-label={`Move ${option.label} up`}><ChevronUp size={14} /></button>
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === settings.quick_panel_sections.length - 1} onclick={() => settingsStore.moveQuickPanelSection(option.id, 1)} aria-label={`Move ${option.label} down`}><ChevronDown size={14} /></button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      <div class="space-y-2 pt-4 border-t border-border/60">
+        <div class="flex items-center gap-2 text-xs font-medium text-foreground">
+          <Sparkles size={14} /> AI Provider Priority
+        </div>
+        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order.</p>
+        {#each orderedProviders() as provider}
+          {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
+          {@const index = settings.quick_panel_ai_providers.indexOf(provider.id)}
+          <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2">
+            <input type="checkbox" checked={enabled} onchange={() => settingsStore.toggleQuickPanelProvider(provider.id)} aria-label={`Show ${provider.label} usage`} class="h-3.5 w-3.5 accent-primary" />
+            <span class="flex-1 text-xs font-medium text-foreground">{provider.label}</span>
+            {#if enabled}
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, -1)} aria-label={`Move ${provider.label} up`}><ChevronUp size={14} /></button>
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === settings.quick_panel_ai_providers.length - 1} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, 1)} aria-label={`Move ${provider.label} down`}><ChevronDown size={14} /></button>
+            {/if}
+          </div>
+        {/each}
       </div>
     </Card>
   </div>
@@ -79,7 +175,7 @@
             class="sr-only peer"
           />
           <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"
+            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
           ></div>
         </label>
       </div>
@@ -98,7 +194,7 @@
             class="sr-only peer"
           />
           <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"
+            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
           ></div>
         </label>
       </div>
@@ -117,7 +213,7 @@
             class="sr-only peer"
           />
           <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"
+            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
           ></div>
         </label>
       </div>
@@ -136,7 +232,7 @@
             class="sr-only peer"
           />
           <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"
+            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
           ></div>
         </label>
       </div>

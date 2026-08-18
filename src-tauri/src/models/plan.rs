@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
     pub device: u64,
     pub inode: u64,
@@ -12,7 +12,7 @@ pub struct FileIdentity {
     pub mtime_secs: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteTarget {
     pub item_id: String,
     pub signature_id: String,
@@ -22,15 +22,55 @@ pub struct DeleteTarget {
     pub expected_bytes: u64,
     pub risk: RiskTier,
     pub identity: Option<FileIdentity>,
+    pub exclusions: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeletePlan {
     pub id: Uuid,
+    pub scan_id: String,
     pub targets: Vec<DeleteTarget>,
     pub expected_reclaim_bytes: u64,
     pub risk: RiskSummary,
     pub created_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanTargetPreview {
+    pub item_id: String,
+    pub name: String,
+    pub expected_bytes: u64,
+    pub risk: RiskTier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanPreview {
+    pub id: Uuid,
+    pub targets: Vec<PlanTargetPreview>,
+    pub expected_reclaim_bytes: u64,
+    pub risk: RiskSummary,
+    pub expires_at: u64,
+}
+
+impl DeletePlan {
+    pub fn preview(&self, ttl_secs: u64) -> PlanPreview {
+        PlanPreview {
+            id: self.id,
+            targets: self
+                .targets
+                .iter()
+                .map(|target| PlanTargetPreview {
+                    item_id: target.item_id.clone(),
+                    name: target.name.clone(),
+                    expected_bytes: target.expected_bytes,
+                    risk: target.risk,
+                })
+                .collect(),
+            expected_reclaim_bytes: self.expected_reclaim_bytes,
+            risk: self.risk.clone(),
+            expires_at: self.created_at.saturating_add(ttl_secs),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

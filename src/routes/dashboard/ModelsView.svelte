@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { LocalModelItem } from '../../lib/models/types';
   import { localModelsStore } from '../../lib/stores/models.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
@@ -20,6 +21,10 @@
 
   let searchQuery = $state('');
   let modelToDelete = $state<LocalModelItem | null>(null);
+
+  onMount(() => {
+    void localModelsStore.refresh();
+  });
 
   let filteredModels = $derived.by(() => {
     if (!searchQuery.trim()) return models;

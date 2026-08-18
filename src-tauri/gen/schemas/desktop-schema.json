@@ -177,6 +177,306 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the connect_openrouter_oauth command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-connect-openrouter-oauth",
+          "markdownDescription": "Enables the connect_openrouter_oauth command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_delete_plan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-delete-plan",
+          "markdownDescription": "Enables the create_delete_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_local_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-local-model",
+          "markdownDescription": "Enables the delete_local_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the disable_manual_awake command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-disable-manual-awake",
+          "markdownDescription": "Enables the disable_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the execute_clean command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-execute-clean",
+          "markdownDescription": "Enables the execute_clean command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ai_usage command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-usage",
+          "markdownDescription": "Enables the get_ai_usage command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_awake_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-awake-state",
+          "markdownDescription": "Enables the get_awake_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_disk_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-disk-metrics",
+          "markdownDescription": "Enables the get_disk_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_disk_volumes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-disk-volumes",
+          "markdownDescription": "Enables the get_disk_volumes command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_docker_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-docker-status",
+          "markdownDescription": "Enables the get_docker_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_last_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-last-scan",
+          "markdownDescription": "Enables the get_last_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_local_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-local-models",
+          "markdownDescription": "Enables the get_local_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_memory_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-memory-metrics",
+          "markdownDescription": "Enables the get_memory_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-settings",
+          "markdownDescription": "Enables the get_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_dashboard_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-dashboard-window",
+          "markdownDescription": "Enables the open_dashboard_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_disk_utility command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-disk-utility",
+          "markdownDescription": "Enables the open_disk_utility command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pick_keep_awake_application command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-keep-awake-application",
+          "markdownDescription": "Enables the pick_keep_awake_application command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prune_docker_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prune-docker-target",
+          "markdownDescription": "Enables the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_in_finder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reveal-in-finder",
+          "markdownDescription": "Enables the reveal_in_finder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-settings",
+          "markdownDescription": "Enables the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_awake_rules command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-awake-rules",
+          "markdownDescription": "Enables the set_awake_rules command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_manual_awake command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-manual-awake",
+          "markdownDescription": "Enables the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-scan",
+          "markdownDescription": "Enables the start_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the terminate_process_group command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-terminate-process-group",
+          "markdownDescription": "Enables the terminate_process_group command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_quick_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-quick-panel",
+          "markdownDescription": "Enables the toggle_quick_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the connect_openrouter_oauth command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-connect-openrouter-oauth",
+          "markdownDescription": "Denies the connect_openrouter_oauth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_delete_plan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-delete-plan",
+          "markdownDescription": "Denies the create_delete_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_local_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-local-model",
+          "markdownDescription": "Denies the delete_local_model command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disable_manual_awake command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-disable-manual-awake",
+          "markdownDescription": "Denies the disable_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the execute_clean command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-execute-clean",
+          "markdownDescription": "Denies the execute_clean command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ai_usage command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-usage",
+          "markdownDescription": "Denies the get_ai_usage command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_awake_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-awake-state",
+          "markdownDescription": "Denies the get_awake_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_disk_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-disk-metrics",
+          "markdownDescription": "Denies the get_disk_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_disk_volumes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-disk-volumes",
+          "markdownDescription": "Denies the get_disk_volumes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_docker_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-docker-status",
+          "markdownDescription": "Denies the get_docker_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_last_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-last-scan",
+          "markdownDescription": "Denies the get_last_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_local_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-local-models",
+          "markdownDescription": "Denies the get_local_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_memory_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-memory-metrics",
+          "markdownDescription": "Denies the get_memory_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-settings",
+          "markdownDescription": "Denies the get_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_dashboard_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-dashboard-window",
+          "markdownDescription": "Denies the open_dashboard_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_disk_utility command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-disk-utility",
+          "markdownDescription": "Denies the open_disk_utility command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pick_keep_awake_application command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-keep-awake-application",
+          "markdownDescription": "Denies the pick_keep_awake_application command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the prune_docker_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prune-docker-target",
+          "markdownDescription": "Denies the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_in_finder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reveal-in-finder",
+          "markdownDescription": "Denies the reveal_in_finder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-settings",
+          "markdownDescription": "Denies the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_awake_rules command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-awake-rules",
+          "markdownDescription": "Denies the set_awake_rules command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_manual_awake command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-manual-awake",
+          "markdownDescription": "Denies the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-scan",
+          "markdownDescription": "Denies the start_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the terminate_process_group command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-terminate-process-group",
+          "markdownDescription": "Denies the terminate_process_group command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_quick_panel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-quick-panel",
+          "markdownDescription": "Denies the toggle_quick_panel command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

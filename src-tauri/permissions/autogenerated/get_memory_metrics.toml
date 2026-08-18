@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-memory-metrics"
+description = "Enables the get_memory_metrics command without any pre-configured scope."
+commands.allow = ["get_memory_metrics"]
+
+[[permission]]
+identifier = "deny-get-memory-metrics"
+description = "Denies the get_memory_metrics command without any pre-configured scope."
+commands.deny = ["get_memory_metrics"]

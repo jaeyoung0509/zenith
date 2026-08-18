@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-manual-awake"
+description = "Enables the set_manual_awake command without any pre-configured scope."
+commands.allow = ["set_manual_awake"]
+
+[[permission]]
+identifier = "deny-set-manual-awake"
+description = "Denies the set_manual_awake command without any pre-configured scope."
+commands.deny = ["set_manual_awake"]
