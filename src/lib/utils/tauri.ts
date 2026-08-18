@@ -357,6 +357,7 @@ export async function tauriGetSettings(): Promise<ZenithSettings> {
       excluded_signatures: [],
       quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
       awake_rules: [
         {
           id: 'rule.claude',
