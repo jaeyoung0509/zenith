@@ -2,16 +2,21 @@
   import type { CategoryResult, RiskTier } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { formatBytes } from '../../lib/utils/format';
+  import {
+    filterAndSortCleanupItems,
+    reclaimableBytes,
+    type CleanupSortMode,
+  } from '../../lib/utils/cleanup';
   import Button from '../../lib/components/Button.svelte';
-  import Card from '../../lib/components/Card.svelte';
   import ItemRow from '../../lib/components/ItemRow.svelte';
-  import Badge from '../../lib/components/Badge.svelte';
+  import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import {
     ArrowLeft,
     Search,
     CheckSquare,
     Square,
-    Filter,
+    Info,
+    Trash2,
   } from 'lucide-svelte';
 
   interface Props {
@@ -23,24 +28,16 @@
 
   let searchQuery = $state('');
   let selectedRiskFilter = $state<RiskTier | 'all'>('all');
+  let sortMode = $state<CleanupSortMode>('size');
+  let showResultModal = $state(false);
 
   let filteredItems = $derived.by(() => {
-    return categoryResult.items.filter((item) => {
-      // Risk filter
-      if (selectedRiskFilter !== 'all' && item.risk !== selectedRiskFilter) {
-        return false;
-      }
-      // Search query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        return (
-          item.name.toLowerCase().includes(q) ||
-          item.path.toLowerCase().includes(q) ||
-          item.description.toLowerCase().includes(q)
-        );
-      }
-      return true;
-    });
+    return filterAndSortCleanupItems(
+      categoryResult.items,
+      selectedRiskFilter,
+      searchQuery,
+      sortMode
+    );
   });
 
   let allFilteredSelected = $derived.by(() => {
@@ -48,11 +45,25 @@
     return filteredItems.every((i) => scanStore.selectedMap[i.id]);
   });
 
+  let categorySelectedBytes = $derived.by(() =>
+    categoryResult.items.reduce(
+      (total, item) => total + (scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
+      0
+    )
+  );
+
   function toggleAllFiltered() {
     const next = !allFilteredSelected;
     for (const item of filteredItems) {
       scanStore.setItemSelected(item.id, next);
     }
+  }
+
+
+  function cleanSelected() {
+    scanStore.cleanItems(categoryResult.items).then((result) => {
+      if (result) showResultModal = true;
+    });
   }
 </script>
 
@@ -68,7 +79,7 @@
           {categoryResult.display_name}
         </h2>
         <p class="text-xs text-muted-foreground">
-          {categoryResult.items.length} detected locations • {formatBytes(categoryResult.total_bytes)} total
+          {filteredItems.length} reclaimable locations • {formatBytes(categoryResult.total_bytes)} total
         </p>
       </div>
     </div>
@@ -87,6 +98,16 @@
           <CheckSquare size={13} class="text-emerald-500" />
           <span>Select Filtered</span>
         {/if}
+      </Button>
+      <Button
+        variant="primary"
+        size="sm"
+        class="gap-1.5"
+        disabled={categorySelectedBytes === 0 || scanStore.isCleaning}
+        onclick={cleanSelected}
+      >
+        <Trash2 size={13} />
+        {scanStore.isCleaning ? 'Cleaning…' : `Clean ${formatBytes(categorySelectedBytes)}`}
       </Button>
     </div>
   </div>
@@ -108,7 +129,18 @@
     </div>
 
     <!-- Risk Filter Tabs -->
-    <div class="flex items-center gap-1 bg-secondary/60 p-1 rounded-lg self-stretch sm:self-auto">
+    <div class="flex items-center gap-2 self-stretch sm:self-auto">
+      <select
+        bind:value={sortMode}
+        aria-label="Sort cleanup items"
+        class="h-8 rounded-lg border border-border bg-card px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+      >
+        <option value="size">Largest first</option>
+        <option value="modified">Recently modified</option>
+        <option value="name">Name A–Z</option>
+      </select>
+
+      <div class="flex items-center gap-1 bg-secondary/60 p-1 rounded-lg">
       <button
         type="button"
         onclick={() => (selectedRiskFilter = 'all')}
@@ -149,8 +181,18 @@
       >
         Manual ({categoryResult.items.filter((i) => i.risk === 'manual').length})
       </button>
+      </div>
     </div>
   </div>
+
+  {#if selectedRiskFilter === 'all' || selectedRiskFilter === 'rebuild'}
+    <div class="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+      <Info size={15} class="mt-0.5 shrink-0 text-amber-400" />
+      <p class="text-[11px] leading-relaxed text-muted-foreground">
+        <span class="font-medium text-amber-400">Rebuild</span> items are safe to remove, but dependencies or indexes will be downloaded or rebuilt the next time you use that tool. They stay unselected until you choose them.
+      </p>
+    </div>
+  {/if}
 
   <!-- Items List -->
   {#if filteredItems.length > 0}
@@ -163,5 +205,15 @@
     <div class="py-16 text-center text-xs text-muted-foreground">
       No items match your search or risk filter.
     </div>
+  {/if}
+
+  {#if showResultModal && scanStore.lastCleanResult}
+    <CleanResultModal
+      result={scanStore.lastCleanResult}
+      onClose={() => {
+        showResultModal = false;
+        onBack();
+      }}
+    />
   {/if}
 </div>

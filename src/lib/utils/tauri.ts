@@ -10,12 +10,14 @@ import type {
   CleanResult,
   DeletePlan,
   DiskMetrics,
+  DiskVolume,
   DockerStatus,
   LocalModelItem,
   MemoryMetrics,
   ScanEvent,
   ScanItem,
   ScanResult,
+  SelectedApplication,
   ZenithSettings,
 } from '../models/types';
 
@@ -162,17 +164,33 @@ export async function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
       swap_total_bytes: 2 * 1024 * 1024 * 1024,
       pressure: 'normal',
       top_processes: [
-        { pid: 101, name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14 },
-        { pid: 102, name: 'Google Chrome', memory_bytes: 2.2 * 1024 * 1024 * 1024, process_count: 22 },
-        { pid: 103, name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4 },
-        { pid: 104, name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2 },
-        { pid: 105, name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6 },
+        { pid: 102, name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true },
+        { pid: 101, name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true },
+        { pid: 103, name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true },
+        { pid: 104, name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true },
+        { pid: 105, name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true },
       ],
       timestamp: Math.floor(Date.now() / 1000),
     };
   }
 
   return await invoke<MemoryMetrics>('get_memory_metrics');
+}
+
+export async function tauriTerminateProcessGroup(name: string, force: boolean): Promise<number> {
+  if (!isTauri) return name === 'Google Chrome' ? 109 : 1;
+  return await invoke<number>('terminate_process_group', { name, force });
+}
+
+export async function tauriPickKeepAwakeApplication(): Promise<SelectedApplication | null> {
+  if (!isTauri) {
+    return {
+      name: 'Blender',
+      executable_pattern: 'Blender',
+      path: '/Applications/Blender.app',
+    };
+  }
+  return await invoke<SelectedApplication | null>('pick_keep_awake_application');
 }
 
 export async function tauriGetDiskMetrics(): Promise<DiskMetrics> {
@@ -188,6 +206,43 @@ export async function tauriGetDiskMetrics(): Promise<DiskMetrics> {
   }
 
   return await invoke<DiskMetrics>('get_disk_metrics');
+}
+
+export async function tauriGetDiskVolumes(): Promise<DiskVolume[]> {
+  if (!isTauri) {
+    return [
+      {
+        name: 'Macintosh HD',
+        mount_point: '/',
+        file_system: 'APFS',
+        disk_type: 'SSD',
+        total_bytes: 228.3 * 1024 * 1024 * 1024,
+        used_bytes: 190.5 * 1024 * 1024 * 1024,
+        available_bytes: 37.8 * 1024 * 1024 * 1024,
+        percent_used: 83.5,
+        is_removable: false,
+        is_primary: true,
+      },
+      {
+        name: 'Developer SSD',
+        mount_point: '/Volumes/Developer SSD',
+        file_system: 'APFS',
+        disk_type: 'SSD',
+        total_bytes: 1_000 * 1024 * 1024 * 1024,
+        used_bytes: 642 * 1024 * 1024 * 1024,
+        available_bytes: 358 * 1024 * 1024 * 1024,
+        percent_used: 64.2,
+        is_removable: true,
+        is_primary: false,
+      },
+    ];
+  }
+  return await invoke<DiskVolume[]>('get_disk_volumes');
+}
+
+export async function tauriOpenDiskUtility(): Promise<void> {
+  if (!isTauri) return;
+  await invoke('open_disk_utility');
 }
 
 export async function tauriGetDockerStatus(): Promise<DockerStatus> {

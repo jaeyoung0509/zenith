@@ -56,6 +56,9 @@ impl ScanEngine {
                 let items = DirectoryScanner::scan_signature(sig);
                 for item in items {
                     let bytes = item.size.reclaimable();
+                    if !item.exists || bytes == 0 {
+                        continue;
+                    }
                     category_total_bytes += bytes;
 
                     match item.risk {
@@ -86,6 +89,14 @@ impl ScanEngine {
                     category_items.push(item);
                 }
             }
+
+            category_items.sort_by(|left, right| {
+                right
+                    .size
+                    .reclaimable()
+                    .cmp(&left.size.reclaimable())
+                    .then_with(|| left.name.cmp(&right.name))
+            });
 
             total_bytes += category_total_bytes;
             safe_bytes += cat_safe;

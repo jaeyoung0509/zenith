@@ -3,6 +3,7 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { formatDuration } from '../../lib/utils/format';
+  import { tauriPickKeepAwakeApplication } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
@@ -15,6 +16,8 @@
     Power,
     Shield,
     AlertCircle,
+    AppWindow,
+    FolderOpen,
   } from 'lucide-svelte';
 
   onMount(() => {
@@ -27,6 +30,9 @@
   let newAppName = $state('');
   let newExecutable = $state('');
   let showAddModal = $state(false);
+  let selectedAppPath = $state('');
+  let isPickingApp = $state(false);
+  let pickerError = $state<string | null>(null);
 
   function handleSetTimer(mins: number | null) {
     if (mins === null) {
@@ -47,7 +53,31 @@
     });
     newAppName = '';
     newExecutable = '';
+    selectedAppPath = '';
     showAddModal = false;
+  }
+
+  async function pickApplication() {
+    if (isPickingApp) return;
+    isPickingApp = true;
+    pickerError = null;
+    try {
+      const selection = await tauriPickKeepAwakeApplication();
+      if (selection) {
+        newAppName = selection.name;
+        newExecutable = selection.executable_pattern;
+        selectedAppPath = selection.path;
+      }
+    } catch (error: any) {
+      pickerError = error?.toString() || 'Could not open the application picker';
+    } finally {
+      isPickingApp = false;
+    }
+  }
+
+  function closeAddModal() {
+    showAddModal = false;
+    pickerError = null;
   }
 </script>
 
@@ -209,6 +239,34 @@
       <Card class="w-full max-w-md bg-card border-border shadow-2xl p-5 space-y-4">
         <h3 class="text-sm font-semibold text-foreground">Add Keep Awake App Rule</h3>
 
+        <button
+          type="button"
+          onclick={pickApplication}
+          disabled={isPickingApp}
+          class="flex w-full items-center gap-3 rounded-xl border border-indigo-500/25 bg-indigo-500/5 p-3 text-left transition-colors hover:bg-indigo-500/10 disabled:opacity-50"
+        >
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-500">
+            <AppWindow size={18} />
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-xs font-medium text-foreground">{isPickingApp ? 'Opening Applications…' : 'Choose from Applications'}</p>
+            <p class="mt-0.5 truncate text-[10px] text-muted-foreground">
+              {selectedAppPath || 'Select a macOS app and fill its executable automatically.'}
+            </p>
+          </div>
+          <FolderOpen size={15} class="shrink-0 text-muted-foreground" />
+        </button>
+
+        {#if pickerError}
+          <p class="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-500">{pickerError}</p>
+        {/if}
+
+        <div class="flex items-center gap-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span class="h-px flex-1 bg-border"></span>
+          <span>or enter a CLI process</span>
+          <span class="h-px flex-1 bg-border"></span>
+        </div>
+
         <div class="space-y-3 text-xs">
           <div class="space-y-1">
             <label for="appName" class="text-muted-foreground font-medium">Application Name</label>
@@ -222,19 +280,19 @@
           </div>
 
           <div class="space-y-1">
-            <label for="execPattern" class="text-muted-foreground font-medium">Executable Pattern (regex or name)</label>
+            <label for="execPattern" class="text-muted-foreground font-medium">Executable Name Fragments</label>
             <input
               id="execPattern"
               type="text"
               bind:value={newExecutable}
-              placeholder="e.g. ffmpeg|blender"
+              placeholder="e.g. ffmpeg|blender (separate with |)"
               class="w-full h-8 px-3 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-mono"
             />
           </div>
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" size="sm" onclick={() => (showAddModal = false)}>
+          <Button variant="ghost" size="sm" onclick={closeAddModal}>
             Cancel
           </Button>
           <Button variant="primary" size="sm" onclick={handleAddRule}>

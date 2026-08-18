@@ -24,6 +24,7 @@ pub struct ProcessMemory {
     pub name: String,
     pub memory_bytes: u64,
     pub process_count: usize,
+    pub can_terminate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,4 +49,18 @@ pub struct DiskMetrics {
     pub free_bytes: u64,
     pub available_bytes: u64,
     pub percent_used: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiskVolume {
+    pub name: String,
+    pub mount_point: String,
+    pub file_system: String,
+    pub disk_type: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub percent_used: f64,
+    pub is_removable: bool,
+    pub is_primary: bool,
 }

@@ -5,6 +5,7 @@
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import StorageView from './StorageView.svelte';
+  import DiskView from './DiskView.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
@@ -23,7 +24,7 @@
     ChartNoAxesCombined,
   } from 'lucide-svelte';
 
-  type Tab = 'storage' | 'docker' | 'models' | 'usage' | 'memory' | 'awake' | 'settings';
+  type Tab = 'storage' | 'disk' | 'docker' | 'models' | 'usage' | 'memory' | 'awake' | 'settings';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -61,6 +62,18 @@
 
       <!-- Navigation Tabs -->
       <nav class="space-y-1">
+        <button
+          type="button"
+          onclick={() => selectTab('disk')}
+          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+          'disk'
+            ? 'bg-secondary text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+        >
+          <HardDrive size={15} />
+          <span>Disks</span>
+        </button>
+
         <button
           type="button"
           onclick={() => selectTab('storage')}
@@ -168,6 +181,8 @@
       <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
     {:else if currentTab === 'docker'}
       <DockerView />
+    {:else if currentTab === 'disk'}
+      <DiskView onReviewCategory={(category) => (selectedCategory = category)} />
     {:else if currentTab === 'models'}
       <ModelsView />
     {:else if currentTab === 'usage'}

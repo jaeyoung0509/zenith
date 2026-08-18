@@ -128,6 +128,7 @@ export interface ProcessMemory {
   name: string;
   memory_bytes: number;
   process_count: number;
+  can_terminate: boolean;
 }
 
 export interface MemoryMetrics {
@@ -150,6 +151,19 @@ export interface DiskMetrics {
   free_bytes: number;
   available_bytes: number;
   percent_used: number;
+}
+
+export interface DiskVolume {
+  name: string;
+  mount_point: string;
+  file_system: string;
+  disk_type: string;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  percent_used: number;
+  is_removable: boolean;
+  is_primary: boolean;
 }
 
 export interface DockerImageItem {
@@ -220,6 +234,12 @@ export interface AwakeRule {
   executable_pattern: string;
   behavior: AwakeBehavior;
   enabled: boolean;
+}
+
+export interface SelectedApplication {
+  name: string;
+  executable_pattern: string;
+  path: string;
 }
 
 export interface AwakeState {

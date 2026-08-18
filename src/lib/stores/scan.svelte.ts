@@ -173,20 +173,15 @@ class ScanStore {
   }
 
   async cleanSelected(): Promise<CleanResult | null> {
-    if (!this.lastScan || this.isCleaning) return null;
+    if (!this.lastScan) return null;
+    return this.cleanItems(this.lastScan.categories.flatMap((category) => category.items));
+  }
 
-    // Collect selected items
-    const selectedItems: ScanItem[] = [];
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (this.selectedMap[item.id]) {
-          selectedItems.push({
-            ...item,
-            is_selected: true,
-          });
-        }
-      }
-    }
+  async cleanItems(items: ScanItem[]): Promise<CleanResult | null> {
+    if (this.isCleaning) return null;
+    const selectedItems = items
+      .filter((item) => this.selectedMap[item.id])
+      .map((item) => ({ ...item, is_selected: true }));
 
     if (selectedItems.length === 0) {
       this.error = 'No items selected for cleaning';

@@ -17,16 +17,17 @@ dev:
 dev-web:
     pnpm dev
 
-# Build quick debug binary (최적화 생략으로 가장 빠르게 빌드)
+# Build a debug macOS app bundle so Finder and Dock use Zenith branding.
 build-fast:
-    pnpm build
-    cargo build
+    pnpm tauri build --debug --bundles app
     @echo ""
-    @echo "⚡ Fast debug binary built at: target/debug/Zenith"
+    @echo "⚡ Debug app built at: target/debug/bundle/macos/Zenith.app"
 
 # Run fast debug binary directly
 run-fast:
-    @if [ -f "target/debug/Zenith" ]; then \
+    @if [ -d "target/debug/bundle/macos/Zenith.app" ]; then \
+        open "target/debug/bundle/macos/Zenith.app"; \
+    elif [ -f "target/debug/Zenith" ]; then \
         ./target/debug/Zenith; \
     elif [ -f "src-tauri/target/debug/Zenith" ]; then \
         ./src-tauri/target/debug/Zenith; \

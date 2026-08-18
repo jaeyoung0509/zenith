@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use zenith_lib::docker::DockerAdapter;
 use zenith_lib::models::{AwakeBehavior, Category, CleanStrategy, RiskTier, Signature};
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
-use zenith_lib::scanner::{DirectoryScanner, SizeCalculator};
+use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
 
 #[test]
@@ -82,6 +82,51 @@ fn test_temp_scanner_only_includes_known_direct_children() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].path, known.to_string_lossy());
     assert!(items[0].is_selected);
+}
+
+#[test]
+fn test_scan_hides_empty_paths_and_orders_largest_first() {
+    let dir = tempdir().expect("tempdir");
+    let large = dir.path().join("large.cache");
+    let small = dir.path().join("small.cache");
+    File::create(&large)
+        .unwrap()
+        .write_all(&vec![0u8; 16 * 1024])
+        .unwrap();
+    File::create(&small)
+        .unwrap()
+        .write_all(&vec![0u8; 1024])
+        .unwrap();
+
+    let signature = |id: &str, path: String| Signature {
+        id: id.into(),
+        name: id.into(),
+        category: Category::System,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteDirectory,
+        paths: vec![path],
+        exclusions: vec![],
+        description: "test".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+    };
+
+    let mut registry = SignatureRegistry::new();
+    registry.register(signature("large", large.to_string_lossy().into_owned()));
+    registry.register(signature("small", small.to_string_lossy().into_owned()));
+    registry.register(signature(
+        "missing",
+        dir.path()
+            .join("missing.cache")
+            .to_string_lossy()
+            .into_owned(),
+    ));
+
+    let result = ScanEngine::scan(&registry, Some(&[Category::System]), |_| {});
+    let items = &result.categories[0].items;
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].id, "large");
+    assert_eq!(items[1].id, "small");
 }
 
 #[test]

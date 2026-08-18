@@ -31,7 +31,7 @@
           <p class="text-xs text-muted-foreground">Storage has been safely reclaimed</p>
         </div>
       </div>
-      <Button variant="ghost" size="icon" onclick={onClose}>
+      <Button variant="ghost" size="icon" onclick={onClose} ariaLabel="Close cleanup result" title="Close">
         <X size={16} />
       </Button>
     </div>

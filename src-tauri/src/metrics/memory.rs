@@ -1,7 +1,7 @@
 use crate::models::{MemoryMetrics, MemoryPressure, ProcessMemory};
 use std::collections::HashMap;
 use std::time::SystemTime;
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::{ProcessesToUpdate, Signal, System};
 
 pub struct MemoryInspector;
 
@@ -58,6 +58,7 @@ impl MemoryInspector {
             .into_iter()
             .map(|(name, (memory_bytes, process_count, pid))| ProcessMemory {
                 pid,
+                can_terminate: Self::can_terminate_group(&name),
                 name,
                 memory_bytes,
                 process_count,
@@ -90,6 +91,8 @@ impl MemoryInspector {
         let lower = raw.to_lowercase();
         if lower.contains("cursor") {
             "Cursor".to_string()
+        } else if lower.contains("brave browser") {
+            "Brave Browser".to_string()
         } else if lower.contains("chrome") {
             "Google Chrome".to_string()
         } else if lower.contains("docker") || lower.contains("com.docker") {
@@ -100,8 +103,11 @@ impl MemoryInspector {
             "Xcode".to_string()
         } else if lower.contains("rust-analyzer") {
             "rust-analyzer".to_string()
-        } else if lower.contains("code") || lower.contains("electron") {
-            "VS Code / Electron".to_string()
+        } else if lower == "code"
+            || lower.starts_with("code helper")
+            || lower.contains("visual studio code")
+        {
+            "VS Code".to_string()
         } else if lower.contains("node") {
             "Node.js".to_string()
         } else if lower.contains("python") {
@@ -116,6 +122,54 @@ impl MemoryInspector {
         } else {
             raw.to_string()
         }
+    }
+
+    fn can_terminate_group(name: &str) -> bool {
+        matches!(
+            name,
+            "Google Chrome"
+                | "Brave Browser"
+                | "Cursor"
+                | "Docker Desktop"
+                | "Claude"
+                | "Xcode"
+                | "VS Code"
+                | "Ollama Server"
+                | "Safari"
+        )
+    }
+
+    /// Signals only an allowlisted user-application group resolved from a fresh
+    /// process snapshot. Arbitrary PID termination is intentionally not exposed.
+    pub fn terminate_group(name: &str, force: bool) -> Result<usize, String> {
+        if !Self::can_terminate_group(name) {
+            return Err(format!("{name} is protected from termination by Zenith"));
+        }
+
+        let mut system = System::new_all();
+        system.refresh_processes(ProcessesToUpdate::All, true);
+        let signal = if force { Signal::Kill } else { Signal::Term };
+        let mut matched = 0usize;
+        let mut signaled = 0usize;
+
+        for process in system.processes().values() {
+            let raw_name = process.name().to_string_lossy();
+            if Self::normalize_process_name(&raw_name) != name {
+                continue;
+            }
+            matched += 1;
+            if process.kill_with(signal).unwrap_or(false) {
+                signaled += 1;
+            }
+        }
+
+        if matched == 0 {
+            return Err(format!("{name} is no longer running"));
+        }
+        if signaled == 0 {
+            return Err(format!("macOS did not allow Zenith to terminate {name}"));
+        }
+        Ok(signaled)
     }
 
     #[cfg(target_os = "macos")]
@@ -145,5 +199,31 @@ impl MemoryInspector {
     #[cfg(not(target_os = "macos"))]
     fn get_compressed_memory_macos() -> Option<u64> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MemoryInspector;
+
+    #[test]
+    fn browser_helpers_are_grouped_with_their_parent_app() {
+        assert_eq!(
+            MemoryInspector::normalize_process_name("Google Chrome Helper (Renderer)"),
+            "Google Chrome"
+        );
+        assert_eq!(
+            MemoryInspector::normalize_process_name("Brave Browser Helper (GPU)"),
+            "Brave Browser"
+        );
+    }
+
+    #[test]
+    fn only_known_user_apps_can_be_terminated() {
+        assert!(MemoryInspector::can_terminate_group("Google Chrome"));
+        assert!(MemoryInspector::can_terminate_group("Cursor"));
+        assert!(!MemoryInspector::can_terminate_group("spotlightknowledged"));
+        assert!(!MemoryInspector::can_terminate_group("Terminal"));
+        assert!(!MemoryInspector::can_terminate_group("Zenith"));
     }
 }

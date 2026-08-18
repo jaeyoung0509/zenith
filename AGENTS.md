@@ -10,6 +10,9 @@ safety conventions below when changing Zenith.
 - Package manager: pnpm. Task runner: `just`.
 - Use `pnpm install` for dependencies, `just dev` for the desktop dev loop, and
   `just dev-web` for browser-only UI work with mocked IPC.
+- `just build-fast` creates a debug `.app` bundle and `just run-fast` opens that
+  bundle. Do not switch it back to launching the bare Mach-O binary; macOS only
+  applies the configured Dock/Finder icon reliably to the application bundle.
 - Before handing off a change, run `cargo check`, `cargo test`, `pnpm check`,
   `pnpm test -- --run`, and `pnpm build`. Use `just build-fast` to verify that
   the standalone debug binary embeds the current frontend.
@@ -31,9 +34,17 @@ safety conventions below when changing Zenith.
   embedded.
 - Create the tray icon once in Rust. The tray menu must include Open Zenith,
   Toggle Quick Panel, and Quit Zenith.
+- Position the quick panel from the tray click coordinates, clamp it to the
+  active display, and align its right edge beneath the menu-bar icon.
 - Window labels are `main` and `quick`. Closing the quick panel hides it; it
   must not terminate the background app. Every frameless window needs an
   obvious keyboard-accessible close control.
+- Never expose arbitrary PID kill commands. Memory actions must resolve a fresh
+  process snapshot from an allowlisted user-app group, protect system/terminal/
+  Zenith processes, and offer graceful termination before force termination.
+- Native app selection for Keep Awake starts in `/Applications`, reads
+  `CFBundleExecutable`, and returns only the display name, executable name, and
+  bundle path. Cancellation is a normal empty result, not an error.
 
 ## Svelte conventions
 
@@ -62,6 +73,10 @@ safety conventions below when changing Zenith.
   `Manual` items require explicit user intent.
 - Add a regression test for every safety boundary change. Tests must use
   temporary fixtures and must never clean real user directories.
+- Do not include nonexistent or zero-byte signature paths in scan results.
+  Order cleanup candidates by reclaimable bytes unless the user chooses another
+  explicit sort. `Rebuild` means deletable but re-downloadable/rebuildable; it
+  remains opt-in to avoid unexpected network or build costs.
 
 ## Product and design
 
