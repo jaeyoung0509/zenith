@@ -27,10 +27,10 @@ build-fast:
 run-fast:
     @if [ -d "target/debug/bundle/macos/Zenith.app" ]; then \
         open "target/debug/bundle/macos/Zenith.app"; \
+    elif [ -d "src-tauri/target/debug/bundle/macos/Zenith.app" ]; then \
+        open "src-tauri/target/debug/bundle/macos/Zenith.app"; \
     elif [ -f "target/debug/Zenith" ]; then \
         ./target/debug/Zenith; \
-    elif [ -f "src-tauri/target/debug/Zenith" ]; then \
-        ./src-tauri/target/debug/Zenith; \
     else \
         cargo run; \
     fi
@@ -43,12 +43,11 @@ run-fast:
 build:
     pnpm tauri build
 
-# Build standalone single release executable binary (최대 최적화)
+# Build standalone release macOS App bundle with full Dock/Finder branding
 build-bin:
-    pnpm build
-    cargo build --release
+    pnpm tauri build --bundles app
     @echo ""
-    @echo "✅ Standalone release binary built at: target/release/Zenith"
+    @echo "✅ Standalone release App built at: target/release/bundle/macos/Zenith.app"
     @echo "👉 Run directly with: just run-bin"
 
 # Build frontend static assets into dist/
@@ -80,14 +79,18 @@ check:
 # ⚡ Execution
 # ------------------------------------------------------------------------------
 
-# Run the release standalone binary executable directly
+# Run the release app bundle directly (with full macOS Dock icon)
 run-bin:
-    @if [ -f "target/release/Zenith" ]; then \
+    @if [ -d "target/release/bundle/macos/Zenith.app" ]; then \
+        open "target/release/bundle/macos/Zenith.app"; \
+    elif [ -d "src-tauri/target/release/bundle/macos/Zenith.app" ]; then \
+        open "src-tauri/target/release/bundle/macos/Zenith.app"; \
+    elif [ -f "target/release/Zenith" ]; then \
         ./target/release/Zenith; \
     elif [ -f "src-tauri/target/release/Zenith" ]; then \
         ./src-tauri/target/release/Zenith; \
     else \
-        cargo run --release; \
+        pnpm tauri build --bundles app && open "target/release/bundle/macos/Zenith.app"; \
     fi
 
 # ------------------------------------------------------------------------------

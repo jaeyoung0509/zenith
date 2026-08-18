@@ -10,6 +10,7 @@
   import Button from '../../lib/components/Button.svelte';
   import ItemRow from '../../lib/components/ItemRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     ArrowLeft,
     Search,
@@ -40,21 +41,24 @@
     );
   });
 
+  let cleanableFilteredItems = $derived(filteredItems.filter((i) => i.risk !== 'manual'));
+
   let allFilteredSelected = $derived.by(() => {
-    if (filteredItems.length === 0) return false;
-    return filteredItems.every((i) => scanStore.selectedMap[i.id]);
+    if (cleanableFilteredItems.length === 0) return false;
+    return cleanableFilteredItems.every((i) => scanStore.selectedMap[i.id]);
   });
 
   let categorySelectedBytes = $derived.by(() =>
     categoryResult.items.reduce(
-      (total, item) => total + (scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
+      (total, item) => total + (item.risk !== 'manual' && scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
       0
     )
   );
 
   function toggleAllFiltered() {
+    if (cleanableFilteredItems.length === 0) return;
     const next = !allFilteredSelected;
-    for (const item of filteredItems) {
+    for (const item of cleanableFilteredItems) {
       scanStore.setItemSelected(item.id, next);
     }
   }
@@ -88,6 +92,7 @@
       <Button
         variant="outline"
         size="sm"
+        disabled={cleanableFilteredItems.length === 0}
         onclick={toggleAllFiltered}
         class="gap-1.5 text-xs"
       >
@@ -102,12 +107,17 @@
       <Button
         variant="primary"
         size="sm"
-        class="gap-1.5"
+        class="gap-1.5 min-w-[90px]"
         disabled={categorySelectedBytes === 0 || scanStore.isCleaning}
         onclick={cleanSelected}
       >
-        <Trash2 size={13} />
-        {scanStore.isCleaning ? 'Cleaning…' : `Clean ${formatBytes(categorySelectedBytes)}`}
+        {#if scanStore.isCleaning}
+          <DeletingDots size="xs" />
+          <span>Cleaning…</span>
+        {:else}
+          <Trash2 size={13} />
+          <span>Clean {formatBytes(categorySelectedBytes)}</span>
+        {/if}
       </Button>
     </div>
   </div>

@@ -7,6 +7,7 @@
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     Boxes,
     RotateCw,
@@ -81,7 +82,7 @@
         onclick={() => localModelsStore.refresh()}
         class="gap-1.5 text-xs"
       >
-        <RotateCw size={13} class={localModelsStore.isLoading ? 'animate-spin' : ''} />
+        <RotateCw size={13} class={localModelsStore.isLoading ? 'animate-gentle-spin' : ''} />
         <span>Rescan Models</span>
       </Button>
     </div>
@@ -191,8 +192,15 @@
             size="sm"
             disabled={localModelsStore.isDeleting}
             onclick={executeDeleteModel}
+            class="min-w-[95px] gap-1.5"
           >
-            {localModelsStore.isDeleting ? 'Deleting...' : 'Delete Model'}
+            {#if localModelsStore.isDeleting}
+              <DeletingDots size="xs" />
+              <span>Deleting…</span>
+            {:else}
+              <Trash2 size={12} />
+              <span>Delete Model</span>
+            {/if}
           </Button>
         </div>
       </Card>

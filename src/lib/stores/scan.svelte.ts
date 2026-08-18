@@ -43,7 +43,7 @@ class ScanStore {
     let total = 0;
     for (const cat of this.lastScan.categories) {
       for (const item of cat.items) {
-        if (this.selectedMap[item.id]) {
+        if (item.risk !== 'manual' && this.selectedMap[item.id]) {
           total += item.size.allocated ?? item.size.logical;
         }
       }
@@ -96,18 +96,31 @@ class ScanStore {
     const newMap: Record<string, boolean> = {};
     for (const cat of scan.categories) {
       for (const item of cat.items) {
-        // Auto-select only safe items with non-zero size
+        // Auto-select only safe items with non-zero size (never manual)
         newMap[item.id] = item.risk === 'safe' && (item.size.allocated ?? item.size.logical) > 0;
       }
     }
     this.selectedMap = newMap;
   }
 
+  private findItem(id: string): ScanItem | undefined {
+    if (!this.lastScan) return undefined;
+    for (const cat of this.lastScan.categories) {
+      const found = cat.items.find((i) => i.id === id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
   toggleItem(id: string) {
+    const item = this.findItem(id);
+    if (item && item.risk === 'manual') return;
     this.selectedMap[id] = !this.selectedMap[id];
   }
 
   setItemSelected(id: string, selected: boolean) {
+    const item = this.findItem(id);
+    if (item && item.risk === 'manual') return;
     this.selectedMap[id] = selected;
   }
 
@@ -117,7 +130,9 @@ class ScanStore {
     if (!cat) return;
 
     for (const item of cat.items) {
-      this.selectedMap[item.id] = select;
+      if (item.risk !== 'manual') {
+        this.selectedMap[item.id] = select;
+      }
     }
   }
 
@@ -213,7 +228,7 @@ class ScanStore {
   async cleanItems(items: ScanItem[]): Promise<CleanResult | null> {
     if (this.isCleaning) return null;
     const selectedItems = items
-      .filter((item) => this.selectedMap[item.id])
+      .filter((item) => this.selectedMap[item.id] && item.risk !== 'manual')
       .map((item) => ({ ...item, is_selected: true }));
 
     if (selectedItems.length === 0) {

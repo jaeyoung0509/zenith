@@ -53,11 +53,12 @@ describe('filterAndSortCleanupItems', () => {
       [
         item({ id: 'cargo', name: 'Cargo Registry', risk: 'rebuild', path: '/cargo/cache' }),
         item({ id: 'npm', name: 'npm Cache', path: '/npm/cache' }),
+        item({ id: 'ollama', name: 'Ollama Blobs', risk: 'manual', path: '/ollama/models' }),
       ],
-      'rebuild',
-      'cargo',
+      'manual',
+      'ollama',
       'name'
     );
-    expect(result.map((entry) => entry.id)).toEqual(['cargo']);
+    expect(result.map((entry) => entry.id)).toEqual(['ollama']);
   });
 });

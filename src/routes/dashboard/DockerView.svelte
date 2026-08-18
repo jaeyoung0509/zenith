@@ -5,6 +5,7 @@
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     Container,
     RotateCw,
@@ -60,7 +61,7 @@
       onclick={() => dockerStore.refresh()}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={dockerStore.isLoading ? 'animate-spin' : ''} />
+      <RotateCw size={13} class={dockerStore.isLoading ? 'animate-gentle-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>
@@ -100,10 +101,15 @@
           size="sm"
           disabled={dockerStore.isPruning || overview.build_cache.reclaimable_bytes === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.builder')}
-          class="w-full text-xs gap-1.5"
+          class="w-full text-xs gap-1.5 min-h-[30px]"
         >
-          <Trash2 size={12} />
-          <span>Prune Cache</span>
+          {#if dockerStore.isPruning}
+            <DeletingDots size="xs" />
+            <span>Pruning…</span>
+          {:else}
+            <Trash2 size={12} />
+            <span>Prune Cache</span>
+          {/if}
         </Button>
       </Card>
 
@@ -127,10 +133,15 @@
           size="sm"
           disabled={dockerStore.isPruning || overview.images.reclaimable_bytes === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.dangling_images')}
-          class="w-full text-xs gap-1.5"
+          class="w-full text-xs gap-1.5 min-h-[30px]"
         >
-          <Trash2 size={12} />
-          <span>Prune Images</span>
+          {#if dockerStore.isPruning}
+            <DeletingDots size="xs" />
+            <span>Pruning…</span>
+          {:else}
+            <Trash2 size={12} />
+            <span>Prune Images</span>
+          {/if}
         </Button>
       </Card>
 
@@ -154,10 +165,15 @@
           size="sm"
           disabled={dockerStore.isPruning || overview.containers.reclaimable_bytes === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.stopped_containers')}
-          class="w-full text-xs gap-1.5"
+          class="w-full text-xs gap-1.5 min-h-[30px]"
         >
-          <Trash2 size={12} />
-          <span>Prune Containers</span>
+          {#if dockerStore.isPruning}
+            <DeletingDots size="xs" />
+            <span>Pruning…</span>
+          {:else}
+            <Trash2 size={12} />
+            <span>Prune Containers</span>
+          {/if}
         </Button>
       </Card>
 
@@ -181,10 +197,15 @@
           size="sm"
           disabled={dockerStore.isPruning || overview.volumes.reclaimable_bytes === 0}
           onclick={() => (confirmVolumePrune = true)}
-          class="w-full text-xs gap-1.5 text-rose-400 hover:text-rose-400"
+          class="w-full text-xs gap-1.5 text-rose-400 hover:text-rose-400 min-h-[30px]"
         >
-          <Trash2 size={12} />
-          <span>Prune Volumes</span>
+          {#if dockerStore.isPruning}
+            <DeletingDots size="xs" />
+            <span>Pruning…</span>
+          {:else}
+            <Trash2 size={12} />
+            <span>Prune Volumes</span>
+          {/if}
         </Button>
       </Card>
     </div>

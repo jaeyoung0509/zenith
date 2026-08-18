@@ -71,7 +71,7 @@
       onclick={() => memoryStore.refreshMemory()}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={memoryStore.isLoading ? 'animate-spin' : ''} />
+      <RotateCw size={13} class={memoryStore.isLoading ? 'animate-gentle-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>

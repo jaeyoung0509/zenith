@@ -63,7 +63,7 @@
         Disk Utility
       </Button>
       <Button variant="outline" size="sm" class="gap-1.5" disabled={isLoading} onclick={refresh}>
-        <RefreshCw size={13} class={isLoading ? 'animate-spin' : ''} />
+        <RefreshCw size={13} class={isLoading ? 'animate-gentle-spin' : ''} />
         Refresh
       </Button>
     </div>

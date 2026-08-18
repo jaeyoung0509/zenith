@@ -34,7 +34,7 @@
       </div>
     </div>
     <Button variant="outline" size="sm" class="gap-1.5" disabled={usageStore.isLoading} onclick={() => usageStore.refresh(true)}>
-      <RefreshCw size={13} class={usageStore.isLoading ? 'animate-spin' : ''} />
+      <RefreshCw size={13} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
       Refresh
     </Button>
   </div>
