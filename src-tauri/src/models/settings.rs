@@ -120,8 +120,7 @@ impl ZenithSettings {
         }
 
         let mut tabs = HashSet::new();
-        self.dashboard_tabs
-            .retain(|tab| tabs.insert(*tab));
+        self.dashboard_tabs.retain(|tab| tabs.insert(*tab));
         if self.dashboard_tabs.is_empty() {
             self.dashboard_tabs.push(DashboardTab::Disk);
         }
@@ -170,11 +169,7 @@ mod tests {
                 QuickPanelSection::AiUsage,
                 QuickPanelSection::Memory,
             ],
-            dashboard_tabs: vec![
-                DashboardTab::Usage,
-                DashboardTab::Usage,
-                DashboardTab::Disk,
-            ],
+            dashboard_tabs: vec![DashboardTab::Usage, DashboardTab::Usage, DashboardTab::Disk],
             quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
             ..ZenithSettings::default()
         };
@@ -201,9 +196,6 @@ mod tests {
             sanitized.quick_panel_sections,
             vec![QuickPanelSection::Storage]
         );
-        assert_eq!(
-            sanitized.dashboard_tabs,
-            vec![DashboardTab::Disk]
-        );
+        assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Disk]);
     }
 }

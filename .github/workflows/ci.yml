@@ -6,8 +6,8 @@ on:
     branches: [master, develop]
 
 jobs:
-  test:
-    name: Test & Build (macOS)
+  rust:
+    name: Rust Checks & Tests (macOS)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +16,29 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> src-tauri/target'
+
+      - name: Rust Format Check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust Clippy Linter
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust Unit & Safety Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust Cargo Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  frontend:
+    name: Frontend Checks & Build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
@@ -30,9 +53,6 @@ jobs:
 
       - name: Install Frontend Dependencies
         run: pnpm install
-
-      - name: Rust Unit & Safety Tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Svelte Typecheck
         run: pnpm check
