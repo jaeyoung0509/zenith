@@ -68,7 +68,7 @@
       variant="outline"
       size="sm"
       disabled={memoryStore.isLoading}
-      onclick={() => memoryStore.refresh()}
+      onclick={() => memoryStore.refreshMemory()}
       class="gap-1.5 text-xs"
     >
       <RotateCw size={13} class={memoryStore.isLoading ? 'animate-spin' : ''} />

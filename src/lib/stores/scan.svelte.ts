@@ -128,6 +128,11 @@ class ScanStore {
     }
   }
 
+  isStale(maxAgeSeconds = 300) {
+    if (!this.lastScan) return true;
+    return Math.floor(Date.now() / 1000) - this.lastScan.finished_at >= maxAgeSeconds;
+  }
+
   async runScan(categories?: Category[]): Promise<ScanResult | null> {
     if (this.isScanning) return null;
     this.isScanning = true;

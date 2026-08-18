@@ -21,7 +21,7 @@ import type {
   ZenithSettings,
 } from '../models/types';
 
-export async function tauriGetAiUsage(): Promise<AiUsageSnapshot> {
+export async function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {
   if (!isTauri) {
     return {
       fetched_at: Math.floor(Date.now() / 1000),
@@ -60,7 +60,7 @@ export async function tauriGetAiUsage(): Promise<AiUsageSnapshot> {
       ],
     };
   }
-  return await invoke<AiUsageSnapshot>('get_ai_usage');
+  return await invoke<AiUsageSnapshot>('get_ai_usage', { force });
 }
 
 export async function tauriConnectOpenRouter(): Promise<void> {
@@ -355,6 +355,8 @@ export async function tauriGetSettings(): Promise<ZenithSettings> {
       include_rebuild_caches: false,
       theme: 'system',
       excluded_signatures: [],
+      quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+      quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       awake_rules: [
         {
           id: 'rule.claude',
@@ -371,7 +373,10 @@ export async function tauriGetSettings(): Promise<ZenithSettings> {
 }
 
 export async function tauriSaveSettings(settings: ZenithSettings): Promise<void> {
-  if (!isTauri) return;
+  if (!isTauri) {
+    localStorage.setItem('zenith.settings', JSON.stringify(settings));
+    return;
+  }
   await invoke('save_settings', { settings });
 }
 
@@ -391,6 +396,12 @@ export async function tauriOpenDashboard(): Promise<void> {
 export async function tauriToggleQuick(): Promise<void> {
   if (!isTauri) return;
   await invoke('toggle_quick_panel');
+}
+
+export async function tauriHideCurrentWindow(): Promise<void> {
+  if (!isTauri) return;
+  const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+  await getCurrentWebviewWindow().hide();
 }
 
 // Fallback browser mock helpers

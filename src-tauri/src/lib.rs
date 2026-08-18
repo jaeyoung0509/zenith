@@ -8,6 +8,7 @@ pub mod models_inventory;
 pub mod power;
 pub mod safety;
 pub mod scanner;
+pub mod settings_store;
 pub mod signatures;
 
 use commands::AppState;
@@ -103,6 +104,8 @@ pub fn run() {
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
     let last_scan = Arc::new(Mutex::new(None));
     let openrouter_key = Arc::new(Mutex::new(None));
+    let ai_usage_cache = Arc::new(Mutex::new(None));
+    let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
 
     let app_state = AppState {
         registry,
@@ -110,6 +113,8 @@ pub fn run() {
         settings,
         last_scan,
         openrouter_key,
+        ai_usage_cache,
+        ai_usage_refresh_lock,
     };
 
     tauri::Builder::default()
@@ -123,6 +128,13 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                let loaded = settings_store::load(&config_dir);
+                app.state::<AppState>()
+                    .awake_manager
+                    .set_rules(loaded.awake_rules.clone());
+                *app.state::<AppState>().settings.lock().unwrap() = loaded;
+            }
             // Create exactly one macOS menu-bar icon. It is a monochrome
             // template image so macOS can adapt it to light/dark menu bars.
             let open_dashboard =

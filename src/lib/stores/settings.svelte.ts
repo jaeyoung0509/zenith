@@ -1,5 +1,6 @@
-import type { ZenithSettings } from '../models/types';
+import type { AiProviderId, QuickPanelSection, ZenithSettings } from '../models/types';
 import { tauriGetSettings, tauriSaveSettings } from '../utils/tauri';
+import { moveOrdered, toggleOrdered } from '../utils/quickPanel';
 
 class SettingsStore {
   settings = $state<ZenithSettings>({
@@ -11,6 +12,8 @@ class SettingsStore {
     include_rebuild_caches: false,
     theme: 'system',
     excluded_signatures: [],
+    quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+    quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
     awake_rules: [
       {
         id: 'rule.claude',
@@ -37,15 +40,35 @@ class SettingsStore {
   });
 
   isLoading = $state(false);
+  error = $state<string | null>(null);
+  private hasLoaded = false;
+  private loadPromise: Promise<void> | null = null;
+  private saveQueue: Promise<void> = Promise.resolve();
 
-  constructor() {
-    this.load();
+  async load(force = false) {
+    if (this.hasLoaded && !force) return;
+    if (this.loadPromise) return this.loadPromise;
+    this.loadPromise = this.performLoad();
+    try {
+      await this.loadPromise;
+    } finally {
+      this.loadPromise = null;
+    }
   }
 
-  async load() {
+  private async performLoad() {
     this.isLoading = true;
     try {
-      this.settings = await tauriGetSettings();
+      const browserSettings = typeof localStorage !== 'undefined'
+        ? localStorage.getItem('zenith.settings')
+        : null;
+      this.settings = browserSettings ? JSON.parse(browserSettings) : await tauriGetSettings();
+      this.settings = {
+        ...this.settings,
+        quick_panel_sections: this.settings.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+        quick_panel_ai_providers: this.settings.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+      };
+      this.hasLoaded = true;
       this.applyTheme(this.settings.theme);
     } catch {
       // keep default
@@ -56,14 +79,37 @@ class SettingsStore {
 
   async save(partial: Partial<ZenithSettings>) {
     this.settings = { ...this.settings, ...partial };
+    const snapshot = structuredClone(this.settings);
+    this.error = null;
+    this.saveQueue = this.saveQueue.catch(() => undefined).then(() => tauriSaveSettings(snapshot));
     try {
-      await tauriSaveSettings(this.settings);
-      if (partial.theme) {
-        this.applyTheme(partial.theme);
-      }
-    } catch {
-      // ignore
+      await this.saveQueue;
+      if (partial.theme) this.applyTheme(partial.theme);
+    } catch (error: any) {
+      this.error = error?.toString() || 'Could not save preferences';
     }
+  }
+
+  async toggleQuickPanelSection(section: QuickPanelSection) {
+    const current = this.settings.quick_panel_sections;
+    const next = toggleOrdered(current, section, true);
+    await this.save({ quick_panel_sections: next });
+  }
+
+  async moveQuickPanelSection(section: QuickPanelSection, direction: -1 | 1) {
+    const next = moveOrdered(this.settings.quick_panel_sections, section, direction);
+    await this.save({ quick_panel_sections: next });
+  }
+
+  async toggleQuickPanelProvider(provider: AiProviderId) {
+    const current = this.settings.quick_panel_ai_providers;
+    const next = toggleOrdered(current, provider);
+    await this.save({ quick_panel_ai_providers: next });
+  }
+
+  async moveQuickPanelProvider(provider: AiProviderId, direction: -1 | 1) {
+    const next = moveOrdered(this.settings.quick_panel_ai_providers, provider, direction);
+    await this.save({ quick_panel_ai_providers: next });
   }
 
   applyTheme(theme: string) {

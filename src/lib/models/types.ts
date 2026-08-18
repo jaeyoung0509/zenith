@@ -261,7 +261,12 @@ export interface ZenithSettings {
   theme: string;
   excluded_signatures: string[];
   awake_rules: AwakeRule[];
+  quick_panel_sections: QuickPanelSection[];
+  quick_panel_ai_providers: AiProviderId[];
 }
+
+export type QuickPanelSection = 'storage' | 'cleanup' | 'ai_usage' | 'categories' | 'memory';
+export type AiProviderId = 'codex' | 'claude' | 'opencode' | 'openrouter' | 'antigravity';
 
 export type UsageSupport = 'live' | 'local' | 'manual';
 

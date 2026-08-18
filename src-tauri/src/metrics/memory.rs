@@ -1,5 +1,6 @@
 use crate::models::{MemoryMetrics, MemoryPressure, ProcessMemory};
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::SystemTime;
 use sysinfo::{ProcessesToUpdate, Signal, System};
 
@@ -40,29 +41,33 @@ impl MemoryInspector {
         let compressed_bytes = Self::get_compressed_memory_macos().unwrap_or(0);
 
         // Aggregate top processes
-        let mut process_groups: HashMap<String, (u64, usize, u32)> = HashMap::new();
+        let mut process_groups: HashMap<String, (u64, usize, u32, bool)> = HashMap::new();
 
         for (pid, process) in sys.processes() {
             let raw_name = process.name().to_string_lossy();
-            let norm_name = Self::normalize_process_name(&raw_name);
+            let norm_name = Self::normalize_process_name(&raw_name, process.exe());
             let mem = process.memory();
+            let can_terminate = Self::can_terminate_process(&norm_name, process.exe());
 
             let entry = process_groups
                 .entry(norm_name)
-                .or_insert((0, 0, pid.as_u32()));
+                .or_insert((0, 0, pid.as_u32(), false));
             entry.0 += mem;
             entry.1 += 1;
+            entry.3 |= can_terminate;
         }
 
         let mut top_processes: Vec<ProcessMemory> = process_groups
             .into_iter()
-            .map(|(name, (memory_bytes, process_count, pid))| ProcessMemory {
-                pid,
-                can_terminate: Self::can_terminate_group(&name),
-                name,
-                memory_bytes,
-                process_count,
-            })
+            .map(
+                |(name, (memory_bytes, process_count, pid, can_terminate))| ProcessMemory {
+                    pid,
+                    can_terminate,
+                    name,
+                    memory_bytes,
+                    process_count,
+                },
+            )
             .collect();
 
         top_processes.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
@@ -87,7 +92,10 @@ impl MemoryInspector {
         }
     }
 
-    fn normalize_process_name(raw: &str) -> String {
+    fn normalize_process_name(raw: &str, executable: Option<&Path>) -> String {
+        if let Some(app_name) = Self::installed_app_name(executable) {
+            return app_name;
+        }
         let lower = raw.to_lowercase();
         if lower.contains("cursor") {
             "Cursor".to_string()
@@ -99,6 +107,10 @@ impl MemoryInspector {
             "Docker Desktop".to_string()
         } else if lower.contains("claude") {
             "Claude".to_string()
+        } else if lower.contains("chatgpt") {
+            "ChatGPT".to_string()
+        } else if lower.contains("anytype") {
+            "Anytype".to_string()
         } else if lower.contains("xcode") || lower.contains("sourcekit") {
             "Xcode".to_string()
         } else if lower.contains("rust-analyzer") {
@@ -116,6 +128,12 @@ impl MemoryInspector {
             "Ollama Server".to_string()
         } else if lower.contains("safari") {
             "Safari".to_string()
+        } else if lower.contains("antigravity") {
+            "Antigravity".to_string()
+        } else if lower == "agy" || lower.starts_with("agy ") {
+            "agy".to_string()
+        } else if lower.contains("kakaotalk") || lower.contains("kakao talk") {
+            "KakaoTalk".to_string()
         } else if lower.contains("iterm") || lower.contains("terminal") || lower.contains("ghostty")
         {
             "Terminal".to_string()
@@ -124,8 +142,22 @@ impl MemoryInspector {
         }
     }
 
-    fn can_terminate_group(name: &str) -> bool {
-        matches!(
+    fn installed_app_name(executable: Option<&Path>) -> Option<String> {
+        let path = executable?.to_str()?;
+        let is_user_application = path.starts_with("/Applications/")
+            || (path.starts_with("/Users/") && path.contains("/Applications/"));
+        if !is_user_application {
+            return None;
+        }
+        let bundle_prefix = path.split_once(".app/")?.0;
+        bundle_prefix.rsplit('/').next().map(str::to_string)
+    }
+
+    fn can_terminate_process(name: &str, executable: Option<&Path>) -> bool {
+        if matches!(name, "Zenith" | "Terminal") {
+            return false;
+        }
+        let explicitly_supported = matches!(
             name,
             "Google Chrome"
                 | "Brave Browser"
@@ -136,16 +168,23 @@ impl MemoryInspector {
                 | "VS Code"
                 | "Ollama Server"
                 | "Safari"
-        )
+                | "Antigravity"
+                | "agy"
+                | "KakaoTalk"
+                | "ChatGPT"
+                | "Anytype"
+        );
+        let installed_user_app = executable.and_then(Path::to_str).is_some_and(|path| {
+            (path.starts_with("/Applications/")
+                || (path.starts_with("/Users/") && path.contains("/Applications/")))
+                && path.contains(".app/Contents/")
+        });
+        explicitly_supported || installed_user_app
     }
 
     /// Signals only an allowlisted user-application group resolved from a fresh
     /// process snapshot. Arbitrary PID termination is intentionally not exposed.
     pub fn terminate_group(name: &str, force: bool) -> Result<usize, String> {
-        if !Self::can_terminate_group(name) {
-            return Err(format!("{name} is protected from termination by Zenith"));
-        }
-
         let mut system = System::new_all();
         system.refresh_processes(ProcessesToUpdate::All, true);
         let signal = if force { Signal::Kill } else { Signal::Term };
@@ -154,10 +193,13 @@ impl MemoryInspector {
 
         for process in system.processes().values() {
             let raw_name = process.name().to_string_lossy();
-            if Self::normalize_process_name(&raw_name) != name {
+            if Self::normalize_process_name(&raw_name, process.exe()) != name {
                 continue;
             }
             matched += 1;
+            if !Self::can_terminate_process(name, process.exe()) {
+                continue;
+            }
             if process.kill_with(signal).unwrap_or(false) {
                 signaled += 1;
             }
@@ -209,21 +251,59 @@ mod tests {
     #[test]
     fn browser_helpers_are_grouped_with_their_parent_app() {
         assert_eq!(
-            MemoryInspector::normalize_process_name("Google Chrome Helper (Renderer)"),
+            MemoryInspector::normalize_process_name("Google Chrome Helper (Renderer)", None),
             "Google Chrome"
         );
         assert_eq!(
-            MemoryInspector::normalize_process_name("Brave Browser Helper (GPU)"),
+            MemoryInspector::normalize_process_name("Brave Browser Helper (GPU)", None),
             "Brave Browser"
         );
     }
 
     #[test]
-    fn only_known_user_apps_can_be_terminated() {
-        assert!(MemoryInspector::can_terminate_group("Google Chrome"));
-        assert!(MemoryInspector::can_terminate_group("Cursor"));
-        assert!(!MemoryInspector::can_terminate_group("spotlightknowledged"));
-        assert!(!MemoryInspector::can_terminate_group("Terminal"));
-        assert!(!MemoryInspector::can_terminate_group("Zenith"));
+    fn installed_app_helpers_are_grouped_by_bundle_name() {
+        use std::path::Path;
+        assert_eq!(
+            MemoryInspector::normalize_process_name(
+                "Anytype Helper (Renderer)",
+                Some(Path::new(
+                    "/Applications/Anytype.app/Contents/Frameworks/Anytype Helper.app/Contents/MacOS/Anytype Helper"
+                ))
+            ),
+            "Anytype"
+        );
+    }
+
+    #[test]
+    fn user_apps_and_requested_agent_processes_can_be_terminated() {
+        use std::path::Path;
+        assert!(MemoryInspector::can_terminate_process("agy", None));
+        assert!(MemoryInspector::can_terminate_process("Antigravity", None));
+        assert!(MemoryInspector::can_terminate_process("ChatGPT", None));
+        assert!(MemoryInspector::can_terminate_process("Claude", None));
+        assert!(MemoryInspector::can_terminate_process("Anytype", None));
+        assert!(MemoryInspector::can_terminate_process(
+            "KakaoTalk",
+            Some(Path::new(
+                "/Applications/KakaoTalk.app/Contents/MacOS/KakaoTalk"
+            ))
+        ));
+        assert!(MemoryInspector::can_terminate_process(
+            "Acme",
+            Some(Path::new(
+                "/Users/test/Applications/Acme.app/Contents/MacOS/Acme"
+            ))
+        ));
+        assert!(!MemoryInspector::can_terminate_process(
+            "spotlightknowledged",
+            Some(Path::new("/System/Library/Frameworks/spotlightknowledged"))
+        ));
+        assert!(!MemoryInspector::can_terminate_process(
+            "Terminal",
+            Some(Path::new(
+                "/Applications/Terminal.app/Contents/MacOS/Terminal"
+            ))
+        ));
+        assert!(!MemoryInspector::can_terminate_process("Zenith", None));
     }
 }

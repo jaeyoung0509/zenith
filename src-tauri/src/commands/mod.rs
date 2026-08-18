@@ -11,6 +11,7 @@ use crate::models_inventory::LocalModelScanner;
 use crate::power::{ApplicationPicker, KeepAwakeManager};
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
+use crate::settings_store;
 use crate::signatures::SignatureRegistry;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
@@ -22,14 +23,49 @@ pub struct AppState {
     pub settings: Arc<Mutex<ZenithSettings>>,
     pub last_scan: Arc<Mutex<Option<ScanResult>>>,
     pub openrouter_key: Arc<Mutex<Option<String>>>,
+    pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
+    pub ai_usage_refresh_lock: Arc<Mutex<()>>,
+}
+
+fn unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[tauri::command]
-pub async fn get_ai_usage(state: State<'_, AppState>) -> Result<AiUsageSnapshot, String> {
+pub async fn get_ai_usage(
+    force: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<AiUsageSnapshot, String> {
+    const CACHE_TTL_SECS: u64 = 60;
+    if !force.unwrap_or(false) {
+        if let Some(snapshot) = state.ai_usage_cache.lock().unwrap().as_ref() {
+            if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                return Ok(snapshot.clone());
+            }
+        }
+    }
+
     let openrouter_key = state.openrouter_key.lock().unwrap().clone();
-    tauri::async_runtime::spawn_blocking(move || AiUsageCollector::collect(openrouter_key))
-        .await
-        .map_err(|error| error.to_string())
+    let cache = state.ai_usage_cache.clone();
+    let refresh_lock = state.ai_usage_refresh_lock.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _refresh_guard = refresh_lock.lock().unwrap();
+        if !force.unwrap_or(false) {
+            if let Some(snapshot) = cache.lock().unwrap().as_ref() {
+                if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                    return snapshot.clone();
+                }
+            }
+        }
+        let snapshot = AiUsageCollector::collect(openrouter_key);
+        *cache.lock().unwrap() = Some(snapshot.clone());
+        snapshot
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -39,6 +75,7 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
         .await
         .map_err(|error| error.to_string())??;
     *openrouter_key.lock().unwrap() = Some(key);
+    *state.ai_usage_cache.lock().unwrap() = None;
     Ok(())
 }
 
@@ -190,7 +227,17 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String
 }
 
 #[tauri::command]
-pub fn save_settings(settings: ZenithSettings, state: State<'_, AppState>) -> Result<(), String> {
+pub fn save_settings(
+    settings: ZenithSettings,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = settings.sanitize();
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+    settings_store::save(&config_dir, &settings)?;
     state.awake_manager.set_rules(settings.awake_rules.clone());
     let mut s = state.settings.lock().unwrap();
     *s = settings;

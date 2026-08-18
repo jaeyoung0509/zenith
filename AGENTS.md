@@ -39,9 +39,17 @@ safety conventions below when changing Zenith.
 - Window labels are `main` and `quick`. Closing the quick panel hides it; it
   must not terminate the background app. Every frameless window needs an
   obvious keyboard-accessible close control.
+- Persist user preferences as validated JSON in Tauri's app configuration
+  directory. Missing fields must deserialize to safe defaults so upgrades do
+  not discard existing settings. Reload preferences when the persistent quick
+  window is activated because each webview owns a separate frontend store.
+- Hidden quick panels must not poll metrics or invoke provider CLIs. Disk data
+  refreshes once per activation, memory may poll only while visible, and AI
+  provider snapshots use a bounded backend cache with manual refresh support.
 - Never expose arbitrary PID kill commands. Memory actions must resolve a fresh
-  process snapshot from an allowlisted user-app group, protect system/terminal/
-  Zenith processes, and offer graceful termination before force termination.
+  process snapshot from an allowlisted user-app group (including executables in
+  installed `.app` bundles), protect system/terminal/Zenith processes, and
+  offer graceful termination before force termination.
 - Native app selection for Keep Awake starts in `/Applications`, reads
   `CFBundleExecutable`, and returns only the display name, executable name, and
   bundle path. Cancellation is a normal empty result, not an error.
