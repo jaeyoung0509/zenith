@@ -4,6 +4,7 @@ import type {
   AwakeBehavior,
   AwakeRule,
   AwakeState,
+  AiUsageSnapshot,
   Category,
   CleanEvent,
   CleanResult,
@@ -17,6 +18,53 @@ import type {
   ScanResult,
   ZenithSettings,
 } from '../models/types';
+
+export async function tauriGetAiUsage(): Promise<AiUsageSnapshot> {
+  if (!isTauri) {
+    return {
+      fetched_at: Math.floor(Date.now() / 1000),
+      providers: [
+        {
+          id: 'codex',
+          name: 'Codex',
+          installed: true,
+          connected: true,
+          auth_label: 'plus · OAuth',
+          status_message: 'Live account limits from the official Codex app-server.',
+          support: 'live',
+          windows: [{ label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 }],
+          summary: { lifetime_tokens: 7111812241, last_7d_tokens: 452818756, current_streak_days: 3 },
+        },
+        {
+          id: 'claude', name: 'Claude Code', installed: true, connected: false,
+          auth_label: 'Claude.ai OAuth', status_message: 'Open /usage in Claude Code for subscription limits.',
+          support: 'manual', windows: [], summary: {},
+        },
+        {
+          id: 'opencode', name: 'OpenCode', installed: true, connected: true,
+          auth_label: '4 OAuth providers', status_message: 'Local activity from opencode stats.',
+          support: 'local', windows: [], summary: { local_sessions: 18, local_cost_usd: 1.42 },
+        },
+        {
+          id: 'openrouter', name: 'OpenRouter', installed: true, connected: false,
+          auth_label: 'OAuth PKCE', status_message: 'No Zenith OAuth session is connected yet.',
+          support: 'live', windows: [], summary: {},
+        },
+        {
+          id: 'antigravity', name: 'Antigravity', installed: true, connected: false,
+          auth_label: 'Google OAuth', status_message: 'Google does not publish an account-usage API.',
+          support: 'manual', windows: [], summary: {},
+        },
+      ],
+    };
+  }
+  return await invoke<AiUsageSnapshot>('get_ai_usage');
+}
+
+export async function tauriConnectOpenRouter(): Promise<void> {
+  if (!isTauri) return;
+  await invoke('connect_openrouter_oauth');
+}
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 

@@ -30,10 +30,12 @@ impl SignatureLoader {
         Ok(valid_signatures)
     }
 
-    /// Expands `~` in path patterns to the user's HOME directory and validates safety.
+    /// Expands `~` and the current user's `$TMPDIR` without reading arbitrary variables.
     pub fn expand_path(pattern: &str) -> Option<PathBuf> {
         let home = std::env::var("HOME").ok()?;
-        let path = if pattern.starts_with("~/") {
+        let path = if pattern == "$TMPDIR" {
+            std::env::temp_dir()
+        } else if pattern.starts_with("~/") {
             PathBuf::from(&home).join(&pattern[2..])
         } else if pattern == "~" {
             PathBuf::from(&home)

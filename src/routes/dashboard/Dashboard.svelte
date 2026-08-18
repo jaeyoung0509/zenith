@@ -8,6 +8,7 @@
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
+  import AiUsageView from './AiUsageView.svelte';
   import MemoryView from './MemoryView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
@@ -19,9 +20,10 @@
     Moon,
     Settings,
     Shield,
+    ChartNoAxesCombined,
   } from 'lucide-svelte';
 
-  type Tab = 'storage' | 'docker' | 'models' | 'memory' | 'awake' | 'settings';
+  type Tab = 'storage' | 'docker' | 'models' | 'usage' | 'memory' | 'awake' | 'settings';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -109,6 +111,18 @@
 
         <button
           type="button"
+          onclick={() => selectTab('usage')}
+          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+          'usage'
+            ? 'bg-secondary text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+        >
+          <ChartNoAxesCombined size={15} />
+          <span>AI Usage</span>
+        </button>
+
+        <button
+          type="button"
           onclick={() => selectTab('awake')}
           class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
           'awake'
@@ -156,6 +170,8 @@
       <DockerView />
     {:else if currentTab === 'models'}
       <ModelsView />
+    {:else if currentTab === 'usage'}
+      <AiUsageView />
     {:else if currentTab === 'memory'}
       <MemoryView />
     {:else if currentTab === 'awake'}

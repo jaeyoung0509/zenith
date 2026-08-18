@@ -1,0 +1,26 @@
+# Zenith Signatures - System & per-user temporary files
+
+[[signatures]]
+id = "system.developer_temp"
+name = "Stale Developer Temporary Files"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+paths = ["$TMPDIR"]
+include_prefixes = [
+    "antigravity-",
+    "claude-",
+    "claude_",
+    "codex-",
+    "codex_",
+    "com.anthropic.",
+    "com.openai.",
+    "esbuild-",
+    "gemini-",
+    "opencode-",
+    "opencode_",
+    "tauri-",
+    "vite-"
+]
+min_age_days = 3
+description = "Known AI and developer-tool temp artifacts that have not changed for at least 3 days. Other apps' temporary files are left untouched."

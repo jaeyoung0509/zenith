@@ -17,6 +17,8 @@ pub struct Signature {
     pub description: String,
     #[serde(default)]
     pub min_age_days: Option<u32>,
+    #[serde(default)]
+    pub include_prefixes: Vec<String>,
 }
 
 fn default_strategy() -> CleanStrategy {

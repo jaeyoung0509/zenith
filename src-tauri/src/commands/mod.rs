@@ -1,10 +1,11 @@
+use crate::ai_usage::{connect_openrouter, AiUsageCollector};
 use crate::cleaner::CleanExecutor;
 use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
-    AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult, DeletePlan,
-    DiskMetrics, DockerStatus, LocalModelItem, MemoryMetrics, ScanEvent, ScanItem, ScanResult,
-    ZenithSettings,
+    AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
+    DeletePlan, DiskMetrics, DockerStatus, LocalModelItem, MemoryMetrics, ScanEvent, ScanItem,
+    ScanResult, ZenithSettings,
 };
 use crate::models_inventory::LocalModelScanner;
 use crate::power::KeepAwakeManager;
@@ -20,6 +21,25 @@ pub struct AppState {
     pub awake_manager: Arc<KeepAwakeManager>,
     pub settings: Arc<Mutex<ZenithSettings>>,
     pub last_scan: Arc<Mutex<Option<ScanResult>>>,
+    pub openrouter_key: Arc<Mutex<Option<String>>>,
+}
+
+#[tauri::command]
+pub async fn get_ai_usage(state: State<'_, AppState>) -> Result<AiUsageSnapshot, String> {
+    let openrouter_key = state.openrouter_key.lock().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || AiUsageCollector::collect(openrouter_key))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), String> {
+    let openrouter_key = state.openrouter_key.clone();
+    let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
+        .await
+        .map_err(|error| error.to_string())??;
+    *openrouter_key.lock().unwrap() = Some(key);
+    Ok(())
 }
 
 #[tauri::command]

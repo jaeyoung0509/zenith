@@ -1,3 +1,4 @@
+pub mod ai_usage;
 pub mod awake;
 pub mod category;
 pub mod clean_strategy;
@@ -11,6 +12,7 @@ pub mod scan;
 pub mod settings;
 pub mod signature;
 
+pub use ai_usage::*;
 pub use awake::*;
 pub use category::*;
 pub use clean_strategy::*;

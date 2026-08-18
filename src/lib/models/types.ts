@@ -242,3 +242,40 @@ export interface ZenithSettings {
   excluded_signatures: string[];
   awake_rules: AwakeRule[];
 }
+
+export type UsageSupport = 'live' | 'local' | 'manual';
+
+export interface UsageWindow {
+  label: string;
+  used_percent: number;
+  resets_at?: number;
+}
+
+export interface UsageSummary {
+  lifetime_tokens?: number;
+  last_7d_tokens?: number;
+  peak_daily_tokens?: number;
+  current_streak_days?: number;
+  local_sessions?: number;
+  local_cost_usd?: number;
+  usage_usd?: number;
+  limit_remaining_usd?: number;
+}
+
+export interface AiProviderUsage {
+  id: string;
+  name: string;
+  installed: boolean;
+  connected: boolean;
+  auth_label: string;
+  status_message: string;
+  support: UsageSupport;
+  windows: UsageWindow[];
+  summary: UsageSummary;
+  action_url?: string;
+}
+
+export interface AiUsageSnapshot {
+  providers: AiProviderUsage[];
+  fetched_at: number;
+}

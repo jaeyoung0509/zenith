@@ -1,3 +1,4 @@
+pub mod ai_usage;
 pub mod cleaner;
 pub mod commands;
 pub mod docker;
@@ -23,16 +24,26 @@ pub fn run() {
     let awake_manager = Arc::new(KeepAwakeManager::new());
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
     let last_scan = Arc::new(Mutex::new(None));
+    let openrouter_key = Arc::new(Mutex::new(None));
 
     let app_state = AppState {
         registry,
         awake_manager: awake_manager.clone(),
         settings,
         last_scan,
+        openrouter_key,
     };
 
     tauri::Builder::default()
         .manage(app_state)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Zenith is a menu-bar utility: Cmd+W and the red traffic-light
+                // button hide the focused window while the tray process stays alive.
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(move |app| {
             // Create exactly one macOS menu-bar icon. It is a monochrome
             // template image so macOS can adapt it to light/dark menu bars.
@@ -106,6 +117,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_ai_usage,
+            commands::connect_openrouter_oauth,
             commands::start_scan,
             commands::get_last_scan,
             commands::create_delete_plan,

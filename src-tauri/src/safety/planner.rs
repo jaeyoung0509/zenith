@@ -33,6 +33,20 @@ impl SafetyPlanner {
             // 2. Resolve target path
             let path = PathBuf::from(&item.path);
 
+            // A scan item must remain inside the path scope declared by its signature.
+            // Age-filtered temp signatures emit direct children; normal signatures
+            // may only target the declared root itself.
+            if !signature.paths.is_empty() {
+                let allowed = registry.resolve_paths(signature).iter().any(|root| {
+                    path == *root
+                        || (signature.min_age_days.is_some()
+                            && path.parent() == Some(root.as_path()))
+                });
+                if !allowed {
+                    return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
+                }
+            }
+
             // 3. Hard Blacklist check
             Blacklist::validate(&path)?;
 

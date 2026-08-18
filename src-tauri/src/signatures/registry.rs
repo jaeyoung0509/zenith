@@ -7,6 +7,7 @@ const EMBEDDED_AI_TOML: &str = include_str!("../../../signatures/ai.toml");
 const EMBEDDED_DEV_TOML: &str = include_str!("../../../signatures/developer.toml");
 const EMBEDDED_CONTAINERS_TOML: &str = include_str!("../../../signatures/containers.toml");
 const EMBEDDED_MODELS_TOML: &str = include_str!("../../../signatures/models.toml");
+const EMBEDDED_SYSTEM_TOML: &str = include_str!("../../../signatures/system.toml");
 
 #[derive(Debug, Clone)]
 pub struct SignatureRegistry {
@@ -37,6 +38,7 @@ impl SignatureRegistry {
             EMBEDDED_DEV_TOML,
             EMBEDDED_CONTAINERS_TOML,
             EMBEDDED_MODELS_TOML,
+            EMBEDDED_SYSTEM_TOML,
         ];
 
         for toml_str in &tomls {

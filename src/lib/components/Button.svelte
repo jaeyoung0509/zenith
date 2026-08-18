@@ -7,6 +7,8 @@
     disabled?: boolean;
     class?: string;
     onclick?: (e: MouseEvent) => void;
+    ariaLabel?: string;
+    title?: string;
     children?: Snippet;
   }
 
@@ -16,6 +18,8 @@
     disabled = false,
     class: className = '',
     onclick,
+    ariaLabel,
+    title,
     children,
   }: Props = $props();
 
@@ -44,6 +48,8 @@
   type="button"
   {disabled}
   {onclick}
+  aria-label={ariaLabel}
+  {title}
   class="inline-flex items-center justify-center font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 select-none {variantStyles[
     variant
   ]} {sizeStyles[size]} {className}"

@@ -3,6 +3,7 @@
   import QuickPanel from './routes/quick/QuickPanel.svelte';
   import Dashboard from './routes/dashboard/Dashboard.svelte';
   import { settingsStore } from './lib/stores/settings.svelte';
+  import { isTauri } from './lib/utils/tauri';
 
   let currentView = $state<'dashboard' | 'quick'>('dashboard');
 
@@ -20,6 +21,16 @@
     checkRoute();
     window.addEventListener('hashchange', checkRoute);
 
+    const closeOnCommandW = (event: KeyboardEvent) => {
+      if (!isTauri || !event.metaKey || event.key.toLowerCase() !== 'w') return;
+
+      event.preventDefault();
+      void import('@tauri-apps/api/webviewWindow').then(({ getCurrentWebviewWindow }) => {
+        return getCurrentWebviewWindow().hide();
+      });
+    };
+    window.addEventListener('keydown', closeOnCommandW);
+
     // Check Tauri window label first
     void (async () => {
       try {
@@ -36,6 +47,7 @@
     return () => {
       disposed = true;
       window.removeEventListener('hashchange', checkRoute);
+      window.removeEventListener('keydown', closeOnCommandW);
     };
   });
 </script>

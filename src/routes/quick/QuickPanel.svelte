@@ -4,7 +4,7 @@
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
-  import { tauriOpenDashboard } from '../../lib/utils/tauri';
+  import { tauriOpenDashboard, tauriToggleQuick } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
@@ -19,6 +19,7 @@
     Eye,
     Moon,
     Settings,
+    X,
   } from 'lucide-svelte';
 
   onMount(() => {
@@ -80,6 +81,16 @@
         onclick={handleOpenDashboard}
       >
         <Settings size={14} />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        class="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-secondary"
+        onclick={() => tauriToggleQuick()}
+        ariaLabel="Close quick panel"
+        title="Close"
+      >
+        <X size={15} />
       </Button>
     </div>
   </div>

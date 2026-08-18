@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
-    Category, FileSize, RiskTier, ScanItem, ZenithError,
+    Category, CleanStrategy, FileSize, RiskTier, ScanItem, Signature, ZenithError,
 };
 use zenith_lib::safety::{Blacklist, SafetyPlanner, SymlinkGuard, ToctouGuard};
 use zenith_lib::scanner::SizeCalculator;
@@ -145,7 +145,8 @@ fn test_symlink_safety_and_no_escape() {
     let outside_file = outside_dir.path().join("secret.txt");
     {
         let mut f = File::create(&outside_file).expect("create outside file");
-        f.write_all(b"sensitive content").expect("write outside file");
+        f.write_all(b"sensitive content")
+            .expect("write outside file");
     }
 
     // Create a symlink inside the fixture pointing outside
@@ -190,6 +191,32 @@ fn test_safety_planner_rejects_unknown_signatures() {
 }
 
 #[test]
+fn test_safety_planner_rejects_path_outside_signature_scope() {
+    let registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
+    let dir = tempdir().expect("tempdir");
+    let forged_path = dir.path().join("codex-forged");
+    fs::create_dir(&forged_path).unwrap();
+
+    let forged_item = ScanItem {
+        id: "system.developer_temp.0.codex-forged".into(),
+        signature_id: "system.developer_temp".into(),
+        name: "Forged temp item".into(),
+        category: Category::System,
+        risk: RiskTier::Safe,
+        path: forged_path.to_string_lossy().into_owned(),
+        size: FileSize::new(1024, Some(1024)),
+        file_count: 1,
+        description: "must not be planned".into(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+
+    let result = SafetyPlanner::create_plan(&[forged_item], &registry);
+    assert!(matches!(result, Err(ZenithError::SignatureMismatch(_))));
+}
+
+#[test]
 fn test_cleaner_delete_contents_preserves_root_directory() {
     let dir = tempdir().expect("create temp dir");
     let cache_root = dir.path().join("cargo_cache");
@@ -197,16 +224,34 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
 
     // Add subfiles and subdirectories
     let subfile = cache_root.join("test.crate");
-    File::create(&subfile).unwrap().write_all(b"dummy crate").unwrap();
+    File::create(&subfile)
+        .unwrap()
+        .write_all(b"dummy crate")
+        .unwrap();
     let subdir = cache_root.join("subfolder");
     fs::create_dir(&subdir).unwrap();
-    File::create(subdir.join("inner.bin")).unwrap().write_all(b"inner").unwrap();
+    File::create(subdir.join("inner.bin"))
+        .unwrap()
+        .write_all(b"inner")
+        .unwrap();
 
-    let registry = SignatureRegistry::load_embedded().unwrap();
+    let mut registry = SignatureRegistry::load_embedded().unwrap();
+    registry.register(Signature {
+        id: "test.delete-contents".into(),
+        name: "Test cache".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteContents,
+        paths: vec![cache_root.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "test-only signature".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+    });
 
     let scan_item = ScanItem {
-        id: "dev.cargo.registry.cache".to_string(),
-        signature_id: "dev.cargo.registry.cache".to_string(),
+        id: "test.delete-contents".to_string(),
+        signature_id: "test.delete-contents".to_string(),
         name: "Cargo Registry Cache".to_string(),
         category: Category::Developer,
         risk: RiskTier::Safe,

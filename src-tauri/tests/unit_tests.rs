@@ -2,9 +2,9 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 use zenith_lib::docker::DockerAdapter;
-use zenith_lib::models::{AwakeBehavior, Category, RiskTier};
+use zenith_lib::models::{AwakeBehavior, Category, CleanStrategy, RiskTier, Signature};
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
-use zenith_lib::scanner::SizeCalculator;
+use zenith_lib::scanner::{DirectoryScanner, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
 
 #[test]
@@ -16,11 +16,22 @@ fn test_signature_registry_categories_and_risk_counts() {
     let dev_sigs = registry.by_category(Category::Developer);
     let container_sigs = registry.by_category(Category::Container);
     let model_sigs = registry.by_category(Category::Model);
+    let system_sigs = registry.by_category(Category::System);
 
     assert!(!ai_sigs.is_empty(), "AI signatures must not be empty");
-    assert!(!dev_sigs.is_empty(), "Developer signatures must not be empty");
-    assert!(!container_sigs.is_empty(), "Container signatures must not be empty");
+    assert!(
+        !dev_sigs.is_empty(),
+        "Developer signatures must not be empty"
+    );
+    assert!(
+        !container_sigs.is_empty(),
+        "Container signatures must not be empty"
+    );
     assert!(!model_sigs.is_empty(), "Model signatures must not be empty");
+    assert!(
+        !system_sigs.is_empty(),
+        "System signatures must not be empty"
+    );
 
     // Models must ALWAYS be Manual risk tier
     for model_sig in model_sigs {
@@ -39,13 +50,57 @@ fn test_signature_registry_categories_and_risk_counts() {
 }
 
 #[test]
+fn test_temp_scanner_only_includes_known_direct_children() {
+    let dir = tempdir().expect("tempdir");
+    let known = dir.path().join("codex-session");
+    let unrelated = dir.path().join("personal-files");
+    std::fs::create_dir_all(&known).unwrap();
+    std::fs::create_dir_all(&unrelated).unwrap();
+    File::create(known.join("cache.bin"))
+        .unwrap()
+        .write_all(b"temporary cache")
+        .unwrap();
+    File::create(unrelated.join("keep.txt"))
+        .unwrap()
+        .write_all(b"must remain invisible")
+        .unwrap();
+
+    let signature = Signature {
+        id: "system.test-temp".into(),
+        name: "Developer Temp".into(),
+        category: Category::System,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteDirectory,
+        paths: vec![dir.path().to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "test".into(),
+        min_age_days: Some(0),
+        include_prefixes: vec!["codex-".into()],
+    };
+
+    let items = DirectoryScanner::scan_signature(&signature);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].path, known.to_string_lossy());
+    assert!(items[0].is_selected);
+}
+
+#[test]
 fn test_docker_size_parser() {
     assert_eq!(DockerAdapter::parse_docker_size("0B"), 0);
     assert_eq!(DockerAdapter::parse_docker_size("512B"), 512);
     assert_eq!(DockerAdapter::parse_docker_size("1KB"), 1024);
-    assert_eq!(DockerAdapter::parse_docker_size("1.5MB"), (1.5 * 1024.0 * 1024.0) as u64);
-    assert_eq!(DockerAdapter::parse_docker_size("10GB"), 10 * 1024 * 1024 * 1024);
-    assert_eq!(DockerAdapter::parse_docker_size("2.5TB"), (2.5 * 1024.0 * 1024.0 * 1024.0 * 1024.0) as u64);
+    assert_eq!(
+        DockerAdapter::parse_docker_size("1.5MB"),
+        (1.5 * 1024.0 * 1024.0) as u64
+    );
+    assert_eq!(
+        DockerAdapter::parse_docker_size("10GB"),
+        10 * 1024 * 1024 * 1024
+    );
+    assert_eq!(
+        DockerAdapter::parse_docker_size("2.5TB"),
+        (2.5 * 1024.0 * 1024.0 * 1024.0 * 1024.0) as u64
+    );
 }
 
 #[test]
@@ -53,11 +108,17 @@ fn test_size_calculator_recursive_and_exclusions() {
     let dir = tempdir().expect("tempdir");
 
     let keep_file = dir.path().join("keep.log");
-    File::create(&keep_file).unwrap().write_all(&vec![0u8; 10000]).unwrap();
+    File::create(&keep_file)
+        .unwrap()
+        .write_all(&vec![0u8; 10000])
+        .unwrap();
 
     let exclude_dir = dir.path().join("excluded_folder");
     std::fs::create_dir(&exclude_dir).unwrap();
-    File::create(exclude_dir.join("excluded.dat")).unwrap().write_all(&vec![0u8; 50000]).unwrap();
+    File::create(exclude_dir.join("excluded.dat"))
+        .unwrap()
+        .write_all(&vec![0u8; 50000])
+        .unwrap();
 
     // Measure without exclusions
     let (total_size, total_count) = SizeCalculator::measure_path(dir.path(), &[]);
