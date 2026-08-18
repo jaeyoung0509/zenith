@@ -7,56 +7,119 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TreeDeleteReport {
+    pub reclaimed_bytes: u64,
+    pub deleted_files: usize,
+    pub skipped_files: usize,
+    pub errors: Vec<String>,
+}
+
+impl TreeDeleteReport {
+    pub fn is_success(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
 pub struct SafeTreeDeleter;
 
 impl SafeTreeDeleter {
-    pub fn delete_contents(root: &Path, exclusions: &[String]) -> io::Result<u64> {
+    pub fn delete_contents(root: &Path, exclusions: &[String]) -> TreeDeleteReport {
+        let mut report = TreeDeleteReport::default();
         if !root.exists() && !SymlinkGuard::is_symlink(root) {
-            return Ok(0);
+            return report;
         }
         if !root.is_dir() || SymlinkGuard::is_symlink(root) {
-            return Self::delete_entry(root, exclusions);
+            Self::delete_entry(root, exclusions, &mut report);
+            return report;
         }
 
-        Blacklist::validate(root).map_err(io::Error::other)?;
-        let mut reclaimed = 0;
-        for entry in fs::read_dir(root)? {
-            reclaimed += Self::delete_entry(&entry?.path(), exclusions)?;
+        if let Err(e) = Blacklist::validate(root) {
+            report.errors.push(e.to_string());
+            return report;
         }
-        Ok(reclaimed)
+
+        let entries = match fs::read_dir(root) {
+            Ok(e) => e,
+            Err(e) => {
+                report.errors.push(e.to_string());
+                return report;
+            }
+        };
+
+        for entry in entries {
+            match entry {
+                Ok(ent) => Self::delete_entry(&ent.path(), exclusions, &mut report),
+                Err(e) => report.errors.push(e.to_string()),
+            }
+        }
+        report
     }
 
-    pub fn delete_path(root: &Path, exclusions: &[String]) -> io::Result<u64> {
+    pub fn delete_path(root: &Path, exclusions: &[String]) -> TreeDeleteReport {
+        let mut report = TreeDeleteReport::default();
         if !root.exists() && !SymlinkGuard::is_symlink(root) {
-            return Ok(0);
+            return report;
         }
-        Blacklist::validate(root).map_err(io::Error::other)?;
-        Self::delete_entry(root, exclusions)
+        if let Err(e) = Blacklist::validate(root) {
+            report.errors.push(e.to_string());
+            return report;
+        }
+        Self::delete_entry(root, exclusions, &mut report);
+        report
     }
 
-    fn delete_entry(path: &Path, exclusions: &[String]) -> io::Result<u64> {
+    fn delete_entry(path: &Path, exclusions: &[String], report: &mut TreeDeleteReport) {
         if Self::is_excluded(path, exclusions) || Blacklist::is_blacklisted(path) {
-            return Ok(0);
+            report.skipped_files += 1;
+            return;
         }
 
-        let metadata = fs::symlink_metadata(path)?;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) => {
+                report.errors.push(format!("{}: {}", path.display(), e));
+                return;
+            }
+        };
+
         if metadata.file_type().is_symlink() || metadata.is_file() {
             let bytes = allocated_bytes(&metadata);
-            fs::remove_file(path)?;
-            return Ok(bytes);
-        }
-        if !metadata.is_dir() {
-            return Ok(0);
+            match fs::remove_file(path) {
+                Ok(()) => {
+                    report.reclaimed_bytes += bytes;
+                    report.deleted_files += 1;
+                }
+                Err(e) => {
+                    report.errors.push(format!("{}: {}", path.display(), e));
+                }
+            }
+            return;
         }
 
-        let mut reclaimed = 0;
-        for entry in fs::read_dir(path)? {
-            reclaimed += Self::delete_entry(&entry?.path(), exclusions)?;
+        if !metadata.is_dir() {
+            return;
         }
+
+        let entries = match fs::read_dir(path) {
+            Ok(e) => e,
+            Err(e) => {
+                report.errors.push(format!("{}: {}", path.display(), e));
+                return;
+            }
+        };
+
+        for entry in entries {
+            match entry {
+                Ok(ent) => Self::delete_entry(&ent.path(), exclusions, report),
+                Err(e) => report.errors.push(format!("{}: {}", path.display(), e)),
+            }
+        }
+
         match fs::remove_dir(path) {
-            Ok(()) => Ok(reclaimed),
-            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => Ok(reclaimed),
-            Err(error) => Err(error),
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
+            Err(error) => report.errors.push(format!("{}: {}", path.display(), error)),
         }
     }
 
@@ -78,12 +141,7 @@ impl SafeTreeDeleter {
 fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
-        let allocated = metadata.blocks().saturating_mul(512);
-        if allocated == 0 && metadata.len() > 0 {
-            metadata.len()
-        } else {
-            allocated
-        }
+        metadata.blocks().saturating_mul(512)
     }
     #[cfg(not(unix))]
     {

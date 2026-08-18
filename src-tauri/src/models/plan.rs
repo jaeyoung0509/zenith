@@ -10,6 +10,7 @@ pub struct FileIdentity {
     pub is_dir: bool,
     pub size: u64,
     pub mtime_secs: u64,
+    pub mtime_nanos: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

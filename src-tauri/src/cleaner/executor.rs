@@ -157,49 +157,72 @@ impl CleanExecutor {
         }
 
         // 4. Perform non-destructive deletion according to strategy
-        let clean_op = match target.strategy {
+        let report = match target.strategy {
             CleanStrategy::DeleteContents => {
                 SafeTreeDeleter::delete_contents(path, &target.exclusions)
             }
             CleanStrategy::DeleteDirectory => {
                 SafeTreeDeleter::delete_path(path, &target.exclusions)
             }
-            CleanStrategy::Manual => Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "manual cleanup requires a dedicated adapter",
-            )),
+            CleanStrategy::Manual => {
+                return CleanItemResult {
+                    item_id: target.item_id.clone(),
+                    name: target.name.clone(),
+                    path: path.to_string_lossy().to_string(),
+                    success: false,
+                    bytes_reclaimed: 0,
+                    failure_reason: Some(CleanFailureReason::Unknown),
+                    error_message: Some("Manual cleanup requires a dedicated adapter".to_string()),
+                };
+            }
             CleanStrategy::ExternalCommand => {
                 SafeTreeDeleter::delete_contents(path, &target.exclusions)
             }
             CleanStrategy::DockerPrune => unreachable!(),
         };
 
-        match clean_op {
-            Ok(bytes) => CleanItemResult {
+        if report.is_success() {
+            CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
                 path: path.to_string_lossy().to_string(),
                 success: true,
-                bytes_reclaimed: bytes,
+                bytes_reclaimed: report.reclaimed_bytes,
                 failure_reason: None,
                 error_message: None,
-            },
-            Err(e) => {
-                let failure_reason = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => CleanFailureReason::PermissionDenied,
-                    std::io::ErrorKind::NotFound => CleanFailureReason::NotFound,
-                    _ => CleanFailureReason::Unknown,
-                };
-                let user_msg = failure_reason.user_message(&target.name);
-                CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(failure_reason),
-                    error_message: Some(user_msg),
-                }
+            }
+        } else if report.reclaimed_bytes > 0 {
+            // Partial success: accurately record reclaimed bytes even if some files failed
+            CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                success: true,
+                bytes_reclaimed: report.reclaimed_bytes,
+                failure_reason: None,
+                error_message: Some(format!(
+                    "Partially cleaned ({} errors): {}",
+                    report.errors.len(),
+                    report.errors.join("; ")
+                )),
+            }
+        } else {
+            let error_str = report.errors.join("; ");
+            let failure_reason = if error_str.contains("Permission denied") {
+                CleanFailureReason::PermissionDenied
+            } else if error_str.contains("No such file") {
+                CleanFailureReason::NotFound
+            } else {
+                CleanFailureReason::Unknown
+            };
+            CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(failure_reason),
+                error_message: Some(error_str),
             }
         }
     }

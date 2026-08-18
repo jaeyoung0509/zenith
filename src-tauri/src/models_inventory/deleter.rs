@@ -34,6 +34,16 @@ impl LocalModelManager {
     }
 
     fn delete_ollama(model: &LocalModelItem) -> Result<u64, ZenithError> {
+        let blobs_dir = SignatureLoader::expand_path("~/.ollama/models/blobs");
+        let before_bytes = blobs_dir
+            .as_ref()
+            .map(|p| {
+                crate::scanner::SizeCalculator::measure_path(p, &[])
+                    .0
+                    .reclaimable()
+            })
+            .unwrap_or(0);
+
         let output = tooling::command("ollama")
             .args(Self::ollama_delete_args(model))
             .output()
@@ -49,7 +59,22 @@ impl LocalModelManager {
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ));
         }
-        Ok(model.size_bytes)
+
+        let after_bytes = blobs_dir
+            .as_ref()
+            .map(|p| {
+                crate::scanner::SizeCalculator::measure_path(p, &[])
+                    .0
+                    .reclaimable()
+            })
+            .unwrap_or(0);
+
+        let actual_reclaimed = before_bytes.saturating_sub(after_bytes);
+        if actual_reclaimed > 0 {
+            Ok(actual_reclaimed)
+        } else {
+            Ok(model.size_bytes)
+        }
     }
 
     fn ollama_delete_args(model: &LocalModelItem) -> [&str; 2] {
@@ -66,7 +91,16 @@ impl LocalModelManager {
         if !Self::is_directly_scoped(&path, &root) {
             return Err(ZenithError::PathNotAllowed(model.path.clone()));
         }
-        SafeTreeDeleter::delete_path(&path, &[]).map_err(ZenithError::from)
+
+        // Ancestor symlink protection
+        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root)?;
+
+        let report = SafeTreeDeleter::delete_path(&path, &[]);
+        if report.is_success() || report.reclaimed_bytes > 0 {
+            Ok(report.reclaimed_bytes)
+        } else {
+            Err(ZenithError::Io(report.errors.join("; ")))
+        }
     }
 
     fn is_directly_scoped(path: &Path, root: &Path) -> bool {

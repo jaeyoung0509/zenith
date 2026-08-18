@@ -81,13 +81,21 @@ impl SafetyPlanner {
             // Age-filtered temp signatures emit direct children; normal signatures
             // may only target the declared root itself.
             if !signature.paths.is_empty() {
-                let allowed = registry.resolve_paths(signature).iter().any(|root| {
+                let resolved_roots = registry.resolve_paths(signature);
+                let allowed = resolved_roots.iter().any(|root| {
                     path == *root
                         || (signature.min_age_days.is_some()
                             && path.parent() == Some(root.as_path()))
                 });
                 if !allowed {
                     return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
+                }
+
+                // 2b. Ancestor symlink escape protection: ensure no directory between root and path is a symlink
+                for root in &resolved_roots {
+                    if path.starts_with(root) {
+                        SymlinkGuard::validate_no_symlink_ancestors(&path, root)?;
+                    }
                 }
             }
 

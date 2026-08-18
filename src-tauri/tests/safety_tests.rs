@@ -160,7 +160,7 @@ fn test_symlink_safety_and_no_escape() {
         // Size calculation on the directory with symlink must only measure the link, not traverse outside
         let (size, count) = SizeCalculator::measure_path(dir.path(), &[]);
         assert_eq!(count, 1);
-        assert!(size.reclaimable() > 0);
+        assert!(size.logical > 0);
     }
 }
 
@@ -368,10 +368,51 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     fs::write(&removable, b"cache").unwrap();
 
     let exclusions = vec![excluded.to_string_lossy().into_owned()];
-    SafeTreeDeleter::delete_contents(&cache_root, &exclusions).unwrap();
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &exclusions);
+    assert!(report.is_success());
 
     assert!(cache_root.exists());
     assert!(git.join("config").exists());
     assert!(excluded.exists());
     assert!(!removable.exists());
+}
+
+#[test]
+fn test_ancestor_symlink_escape_rejection() {
+    let dir = tempdir().expect("create temp dir");
+    let trusted_root = dir.path().join("cargo");
+    fs::create_dir_all(&trusted_root).unwrap();
+
+    let outside_dir = tempdir().expect("create outside temp dir");
+    let precious_file = outside_dir.path().join("precious_data.txt");
+    fs::write(&precious_file, b"cannot be deleted").unwrap();
+
+    // Create an intermediate symlink: cargo/registry -> outside_dir
+    let symlink_dir = trusted_root.join("registry");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_dir).expect("create symlink");
+
+        let target_path = symlink_dir.join("cache");
+        // Verify ancestor symlink detection
+        let validation_res =
+            SymlinkGuard::validate_no_symlink_ancestors(&target_path, &trusted_root);
+        assert!(
+            validation_res.is_err(),
+            "Ancestor symlink must be rejected!"
+        );
+        assert!(matches!(validation_res, Err(ZenithError::SymlinkEscape(_))));
+
+        // Precious file outside must remain intact
+        assert!(precious_file.exists());
+    }
+}
+
+#[test]
+fn test_sparse_file_zero_allocated_bytes() {
+    let size = FileSize::new(100 * 1024 * 1024, Some(0));
+    assert_eq!(size.reclaimable(), 0);
+
+    let size_unknown = FileSize::new(100 * 1024 * 1024, None);
+    assert_eq!(size_unknown.reclaimable(), 100 * 1024 * 1024);
 }

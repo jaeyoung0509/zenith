@@ -19,8 +19,19 @@
   } from 'lucide-svelte';
 
   onMount(() => {
-    memoryStore.startPolling(2500);
+    function updatePolling() {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        memoryStore.startPolling(2500);
+      } else {
+        memoryStore.stopPolling();
+      }
+    }
+
+    updatePolling();
+    document.addEventListener('visibilitychange', updatePolling);
+
     return () => {
+      document.removeEventListener('visibilitychange', updatePolling);
       memoryStore.stopPolling();
     };
   });

@@ -71,15 +71,10 @@ impl DockerAdapter {
 
     /// Generates ScanItems for Docker artifacts when the Docker daemon is active.
     pub fn scan_items() -> Vec<ScanItem> {
-        let status = Self::get_status();
-        if !status.is_running {
+        let overview = Self::get_overview();
+        if overview.total_bytes == 0 && overview.total_reclaimable_bytes == 0 {
             return Vec::new();
         }
-
-        let overview = match status.overview {
-            Some(o) => o,
-            None => return Vec::new(),
-        };
 
         let mut items = Vec::new();
 
