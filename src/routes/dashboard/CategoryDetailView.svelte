@@ -10,6 +10,7 @@
   import Button from '../../lib/components/Button.svelte';
   import ItemRow from '../../lib/components/ItemRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     ArrowLeft,
     Search,
@@ -102,12 +103,17 @@
       <Button
         variant="primary"
         size="sm"
-        class="gap-1.5"
+        class="gap-1.5 min-w-[90px]"
         disabled={categorySelectedBytes === 0 || scanStore.isCleaning}
         onclick={cleanSelected}
       >
-        <Trash2 size={13} />
-        {scanStore.isCleaning ? 'Cleaning…' : `Clean ${formatBytes(categorySelectedBytes)}`}
+        {#if scanStore.isCleaning}
+          <DeletingDots size="xs" />
+          <span>Cleaning…</span>
+        {:else}
+          <Trash2 size={13} />
+          <span>Clean {formatBytes(categorySelectedBytes)}</span>
+        {/if}
       </Button>
     </div>
   </div>

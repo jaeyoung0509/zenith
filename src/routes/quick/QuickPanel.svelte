@@ -12,6 +12,7 @@
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     RotateCw, Trash2, ArrowRight, Sparkles, Code2, Container, Boxes,
     Eye, Moon, Settings, X, Bot,
@@ -121,7 +122,17 @@
 <div class="w-full h-full min-h-[500px] max-h-[540px] bg-background/95 backdrop-blur-xl border border-border/80 rounded-2xl flex flex-col justify-between p-4 select-none shadow-2xl text-foreground font-sans overflow-hidden">
   <div class="flex items-center justify-between pb-3 border-b border-border/60">
     <div class="flex items-center space-x-2">
-      <div class="h-6 w-6 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs">Z</div>
+      <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
+        <defs>
+          <linearGradient id="quick-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#27272f"/>
+            <stop offset="1" stop-color="#101014"/>
+          </linearGradient>
+        </defs>
+        <rect width="1024" height="1024" rx="220" fill="url(#quick-bg-grad)"/>
+        <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
+        <circle cx="758" cy="300" r="44" fill="#34d399"/>
+      </svg>
       <span class="text-sm font-semibold tracking-tight">Zenith</span>
     </div>
     <div class="flex items-center space-x-1">
@@ -147,13 +158,29 @@
             <div class="text-xl font-bold font-mono text-foreground mt-0.5">{formatBytes(scanStore.safeSelectedBytes)}</div>
             <div class="text-[10px] text-muted-foreground mt-0.5">Last scan {formatTimeAgo(scan?.finished_at)}</div>
           </div>
-          <Button variant="primary" size="sm" disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.safeSelectedBytes === 0} onclick={handleCleanSafe} class="gap-1.5"><Trash2 size={13} /><span>Clean</span></Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.safeSelectedBytes === 0}
+            onclick={handleCleanSafe}
+            class="gap-1.5 min-w-[76px]"
+          >
+            {#if scanStore.isCleaning}
+              <DeletingDots size="xs" />
+              <span>Cleaning</span>
+            {:else}
+              <Trash2 size={13} />
+              <span>Clean</span>
+            {/if}
+          </Button>
         </div>
       {:else if section === 'ai_usage'}
         <div class="space-y-1.5 rounded-xl border border-border/60 bg-card/40 p-2.5">
           <div class="flex items-center justify-between px-1 pb-1">
             <div class="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"><Sparkles size={12} class="text-violet-400" /> AI Usage</div>
-            <button type="button" class="text-muted-foreground hover:text-foreground" disabled={usageStore.isLoading} onclick={() => usageStore.refresh(true)} aria-label="Refresh AI usage"><RotateCw size={12} class={usageStore.isLoading ? 'animate-spin' : ''} /></button>
+            <button type="button" class="text-muted-foreground hover:text-foreground p-0.5" disabled={usageStore.isLoading} onclick={() => usageStore.refresh(true)} aria-label="Refresh AI usage">
+              <RotateCw size={12} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
+            </button>
           </div>
           {#if usageStore.isLoading && !usageStore.snapshot}
             <div class="py-3 text-center text-[10px] text-muted-foreground">Reading connected accounts…</div>
@@ -185,7 +212,7 @@
             {/each}
           </div>
         {:else if scanStore.isScanning}
-          <div class="py-6 text-center space-y-2"><RotateCw size={18} class="animate-spin mx-auto text-muted-foreground" /><p class="text-xs text-muted-foreground">Scanning development caches...</p></div>
+          <div class="py-6 text-center space-y-2"><RotateCw size={18} class="animate-gentle-spin mx-auto text-muted-foreground" /><p class="text-xs text-muted-foreground">Scanning development caches...</p></div>
         {/if}
       {:else if section === 'memory' && memory}
         <div class="pt-2 border-t border-border/60 flex items-center justify-between text-xs">
@@ -197,7 +224,10 @@
   </div>
 
   <div class="pt-3 border-t border-border/60 flex items-center gap-2">
-    <Button variant="outline" size="sm" disabled={scanStore.isScanning} onclick={() => scanStore.runScan()} class="flex-1 gap-1.5 text-xs"><RotateCw size={13} class={scanStore.isScanning ? 'animate-spin' : ''} /><span>{scanStore.isScanning ? 'Scanning...' : 'Scan Again'}</span></Button>
+    <Button variant="outline" size="sm" disabled={scanStore.isScanning || scanStore.isCleaning} onclick={() => scanStore.runScan()} class="flex-1 gap-1.5 text-xs">
+      <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
+      <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Again'}</span>
+    </Button>
     <Button variant="secondary" size="sm" onclick={handleOpenDashboard} class="flex-1 gap-1.5 text-xs"><span>Open Zenith</span><ArrowRight size={13} /></Button>
   </div>
 

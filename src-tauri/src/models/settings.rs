@@ -22,6 +22,30 @@ impl QuickPanelSection {
     ];
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardTab {
+    Disk,
+    Storage,
+    Docker,
+    Models,
+    Memory,
+    Usage,
+    Awake,
+}
+
+impl DashboardTab {
+    pub const ALL: [Self; 7] = [
+        Self::Disk,
+        Self::Storage,
+        Self::Docker,
+        Self::Models,
+        Self::Memory,
+        Self::Usage,
+        Self::Awake,
+    ];
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ZenithSettings {
@@ -36,6 +60,7 @@ pub struct ZenithSettings {
     pub awake_rules: Vec<AwakeRule>,
     pub quick_panel_sections: Vec<QuickPanelSection>,
     pub quick_panel_ai_providers: Vec<String>,
+    pub dashboard_tabs: Vec<DashboardTab>,
 }
 
 impl Default for ZenithSettings {
@@ -57,6 +82,7 @@ impl Default for ZenithSettings {
                 "openrouter".to_string(),
                 "antigravity".to_string(),
             ],
+            dashboard_tabs: DashboardTab::ALL.to_vec(),
             awake_rules: vec![
                 AwakeRule {
                     id: "rule.claude".to_string(),
@@ -93,6 +119,13 @@ impl ZenithSettings {
             self.quick_panel_sections.push(QuickPanelSection::Storage);
         }
 
+        let mut tabs = HashSet::new();
+        self.dashboard_tabs
+            .retain(|tab| tabs.insert(*tab));
+        if self.dashboard_tabs.is_empty() {
+            self.dashboard_tabs.push(DashboardTab::Disk);
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
@@ -105,10 +138,10 @@ impl ZenithSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{QuickPanelSection, ZenithSettings};
+    use super::{DashboardTab, QuickPanelSection, ZenithSettings};
 
     #[test]
-    fn old_settings_receive_quick_panel_defaults() {
+    fn old_settings_receive_quick_panel_and_dashboard_defaults() {
         let json = r#"{
             "launch_at_login": false,
             "clean_ai_tools": true,
@@ -123,6 +156,7 @@ mod tests {
 
         let settings: ZenithSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.quick_panel_sections, QuickPanelSection::ALL);
+        assert_eq!(settings.dashboard_tabs, DashboardTab::ALL);
         assert!(settings
             .quick_panel_ai_providers
             .contains(&"codex".to_string()));
@@ -136,6 +170,11 @@ mod tests {
                 QuickPanelSection::AiUsage,
                 QuickPanelSection::Memory,
             ],
+            dashboard_tabs: vec![
+                DashboardTab::Usage,
+                DashboardTab::Usage,
+                DashboardTab::Disk,
+            ],
             quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
             ..ZenithSettings::default()
         };
@@ -145,16 +184,26 @@ mod tests {
             sanitized.quick_panel_sections,
             vec![QuickPanelSection::AiUsage, QuickPanelSection::Memory]
         );
+        assert_eq!(
+            sanitized.dashboard_tabs,
+            vec![DashboardTab::Usage, DashboardTab::Disk]
+        );
         assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
     }
 
     #[test]
-    fn sanitize_keeps_at_least_one_section() {
+    fn sanitize_keeps_at_least_one_section_and_tab() {
         let mut settings = ZenithSettings::default();
         settings.quick_panel_sections.clear();
+        settings.dashboard_tabs.clear();
+        let sanitized = settings.sanitize();
         assert_eq!(
-            settings.sanitize().quick_panel_sections,
+            sanitized.quick_panel_sections,
             vec![QuickPanelSection::Storage]
+        );
+        assert_eq!(
+            sanitized.dashboard_tabs,
+            vec![DashboardTab::Disk]
         );
     }
 }

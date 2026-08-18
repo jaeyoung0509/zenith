@@ -8,6 +8,7 @@
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import CategoryCard from '../../lib/components/CategoryCard.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     RotateCw,
     Trash2,
@@ -86,17 +87,18 @@
         <Button
           variant="outline"
           size="sm"
-          disabled={scanStore.isScanning}
+          disabled={scanStore.isScanning || scanStore.isCleaning}
           onclick={() => scanStore.runScan()}
           class="gap-1.5"
         >
-          <RotateCw size={13} class={scanStore.isScanning ? 'animate-spin' : ''} />
+          <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
           <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Storage'}</span>
         </Button>
 
         <Button
           variant="ghost"
           size="sm"
+          disabled={scanStore.isCleaning}
           onclick={() => scanStore.selectAllSafe()}
           class="text-xs"
         >
@@ -107,6 +109,7 @@
         <Button
           variant="ghost"
           size="sm"
+          disabled={scanStore.isCleaning}
           onclick={() => scanStore.deselectAll()}
           class="text-xs text-muted-foreground"
         >
@@ -120,10 +123,15 @@
         size="md"
         disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
         onclick={handleCleanSelected}
-        class="gap-2 px-5"
+        class="gap-2 px-5 min-w-[130px]"
       >
-        <Trash2 size={14} />
-        <span>Clean {formatBytes(scanStore.reclaimableBytes)}</span>
+        {#if scanStore.isCleaning}
+          <DeletingDots size="sm" />
+          <span>Cleaning…</span>
+        {:else}
+          <Trash2 size={14} />
+          <span>Clean {formatBytes(scanStore.reclaimableBytes)}</span>
+        {/if}
       </Button>
     </div>
   </Card>

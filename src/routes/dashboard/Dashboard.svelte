@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { CategoryResult } from '../../lib/models/types';
+  import type { CategoryResult, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
+  import { settingsStore } from '../../lib/stores/settings.svelte';
   import StorageView from './StorageView.svelte';
   import DiskView from './DiskView.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
@@ -22,12 +23,24 @@
     Settings,
     Shield,
     ChartNoAxesCombined,
+    Disc3,
   } from 'lucide-svelte';
 
-  type Tab = 'storage' | 'disk' | 'docker' | 'models' | 'usage' | 'memory' | 'awake' | 'settings';
+  type Tab = DashboardTab | 'settings';
 
-  let currentTab = $state<Tab>('storage');
+  let currentTab = $state<Tab>('disk');
   let selectedCategory = $state<CategoryResult | null>(null);
+  let settings = $derived(settingsStore.settings);
+
+  const tabDefs: Record<DashboardTab, { label: string; icon: any }> = {
+    disk: { label: 'Disks', icon: HardDrive },
+    storage: { label: 'Storage', icon: Disc3 },
+    docker: { label: 'Containers', icon: Container },
+    models: { label: 'Local Models', icon: Boxes },
+    memory: { label: 'Memory', icon: Activity },
+    usage: { label: 'AI Usage', icon: ChartNoAxesCombined },
+    awake: { label: 'Keep Awake', icon: Moon },
+  };
 
   onMount(() => {
     memoryStore.refreshDisk();
@@ -51,104 +64,47 @@
     <div class="space-y-6">
       <!-- Title & Branding -->
       <div class="px-2.5 flex items-center space-x-2.5">
-        <div class="h-6 w-6 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs">
-          Z
-        </div>
+        <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
+          <defs>
+            <linearGradient id="dash-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#27272f"/>
+              <stop offset="1" stop-color="#101014"/>
+            </linearGradient>
+          </defs>
+          <rect width="1024" height="1024" rx="220" fill="url(#dash-bg-grad)"/>
+          <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
+          <circle cx="758" cy="300" r="44" fill="#34d399"/>
+        </svg>
         <div>
           <h1 class="text-sm font-bold tracking-tight text-foreground">Zenith</h1>
           <p class="text-[10px] text-muted-foreground font-mono">macOS Dev Manager</p>
         </div>
       </div>
 
-      <!-- Navigation Tabs -->
+      <!-- Navigation Tabs (Dynamically Ordered from Settings) -->
       <nav class="space-y-1">
-        <button
-          type="button"
-          onclick={() => selectTab('disk')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'disk'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <HardDrive size={15} />
-          <span>Disks</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('storage')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-            'storage' && !selectedCategory
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <HardDrive size={15} />
-          <span>Storage</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('docker')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'docker'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Container size={15} />
-          <span>Containers</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('models')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'models'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Boxes size={15} />
-          <span>Local Models</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('memory')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'memory'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Activity size={15} />
-          <span>Memory</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('usage')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'usage'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <ChartNoAxesCombined size={15} />
-          <span>AI Usage</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('awake')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'awake'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Moon size={15} />
-          <span>Keep Awake</span>
-          {#if awakeStore.state.is_active}
-            <span class="ml-auto w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+        {#each settings.dashboard_tabs as tabId (tabId)}
+          {@const tabInfo = tabDefs[tabId]}
+          {#if tabInfo}
+            {@const Icon = tabInfo.icon}
+            <button
+              type="button"
+              onclick={() => selectTab(tabId)}
+              class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+              tabId && !selectedCategory
+                ? 'bg-secondary text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+            >
+              <Icon size={15} />
+              <span>{tabInfo.label}</span>
+              {#if tabId === 'awake' && awakeStore.state.is_active}
+                <span class="ml-auto w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+              {/if}
+            </button>
           {/if}
-        </button>
+        {/each}
 
+        <!-- Fixed Settings Tab -->
         <button
           type="button"
           onclick={() => selectTab('settings')}

@@ -1,9 +1,19 @@
 <script lang="ts">
   import { settingsStore } from '../../lib/stores/settings.svelte';
-  import type { AiProviderId, QuickPanelSection } from '../../lib/models/types';
+  import type { AiProviderId, DashboardTab, QuickPanelSection } from '../../lib/models/types';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
-  import { Settings, Sparkles, Moon, Sun, Monitor, ChevronUp, ChevronDown, PanelTop } from 'lucide-svelte';
+  import { Settings, Sparkles, Moon, Sun, Monitor, ChevronUp, ChevronDown, PanelTop, LayoutList } from 'lucide-svelte';
+
+  const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
+    { id: 'disk', label: 'Disks', description: 'Disk volumes, mount points, and storage health.' },
+    { id: 'storage', label: 'Storage', description: 'System-wide reclaimable developer and AI caches.' },
+    { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
+    { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
+    { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
+    { id: 'usage', label: 'AI Usage', description: 'OAuth coding agent limits and local token insights.' },
+    { id: 'awake', label: 'Keep Awake', description: 'Prevent system and display sleep rules.' },
+  ];
 
   const sectionOptions: { id: QuickPanelSection; label: string; description: string }[] = [
     { id: 'storage', label: 'Storage', description: 'Primary disk capacity and usage.' },
@@ -30,6 +40,13 @@
 
   function handleTheme(theme: string) {
     settingsStore.save({ theme });
+  }
+
+  function orderedDashboardTabs() {
+    const selected = (settings.dashboard_tabs ?? [])
+      .map((id) => tabOptions.find((option) => option.id === id))
+      .filter((option): option is (typeof tabOptions)[number] => Boolean(option));
+    return [...selected, ...tabOptions.filter((option) => !(settings.dashboard_tabs ?? []).includes(option.id))];
   }
 
   function orderedSections() {
@@ -95,6 +112,61 @@
     </Card>
   </div>
 
+  <!-- Dashboard Navigation Customization -->
+  <div class="space-y-3">
+    <div>
+      <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Dashboard Navigation Menu
+      </h3>
+      <p class="text-[11px] text-muted-foreground mt-1">
+        Customize the tabs displayed in the left sidebar and their ordering.
+      </p>
+    </div>
+    <Card class="p-4 bg-card/70 space-y-3">
+      <div class="flex items-center gap-2 text-xs font-medium text-foreground pb-1">
+        <LayoutList size={14} /> Sidebar Menu Order
+      </div>
+      {#each orderedDashboardTabs() as tabOption}
+        {@const enabled = (settings.dashboard_tabs ?? []).includes(tabOption.id)}
+        {@const index = (settings.dashboard_tabs ?? []).indexOf(tabOption.id)}
+        <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={enabled && (settings.dashboard_tabs ?? []).length === 1}
+            onchange={() => settingsStore.toggleDashboardTab(tabOption.id)}
+            aria-label={`Show ${tabOption.label} in sidebar`}
+            class="h-3.5 w-3.5 accent-primary cursor-pointer"
+          />
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-medium text-foreground">{tabOption.label}</div>
+            <div class="text-[10px] text-muted-foreground">{tabOption.description}</div>
+          </div>
+          {#if enabled}
+            <button
+              type="button"
+              class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+              disabled={index === 0}
+              onclick={() => settingsStore.moveDashboardTab(tabOption.id, -1)}
+              aria-label={`Move ${tabOption.label} up`}
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              type="button"
+              class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
+              disabled={index === (settings.dashboard_tabs ?? []).length - 1}
+              onclick={() => settingsStore.moveDashboardTab(tabOption.id, 1)}
+              aria-label={`Move ${tabOption.label} down`}
+            >
+              <ChevronDown size={14} />
+            </button>
+          {/if}
+        </div>
+      {/each}
+    </Card>
+  </div>
+
   <!-- Quick Panel Customization -->
   <div class="space-y-3">
     <div>
@@ -120,15 +192,15 @@
               disabled={enabled && settings.quick_panel_sections.length === 1}
               onchange={() => settingsStore.toggleQuickPanelSection(option.id)}
               aria-label={`Show ${option.label} in quick panel`}
-              class="h-3.5 w-3.5 accent-primary"
+              class="h-3.5 w-3.5 accent-primary cursor-pointer"
             />
             <div class="min-w-0 flex-1">
               <div class="text-xs font-medium text-foreground">{option.label}</div>
               <div class="text-[10px] text-muted-foreground">{option.description}</div>
             </div>
             {#if enabled}
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelSection(option.id, -1)} aria-label={`Move ${option.label} up`}><ChevronUp size={14} /></button>
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === settings.quick_panel_sections.length - 1} onclick={() => settingsStore.moveQuickPanelSection(option.id, 1)} aria-label={`Move ${option.label} down`}><ChevronDown size={14} /></button>
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelSection(option.id, -1)} aria-label={`Move ${option.label} up`}><ChevronUp size={14} /></button>
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === settings.quick_panel_sections.length - 1} onclick={() => settingsStore.moveQuickPanelSection(option.id, 1)} aria-label={`Move ${option.label} down`}><ChevronDown size={14} /></button>
             {/if}
           </div>
         {/each}
@@ -143,11 +215,11 @@
           {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
           {@const index = settings.quick_panel_ai_providers.indexOf(provider.id)}
           <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2">
-            <input type="checkbox" checked={enabled} onchange={() => settingsStore.toggleQuickPanelProvider(provider.id)} aria-label={`Show ${provider.label} usage`} class="h-3.5 w-3.5 accent-primary" />
+            <input type="checkbox" checked={enabled} onchange={() => settingsStore.toggleQuickPanelProvider(provider.id)} aria-label={`Show ${provider.label} usage`} class="h-3.5 w-3.5 accent-primary cursor-pointer" />
             <span class="flex-1 text-xs font-medium text-foreground">{provider.label}</span>
             {#if enabled}
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, -1)} aria-label={`Move ${provider.label} up`}><ChevronUp size={14} /></button>
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === settings.quick_panel_ai_providers.length - 1} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, 1)} aria-label={`Move ${provider.label} down`}><ChevronDown size={14} /></button>
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, -1)} aria-label={`Move ${provider.label} up`}><ChevronUp size={14} /></button>
+              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === settings.quick_panel_ai_providers.length - 1} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, 1)} aria-label={`Move ${provider.label} down`}><ChevronDown size={14} /></button>
             {/if}
           </div>
         {/each}

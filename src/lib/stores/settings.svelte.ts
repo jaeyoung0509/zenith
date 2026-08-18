@@ -14,6 +14,7 @@ class SettingsStore {
     excluded_signatures: [],
     quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+    dashboard_tabs: ['disk', 'storage', 'docker', 'models', 'memory', 'usage', 'awake'],
     awake_rules: [
       {
         id: 'rule.claude',
@@ -64,6 +65,7 @@ class SettingsStore {
         ...this.settings,
         quick_panel_sections: this.settings.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
         quick_panel_ai_providers: this.settings.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+        dashboard_tabs: this.settings.dashboard_tabs ?? ['disk', 'storage', 'docker', 'models', 'memory', 'usage', 'awake'],
       };
       this.hasLoaded = true;
       this.applyTheme(this.settings.theme);
@@ -85,6 +87,17 @@ class SettingsStore {
     } catch (error: any) {
       this.error = error?.toString() || 'Could not save preferences';
     }
+  }
+
+  async toggleDashboardTab(tab: import('../models/types').DashboardTab) {
+    const current = this.settings.dashboard_tabs;
+    const next = toggleOrdered(current, tab, true);
+    await this.save({ dashboard_tabs: next });
+  }
+
+  async moveDashboardTab(tab: import('../models/types').DashboardTab, direction: -1 | 1) {
+    const next = moveOrdered(this.settings.dashboard_tabs, tab, direction);
+    await this.save({ dashboard_tabs: next });
   }
 
   async toggleQuickPanelSection(section: QuickPanelSection) {
