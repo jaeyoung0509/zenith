@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
-    Category, CleanStrategy, FileSize, RiskTier, ScanItem, Signature, ZenithError,
+    Category, CategoryResult, CleanStrategy, FileSize, RiskTier, ScanItem, ScanResult, Signature,
+    ZenithError,
 };
-use zenith_lib::safety::{Blacklist, SafetyPlanner, SymlinkGuard, ToctouGuard};
+use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
 use zenith_lib::scanner::SizeCalculator;
 use zenith_lib::signatures::SignatureRegistry;
 
@@ -278,4 +279,99 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
     // Inner subfiles must be deleted
     assert!(!subfile.exists());
     assert!(!subdir.exists());
+}
+
+#[test]
+fn frontend_selection_must_resolve_against_trusted_scan() {
+    let registry = SignatureRegistry::load_embedded().unwrap();
+    let scan = ScanResult {
+        scan_id: "trusted-scan".into(),
+        started_at: 1,
+        finished_at: 2,
+        categories: vec![CategoryResult {
+            category: Category::Developer,
+            display_name: "Developer".into(),
+            items: vec![],
+            total_bytes: 0,
+            safe_bytes: 0,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+        }],
+        total_bytes: 0,
+        safe_bytes: 0,
+        rebuild_bytes: 0,
+        manual_bytes: 0,
+    };
+
+    let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
+    assert!(matches!(
+        SafetyPlanner::create_plan_from_scan(&scan, "trusted-scan", &forged, &registry),
+        Err(ZenithError::InvalidPlan(_))
+    ));
+    assert!(matches!(
+        SafetyPlanner::create_plan_from_scan(&scan, "stale-scan", &forged, &registry),
+        Err(ZenithError::InvalidPlan(_))
+    ));
+}
+
+#[test]
+fn manual_strategy_never_enters_generic_cleaner() {
+    let dir = tempdir().unwrap();
+    let model_root = dir.path().join("model");
+    fs::create_dir(&model_root).unwrap();
+    let mut registry = SignatureRegistry::load_embedded().unwrap();
+    registry.register(Signature {
+        id: "test.manual-model".into(),
+        name: "Manual model".into(),
+        category: Category::Model,
+        risk: RiskTier::Manual,
+        strategy: CleanStrategy::Manual,
+        paths: vec![model_root.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "adapter-only".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+    });
+    let item = ScanItem {
+        id: "test.manual-model".into(),
+        signature_id: "test.manual-model".into(),
+        name: "Manual model".into(),
+        category: Category::Model,
+        risk: RiskTier::Manual,
+        path: model_root.to_string_lossy().into_owned(),
+        size: FileSize::new(1, Some(1)),
+        file_count: 1,
+        description: "adapter-only".into(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+
+    assert!(matches!(
+        SafetyPlanner::create_plan(&[item], &registry),
+        Err(ZenithError::UnsupportedManualOperation(_))
+    ));
+    assert!(model_root.exists());
+}
+
+#[test]
+fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
+    let dir = tempdir().unwrap();
+    let cache_root = dir.path().join("cache");
+    let nested = cache_root.join("nested");
+    let git = nested.join(".git");
+    let excluded = nested.join("settings.json");
+    let removable = nested.join("cache.bin");
+    fs::create_dir_all(&git).unwrap();
+    fs::write(git.join("config"), b"protected").unwrap();
+    fs::write(&excluded, b"settings").unwrap();
+    fs::write(&removable, b"cache").unwrap();
+
+    let exclusions = vec![excluded.to_string_lossy().into_owned()];
+    SafeTreeDeleter::delete_contents(&cache_root, &exclusions).unwrap();
+
+    assert!(cache_root.exists());
+    assert!(git.join("config").exists());
+    assert!(excluded.exists());
+    assert!(!removable.exists());
 }

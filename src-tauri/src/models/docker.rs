@@ -37,13 +37,19 @@ pub struct DockerBuildCacheItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct DockerOverview {
-    pub images_bytes: u64,
-    pub dangling_images_bytes: u64,
-    pub build_cache_bytes: u64,
-    pub stopped_containers_bytes: u64,
-    pub volumes_bytes: u64,
+pub struct DockerResourceUsage {
     pub total_bytes: u64,
+    pub reclaimable_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DockerOverview {
+    pub images: DockerResourceUsage,
+    pub containers: DockerResourceUsage,
+    pub volumes: DockerResourceUsage,
+    pub build_cache: DockerResourceUsage,
+    pub total_bytes: u64,
+    pub total_reclaimable_bytes: u64,
     pub safe_cleanable_bytes: u64,
 }
 

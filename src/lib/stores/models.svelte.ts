@@ -11,10 +11,6 @@ class LocalModelsStore {
     return this.models.reduce((acc, m) => acc + m.size_bytes, 0);
   });
 
-  constructor() {
-    this.refresh();
-  }
-
   async refresh() {
     this.isLoading = true;
     this.error = null;
@@ -31,7 +27,7 @@ class LocalModelsStore {
     this.isDeleting = true;
     this.error = null;
     try {
-      await tauriDeleteLocalModel(model.path);
+      await tauriDeleteLocalModel(model.id);
       await this.refresh();
       return true;
     } catch (e: any) {

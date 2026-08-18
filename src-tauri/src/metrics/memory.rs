@@ -70,7 +70,7 @@ impl MemoryInspector {
             )
             .collect();
 
-        top_processes.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
+        top_processes.sort_by_key(|process| std::cmp::Reverse(process.memory_bytes));
         top_processes.truncate(15);
 
         let timestamp = SystemTime::now()
@@ -230,7 +230,10 @@ impl MemoryInspector {
                 if parts.len() == 2 {
                     let num_str = parts[1].trim().trim_end_matches('.');
                     if let Ok(pages) = num_str.parse::<u64>() {
-                        return Some(pages * 4096);
+                        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+                        if page_size > 0 {
+                            return Some(pages.saturating_mul(page_size as u64));
+                        }
                     }
                 }
             }

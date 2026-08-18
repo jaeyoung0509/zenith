@@ -12,6 +12,7 @@ impl ScanEngine {
     pub fn scan<F>(
         registry: &SignatureRegistry,
         categories_filter: Option<&[Category]>,
+        excluded_signatures: &[String],
         mut on_event: F,
     ) -> ScanResult
     where
@@ -53,6 +54,9 @@ impl ScanEngine {
             // 1. Scan filesystem signatures for this category
             let signatures = registry.by_category(category);
             for sig in signatures {
+                if excluded_signatures.iter().any(|id| id == &sig.id) {
+                    continue;
+                }
                 let items = DirectoryScanner::scan_signature(sig);
                 for item in items {
                     let bytes = item.size.reclaimable();

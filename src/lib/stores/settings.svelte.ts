@@ -59,10 +59,7 @@ class SettingsStore {
   private async performLoad() {
     this.isLoading = true;
     try {
-      const browserSettings = typeof localStorage !== 'undefined'
-        ? localStorage.getItem('zenith.settings')
-        : null;
-      this.settings = browserSettings ? JSON.parse(browserSettings) : await tauriGetSettings();
+      this.settings = await tauriGetSettings();
       this.settings = {
         ...this.settings,
         quick_panel_sections: this.settings.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],

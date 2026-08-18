@@ -7,10 +7,6 @@ class DockerStore {
   isPruning = $state(false);
   error = $state<string | null>(null);
 
-  constructor() {
-    this.refresh();
-  }
-
   async refresh() {
     this.isLoading = true;
     this.error = null;

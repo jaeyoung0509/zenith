@@ -60,7 +60,9 @@ in [`src-tauri/tests/`](src-tauri/tests).
 
 The two Tauri windows are a persistent menu-bar quick panel and the main
 dashboard. Both use typed IPC commands backed by Rust modules for scanning,
-cleanup, metrics, provider integrations, and power management.
+cleanup, metrics, provider integrations, and power management. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the runtime and data flow, and
+[`docs/SAFETY.md`](docs/SAFETY.md) for the deletion trust boundaries.
 
 ## Development
 

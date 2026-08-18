@@ -54,7 +54,7 @@
           <h2 class="text-base font-semibold text-foreground tracking-tight">Memory Inspector</h2>
           {#if memory}
             <div class="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium border {pressureColors[memory.pressure]}">
-              Pressure: {memory.pressure.toUpperCase()}
+              Estimated: {memory.pressure.toUpperCase()}
             </div>
           {/if}
         </div>

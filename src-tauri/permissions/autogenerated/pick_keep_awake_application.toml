@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pick-keep-awake-application"
+description = "Enables the pick_keep_awake_application command without any pre-configured scope."
+commands.allow = ["pick_keep_awake_application"]
+
+[[permission]]
+identifier = "deny-pick-keep-awake-application"
+description = "Denies the pick_keep_awake_application command without any pre-configured scope."
+commands.deny = ["pick_keep_awake_application"]

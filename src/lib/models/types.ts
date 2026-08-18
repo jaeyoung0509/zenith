@@ -67,22 +67,19 @@ export interface RiskSummary {
   manual_bytes: number;
 }
 
-export interface DeleteTarget {
+export interface PlanTargetPreview {
   item_id: string;
-  signature_id: string;
   name: string;
-  path: string;
-  strategy: CleanStrategy;
   expected_bytes: number;
   risk: RiskTier;
 }
 
-export interface DeletePlan {
+export interface PlanPreview {
   id: string;
-  targets: DeleteTarget[];
+  targets: PlanTargetPreview[];
   expected_reclaim_bytes: number;
   risk: RiskSummary;
-  created_at: number;
+  expires_at: number;
 }
 
 export type CleanFailureReason =
@@ -192,13 +189,18 @@ export interface DockerVolumeItem {
 }
 
 export interface DockerOverview {
-  images_bytes: number;
-  dangling_images_bytes: number;
-  build_cache_bytes: number;
-  stopped_containers_bytes: number;
-  volumes_bytes: number;
+  images: DockerResourceUsage;
+  containers: DockerResourceUsage;
+  volumes: DockerResourceUsage;
+  build_cache: DockerResourceUsage;
   total_bytes: number;
+  total_reclaimable_bytes: number;
   safe_cleanable_bytes: number;
+}
+
+export interface DockerResourceUsage {
+  total_bytes: number;
+  reclaimable_bytes: number;
 }
 
 export interface DockerStatus {

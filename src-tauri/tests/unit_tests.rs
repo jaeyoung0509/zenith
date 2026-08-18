@@ -122,11 +122,16 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
             .into_owned(),
     ));
 
-    let result = ScanEngine::scan(&registry, Some(&[Category::System]), |_| {});
+    let result = ScanEngine::scan(&registry, Some(&[Category::System]), &[], |_| {});
     let items = &result.categories[0].items;
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].id, "large");
     assert_eq!(items[1].id, "small");
+
+    let excluded = vec!["large".to_string()];
+    let filtered = ScanEngine::scan(&registry, Some(&[Category::System]), &excluded, |_| {});
+    assert_eq!(filtered.categories[0].items.len(), 1);
+    assert_eq!(filtered.categories[0].items[0].id, "small");
 }
 
 #[test]

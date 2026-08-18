@@ -2,10 +2,10 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
-  DeletePlan,
   ScanEvent,
   ScanItem,
   ScanResult,
+  ZenithSettings,
 } from '../models/types';
 import {
   tauriCreatePlan,
@@ -68,11 +68,19 @@ class ScanStore {
     return Object.values(this.selectedMap).filter(Boolean).length;
   });
 
-  constructor() {
-    this.init();
-  }
+  private initPromise: Promise<void> | null = null;
 
   async init() {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this.loadCachedScan();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async loadCachedScan() {
     try {
       const cached = await tauriGetLastScan();
       if (cached) {
@@ -118,6 +126,26 @@ class ScanStore {
     for (const cat of this.lastScan.categories) {
       for (const item of cat.items) {
         this.selectedMap[item.id] = item.risk === 'safe' && (item.size.allocated ?? item.size.logical) > 0;
+      }
+    }
+  }
+
+  selectQuickCleanDefaults(settings: ZenithSettings) {
+    if (!this.lastScan) return;
+    const enabledCategories: Partial<Record<Category, boolean>> = {
+      ai: settings.clean_ai_tools,
+      developer: settings.clean_developer_tools,
+      container: settings.clean_docker,
+      model: settings.clean_local_models,
+      system: true,
+    };
+    for (const category of this.lastScan.categories) {
+      for (const item of category.items) {
+        const allowedRisk = item.risk === 'safe'
+          || (settings.include_rebuild_caches && item.risk === 'rebuild');
+        this.selectedMap[item.id] = Boolean(enabledCategories[category.category])
+          && allowedRisk
+          && (item.size.allocated ?? item.size.logical) > 0;
       }
     }
   }
@@ -199,7 +227,8 @@ class ScanStore {
 
     try {
       // 1. Create and verify safety plan
-      const plan = await tauriCreatePlan(selectedItems);
+      if (!this.lastScan) throw new Error('Scan result is no longer available');
+      const plan = await tauriCreatePlan(this.lastScan.scan_id, selectedItems);
 
       // 2. Execute clean
       const result = await tauriExecuteClean(plan, (event: CleanEvent) => {

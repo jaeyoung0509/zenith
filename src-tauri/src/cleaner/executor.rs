@@ -4,9 +4,7 @@ use crate::models::{
     CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStrategy, DeletePlan,
     DeleteTarget,
 };
-use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
-use std::fs;
-use std::path::Path;
+use crate::safety::{Blacklist, SafeTreeDeleter, SymlinkGuard, ToctouGuard};
 use std::time::SystemTime;
 
 pub struct CleanExecutor;
@@ -160,10 +158,19 @@ impl CleanExecutor {
 
         // 4. Perform non-destructive deletion according to strategy
         let clean_op = match target.strategy {
-            CleanStrategy::DeleteContents => Self::delete_contents_only(path),
-            CleanStrategy::DeleteDirectory => Self::delete_path_itself(path),
-            CleanStrategy::Manual => Self::delete_path_itself(path),
-            CleanStrategy::ExternalCommand => Self::delete_contents_only(path),
+            CleanStrategy::DeleteContents => {
+                SafeTreeDeleter::delete_contents(path, &target.exclusions)
+            }
+            CleanStrategy::DeleteDirectory => {
+                SafeTreeDeleter::delete_path(path, &target.exclusions)
+            }
+            CleanStrategy::Manual => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "manual cleanup requires a dedicated adapter",
+            )),
+            CleanStrategy::ExternalCommand => {
+                SafeTreeDeleter::delete_contents(path, &target.exclusions)
+            }
             CleanStrategy::DockerPrune => unreachable!(),
         };
 
@@ -173,11 +180,7 @@ impl CleanExecutor {
                 name: target.name.clone(),
                 path: path.to_string_lossy().to_string(),
                 success: true,
-                bytes_reclaimed: if bytes > 0 {
-                    bytes
-                } else {
-                    target.expected_bytes
-                },
+                bytes_reclaimed: bytes,
                 failure_reason: None,
                 error_message: None,
             },
@@ -198,74 +201,6 @@ impl CleanExecutor {
                     error_message: Some(user_msg),
                 }
             }
-        }
-    }
-
-    /// Deletes all contents inside a directory, leaving the top-level directory intact.
-    fn delete_contents_only(dir: &Path) -> Result<u64, std::io::Error> {
-        if !dir.exists() {
-            return Ok(0);
-        }
-
-        if !dir.is_dir() {
-            let len = fs::metadata(dir).map(|m| m.len()).unwrap_or(0);
-            fs::remove_file(dir)?;
-            return Ok(len);
-        }
-
-        let mut total_freed = 0u64;
-        let entries = fs::read_dir(dir)?;
-
-        for entry in entries.flatten() {
-            let child = entry.path();
-            // Blacklist check for safety
-            if Blacklist::is_blacklisted(&child) {
-                continue;
-            }
-
-            if SymlinkGuard::is_symlink(&child) {
-                let len = fs::symlink_metadata(&child).map(|m| m.len()).unwrap_or(0);
-                fs::remove_file(&child)?;
-                total_freed += len;
-            } else if child.is_dir() {
-                let len = crate::scanner::SizeCalculator::measure_path(&child, &[])
-                    .0
-                    .reclaimable();
-                fs::remove_dir_all(&child)?;
-                total_freed += len;
-            } else {
-                let len = fs::metadata(&child).map(|m| m.len()).unwrap_or(0);
-                fs::remove_file(&child)?;
-                total_freed += len;
-            }
-        }
-
-        Ok(total_freed)
-    }
-
-    /// Deletes the file or entire directory tree.
-    fn delete_path_itself(path: &Path) -> Result<u64, std::io::Error> {
-        if !path.exists() && !SymlinkGuard::is_symlink(path) {
-            return Ok(0);
-        }
-
-        // Symlink safety: if path is a symlink, only remove the link file
-        if SymlinkGuard::is_symlink(path) {
-            let len = fs::symlink_metadata(path).map(|m| m.len()).unwrap_or(0);
-            fs::remove_file(path)?;
-            return Ok(len);
-        }
-
-        if path.is_dir() {
-            let len = crate::scanner::SizeCalculator::measure_path(path, &[])
-                .0
-                .reclaimable();
-            fs::remove_dir_all(path)?;
-            Ok(len)
-        } else {
-            let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            fs::remove_file(path)?;
-            Ok(len)
         }
     }
 }

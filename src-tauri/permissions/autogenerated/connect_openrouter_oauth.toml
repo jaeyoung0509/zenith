@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connect-openrouter-oauth"
+description = "Enables the connect_openrouter_oauth command without any pre-configured scope."
+commands.allow = ["connect_openrouter_oauth"]
+
+[[permission]]
+identifier = "deny-connect-openrouter-oauth"
+description = "Denies the connect_openrouter_oauth command without any pre-configured scope."
+commands.deny = ["connect_openrouter_oauth"]

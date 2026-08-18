@@ -77,14 +77,14 @@
     <Card class="p-4 space-y-4 bg-card/70">
       <div class="flex items-center justify-between text-xs">
         <div>
-          <div class="font-medium text-foreground">Launch Zenith at login</div>
-          <div class="text-[11px] text-muted-foreground">Start menu bar agent automatically on system startup.</div>
+          <div class="flex items-center gap-2 font-medium text-foreground">Launch Zenith at login <Badge variant="outline">Planned</Badge></div>
+          <div class="text-[11px] text-muted-foreground">Autostart is not enabled in this build.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-pointer">
+        <label class="relative inline-flex items-center cursor-not-allowed opacity-60">
           <input
             type="checkbox"
             checked={settings.launch_at_login}
-            onchange={() => handleToggle('launch_at_login')}
+            disabled
             class="sr-only peer"
           />
           <div

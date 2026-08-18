@@ -43,8 +43,9 @@
     if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length) {
       void usageStore.refreshIfStale();
     }
-    if ((hasSection('cleanup') || hasSection('categories')) && scanStore.isStale()) {
-      void scanStore.runScan();
+    if (hasSection('cleanup') || hasSection('categories')) {
+      await scanStore.init();
+      if (panelActive && scanStore.isStale()) void scanStore.runScan();
     }
   }
 
@@ -93,7 +94,7 @@
   });
 
   function handleCleanSafe() {
-    scanStore.selectAllSafe();
+    scanStore.selectQuickCleanDefaults(settings);
     scanStore.cleanSelected().then((result) => {
       if (result) showResultModal = true;
     });

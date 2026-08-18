@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { dockerStore } from '../../lib/stores/docker.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import Button from '../../lib/components/Button.svelte';
@@ -12,11 +13,20 @@
     Server,
     HardDrive,
     AlertCircle,
-    CheckCircle2,
   } from 'lucide-svelte';
 
   let status = $derived(dockerStore.status);
   let overview = $derived(status?.overview);
+  let confirmVolumePrune = $state(false);
+
+  onMount(() => {
+    void dockerStore.refresh();
+  });
+
+  async function pruneVolumes() {
+    confirmVolumePrune = false;
+    await dockerStore.pruneTarget('container.docker.unused_volumes');
+  }
 </script>
 
 <div class="space-y-6">
@@ -81,14 +91,14 @@
         </div>
         <div>
           <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.build_cache_bytes)}
+            {formatBytes(overview.build_cache.reclaimable_bytes)}
           </div>
           <p class="text-[11px] text-muted-foreground mt-0.5">Unused BuildKit layers</p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          disabled={dockerStore.isPruning || overview.build_cache_bytes === 0}
+          disabled={dockerStore.isPruning || overview.build_cache.reclaimable_bytes === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.builder')}
           class="w-full text-xs gap-1.5"
         >
@@ -108,14 +118,14 @@
         </div>
         <div>
           <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.dangling_images_bytes)}
+            {formatBytes(overview.images.reclaimable_bytes)}
           </div>
           <p class="text-[11px] text-muted-foreground mt-0.5">Untagged layers</p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          disabled={dockerStore.isPruning || overview.dangling_images_bytes === 0}
+          disabled={dockerStore.isPruning || overview.images.reclaimable_bytes === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.dangling_images')}
           class="w-full text-xs gap-1.5"
         >
@@ -135,14 +145,14 @@
         </div>
         <div>
           <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.stopped_containers_bytes)}
+            {formatBytes(overview.containers.reclaimable_bytes)}
           </div>
           <p class="text-[11px] text-muted-foreground mt-0.5">Exited container data</p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          disabled={dockerStore.isPruning || overview.stopped_containers_bytes === 0}
+          disabled={dockerStore.isPruning || overview.containers.reclaimable_bytes === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.stopped_containers')}
           class="w-full text-xs gap-1.5"
         >
@@ -162,15 +172,15 @@
         </div>
         <div>
           <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.volumes_bytes)}
+            {formatBytes(overview.volumes.reclaimable_bytes)}
           </div>
-          <p class="text-[11px] text-muted-foreground mt-0.5">Persistent disk mounts</p>
+          <p class="text-[11px] text-muted-foreground mt-0.5">of {formatBytes(overview.volumes.total_bytes)} total</p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          disabled={dockerStore.isPruning || overview.volumes_bytes === 0}
-          onclick={() => dockerStore.pruneTarget('container.docker.unused_volumes')}
+          disabled={dockerStore.isPruning || overview.volumes.reclaimable_bytes === 0}
+          onclick={() => (confirmVolumePrune = true)}
           class="w-full text-xs gap-1.5 text-rose-400 hover:text-rose-400"
         >
           <Trash2 size={12} />
@@ -207,5 +217,25 @@
         </div>
       </div>
     {/if}
+  {/if}
+
+  {#if confirmVolumePrune}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="volume-prune-title">
+      <Card class="w-full max-w-sm space-y-4 border-border bg-card p-5 shadow-2xl">
+        <div class="flex items-start gap-3">
+          <div class="mt-0.5 text-rose-500"><AlertCircle size={20} /></div>
+          <div>
+            <h3 id="volume-prune-title" class="text-sm font-semibold">Prune unused Docker volumes?</h3>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Docker reports {formatBytes(overview?.volumes.reclaimable_bytes ?? 0)} as reclaimable. Volumes may contain persistent application data and cannot be restored by Zenith.
+            </p>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onclick={() => (confirmVolumePrune = false)}>Cancel</Button>
+          <Button variant="destructive" size="sm" onclick={pruneVolumes}>Prune Volumes</Button>
+        </div>
+      </Card>
+    </div>
   {/if}
 </div>

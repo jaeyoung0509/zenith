@@ -34,9 +34,11 @@ mod tests {
     #[test]
     fn settings_round_trip_through_config_directory() {
         let directory = tempfile::tempdir().unwrap();
-        let mut settings = ZenithSettings::default();
-        settings.quick_panel_sections = vec![QuickPanelSection::AiUsage];
-        settings.quick_panel_ai_providers = vec!["opencode".into()];
+        let settings = ZenithSettings {
+            quick_panel_sections: vec![QuickPanelSection::AiUsage],
+            quick_panel_ai_providers: vec!["opencode".into()],
+            ..ZenithSettings::default()
+        };
 
         save(directory.path(), &settings).unwrap();
         assert_eq!(load(directory.path()), settings);

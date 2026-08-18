@@ -1,8 +1,8 @@
-use crate::models::{LocalModelItem, ModelSource, ZenithError};
+use crate::models::{LocalModelItem, ModelSource};
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 pub struct LocalModelScanner;
@@ -250,32 +250,5 @@ impl LocalModelScanner {
                 }
             }
         }
-    }
-
-    /// Deletes a specific local model after safety verification.
-    pub fn delete_model(model_path_str: &str) -> Result<u64, ZenithError> {
-        let path = PathBuf::from(model_path_str);
-
-        // 1. Safety validation
-        crate::safety::Blacklist::validate(&path)?;
-
-        if !path.exists() {
-            return Err(ZenithError::Io(format!(
-                "Path {} not found",
-                model_path_str
-            )));
-        }
-
-        // 2. Perform deletion
-        let (size, _) = SizeCalculator::measure_path(&path, &[]);
-        let bytes = size.reclaimable();
-
-        if path.is_dir() {
-            fs::remove_dir_all(&path)?;
-        } else {
-            fs::remove_file(&path)?;
-        }
-
-        Ok(bytes)
     }
 }

@@ -4,15 +4,16 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    DeletePlan, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, ScanEvent,
-    ScanItem, ScanResult, SelectedApplication, ZenithSettings,
+    DeletePlan, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview,
+    ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
 };
-use crate::models_inventory::LocalModelScanner;
+use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::power::{ApplicationPicker, KeepAwakeManager};
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
 use crate::settings_store;
 use crate::signatures::SignatureRegistry;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -25,6 +26,8 @@ pub struct AppState {
     pub openrouter_key: Arc<Mutex<Option<String>>>,
     pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
     pub ai_usage_refresh_lock: Arc<Mutex<()>>,
+    pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
+    pub operation_lock: Arc<Mutex<()>>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -87,18 +90,20 @@ pub async fn start_scan(
 ) -> Result<ScanResult, String> {
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
+    let operation_lock = state.operation_lock.clone();
+    let excluded_signatures = state.settings.lock().unwrap().excluded_signatures.clone();
 
-    let result = std::thread::spawn(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _operation_guard = operation_lock.lock().unwrap();
         let cat_ref = categories.as_deref();
-        ScanEngine::scan(&registry, cat_ref, |event| {
+        let result = ScanEngine::scan(&registry, cat_ref, &excluded_signatures, |event| {
             let _ = on_event.send(event);
-        })
+        });
+        *last_scan_store.lock().unwrap() = Some(result.clone());
+        result
     })
-    .join()
+    .await
     .map_err(|_| "Scan worker thread panicked".to_string())?;
-
-    let mut last = last_scan_store.lock().unwrap();
-    *last = Some(result.clone());
 
     Ok(result)
 }
@@ -110,24 +115,75 @@ pub fn get_last_scan(state: State<'_, AppState>) -> Option<ScanResult> {
 
 #[tauri::command]
 pub fn create_delete_plan(
-    items: Vec<ScanItem>,
+    scan_id: String,
+    selected_item_ids: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<DeletePlan, String> {
-    SafetyPlanner::create_plan(&items, &state.registry).map_err(|e| e.to_string())
+) -> Result<PlanPreview, String> {
+    const PLAN_TTL_SECS: u64 = 300;
+    let scan = state
+        .last_scan
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|scan| scan.scan_id == scan_id)
+        .ok_or_else(|| "The scan is no longer current. Scan again before cleaning.".to_string())?;
+
+    let plan =
+        SafetyPlanner::create_plan_from_scan(&scan, &scan_id, &selected_item_ids, &state.registry)
+            .map_err(|e| e.to_string())?;
+    let preview = plan.preview(PLAN_TTL_SECS);
+    let now = unix_timestamp();
+    let mut plans = state.delete_plans.lock().unwrap();
+    plans.retain(|_, stored| now.saturating_sub(stored.created_at) < PLAN_TTL_SECS);
+    if plans.len() >= 64 {
+        if let Some(oldest_id) = plans
+            .iter()
+            .min_by_key(|(_, stored)| stored.created_at)
+            .map(|(id, _)| *id)
+        {
+            plans.remove(&oldest_id);
+        }
+    }
+    plans.insert(plan.id, plan);
+    Ok(preview)
 }
 
 #[tauri::command]
 pub async fn execute_clean(
-    plan: DeletePlan,
+    plan_id: uuid::Uuid,
     on_event: Channel<CleanEvent>,
+    state: State<'_, AppState>,
 ) -> Result<CleanResult, String> {
-    let result = std::thread::spawn(move || {
-        CleanExecutor::execute(plan, |event| {
+    const PLAN_TTL_SECS: u64 = 300;
+    let operation_lock = state.operation_lock.clone();
+    let plans = state.delete_plans.clone();
+    let last_scan = state.last_scan.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
+        let _operation_guard = operation_lock.lock().unwrap();
+        let plan = plans
+            .lock()
+            .unwrap()
+            .remove(&plan_id)
+            .ok_or_else(|| "Delete plan not found or already used".to_string())?;
+        if unix_timestamp().saturating_sub(plan.created_at) >= PLAN_TTL_SECS {
+            return Err("Delete plan expired. Scan again before cleaning.".to_string());
+        }
+        let scan_is_current = last_scan
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|scan| scan.scan_id == plan.scan_id);
+        if !scan_is_current {
+            return Err(
+                "The scan changed after this plan was created. Review a new plan.".to_string(),
+            );
+        }
+        Ok(CleanExecutor::execute(plan, |event| {
             let _ = on_event.send(event);
-        })
+        }))
     })
-    .join()
-    .map_err(|_| "Clean execution thread panicked".to_string())?;
+    .await
+    .map_err(|_| "Clean execution thread panicked".to_string())??;
 
     Ok(result)
 }
@@ -186,8 +242,8 @@ pub fn get_local_models() -> Result<Vec<LocalModelItem>, String> {
 }
 
 #[tauri::command]
-pub fn delete_local_model(path: String) -> Result<u64, String> {
-    LocalModelScanner::delete_model(&path).map_err(|e| e.to_string())
+pub fn delete_local_model(model_id: String) -> Result<u64, String> {
+    LocalModelManager::delete_by_id(&model_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

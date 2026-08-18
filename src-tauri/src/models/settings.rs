@@ -130,13 +130,15 @@ mod tests {
 
     #[test]
     fn sanitize_deduplicates_and_rejects_unknown_values() {
-        let mut settings = ZenithSettings::default();
-        settings.quick_panel_sections = vec![
-            QuickPanelSection::AiUsage,
-            QuickPanelSection::AiUsage,
-            QuickPanelSection::Memory,
-        ];
-        settings.quick_panel_ai_providers = vec!["codex".into(), "unknown".into(), "codex".into()];
+        let settings = ZenithSettings {
+            quick_panel_sections: vec![
+                QuickPanelSection::AiUsage,
+                QuickPanelSection::AiUsage,
+                QuickPanelSection::Memory,
+            ],
+            quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
+            ..ZenithSettings::default()
+        };
 
         let sanitized = settings.sanitize();
         assert_eq!(

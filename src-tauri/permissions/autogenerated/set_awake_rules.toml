@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-awake-rules"
+description = "Enables the set_awake_rules command without any pre-configured scope."
+commands.allow = ["set_awake_rules"]
+
+[[permission]]
+identifier = "deny-set-awake-rules"
+description = "Denies the set_awake_rules command without any pre-configured scope."
+commands.deny = ["set_awake_rules"]

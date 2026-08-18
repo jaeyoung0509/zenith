@@ -1,4 +1,5 @@
 use crate::models::{AiProviderUsage, AiUsageSnapshot, UsageSummary, UsageSupport, UsageWindow};
+use crate::tooling;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::{json, Value};
@@ -6,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 use url::Url;
@@ -32,7 +33,7 @@ impl AiUsageCollector {
         let mut provider = base_provider("codex", "Codex", "ChatGPT OAuth");
         provider.action_url = Some("https://chatgpt.com/codex/settings/usage".into());
 
-        let mut child = match Command::new("codex")
+        let mut child = match tooling::command("codex")
             .args(["app-server", "--stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -161,7 +162,7 @@ impl AiUsageCollector {
         provider.support = UsageSupport::Local;
         provider.action_url = Some("https://opencode.ai/docs/providers".into());
 
-        let auth = match Command::new("opencode").args(["auth", "list"]).output() {
+        let auth = match tooling::command("opencode").args(["auth", "list"]).output() {
             Ok(output) => output,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 provider.status_message = "OpenCode is not installed.".into();
@@ -187,7 +188,7 @@ impl AiUsageCollector {
         provider.status_message =
             "Local activity from `opencode stats`; quotas remain provider-owned.".into();
 
-        if let Ok(output) = Command::new("opencode")
+        if let Ok(output) = tooling::command("opencode")
             .args(["stats", "--days", "7"])
             .output()
         {
@@ -277,7 +278,7 @@ pub fn connect_openrouter() -> Result<String, String> {
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256");
 
-    Command::new("open")
+    tooling::command("open")
         .arg(auth_url.as_str())
         .spawn()
         .map_err(|error| format!("Could not open the OAuth page: {error}"))?;
@@ -396,12 +397,7 @@ fn u64_field(value: &Value, key: &str) -> Option<u64> {
 }
 
 fn command_exists(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
+    tooling::resolve(command).is_some()
 }
 
 fn parse_stat_u64(output: &str, label: &str) -> Option<u64> {
