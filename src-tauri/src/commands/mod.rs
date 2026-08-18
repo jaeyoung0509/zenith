@@ -4,8 +4,8 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    DeletePlan, DiskMetrics, DockerStatus, LocalModelItem, MemoryMetrics, ScanEvent, ScanItem,
-    ScanResult, ZenithSettings,
+    DeletePlan, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, ScanEvent,
+    ScanItem, ScanResult, ZenithSettings,
 };
 use crate::models_inventory::LocalModelScanner;
 use crate::power::KeepAwakeManager;
@@ -103,6 +103,22 @@ pub fn get_memory_metrics() -> Result<MemoryMetrics, String> {
 #[tauri::command]
 pub fn get_disk_metrics() -> Result<DiskMetrics, String> {
     DiskMetricsCollector::get_primary_disk().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_disk_volumes() -> Vec<DiskVolume> {
+    DiskMetricsCollector::get_volumes()
+}
+
+#[tauri::command]
+pub fn open_disk_utility() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .args(["-a", "Disk Utility"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

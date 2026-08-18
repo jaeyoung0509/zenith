@@ -81,6 +81,18 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
   totals, memory, Scan Again, and Open Zenith.
 - The close button hides the panel while the menu-bar process continues. Quit is
   intentionally available from the tray menu, not conflated with close.
+- Open directly below the clicked menu-bar icon, right-aligned to it and clamped
+  inside the active display. Do not reuse a stale centered window position.
+
+### Disk management
+
+- Separate cleanup candidates from physical/logical volume health. The Disks
+  view shows mounted volumes, used/free capacity, mount points, and a handoff to
+  macOS Disk Utility; destructive volume operations remain outside Zenith.
+- Default cleanup ordering is largest reclaimable size first. Hide nonexistent
+  and zero-byte signature locations. Explain that Rebuild items are deletable
+  but intentionally opt-in because the next tool run may need network downloads
+  or recompilation.
 
 ## Visual QA checklist
 

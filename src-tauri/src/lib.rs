@@ -17,7 +17,85 @@ use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow};
+
+fn tray_anchor(window: &WebviewWindow, rect: Rect) -> PhysicalPosition<f64> {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let position: PhysicalPosition<f64> = rect.position.to_physical(scale);
+    let size: tauri::PhysicalSize<f64> = rect.size.to_physical(scale);
+    PhysicalPosition::new(position.x + size.width, position.y + size.height)
+}
+
+fn quick_panel_position(
+    anchor: PhysicalPosition<f64>,
+    panel_size: PhysicalSize<u32>,
+    monitor_origin: PhysicalPosition<i32>,
+    monitor_size: PhysicalSize<u32>,
+) -> PhysicalPosition<i32> {
+    let max_x = monitor_origin.x + monitor_size.width as i32 - panel_size.width as i32;
+    let max_y = monitor_origin.y + monitor_size.height as i32 - panel_size.height as i32;
+    PhysicalPosition::new(
+        (anchor.x.round() as i32 - panel_size.width as i32)
+            .clamp(monitor_origin.x, max_x.max(monitor_origin.x)),
+        (anchor.y.round() as i32 + 6).clamp(monitor_origin.y, max_y.max(monitor_origin.y)),
+    )
+}
+
+fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosition<f64>>) {
+    if let Some(position) = click_position {
+        if let Ok(size) = window.outer_size() {
+            let mut target = PhysicalPosition::new(
+                position.x.round() as i32 - size.width as i32,
+                position.y.round() as i32 + 6,
+            );
+
+            if let Ok(monitors) = window.available_monitors() {
+                if let Some(monitor) = monitors.iter().find(|monitor| {
+                    let origin = monitor.position();
+                    let bounds = monitor.size();
+                    position.x >= f64::from(origin.x)
+                        && position.x < f64::from(origin.x + bounds.width as i32)
+                        && position.y >= f64::from(origin.y)
+                        && position.y < f64::from(origin.y + bounds.height as i32)
+                }) {
+                    target =
+                        quick_panel_position(position, size, *monitor.position(), *monitor.size());
+                }
+            }
+            let _ = window.set_position(target);
+        }
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quick_panel_position;
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    #[test]
+    fn quick_panel_is_right_aligned_below_tray_icon() {
+        let position = quick_panel_position(
+            PhysicalPosition::new(1_500.0, 48.0),
+            PhysicalSize::new(720, 1_040),
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(3_456, 2_234),
+        );
+        assert_eq!(position, PhysicalPosition::new(780, 54));
+    }
+
+    #[test]
+    fn quick_panel_is_clamped_inside_active_display() {
+        let position = quick_panel_position(
+            PhysicalPosition::new(100.0, 1_900.0),
+            PhysicalSize::new(720, 1_040),
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(3_456, 2_234),
+        );
+        assert_eq!(position, PhysicalPosition::new(0, 1_194));
+    }
+}
 
 pub fn run() {
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
@@ -79,8 +157,11 @@ pub fn run() {
                             if window.is_visible().unwrap_or(false) {
                                 let _ = window.hide();
                             } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                                let position = app
+                                    .tray_by_id("main-tray")
+                                    .and_then(|tray| tray.rect().ok().flatten())
+                                    .map(|rect| tray_anchor(&window, rect));
+                                show_quick_panel(&window, position);
                             }
                         }
                     }
@@ -89,6 +170,7 @@ pub fn run() {
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
+                        rect,
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
@@ -99,8 +181,8 @@ pub fn run() {
                             if is_vis {
                                 let _ = quick_win.hide();
                             } else {
-                                let _ = quick_win.show();
-                                let _ = quick_win.set_focus();
+                                let position = tray_anchor(&quick_win, rect);
+                                show_quick_panel(&quick_win, Some(position));
                             }
                         }
                     }
@@ -125,6 +207,8 @@ pub fn run() {
             commands::execute_clean,
             commands::get_memory_metrics,
             commands::get_disk_metrics,
+            commands::get_disk_volumes,
+            commands::open_disk_utility,
             commands::get_docker_status,
             commands::prune_docker_target,
             commands::get_local_models,

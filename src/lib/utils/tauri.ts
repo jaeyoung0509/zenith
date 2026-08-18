@@ -10,6 +10,7 @@ import type {
   CleanResult,
   DeletePlan,
   DiskMetrics,
+  DiskVolume,
   DockerStatus,
   LocalModelItem,
   MemoryMetrics,
@@ -188,6 +189,43 @@ export async function tauriGetDiskMetrics(): Promise<DiskMetrics> {
   }
 
   return await invoke<DiskMetrics>('get_disk_metrics');
+}
+
+export async function tauriGetDiskVolumes(): Promise<DiskVolume[]> {
+  if (!isTauri) {
+    return [
+      {
+        name: 'Macintosh HD',
+        mount_point: '/',
+        file_system: 'APFS',
+        disk_type: 'SSD',
+        total_bytes: 228.3 * 1024 * 1024 * 1024,
+        used_bytes: 190.5 * 1024 * 1024 * 1024,
+        available_bytes: 37.8 * 1024 * 1024 * 1024,
+        percent_used: 83.5,
+        is_removable: false,
+        is_primary: true,
+      },
+      {
+        name: 'Developer SSD',
+        mount_point: '/Volumes/Developer SSD',
+        file_system: 'APFS',
+        disk_type: 'SSD',
+        total_bytes: 1_000 * 1024 * 1024 * 1024,
+        used_bytes: 642 * 1024 * 1024 * 1024,
+        available_bytes: 358 * 1024 * 1024 * 1024,
+        percent_used: 64.2,
+        is_removable: true,
+        is_primary: false,
+      },
+    ];
+  }
+  return await invoke<DiskVolume[]>('get_disk_volumes');
+}
+
+export async function tauriOpenDiskUtility(): Promise<void> {
+  if (!isTauri) return;
+  await invoke('open_disk_utility');
 }
 
 export async function tauriGetDockerStatus(): Promise<DockerStatus> {

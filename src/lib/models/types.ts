@@ -152,6 +152,19 @@ export interface DiskMetrics {
   percent_used: number;
 }
 
+export interface DiskVolume {
+  name: string;
+  mount_point: string;
+  file_system: string;
+  disk_type: string;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  percent_used: number;
+  is_removable: boolean;
+  is_primary: boolean;
+}
+
 export interface DockerImageItem {
   id: string;
   repository: string;
