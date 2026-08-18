@@ -15,10 +15,6 @@ class AwakeStore {
   isLoading = $state(false);
   error = $state<string | null>(null);
 
-  constructor() {
-    this.refresh();
-  }
-
   async refresh() {
     try {
       this.state = await tauriGetAwakeState();

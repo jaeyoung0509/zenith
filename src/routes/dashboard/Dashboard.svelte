@@ -30,11 +30,11 @@
   let selectedCategory = $state<CategoryResult | null>(null);
 
   onMount(() => {
-    memoryStore.refresh();
+    memoryStore.refreshDisk();
     awakeStore.refresh();
-    if (!scanStore.lastScan) {
-      scanStore.runScan();
-    }
+    void scanStore.init().then(() => {
+      if (scanStore.isStale()) void scanStore.runScan();
+    });
   });
 
   function selectTab(tab: Tab) {

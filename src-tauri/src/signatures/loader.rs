@@ -35,8 +35,8 @@ impl SignatureLoader {
         let home = std::env::var("HOME").ok()?;
         let path = if pattern == "$TMPDIR" {
             std::env::temp_dir()
-        } else if pattern.starts_with("~/") {
-            PathBuf::from(&home).join(&pattern[2..])
+        } else if let Some(relative) = pattern.strip_prefix("~/") {
+            PathBuf::from(&home).join(relative)
         } else if pattern == "~" {
             PathBuf::from(&home)
         } else {

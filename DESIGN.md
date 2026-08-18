@@ -27,6 +27,9 @@ The canonical color tokens live in `src/app.css`. In dark mode:
 - Emerald means safe, protected, or connected. Amber means rebuild or warning.
   Red means destructive or failed. Violet identifies AI usage without replacing
   the semantic status colors.
+- Enabled switches use emerald track fill with a white thumb. Never use a plain
+  white track for the enabled state because it is indistinguishable from an
+  inactive control on light surfaces.
 
 Use the system sans-serif stack for labels and prose. Use monospace numerals for
 bytes, percentages, token counts, prices, process IDs, and reset times. Body text
@@ -77,12 +80,17 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
 
 ### Quick panel
 
-- Show the high-frequency snapshot only: storage, safe reclaim amount, category
-  totals, memory, Scan Again, and Open Zenith.
-- The close button hides the panel while the menu-bar process continues. Quit is
-  intentionally available from the tray menu, not conflated with close.
+- Show only user-selected high-frequency sections: storage, safe reclaim amount,
+  compact AI usage, category totals, and memory. Preserve the saved section and
+  AI-provider priority order; Scan Again and Open Zenith remain fixed actions.
+- The close button, Escape, Cmd+W, and focus loss hide the panel while the
+  menu-bar process continues. Quit is intentionally available from the tray
+  menu, not conflated with close.
 - Open directly below the clicked menu-bar icon, right-aligned to it and clamped
   inside the active display. Do not reuse a stale centered window position.
+- Hidden panels perform no recurring metrics polling or provider collection.
+  Refresh disk metrics once when opening, poll memory only while visible, and
+  keep AI usage bounded by a short cache with an explicit refresh action.
 
 ### Disk management
 
@@ -96,7 +104,8 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
 
 ### Memory inspector
 
-- Termination is available only for recognized user applications. Keep the
+- Termination is available only for recognized user applications, including
+  executables inside installed `.app` bundles. Keep the
   action visually secondary until row hover and always show a confirmation with
   process count, estimated memory, and unsaved-work warning.
 - Offer normal Quit before the red Force Quit action. Explain that displayed

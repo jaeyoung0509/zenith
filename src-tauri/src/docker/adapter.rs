@@ -2,14 +2,14 @@ use crate::models::{
     Category, DockerContainerItem, DockerImageItem, DockerOverview, DockerStatus, DockerVolumeItem,
     FileSize, RiskTier, ScanItem, ZenithError,
 };
-use std::process::Command;
+use crate::tooling;
 
 pub struct DockerAdapter;
 
 impl DockerAdapter {
     /// Checks if the Docker CLI is installed and the daemon is currently running.
     pub fn get_status() -> DockerStatus {
-        let cli_check = Command::new("docker").arg("--version").output();
+        let cli_check = tooling::command("docker").arg("--version").output();
 
         let (is_available, version) = match cli_check {
             Ok(output) if output.status.success() => {
@@ -33,14 +33,11 @@ impl DockerAdapter {
         }
 
         // Check if Docker daemon is running
-        let ping = Command::new("docker")
+        let ping = tooling::command("docker")
             .args(["info", "--format", "{{.ServerVersion}}"])
             .output();
 
-        let is_running = match ping {
-            Ok(output) if output.status.success() => true,
-            _ => false,
-        };
+        let is_running = matches!(ping, Ok(output) if output.status.success());
 
         if !is_running {
             return DockerStatus {
@@ -86,7 +83,7 @@ impl DockerAdapter {
 
         let mut items = Vec::new();
 
-        if overview.dangling_images_bytes > 0 {
+        if overview.images.reclaimable_bytes > 0 {
             items.push(ScanItem {
                 id: "container.docker.dangling_images".to_string(),
                 signature_id: "container.docker.dangling_images".to_string(),
@@ -95,8 +92,8 @@ impl DockerAdapter {
                 risk: RiskTier::Safe,
                 path: "docker://images/dangling".to_string(),
                 size: FileSize::new(
-                    overview.dangling_images_bytes,
-                    Some(overview.dangling_images_bytes),
+                    overview.images.reclaimable_bytes,
+                    Some(overview.images.reclaimable_bytes),
                 ),
                 file_count: 0,
                 description: "Untagged intermediate image layers".to_string(),
@@ -106,7 +103,7 @@ impl DockerAdapter {
             });
         }
 
-        if overview.build_cache_bytes > 0 {
+        if overview.build_cache.reclaimable_bytes > 0 {
             items.push(ScanItem {
                 id: "container.docker.builder".to_string(),
                 signature_id: "container.docker.builder".to_string(),
@@ -114,7 +111,10 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Safe,
                 path: "docker://buildkit/cache".to_string(),
-                size: FileSize::new(overview.build_cache_bytes, Some(overview.build_cache_bytes)),
+                size: FileSize::new(
+                    overview.build_cache.reclaimable_bytes,
+                    Some(overview.build_cache.reclaimable_bytes),
+                ),
                 file_count: 0,
                 description: "Reusable BuildKit build cache layers".to_string(),
                 is_selected: true,
@@ -123,7 +123,7 @@ impl DockerAdapter {
             });
         }
 
-        if overview.stopped_containers_bytes > 0 {
+        if overview.containers.reclaimable_bytes > 0 {
             items.push(ScanItem {
                 id: "container.docker.stopped_containers".to_string(),
                 signature_id: "container.docker.stopped_containers".to_string(),
@@ -132,8 +132,8 @@ impl DockerAdapter {
                 risk: RiskTier::Rebuild,
                 path: "docker://containers/stopped".to_string(),
                 size: FileSize::new(
-                    overview.stopped_containers_bytes,
-                    Some(overview.stopped_containers_bytes),
+                    overview.containers.reclaimable_bytes,
+                    Some(overview.containers.reclaimable_bytes),
                 ),
                 file_count: 0,
                 description: "Exited containers holding read-write layer state".to_string(),
@@ -143,7 +143,7 @@ impl DockerAdapter {
             });
         }
 
-        if overview.volumes_bytes > 0 {
+        if overview.volumes.reclaimable_bytes > 0 {
             items.push(ScanItem {
                 id: "container.docker.unused_volumes".to_string(),
                 signature_id: "container.docker.unused_volumes".to_string(),
@@ -151,7 +151,10 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Manual,
                 path: "docker://volumes/unused".to_string(),
-                size: FileSize::new(overview.volumes_bytes, Some(overview.volumes_bytes)),
+                size: FileSize::new(
+                    overview.volumes.reclaimable_bytes,
+                    Some(overview.volumes.reclaimable_bytes),
+                ),
                 file_count: 0,
                 description: "Anonymous and orphaned persistent storage volumes".to_string(),
                 is_selected: false,
@@ -165,16 +168,20 @@ impl DockerAdapter {
 
     /// Queries `docker system df` and parses image, container, volume, and build cache usage.
     pub fn get_overview() -> DockerOverview {
-        let output = Command::new("docker")
+        let output = tooling::command("docker")
             .args(["system", "df", "--format", "{{json .}}"])
             .output();
 
-        let mut overview = DockerOverview::default();
-
         let stdout = match output {
             Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
-            _ => return overview,
+            _ => return DockerOverview::default(),
         };
+
+        Self::parse_overview(&stdout)
+    }
+
+    fn parse_overview(stdout: &str) -> DockerOverview {
+        let mut overview = DockerOverview::default();
 
         for line in stdout.lines() {
             let val: serde_json::Value = match serde_json::from_str(line) {
@@ -194,28 +201,36 @@ impl DockerAdapter {
 
             match item_type {
                 "Images" => {
-                    overview.images_bytes = total_bytes;
-                    overview.dangling_images_bytes = reclaim_bytes;
+                    overview.images.total_bytes = total_bytes;
+                    overview.images.reclaimable_bytes = reclaim_bytes;
                 }
                 "Containers" => {
-                    overview.stopped_containers_bytes = reclaim_bytes;
+                    overview.containers.total_bytes = total_bytes;
+                    overview.containers.reclaimable_bytes = reclaim_bytes;
                 }
                 "Local Volumes" => {
-                    overview.volumes_bytes = total_bytes;
+                    overview.volumes.total_bytes = total_bytes;
+                    overview.volumes.reclaimable_bytes = reclaim_bytes;
                 }
                 "Build Cache" => {
-                    overview.build_cache_bytes = reclaim_bytes;
+                    overview.build_cache.total_bytes = total_bytes;
+                    overview.build_cache.reclaimable_bytes = reclaim_bytes;
                 }
                 _ => {}
             }
         }
 
-        overview.total_bytes = overview.images_bytes
-            + overview.stopped_containers_bytes
-            + overview.volumes_bytes
-            + overview.build_cache_bytes;
+        overview.total_bytes = overview.images.total_bytes
+            + overview.containers.total_bytes
+            + overview.volumes.total_bytes
+            + overview.build_cache.total_bytes;
+        overview.total_reclaimable_bytes = overview.images.reclaimable_bytes
+            + overview.containers.reclaimable_bytes
+            + overview.volumes.reclaimable_bytes
+            + overview.build_cache.reclaimable_bytes;
 
-        overview.safe_cleanable_bytes = overview.dangling_images_bytes + overview.build_cache_bytes;
+        overview.safe_cleanable_bytes =
+            overview.images.reclaimable_bytes + overview.build_cache.reclaimable_bytes;
 
         overview
     }
@@ -251,7 +266,7 @@ impl DockerAdapter {
     }
 
     pub fn get_images() -> Vec<DockerImageItem> {
-        let output = Command::new("docker")
+        let output = tooling::command("docker")
             .args(["images", "--format", "{{json .}}"])
             .output();
 
@@ -295,7 +310,7 @@ impl DockerAdapter {
     }
 
     pub fn get_containers() -> Vec<DockerContainerItem> {
-        let output = Command::new("docker")
+        let output = tooling::command("docker")
             .args(["ps", "-a", "--format", "{{json .}}"])
             .output();
 
@@ -344,7 +359,7 @@ impl DockerAdapter {
     }
 
     pub fn get_volumes() -> Vec<DockerVolumeItem> {
-        let output = Command::new("docker")
+        let output = tooling::command("docker")
             .args(["volume", "ls", "--format", "{{json .}}"])
             .output();
 
@@ -382,16 +397,16 @@ impl DockerAdapter {
         let overview_before = Self::get_overview();
 
         let res = match signature_id {
-            "container.docker.dangling_images" => Command::new("docker")
+            "container.docker.dangling_images" => tooling::command("docker")
                 .args(["image", "prune", "-f"])
                 .output(),
-            "container.docker.builder" => Command::new("docker")
+            "container.docker.builder" => tooling::command("docker")
                 .args(["builder", "prune", "-f"])
                 .output(),
-            "container.docker.stopped_containers" => Command::new("docker")
+            "container.docker.stopped_containers" => tooling::command("docker")
                 .args(["container", "prune", "-f"])
                 .output(),
-            "container.docker.unused_volumes" => Command::new("docker")
+            "container.docker.unused_volumes" => tooling::command("docker")
                 .args(["volume", "prune", "-f"])
                 .output(),
             _ => {
@@ -416,5 +431,24 @@ impl DockerAdapter {
             }
             Err(e) => Err(ZenithError::ExternalCommandFailed(e.to_string())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DockerAdapter;
+
+    #[test]
+    fn volume_total_is_not_reported_as_reclaimable() {
+        let output = r#"
+{"Type":"Images","Size":"10GB","Reclaimable":"2GB (20%)"}
+{"Type":"Containers","Size":"3GB","Reclaimable":"1GB (33%)"}
+{"Type":"Local Volumes","Size":"8GB","Reclaimable":"500MB (6%)"}
+{"Type":"Build Cache","Size":"4GB","Reclaimable":"3GB (75%)"}
+"#;
+        let overview = DockerAdapter::parse_overview(output);
+        assert_eq!(overview.volumes.total_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(overview.volumes.reclaimable_bytes, 500 * 1024 * 1024);
+        assert!(overview.total_reclaimable_bytes < overview.total_bytes);
     }
 }

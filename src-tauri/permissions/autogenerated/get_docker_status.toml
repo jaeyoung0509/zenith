@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-docker-status"
+description = "Enables the get_docker_status command without any pre-configured scope."
+commands.allow = ["get_docker_status"]
+
+[[permission]]
+identifier = "deny-get-docker-status"
+description = "Denies the get_docker_status command without any pre-configured scope."
+commands.deny = ["get_docker_status"]

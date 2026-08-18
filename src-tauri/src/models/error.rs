@@ -10,6 +10,7 @@ pub enum ZenithError {
     ExternalCommandFailed(String),
     BlacklistedPath(String),
     InvalidPlan(String),
+    UnsupportedManualOperation(String),
     Io(String),
 }
 
@@ -26,6 +27,9 @@ impl fmt::Display for ZenithError {
                 write!(f, "Attempted operation on blacklisted path: {}", p)
             }
             ZenithError::InvalidPlan(msg) => write!(f, "Invalid delete plan: {}", msg),
+            ZenithError::UnsupportedManualOperation(name) => {
+                write!(f, "Manual item requires a dedicated adapter: {}", name)
+            }
             ZenithError::Io(e) => write!(f, "IO error: {}", e),
         }
     }

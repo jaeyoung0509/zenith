@@ -26,6 +26,9 @@ safety conventions below when changing Zenith.
   report progress over time.
 - Keep all `invoke` calls in `src/lib/utils/tauri.ts`. Every browser-previewed
   feature must have a deterministic mock guarded by `isTauri()`.
+- Register every application command in `src-tauri/build.rs` and grant it only
+  to the windows that need it through `src-tauri/capabilities`. Destructive
+  adapters belong to the main-window capability, not the quick panel.
 - Never read or expose OAuth credential files directly. Prefer an official CLI
   or API flow. Keep provider secrets in Rust, return only derived usage data,
   and use the OS keychain if persistence is introduced. Never log tokens.
@@ -39,9 +42,17 @@ safety conventions below when changing Zenith.
 - Window labels are `main` and `quick`. Closing the quick panel hides it; it
   must not terminate the background app. Every frameless window needs an
   obvious keyboard-accessible close control.
+- Persist user preferences as validated JSON in Tauri's app configuration
+  directory. Missing fields must deserialize to safe defaults so upgrades do
+  not discard existing settings. Reload preferences when the persistent quick
+  window is activated because each webview owns a separate frontend store.
+- Hidden quick panels must not poll metrics or invoke provider CLIs. Disk data
+  refreshes once per activation, memory may poll only while visible, and AI
+  provider snapshots use a bounded backend cache with manual refresh support.
 - Never expose arbitrary PID kill commands. Memory actions must resolve a fresh
-  process snapshot from an allowlisted user-app group, protect system/terminal/
-  Zenith processes, and offer graceful termination before force termination.
+  process snapshot from an allowlisted user-app group (including executables in
+  installed `.app` bundles), protect system/terminal/Zenith processes, and
+  offer graceful termination before force termination.
 - Native app selection for Keep Awake starts in `/Applications`, reads
   `CFBundleExecutable`, and returns only the display name, executable name, and
   bundle path. Cancellation is a normal empty result, not an error.
@@ -65,12 +76,18 @@ safety conventions below when changing Zenith.
 
 - Cleanup targets originate from registered TOML signatures. The planner must
   reject paths outside a signature's resolved scope.
+- Delete plans remain private Rust values in the bounded plan store. The
+  frontend submits only the current scan ID, selected item IDs, and then the
+  opaque one-shot plan ID; it never supplies paths, strategies, or identities.
+- `Manual` is never a generic filesystem strategy. Stateful resources such as
+  local models and Docker volumes require a typed adapter and explicit UX.
 - Never scan or delete all of `/tmp`. Temporary cleanup is limited to direct
   children with known tool prefixes and a minimum inactivity age. Determine
   inactivity from the newest timestamp in the candidate tree.
 - Do not follow symlinks. Apply blacklist, signature-scope, and TOCTOU checks
-  before deletion. Only `Safe` items may be auto-selected; `Rebuild` and
-  `Manual` items require explicit user intent.
+  before deletion and at every recursive entry. Only `Safe` items may be
+  auto-selected; `Rebuild` requires explicit preference or selection and
+  `Manual` is never selected for generic cleanup.
 - Add a regression test for every safety boundary change. Tests must use
   temporary fixtures and must never clean real user directories.
 - Do not include nonexistent or zero-byte signature paths in scan results.

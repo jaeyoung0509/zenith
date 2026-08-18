@@ -9,6 +9,7 @@ class MemoryStore {
   memory = $state<MemoryMetrics | null>(null);
   disk = $state<DiskMetrics | null>(null);
   isLoading = $state(false);
+  isDiskLoading = $state(false);
   isPolling = $state(false);
   error = $state<string | null>(null);
   terminating = $state<string | null>(null);
@@ -18,19 +19,31 @@ class MemoryStore {
   private subscriberCount = 0;
 
   async refresh() {
+    await Promise.all([this.refreshMemory(), this.refreshDisk()]);
+  }
+
+  async refreshMemory() {
+    if (this.isLoading) return;
     this.isLoading = true;
     this.error = null;
     try {
-      const [mem, dsk] = await Promise.all([
-        tauriGetMemoryMetrics(),
-        tauriGetDiskMetrics(),
-      ]);
-      this.memory = mem;
-      this.disk = dsk;
+      this.memory = await tauriGetMemoryMetrics();
     } catch (e: any) {
       this.error = e?.toString() || 'Failed to fetch metrics';
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  async refreshDisk() {
+    if (this.isDiskLoading) return;
+    this.isDiskLoading = true;
+    try {
+      this.disk = await tauriGetDiskMetrics();
+    } catch (e: any) {
+      this.error = e?.toString() || 'Failed to fetch disk metrics';
+    } finally {
+      this.isDiskLoading = false;
     }
   }
 
@@ -43,7 +56,7 @@ class MemoryStore {
       const count = await tauriTerminateProcessGroup(name, force);
       this.lastAction = `${force ? 'Force quit' : 'Quit'} requested for ${name} (${count} processes).`;
       await new Promise((resolve) => window.setTimeout(resolve, force ? 300 : 900));
-      await this.refresh();
+      await this.refreshMemory();
     } catch (error: any) {
       this.error = error?.toString() || `Could not terminate ${name}`;
     } finally {
@@ -55,9 +68,9 @@ class MemoryStore {
     this.subscriberCount++;
     if (this.subscriberCount === 1) {
       this.isPolling = true;
-      this.refresh();
+      this.refreshMemory();
       this.timer = window.setInterval(() => {
-        this.refresh();
+        this.refreshMemory();
       }, intervalMs);
     }
   }

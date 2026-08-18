@@ -6,7 +6,7 @@
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import { Activity, Bot, RefreshCw, ShieldCheck, Terminal, Zap } from 'lucide-svelte';
 
-  onMount(() => usageStore.refresh());
+  onMount(() => usageStore.refreshIfStale());
 
   const compactNumber = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
@@ -33,7 +33,7 @@
         <p class="text-xs text-muted-foreground mt-0.5">OAuth account limits and local coding-agent activity</p>
       </div>
     </div>
-    <Button variant="outline" size="sm" class="gap-1.5" disabled={usageStore.isLoading} onclick={() => usageStore.refresh()}>
+    <Button variant="outline" size="sm" class="gap-1.5" disabled={usageStore.isLoading} onclick={() => usageStore.refresh(true)}>
       <RefreshCw size={13} class={usageStore.isLoading ? 'animate-spin' : ''} />
       Refresh
     </Button>

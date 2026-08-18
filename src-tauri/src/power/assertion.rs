@@ -11,7 +11,6 @@ mod macos_iokit {
     pub const K_IORETURN_SUCCESS: i32 = 0;
 
     #[link(name = "IOKit", kind = "framework")]
-    #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
         pub fn IOPMAssertionCreateWithName(
             assertion_type: *const c_void,
@@ -21,7 +20,10 @@ mod macos_iokit {
         ) -> IOReturn;
 
         pub fn IOPMAssertionRelease(assertion_id: IOPMAssertionID) -> IOReturn;
+    }
 
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
         pub fn CFStringCreateWithCString(
             alloc: *const c_void,
             c_str: *const libc::c_char,
