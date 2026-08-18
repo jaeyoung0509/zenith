@@ -70,11 +70,7 @@ impl LocalModelManager {
             .unwrap_or(0);
 
         let actual_reclaimed = before_bytes.saturating_sub(after_bytes);
-        if actual_reclaimed > 0 {
-            Ok(actual_reclaimed)
-        } else {
-            Ok(model.size_bytes)
-        }
+        Ok(actual_reclaimed)
     }
 
     fn ollama_delete_args(model: &LocalModelItem) -> [&str; 2] {

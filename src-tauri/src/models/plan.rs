@@ -126,11 +126,20 @@ impl CleanFailureReason {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanStatus {
+    Success,
+    Partial,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleanItemResult {
     pub item_id: String,
     pub name: String,
     pub path: String,
+    pub status: CleanStatus,
     pub success: bool,
     pub bytes_reclaimed: u64,
     pub failure_reason: Option<CleanFailureReason>,

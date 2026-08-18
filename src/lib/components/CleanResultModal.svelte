@@ -3,8 +3,7 @@
   import { formatBytes } from '../utils/format';
   import Button from './Button.svelte';
   import Card from './Card.svelte';
-  import Badge from './Badge.svelte';
-  import { CheckCircle2, AlertTriangle, X } from 'lucide-svelte';
+  import { CheckCircle2, AlertTriangle, X, AlertCircle } from 'lucide-svelte';
 
   interface Props {
     result: CleanResult;
@@ -13,8 +12,15 @@
 
   let { result, onClose }: Props = $props();
 
-  let failedItems = $derived(result.items.filter((i) => !i.success));
-  let successItems = $derived(result.items.filter((i) => i.success));
+  let failedItems = $derived(
+    result.items.filter((i) => !i.success || i.status === 'failed')
+  );
+  let partialItems = $derived(
+    result.items.filter((i) => i.status === 'partial' || (i.success && !!i.error_message))
+  );
+  let fullSuccessItems = $derived(
+    result.items.filter((i) => i.status === 'success' || (i.success && !i.error_message && i.status !== 'partial'))
+  );
 </script>
 
 <div
@@ -51,13 +57,14 @@
         </div>
       </div>
 
+      <!-- Failed Items -->
       {#if failedItems.length > 0}
-        <div class="space-y-2">
-          <div class="flex items-center gap-1.5 text-xs font-medium text-amber-500">
-            <AlertTriangle size={14} />
-            <span>{failedItems.length} items skipped or failed</span>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-1.5 text-xs font-medium text-rose-500">
+            <AlertCircle size={14} />
+            <span>{failedItems.length} item(s) failed</span>
           </div>
-          <div class="max-h-32 overflow-y-auto space-y-1.5 pr-1">
+          <div class="max-h-28 overflow-y-auto space-y-1.5 pr-1">
             {#each failedItems as item}
               <div class="p-2 rounded bg-destructive/10 border border-destructive/20 text-xs">
                 <div class="font-medium text-foreground">{item.name}</div>
@@ -70,17 +77,43 @@
         </div>
       {/if}
 
-      <div class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-        <span class="text-xs font-medium text-muted-foreground">Cleaned Items ({successItems.length})</span>
-        {#each successItems as item}
-          <div class="flex items-center justify-between py-1 text-xs border-b border-border/40 last:border-0">
-            <span class="truncate text-foreground max-w-[240px]">{item.name}</span>
-            <span class="font-mono text-muted-foreground">
-              {formatBytes(item.bytes_reclaimed)}
-            </span>
+      <!-- Partial Items -->
+      {#if partialItems.length > 0}
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-1.5 text-xs font-medium text-amber-500">
+            <AlertTriangle size={14} />
+            <span>{partialItems.length} item(s) partially cleaned</span>
           </div>
-        {/each}
-      </div>
+          <div class="max-h-28 overflow-y-auto space-y-1.5 pr-1">
+            {#each partialItems as item}
+              <div class="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-xs">
+                <div class="flex items-center justify-between">
+                  <span class="font-medium text-foreground">{item.name}</span>
+                  <span class="font-mono text-amber-400 text-[11px]">+{formatBytes(item.bytes_reclaimed)}</span>
+                </div>
+                <div class="text-[11px] text-amber-300/80 mt-0.5">
+                  {item.error_message || 'Some files were locked or in use'}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Fully Cleaned Items -->
+      {#if fullSuccessItems.length > 0}
+        <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+          <span class="text-xs font-medium text-muted-foreground">Cleaned Items ({fullSuccessItems.length})</span>
+          {#each fullSuccessItems as item}
+            <div class="flex items-center justify-between py-1 text-xs border-b border-border/40 last:border-0">
+              <span class="truncate text-foreground max-w-[240px]">{item.name}</span>
+              <span class="font-mono text-muted-foreground">
+                {formatBytes(item.bytes_reclaimed)}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
 
     <div class="pt-2 flex justify-end">

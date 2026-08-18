@@ -54,6 +54,20 @@
     await localModelsStore.deleteModel(modelToDelete);
     modelToDelete = null;
   }
+
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await localModelsStore.refresh();
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 </script>
 
 <div class="space-y-6">
@@ -78,11 +92,11 @@
       <Button
         variant="outline"
         size="sm"
-        disabled={localModelsStore.isLoading}
-        onclick={() => localModelsStore.refresh()}
+        disabled={isRefreshing || localModelsStore.isLoading}
+        onclick={handleRefresh}
         class="gap-1.5 text-xs"
       >
-        <RotateCw size={13} class={localModelsStore.isLoading ? 'animate-gentle-spin' : ''} />
+        <RotateCw size={13} class={isRefreshing || localModelsStore.isLoading ? 'animate-spin' : ''} />
         <span>Rescan Models</span>
       </Button>
     </div>

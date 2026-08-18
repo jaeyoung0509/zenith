@@ -91,16 +91,19 @@ impl SafetyPlanner {
                     return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
                 }
 
-                // 2b. Ancestor symlink escape protection: ensure no directory between root and path is a symlink
+                // 2b. Ancestor symlink escape protection: ensure no directory between anchor/root and path is a symlink
                 for root in &resolved_roots {
                     if path.starts_with(root) {
                         SymlinkGuard::validate_no_symlink_ancestors(&path, root)?;
                     }
                 }
+            } else {
+                SymlinkGuard::validate_anchored_path(&path)?;
             }
 
-            // 3. Hard Blacklist check
+            // 3. Hard Blacklist check (lexical & canonical)
             Blacklist::validate(&path)?;
+            SymlinkGuard::validate_canonical_blacklist(&path)?;
 
             // 4. Symlink Target check
             SymlinkGuard::validate_symlink_target(&path)?;

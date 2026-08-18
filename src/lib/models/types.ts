@@ -91,10 +91,13 @@ export type CleanFailureReason =
   | 'external_command_failed'
   | 'unknown';
 
+export type CleanStatus = 'success' | 'partial' | 'failed';
+
 export interface CleanItemResult {
   item_id: string;
   name: string;
   path: string;
+  status?: CleanStatus;
   success: boolean;
   bytes_reclaimed: number;
   failure_reason?: CleanFailureReason;

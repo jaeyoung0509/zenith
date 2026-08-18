@@ -28,6 +28,20 @@
     confirmVolumePrune = false;
     await dockerStore.pruneTarget('container.docker.unused_volumes');
   }
+
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await dockerStore.refresh();
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 </script>
 
 <div class="space-y-6">
@@ -57,11 +71,11 @@
     <Button
       variant="outline"
       size="sm"
-      disabled={dockerStore.isLoading || dockerStore.isPruning}
-      onclick={() => dockerStore.refresh()}
+      disabled={isRefreshing || dockerStore.isLoading || dockerStore.isPruning}
+      onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={dockerStore.isLoading ? 'animate-gentle-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || dockerStore.isLoading ? 'animate-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>

@@ -416,3 +416,56 @@ fn test_sparse_file_zero_allocated_bytes() {
     let size_unknown = FileSize::new(100 * 1024 * 1024, None);
     assert_eq!(size_unknown.reclaimable(), 100 * 1024 * 1024);
 }
+
+#[test]
+fn test_symlink_ancestor_above_signature_root_rejection() {
+    let base_dir = tempdir().expect("create base temp dir");
+    let outside_dir = tempdir().expect("create outside temp dir");
+    let precious = outside_dir.path().join("precious_code.rs");
+    fs::write(&precious, b"fn important() {}").unwrap();
+
+    // Create intermediate symlink: base_dir/.cargo -> outside_dir
+    let symlink_dot_cargo = base_dir.path().join(".cargo");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_dot_cargo).expect("create symlink");
+
+        let signature_target = symlink_dot_cargo.join("registry").join("cache");
+
+        // Validate that checking against base_dir detects the .cargo symlink
+        let validation_res =
+            SymlinkGuard::validate_components_between(&signature_target, base_dir.path());
+        assert!(
+            validation_res.is_err(),
+            "Symlink above signature root must be rejected!"
+        );
+        assert!(matches!(validation_res, Err(ZenithError::SymlinkEscape(_))));
+
+        assert!(precious.exists());
+    }
+}
+
+#[test]
+fn test_signature_root_itself_symlink_rejection() {
+    let base_dir = tempdir().expect("create base temp dir");
+    let outside_dir = tempdir().expect("create outside temp dir");
+    let precious = outside_dir.path().join("precious.txt");
+    fs::write(&precious, b"cannot delete").unwrap();
+
+    // signature root itself is a symlink: base_dir/cache -> outside_dir
+    let symlink_cache = base_dir.path().join("cache");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_cache).expect("create symlink");
+
+        let validation_res =
+            SymlinkGuard::validate_components_between(&symlink_cache, base_dir.path());
+        assert!(
+            validation_res.is_err(),
+            "Signature root as symlink must be rejected!"
+        );
+        assert!(matches!(validation_res, Err(ZenithError::SymlinkEscape(_))));
+
+        assert!(precious.exists());
+    }
+}

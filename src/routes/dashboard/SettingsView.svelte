@@ -6,8 +6,7 @@
   import { Settings, Sparkles, Moon, Sun, Monitor, ChevronUp, ChevronDown, PanelTop, LayoutList } from 'lucide-svelte';
 
   const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
-    { id: 'disk', label: 'Disks', description: 'Disk volumes, mount points, and storage health.' },
-    { id: 'storage', label: 'Storage', description: 'System-wide reclaimable developer and AI caches.' },
+    { id: 'storage', label: 'Storage & Disks', description: 'Primary storage, volumes, and developer/AI caches.' },
     { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
     { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
     { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
