@@ -36,8 +36,27 @@ run-fast:
     fi
 
 # ------------------------------------------------------------------------------
-# 📦 Production Build (배포용 단일 바이너리 / 앱 번들)
+# 📦 Production Build & Distribution (배포용 단일 바이너리 / 앱 번들)
 # ------------------------------------------------------------------------------
+
+# Clean existing binaries and build fresh release packages (.app & .dmg)
+distribute: clean-bin
+    pnpm tauri build
+    @echo ""
+    @echo "📦 Fresh release packages built successfully:"
+    @echo "  - App Bundle: target/release/bundle/macos/Zenith.app"
+    @echo "  - DMG Installer: target/release/bundle/dmg/"
+    @echo "👉 Run directly with: just run-bin"
+
+# Alias for distribute
+release: distribute
+
+# Clean existing binaries and build fresh standalone release macOS App bundle
+release-app: clean-bin
+    pnpm tauri build --bundles app
+    @echo ""
+    @echo "✅ Standalone release App built at: target/release/bundle/macos/Zenith.app"
+    @echo "👉 Run directly with: just run-bin"
 
 # Build production macOS App bundle & DMG installer (.app / .dmg)
 build:
@@ -73,7 +92,29 @@ test-front:
 # Check code types & compile check
 check:
     cargo check
+    pnpm check
     pnpm build
+
+# Check version consistency across package.json, Cargo.toml, and tauri.conf.json
+check-version:
+    @node -e '\
+        const fs = require("fs"); \
+        const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version; \
+        const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version; \
+        const cargoMatch = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/version\s*=\s*"([^"]+)"/); \
+        const cargo = cargoMatch ? cargoMatch[1] : null; \
+        console.log(`📦 package.json:      ${pkg}`); \
+        console.log(`🦀 Cargo.toml:        ${cargo}`); \
+        console.log(`⚙️  tauri.conf.json:   ${tauri}`); \
+        if (pkg !== cargo || pkg !== tauri) { \
+            console.error("❌ Version mismatch detected!"); \
+            process.exit(1); \
+        } \
+        console.log("✅ All manifest versions are synchronized."); \
+    '
+
+# Display current application version
+version: check-version
 
 # ------------------------------------------------------------------------------
 # ⚡ Execution
@@ -101,7 +142,12 @@ run-bin:
 install:
     pnpm install
 
-# Clean all build artifacts and node_modules
+# Clean previous built binary, app bundles, dmg packages, and dist frontend
+clean-bin:
+    rm -rf dist target/release/bundle target/release/Zenith target/debug/bundle target/debug/Zenith src-tauri/target/release/bundle src-tauri/target/release/Zenith src-tauri/target/debug/bundle src-tauri/target/debug/Zenith
+    @echo "🗑️ Existing binary and bundle artifacts removed."
+
+# Clean all build artifacts, Cargo target, and node_modules
 clean:
     cargo clean
     rm -rf dist node_modules

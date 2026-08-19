@@ -242,6 +242,7 @@ pub fn run() {
             commands::reveal_in_finder,
             commands::open_dashboard_window,
             commands::toggle_quick_panel,
+            commands::get_app_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running zenith application");

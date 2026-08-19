@@ -16,6 +16,7 @@
     "allow-get-awake-state",
     "allow-get-settings",
     "allow-open-dashboard-window",
-    "allow-toggle-quick-panel"
+    "allow-toggle-quick-panel",
+    "allow-get-app-version"
   ]
 }

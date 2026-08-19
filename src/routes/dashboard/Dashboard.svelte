@@ -13,6 +13,7 @@
   import MemoryView from './MemoryView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
+  import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import {
     HardDrive,
     Container,
@@ -120,13 +121,19 @@
       </nav>
     </div>
 
-    <!-- Safety Badge at bottom -->
-    <div
-      class="px-2.5 py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2"
-      title="Path, symlink and filesystem identity are verified immediately before deletion (TOCTOU protection)."
-    >
-      <Shield size={13} class="text-emerald-500 shrink-0" />
-      <span class="truncate">Protected cleanup</span>
+    <!-- Safety Badge & Version at bottom -->
+    <div class="space-y-2">
+      <div
+        class="px-2.5 py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2"
+        title="Path, symlink and filesystem identity are verified immediately before deletion (TOCTOU protection)."
+      >
+        <Shield size={13} class="text-emerald-500 shrink-0" />
+        <span class="truncate">Protected cleanup</span>
+      </div>
+      <div class="px-2.5 flex items-center justify-between text-[10px] text-muted-foreground/60 font-mono select-none">
+        <span>Zenith</span>
+        <span>{formatVersion(APP_VERSION)}</span>
+      </div>
     </div>
   </aside>
 

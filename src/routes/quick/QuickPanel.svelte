@@ -6,9 +6,10 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
-  import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
   import { isQuickPanelDismissShortcut } from '../../lib/utils/quickPanel';
   import { isTauri, tauriHideCurrentWindow, tauriOpenDashboard } from '../../lib/utils/tauri';
+  import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
@@ -130,10 +131,27 @@
   }
 
   function providerValue(provider: AiProviderUsage) {
-    if (provider.windows[0]) return `${Math.round(provider.windows[0].used_percent)}% used`;
+    if (provider.windows[0]) {
+      const window = provider.windows[0];
+      const percent = Math.round(window.used_percent);
+      if (window.resets_at) {
+        const timeUntil = formatTimeUntil(window.resets_at);
+        if (timeUntil) {
+          return `${percent}% used (${timeUntil})`;
+        }
+      }
+      return `${percent}% used`;
+    }
     if (provider.summary.local_sessions != null) return `${provider.summary.local_sessions} sessions`;
     if (provider.summary.usage_usd != null) return `$${provider.summary.usage_usd.toFixed(2)}`;
     return provider.connected ? 'Connected' : provider.installed ? 'Available' : 'Not installed';
+  }
+
+  function providerTitle(provider: AiProviderUsage) {
+    if (provider.windows[0]?.resets_at) {
+      return `${provider.name}: ${Math.round(provider.windows[0].used_percent)}% used, resets on ${formatResetDate(provider.windows[0].resets_at)} (in ${formatTimeUntil(provider.windows[0].resets_at)})`;
+    }
+    return provider.status_message || provider.auth_label || provider.name;
   }
 </script>
 
@@ -260,7 +278,10 @@
             <div class="py-2 text-center text-[10px] text-muted-foreground">Reading accounts…</div>
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}
-              <div class="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs hover:bg-secondary/40">
+              <div
+                class="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                title={providerTitle(provider)}
+              >
                 <div class="flex min-w-0 items-center gap-2">
                   <Bot size={13} class={provider.connected ? 'text-emerald-400' : 'text-muted-foreground'} />
                   <span class="truncate font-medium">{provider.name}</span>
@@ -312,15 +333,18 @@
         <RotateCw size={11} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
       </button>
     </div>
-    <Button
-      variant="secondary"
-      size="sm"
-      onclick={handleOpenDashboard}
-      class="gap-1.5 text-xs font-medium"
-    >
-      <span>Open Zenith</span>
-      <ArrowRight size={13} />
-    </Button>
+    <div class="flex items-center gap-2">
+      <span class="text-[10px] font-mono text-muted-foreground/60 select-none">{formatVersion(APP_VERSION)}</span>
+      <Button
+        variant="secondary"
+        size="sm"
+        onclick={handleOpenDashboard}
+        class="gap-1.5 text-xs font-medium"
+      >
+        <span>Open Zenith</span>
+        <ArrowRight size={13} />
+      </Button>
+    </div>
   </div>
 
   {#if showResultModal && scanStore.lastCleanResult}

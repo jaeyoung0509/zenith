@@ -633,3 +633,14 @@ function mockClean(
     });
   });
 }
+
+export async function tauriGetAppVersion(): Promise<string> {
+  if (!isTauri) {
+    return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
+  }
+  try {
+    return await invoke<string>('get_app_version');
+  } catch {
+    return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
+  }
+}
