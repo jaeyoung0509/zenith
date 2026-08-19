@@ -6,7 +6,7 @@ default:
     @just --list
 
 # ------------------------------------------------------------------------------
-# 🚀 Development & Fast Run (빠른 개발용)
+# 🚀 Development & Fast Run
 # ------------------------------------------------------------------------------
 
 # Run full desktop application in development mode (hot-reload)
@@ -36,7 +36,7 @@ run-fast:
     fi
 
 # ------------------------------------------------------------------------------
-# 📦 Production Build & Distribution (배포용 단일 바이너리 / 앱 번들)
+# 📦 Production Build & Distribution
 # ------------------------------------------------------------------------------
 
 # Clean existing binaries and build fresh release packages (.app & .dmg)
