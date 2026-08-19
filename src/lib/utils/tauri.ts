@@ -319,7 +319,22 @@ export async function tauriGetAwakeState(): Promise<AwakeState> {
   if (!isTauri) {
     return {
       is_active: false,
-      active_rules_count: 1,
+      active_rules_count: 2,
+      power_source: 'ac',
+      rule_evaluations: [
+        {
+          rule_id: 'rule.codex',
+          status: 'waiting_process',
+          is_process_running: false,
+          is_power_eligible: true,
+        },
+        {
+          rule_id: 'rule.claude',
+          status: 'waiting_process',
+          is_process_running: false,
+          is_power_eligible: true,
+        },
+      ],
     };
   }
 
@@ -360,10 +375,19 @@ export async function tauriGetSettings(): Promise<ZenithSettings> {
       dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
       awake_rules: [
         {
+          id: 'rule.codex',
+          app_name: 'Codex',
+          executable_pattern: 'codex',
+          behavior: 'prevent_system_sleep',
+          power_condition: 'ac_power_only',
+          enabled: true,
+        },
+        {
           id: 'rule.claude',
           app_name: 'Claude Code',
           executable_pattern: 'claude',
           behavior: 'prevent_system_sleep',
+          power_condition: 'ac_power_only',
           enabled: true,
         },
       ],
