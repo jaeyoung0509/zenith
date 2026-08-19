@@ -41,3 +41,17 @@ describe('dashboard tab reordering and customization', () => {
     expect(preserved).toEqual(['storage']);
   });
 });
+
+describe('quick panel sections customization', () => {
+  const defaultSections = ['cleanup', 'storage', 'memory', 'ai_usage'] as const;
+
+  it('reorders quick panel sections via drag and drop', () => {
+    const reordered = reorderOrdered([...defaultSections], 'memory', 'cleanup');
+    expect(reordered).toEqual(['memory', 'cleanup', 'storage', 'ai_usage']);
+  });
+
+  it('moves quick panel sections with boundary clamping', () => {
+    const moved = moveOrdered([...defaultSections], 'storage', -1);
+    expect(moved).toEqual(['storage', 'cleanup', 'memory', 'ai_usage']);
+  });
+});

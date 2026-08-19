@@ -12,7 +12,7 @@ class SettingsStore {
     include_rebuild_caches: false,
     theme: 'system',
     excluded_signatures: [],
-    quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+    quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
     dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
     awake_rules: [

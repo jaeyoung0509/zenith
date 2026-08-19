@@ -64,6 +64,32 @@ class ScanStore {
     return total;
   });
 
+  rebuildSelectedBytes = $derived.by(() => {
+    if (!this.lastScan) return 0;
+    let total = 0;
+    for (const cat of this.lastScan.categories) {
+      for (const item of cat.items) {
+        if (item.risk === 'rebuild' && this.selectedMap[item.id]) {
+          total += item.size.allocated ?? item.size.logical;
+        }
+      }
+    }
+    return total;
+  });
+
+  manualSelectedBytes = $derived.by(() => {
+    if (!this.lastScan) return 0;
+    let total = 0;
+    for (const cat of this.lastScan.categories) {
+      for (const item of cat.items) {
+        if (item.risk === 'manual' && this.selectedMap[item.id]) {
+          total += item.size.allocated ?? item.size.logical;
+        }
+      }
+    }
+    return total;
+  });
+
   selectedCount = $derived.by(() => {
     return Object.values(this.selectedMap).filter(Boolean).length;
   });
@@ -136,6 +162,41 @@ class ScanStore {
     }
   }
 
+  quickCleanCategoryEnabled(category: Category, settings: ZenithSettings): boolean {
+    switch (category) {
+      case 'ai':
+        return settings.clean_ai_tools;
+      case 'developer':
+        return settings.clean_developer_tools;
+      case 'container':
+        return settings.clean_docker;
+      case 'model':
+        return settings.clean_local_models;
+      case 'system':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  isQuickCleanEligible(category: Category, item: ScanItem, settings: ZenithSettings): boolean {
+    const bytes = item.size.allocated ?? item.size.logical;
+    return item.risk === 'safe' && bytes > 0 && this.quickCleanCategoryEnabled(category, settings);
+  }
+
+  quickCleanableBytes(settings: ZenithSettings): number {
+    if (!this.lastScan) return 0;
+    let total = 0;
+    for (const category of this.lastScan.categories) {
+      for (const item of category.items) {
+        if (this.isQuickCleanEligible(category.category, item, settings)) {
+          total += item.size.allocated ?? item.size.logical;
+        }
+      }
+    }
+    return total;
+  }
+
   selectAllSafe() {
     if (!this.lastScan) return;
     for (const cat of this.lastScan.categories) {
@@ -147,22 +208,13 @@ class ScanStore {
 
   selectQuickCleanDefaults(settings: ZenithSettings) {
     if (!this.lastScan) return;
-    const enabledCategories: Partial<Record<Category, boolean>> = {
-      ai: settings.clean_ai_tools,
-      developer: settings.clean_developer_tools,
-      container: settings.clean_docker,
-      model: settings.clean_local_models,
-      system: true,
-    };
+    const next: Record<string, boolean> = {};
     for (const category of this.lastScan.categories) {
       for (const item of category.items) {
-        const allowedRisk = item.risk === 'safe'
-          || (settings.include_rebuild_caches && item.risk === 'rebuild');
-        this.selectedMap[item.id] = Boolean(enabledCategories[category.category])
-          && allowedRisk
-          && (item.size.allocated ?? item.size.logical) > 0;
+        next[item.id] = this.isQuickCleanEligible(category.category, item, settings);
       }
     }
+    this.selectedMap = next;
   }
 
   deselectAll() {

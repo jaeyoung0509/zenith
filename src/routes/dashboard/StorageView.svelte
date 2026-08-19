@@ -39,6 +39,11 @@
   let volumes = $state<DiskVolume[]>([]);
   let isLoadingVolumes = $state(false);
 
+  let safeSelectedBytes = $derived(scanStore.safeSelectedBytes);
+  let rebuildSelectedBytes = $derived(scanStore.rebuildSelectedBytes);
+  let manualSelectedBytes = $derived(scanStore.manualSelectedBytes);
+  let hasRebuildSelected = $derived(rebuildSelectedBytes > 0);
+
   async function loadVolumes() {
     isLoadingVolumes = true;
     try {
@@ -194,27 +199,40 @@
         </Button>
       </div>
 
-      <Button
-        variant="primary"
-        size="md"
-        disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
-        onclick={handleCleanSelected}
-        class="gap-2 px-5 min-w-[130px]"
-      >
-        {#if scanStore.isCleaning}
-          <DeletingDots size="sm" />
-          <span>Cleaning…</span>
-        {:else}
-          <Trash2 size={14} />
-          <span>Clean {formatBytes(scanStore.reclaimableBytes)}</span>
+      <div class="flex flex-col items-end gap-1.5">
+        {#if scanStore.selectedCount > 0}
+          <div class="flex items-center gap-2.5 text-[11px] font-mono">
+            <span class="text-emerald-500 font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
+            {#if rebuildSelectedBytes > 0}
+              <span class="text-amber-500 font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
+            {/if}
+            {#if manualSelectedBytes > 0}
+              <span class="text-rose-400 font-medium">! {formatBytes(manualSelectedBytes)} Manual</span>
+            {/if}
+          </div>
         {/if}
-      </Button>
+        <Button
+          variant="primary"
+          size="md"
+          disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
+          onclick={handleCleanSelected}
+          class="gap-2 px-5 min-w-[140px]"
+        >
+          {#if scanStore.isCleaning}
+            <DeletingDots size="sm" />
+            <span>Cleaning…</span>
+          {:else}
+            <Trash2 size={14} />
+            <span>{hasRebuildSelected ? 'Review & Clean' : 'Clean Safely'} · {formatBytes(scanStore.reclaimableBytes)}</span>
+          {/if}
+        </Button>
+      </div>
     </div>
   </Card>
 
   <!-- Cleaning In Progress Bar -->
   {#if scanStore.isCleaning}
-    <Card class="p-4 bg-secondary/50 border-primary/30 animate-pulse">
+    <Card class="p-4 bg-secondary/50 border-primary/30">
       <div class="space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="font-medium text-foreground">

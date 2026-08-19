@@ -103,6 +103,7 @@ pub fn run() {
     let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
     let delete_plans = Arc::new(Mutex::new(HashMap::new()));
     let operation_lock = Arc::new(Mutex::new(()));
+    let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
 
     let app_state = AppState {
         registry,
@@ -114,6 +115,7 @@ pub fn run() {
         ai_usage_refresh_lock,
         delete_plans,
         operation_lock,
+        memory_sampler,
     };
 
     tauri::Builder::default()

@@ -40,6 +40,28 @@
   let pendingProcess = $state<ProcessMemory | null>(null);
   let isRefreshing = $state(false);
 
+  let topReclaimableApp = $derived(
+    memory?.top_processes.find((p) => p.can_terminate && p.memory_bytes > 400 * 1024 * 1024)
+  );
+
+  let memoryHealthTitle = $derived.by(() => {
+    if (!memory) return 'Reading memory metrics…';
+    if (memory.pressure === 'critical') return 'Memory pressure is high';
+    if (memory.pressure === 'warning') return 'Elevated memory usage';
+    return 'Memory looks healthy';
+  });
+
+  let memoryHealthSubtitle = $derived.by(() => {
+    if (!memory) return '';
+    if (memory.pressure === 'critical' || memory.pressure === 'warning') {
+      if (topReclaimableApp) {
+        return `Closing ${topReclaimableApp.name} could recover ~${formatBytes(topReclaimableApp.memory_bytes)}.`;
+      }
+      return 'Consider closing background developer apps to relieve system memory.';
+    }
+    return 'System memory allocations and swap are well within safe thresholds. No action needed.';
+  });
+
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
@@ -75,15 +97,15 @@
       </div>
       <div>
         <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground tracking-tight">Memory Inspector</h2>
+          <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
           {#if memory}
             <div class="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium border {pressureColors[memory.pressure]}">
-              Estimated: {memory.pressure.toUpperCase()}
+              Pressure: {memory.pressure.toUpperCase()}
             </div>
           {/if}
         </div>
         <p class="text-xs text-muted-foreground mt-0.5">
-          Real-time macOS memory pressure, compressed memory, swap usage, and developer processes.
+          {memoryHealthSubtitle}
         </p>
       </div>
     </div>
