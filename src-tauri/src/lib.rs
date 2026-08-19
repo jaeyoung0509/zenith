@@ -20,7 +20,28 @@ use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow, WebviewWindowBuilder,
+};
+
+pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == label)
+        .cloned()
+        .ok_or_else(|| {
+            tauri::Error::AssetNotFound(format!("Window config for {label} not found"))
+        })?;
+
+    WebviewWindowBuilder::from_config(app, &config)?.build()
+}
 
 fn tray_anchor(window: &WebviewWindow, rect: Rect) -> PhysicalPosition<f64> {
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -99,10 +120,14 @@ pub fn run() {
         .manage(app_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Zenith is a menu-bar utility: Cmd+W and the red traffic-light
-                // button hide the focused window while the tray process stays alive.
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "quick" {
+                    // Quick panel hides to stay responsive
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if window.label() == "main" {
+                    // Main dashboard is destroyed on close to release WKWebView memory back to the OS.
+                    // The tray keeps the application alive.
+                }
             }
         })
         .setup(move |app| {
@@ -137,13 +162,13 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open_dashboard" => {
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Ok(window) = ensure_window(app, "main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
                     "toggle_quick" => {
-                        if let Some(window) = app.get_webview_window("quick") {
+                        if let Ok(window) = ensure_window(app, "quick") {
                             if window.is_visible().unwrap_or(false) {
                                 let _ = window.hide();
                             } else {
@@ -166,7 +191,8 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        if let Some(quick_win) = tray.app_handle().get_webview_window("quick") {
+                        let app = tray.app_handle();
+                        if let Ok(quick_win) = ensure_window(app, "quick") {
                             let is_vis = quick_win.is_visible().unwrap_or(false);
                             if is_vis {
                                 let _ = quick_win.hide();

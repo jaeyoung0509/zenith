@@ -20,6 +20,15 @@ paths = []
 description = "Untagged intermediate image layers not referenced by any container."
 
 [[signatures]]
+id = "container.docker.unused_images"
+name = "Docker Unused Images"
+category = "container"
+risk = "rebuild"
+strategy = "docker_prune"
+paths = []
+description = "Images not referenced by any running or stopped container (re-download may be required)."
+
+[[signatures]]
 id = "container.docker.stopped_containers"
 name = "Docker Stopped Containers"
 category = "container"
