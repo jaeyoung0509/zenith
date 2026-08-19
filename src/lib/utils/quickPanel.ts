@@ -13,6 +13,16 @@ export function moveOrdered<T>(items: T[], item: T, direction: -1 | 1): T[] {
   return next;
 }
 
+export function reorderOrdered<T>(items: T[], dragged: T, target: T): T[] {
+  const next = [...items];
+  const from = next.indexOf(dragged);
+  const to = next.indexOf(target);
+  if (from < 0 || to < 0 || from === to) return items;
+  next.splice(from, 1);
+  next.splice(to, 0, dragged);
+  return next;
+}
+
 export function isQuickPanelDismissShortcut(key: string, metaKey: boolean): boolean {
   return key === 'Escape' || (metaKey && key.toLowerCase() === 'w');
 }

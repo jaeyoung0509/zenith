@@ -19,14 +19,38 @@
   } from 'lucide-svelte';
 
   onMount(() => {
-    memoryStore.startPolling(2500);
+    function updatePolling() {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        memoryStore.startPolling(2500);
+      } else {
+        memoryStore.stopPolling();
+      }
+    }
+
+    updatePolling();
+    document.addEventListener('visibilitychange', updatePolling);
+
     return () => {
+      document.removeEventListener('visibilitychange', updatePolling);
       memoryStore.stopPolling();
     };
   });
 
   let memory = $derived(memoryStore.memory);
   let pendingProcess = $state<ProcessMemory | null>(null);
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await memoryStore.refreshMemory();
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 
   async function terminatePending(force: boolean) {
     if (!pendingProcess) return;
@@ -67,11 +91,11 @@
     <Button
       variant="outline"
       size="sm"
-      disabled={memoryStore.isLoading}
-      onclick={() => memoryStore.refreshMemory()}
+      disabled={isRefreshing || memoryStore.isLoading}
+      onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={memoryStore.isLoading ? 'animate-gentle-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>

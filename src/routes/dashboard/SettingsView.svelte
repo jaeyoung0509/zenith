@@ -3,11 +3,10 @@
   import type { AiProviderId, DashboardTab, QuickPanelSection } from '../../lib/models/types';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
-  import { Settings, Sparkles, Moon, Sun, Monitor, ChevronUp, ChevronDown, PanelTop, LayoutList } from 'lucide-svelte';
+  import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical } from 'lucide-svelte';
 
   const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
-    { id: 'disk', label: 'Disks', description: 'Disk volumes, mount points, and storage health.' },
-    { id: 'storage', label: 'Storage', description: 'System-wide reclaimable developer and AI caches.' },
+    { id: 'storage', label: 'Storage & Disks', description: 'Primary storage, volumes, and developer/AI caches.' },
     { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
     { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
     { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
@@ -31,6 +30,15 @@
   ];
 
   let settings = $derived(settingsStore.settings);
+
+  let draggedTab = $state<DashboardTab | null>(null);
+  let dragOverTab = $state<DashboardTab | null>(null);
+
+  let draggedSection = $state<QuickPanelSection | null>(null);
+  let dragOverSection = $state<QuickPanelSection | null>(null);
+
+  let draggedProvider = $state<AiProviderId | null>(null);
+  let dragOverProvider = $state<AiProviderId | null>(null);
 
   function handleToggle(key: keyof typeof settings) {
     if (typeof settings[key] === 'boolean') {
@@ -119,7 +127,7 @@
         Dashboard Navigation Menu
       </h3>
       <p class="text-[11px] text-muted-foreground mt-1">
-        Customize the tabs displayed in the left sidebar and their ordering.
+        Customize the tabs displayed in the left sidebar and drag to reorder.
       </p>
     </div>
     <Card class="p-4 bg-card/70 space-y-3">
@@ -128,8 +136,36 @@
       </div>
       {#each orderedDashboardTabs() as tabOption}
         {@const enabled = (settings.dashboard_tabs ?? []).includes(tabOption.id)}
-        {@const index = (settings.dashboard_tabs ?? []).indexOf(tabOption.id)}
-        <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+        <div
+          role="listitem"
+          draggable={enabled}
+          ondragstart={() => {
+            if (enabled) draggedTab = tabOption.id;
+          }}
+          ondragover={(e) => {
+            if (enabled && draggedTab) {
+              e.preventDefault();
+              dragOverTab = tabOption.id;
+            }
+          }}
+          ondragleave={() => {
+            if (dragOverTab === tabOption.id) dragOverTab = null;
+          }}
+          ondrop={(e) => {
+            e.preventDefault();
+            if (draggedTab && draggedTab !== tabOption.id) {
+              settingsStore.reorderDashboardTabs(draggedTab, tabOption.id);
+            }
+            draggedTab = null;
+            dragOverTab = null;
+          }}
+          ondragend={() => {
+            draggedTab = null;
+            dragOverTab = null;
+          }}
+          class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverTab === tabOption.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedTab === tabOption.id ? 'opacity-40' : ''}"
+        >
+          <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
           <input
             type="checkbox"
             checked={enabled}
@@ -138,30 +174,10 @@
             aria-label={`Show ${tabOption.label} in sidebar`}
             class="h-3.5 w-3.5 accent-primary cursor-pointer"
           />
-          <div class="min-w-0 flex-1">
+          <div class="min-w-0 flex-1 select-none">
             <div class="text-xs font-medium text-foreground">{tabOption.label}</div>
             <div class="text-[10px] text-muted-foreground">{tabOption.description}</div>
           </div>
-          {#if enabled}
-            <button
-              type="button"
-              class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
-              disabled={index === 0}
-              onclick={() => settingsStore.moveDashboardTab(tabOption.id, -1)}
-              aria-label={`Move ${tabOption.label} up`}
-            >
-              <ChevronUp size={14} />
-            </button>
-            <button
-              type="button"
-              class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors"
-              disabled={index === (settings.dashboard_tabs ?? []).length - 1}
-              onclick={() => settingsStore.moveDashboardTab(tabOption.id, 1)}
-              aria-label={`Move ${tabOption.label} down`}
-            >
-              <ChevronDown size={14} />
-            </button>
-          {/if}
         </div>
       {/each}
     </Card>
@@ -174,7 +190,7 @@
         Menu Bar Quick Panel
       </h3>
       <p class="text-[11px] text-muted-foreground mt-1">
-        Choose what appears below the menu bar icon and set the display priority.
+        Choose what appears below the menu bar icon and drag to set display priority.
       </p>
     </div>
     <Card class="p-4 bg-card/70 space-y-5">
@@ -184,8 +200,36 @@
         </div>
         {#each orderedSections() as option}
           {@const enabled = settings.quick_panel_sections.includes(option.id)}
-          {@const index = settings.quick_panel_sections.indexOf(option.id)}
-          <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+          <div
+            role="listitem"
+            draggable={enabled}
+            ondragstart={() => {
+              if (enabled) draggedSection = option.id;
+            }}
+            ondragover={(e) => {
+              if (enabled && draggedSection) {
+                e.preventDefault();
+                dragOverSection = option.id;
+              }
+            }}
+            ondragleave={() => {
+              if (dragOverSection === option.id) dragOverSection = null;
+            }}
+            ondrop={(e) => {
+              e.preventDefault();
+              if (draggedSection && draggedSection !== option.id) {
+                settingsStore.reorderQuickPanelSections(draggedSection, option.id);
+              }
+              draggedSection = null;
+              dragOverSection = null;
+            }}
+            ondragend={() => {
+              draggedSection = null;
+              dragOverSection = null;
+            }}
+            class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverSection === option.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedSection === option.id ? 'opacity-40' : ''}"
+          >
+            <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
             <input
               type="checkbox"
               checked={enabled}
@@ -194,14 +238,10 @@
               aria-label={`Show ${option.label} in quick panel`}
               class="h-3.5 w-3.5 accent-primary cursor-pointer"
             />
-            <div class="min-w-0 flex-1">
+            <div class="min-w-0 flex-1 select-none">
               <div class="text-xs font-medium text-foreground">{option.label}</div>
               <div class="text-[10px] text-muted-foreground">{option.description}</div>
             </div>
-            {#if enabled}
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelSection(option.id, -1)} aria-label={`Move ${option.label} up`}><ChevronUp size={14} /></button>
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === settings.quick_panel_sections.length - 1} onclick={() => settingsStore.moveQuickPanelSection(option.id, 1)} aria-label={`Move ${option.label} down`}><ChevronDown size={14} /></button>
-            {/if}
           </div>
         {/each}
       </div>
@@ -210,17 +250,41 @@
         <div class="flex items-center gap-2 text-xs font-medium text-foreground">
           <Sparkles size={14} /> AI Provider Priority
         </div>
-        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order.</p>
+        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order. Drag to reorder.</p>
         {#each orderedProviders() as provider}
           {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
-          {@const index = settings.quick_panel_ai_providers.indexOf(provider.id)}
-          <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2">
+          <div
+            role="listitem"
+            draggable={enabled}
+            ondragstart={() => {
+              if (enabled) draggedProvider = provider.id;
+            }}
+            ondragover={(e) => {
+              if (enabled && draggedProvider) {
+                e.preventDefault();
+                dragOverProvider = provider.id;
+              }
+            }}
+            ondragleave={() => {
+              if (dragOverProvider === provider.id) dragOverProvider = null;
+            }}
+            ondrop={(e) => {
+              e.preventDefault();
+              if (draggedProvider && draggedProvider !== provider.id) {
+                settingsStore.reorderQuickPanelProviders(draggedProvider, provider.id);
+              }
+              draggedProvider = null;
+              dragOverProvider = null;
+            }}
+            ondragend={() => {
+              draggedProvider = null;
+              dragOverProvider = null;
+            }}
+            class="flex items-center gap-3 rounded-lg border px-3 py-2 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverProvider === provider.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedProvider === provider.id ? 'opacity-40' : ''}"
+          >
+            <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
             <input type="checkbox" checked={enabled} onchange={() => settingsStore.toggleQuickPanelProvider(provider.id)} aria-label={`Show ${provider.label} usage`} class="h-3.5 w-3.5 accent-primary cursor-pointer" />
-            <span class="flex-1 text-xs font-medium text-foreground">{provider.label}</span>
-            {#if enabled}
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, -1)} aria-label={`Move ${provider.label} up`}><ChevronUp size={14} /></button>
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30 transition-colors" disabled={index === settings.quick_panel_ai_providers.length - 1} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, 1)} aria-label={`Move ${provider.label} down`}><ChevronDown size={14} /></button>
-            {/if}
+            <span class="flex-1 text-xs font-medium text-foreground select-none">{provider.label}</span>
           </div>
         {/each}
       </div>

@@ -72,9 +72,11 @@
         />
       {:else}
         <div
-          class="h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center opacity-40 cursor-not-allowed"
-          title="Manual items require dedicated adapters"
-        ></div>
+          class="h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center text-[9px] text-muted-foreground"
+          title="Manual category: stateful resources are managed in dedicated adapter"
+        >
+          -
+        </div>
       {/if}
 
       <div

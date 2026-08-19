@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
-    Category, CategoryResult, CleanStrategy, FileSize, RiskTier, ScanItem, ScanResult, Signature,
-    ZenithError,
+    Category, CategoryResult, CleanFailureReason, CleanStrategy, FileSize, RiskTier, ScanItem,
+    ScanResult, Signature, ZenithError,
 };
 use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
 use zenith_lib::scanner::SizeCalculator;
@@ -160,7 +160,7 @@ fn test_symlink_safety_and_no_escape() {
         // Size calculation on the directory with symlink must only measure the link, not traverse outside
         let (size, count) = SizeCalculator::measure_path(dir.path(), &[]);
         assert_eq!(count, 1);
-        assert!(size.reclaimable() > 0);
+        assert!(size.logical > 0);
     }
 }
 
@@ -368,10 +368,182 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     fs::write(&removable, b"cache").unwrap();
 
     let exclusions = vec![excluded.to_string_lossy().into_owned()];
-    SafeTreeDeleter::delete_contents(&cache_root, &exclusions).unwrap();
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &exclusions);
+    assert!(report.is_success());
 
     assert!(cache_root.exists());
     assert!(git.join("config").exists());
     assert!(excluded.exists());
     assert!(!removable.exists());
+}
+
+#[test]
+fn test_ancestor_symlink_escape_rejection() {
+    let dir = tempdir().expect("create temp dir");
+    let trusted_root = dir.path().join("cargo");
+    fs::create_dir_all(&trusted_root).unwrap();
+
+    let outside_dir = tempdir().expect("create outside temp dir");
+    let precious_file = outside_dir.path().join("precious_data.txt");
+    fs::write(&precious_file, b"cannot be deleted").unwrap();
+
+    // Create an intermediate symlink: cargo/registry -> outside_dir
+    let symlink_dir = trusted_root.join("registry");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_dir).expect("create symlink");
+
+        let target_path = symlink_dir.join("cache");
+        // Verify ancestor symlink detection
+        let validation_res =
+            SymlinkGuard::validate_no_symlink_ancestors(&target_path, &trusted_root);
+        assert!(
+            validation_res.is_err(),
+            "Ancestor symlink must be rejected!"
+        );
+        assert!(matches!(validation_res, Err(ZenithError::SymlinkEscape(_))));
+
+        // Precious file outside must remain intact
+        assert!(precious_file.exists());
+    }
+}
+
+#[test]
+fn test_sparse_file_zero_allocated_bytes() {
+    let size = FileSize::new(100 * 1024 * 1024, Some(0));
+    assert_eq!(size.reclaimable(), 0);
+
+    let size_unknown = FileSize::new(100 * 1024 * 1024, None);
+    assert_eq!(size_unknown.reclaimable(), 100 * 1024 * 1024);
+}
+
+#[test]
+fn test_symlink_ancestor_above_signature_root_rejection() {
+    let base_dir = tempdir().expect("create base temp dir");
+    let outside_dir = tempdir().expect("create outside temp dir");
+    let precious = outside_dir.path().join("precious_code.rs");
+    fs::write(&precious, b"fn important() {}").unwrap();
+
+    // Create intermediate symlink: base_dir/.cargo -> outside_dir
+    let symlink_dot_cargo = base_dir.path().join(".cargo");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_dot_cargo).expect("create symlink");
+
+        let signature_target = symlink_dot_cargo.join("registry").join("cache");
+
+        // Validate that checking against base_dir detects the .cargo symlink
+        let validation_res =
+            SymlinkGuard::validate_components_between(&signature_target, base_dir.path());
+        assert!(
+            validation_res.is_err(),
+            "Symlink above signature root must be rejected!"
+        );
+        assert!(matches!(validation_res, Err(ZenithError::SymlinkEscape(_))));
+
+        assert!(precious.exists());
+    }
+}
+
+#[test]
+fn test_signature_root_itself_symlink_rejection() {
+    let base_dir = tempdir().expect("create base temp dir");
+    let outside_dir = tempdir().expect("create outside temp dir");
+    let precious = outside_dir.path().join("precious.txt");
+    fs::write(&precious, b"cannot delete").unwrap();
+
+    // signature root itself is a symlink: base_dir/cache -> outside_dir
+    let symlink_cache = base_dir.path().join("cache");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside_dir.path(), &symlink_cache).expect("create symlink");
+
+        let validation_res =
+            SymlinkGuard::validate_components_between(&symlink_cache, base_dir.path());
+        assert!(
+            validation_res.is_err(),
+            "Signature root as symlink must be rejected!"
+        );
+        assert!(matches!(validation_res, Err(ZenithError::SymlinkEscape(_))));
+
+        assert!(precious.exists());
+    }
+}
+
+#[test]
+fn test_docker_prune_target_can_create_plan() {
+    let registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
+    let docker_item = ScanItem {
+        id: "container.docker.builder".to_string(),
+        signature_id: "container.docker.builder".to_string(),
+        name: "Docker Build Cache".to_string(),
+        category: Category::Container,
+        risk: RiskTier::Safe,
+        path: "docker://buildkit/cache".to_string(),
+        size: FileSize::new(1024 * 1024, Some(1024 * 1024)),
+        file_count: 1,
+        description: "Docker build cache".to_string(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+
+    let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
+        .expect("DockerPrune target must successfully create a plan");
+    assert_eq!(plan.targets.len(), 1);
+    assert_eq!(plan.targets[0].strategy, CleanStrategy::DockerPrune);
+}
+
+#[test]
+fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
+    let dir = tempdir().expect("create temp dir");
+    let temp_child = dir.path().join("active_tool_cache");
+    fs::create_dir(&temp_child).unwrap();
+
+    // Create a file modified right now
+    let new_file = temp_child.join("active.log");
+    fs::write(&new_file, b"actively writing").unwrap();
+
+    let mut registry = SignatureRegistry::load_embedded().unwrap();
+    registry.register(Signature {
+        id: "test.stale_temp".into(),
+        name: "Test stale temp".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteDirectory,
+        paths: vec![dir.path().to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "stale temp test".into(),
+        min_age_days: Some(3),
+        include_prefixes: vec![],
+    });
+
+    let scan_item = ScanItem {
+        id: "test.stale_temp.0.active_tool_cache".into(),
+        signature_id: "test.stale_temp".into(),
+        name: "active_tool_cache".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        path: temp_child.to_string_lossy().into_owned(),
+        size: FileSize::new(1024, Some(1024)),
+        file_count: 1,
+        description: "test".into(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+
+    let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
+    assert_eq!(plan.targets[0].min_age_days, Some(3));
+
+    let clean_res = CleanExecutor::execute(plan, |_| {});
+    assert_eq!(clean_res.items.len(), 1);
+    assert!(!clean_res.items[0].success);
+    assert_eq!(
+        clean_res.items[0].failure_reason,
+        Some(CleanFailureReason::ChangedSinceScan)
+    );
+    // Active directory must be preserved
+    assert!(temp_child.exists());
+    assert!(new_file.exists());
 }

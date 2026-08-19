@@ -13,10 +13,7 @@ impl FileSize {
     }
 
     pub fn reclaimable(&self) -> u64 {
-        match self.allocated {
-            Some(alloc) if alloc > 0 => alloc,
-            _ => self.logical,
-        }
+        self.allocated.unwrap_or(self.logical)
     }
 }
 

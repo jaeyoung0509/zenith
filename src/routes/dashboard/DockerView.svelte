@@ -28,6 +28,23 @@
     confirmVolumePrune = false;
     await dockerStore.pruneTarget('container.docker.unused_volumes');
   }
+
+  let danglingImages = $derived(status?.images?.filter((i) => i.is_dangling) ?? []);
+  let danglingBytes = $derived(danglingImages.reduce((sum, i) => sum + i.size_bytes, 0));
+
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await dockerStore.refresh();
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 </script>
 
 <div class="space-y-6">
@@ -57,14 +74,21 @@
     <Button
       variant="outline"
       size="sm"
-      disabled={dockerStore.isLoading || dockerStore.isPruning}
-      onclick={() => dockerStore.refresh()}
+      disabled={isRefreshing || dockerStore.isLoading || dockerStore.isPruning}
+      onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={dockerStore.isLoading ? 'animate-gentle-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || dockerStore.isLoading ? 'animate-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>
+
+  {#if dockerStore.error}
+    <div class="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-500 flex items-center justify-between">
+      <span>{dockerStore.error}</span>
+      <Button variant="ghost" size="sm" onclick={() => (dockerStore.error = null)} class="text-xs h-6 px-2 text-rose-400">Dismiss</Button>
+    </div>
+  {/if}
 
   {#if !status?.is_running}
     <Card class="p-8 text-center space-y-3 bg-secondary/30">
@@ -80,21 +104,23 @@
     </Card>
   {:else if overview}
     <!-- Storage Breakdown Grid -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
       <!-- Build Cache (Safe) -->
-      <Card class="p-4 space-y-3 bg-card/60">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <Layers size={15} class="text-purple-400" />
-            <span>Build Cache</span>
-          </div>
-          <Badge variant="success">Safe</Badge>
-        </div>
+      <Card class="p-4 space-y-3 bg-card/60 flex flex-col justify-between">
         <div>
-          <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.build_cache.reclaimable_bytes)}
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Layers size={15} class="text-purple-400" />
+              <span>Build Cache</span>
+            </div>
+            <Badge variant="success">Safe</Badge>
           </div>
-          <p class="text-[11px] text-muted-foreground mt-0.5">Unused BuildKit layers</p>
+          <div class="mt-3">
+            <div class="text-xl font-bold font-mono text-foreground">
+              {formatBytes(overview.build_cache.reclaimable_bytes)}
+            </div>
+            <p class="text-[11px] text-muted-foreground mt-0.5">Unused BuildKit layers</p>
+          </div>
         </div>
         <Button
           variant="outline"
@@ -114,24 +140,26 @@
       </Card>
 
       <!-- Dangling Images (Safe) -->
-      <Card class="p-4 space-y-3 bg-card/60">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <Container size={15} class="text-emerald-400" />
-            <span>Dangling Images</span>
-          </div>
-          <Badge variant="success">Safe</Badge>
-        </div>
+      <Card class="p-4 space-y-3 bg-card/60 flex flex-col justify-between">
         <div>
-          <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.images.reclaimable_bytes)}
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Container size={15} class="text-emerald-400" />
+              <span>Dangling</span>
+            </div>
+            <Badge variant="success">Safe</Badge>
           </div>
-          <p class="text-[11px] text-muted-foreground mt-0.5">Untagged layers</p>
+          <div class="mt-3">
+            <div class="text-xl font-bold font-mono text-foreground">
+              {danglingBytes > 0 ? formatBytes(danglingBytes) : (danglingImages.length > 0 ? `${danglingImages.length} images` : '0 B')}
+            </div>
+            <p class="text-[11px] text-muted-foreground mt-0.5">Untagged layers</p>
+          </div>
         </div>
         <Button
           variant="outline"
           size="sm"
-          disabled={dockerStore.isPruning || overview.images.reclaimable_bytes === 0}
+          disabled={dockerStore.isPruning || danglingImages.length === 0}
           onclick={() => dockerStore.pruneTarget('container.docker.dangling_images')}
           class="w-full text-xs gap-1.5 min-h-[30px]"
         >
@@ -140,25 +168,61 @@
             <span>Pruning…</span>
           {:else}
             <Trash2 size={12} />
-            <span>Prune Images</span>
+            <span>Prune Dangling</span>
+          {/if}
+        </Button>
+      </Card>
+
+      <!-- Unused Images (Rebuild) -->
+      <Card class="p-4 space-y-3 bg-card/60 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Container size={15} class="text-amber-400" />
+              <span>Unused Images</span>
+            </div>
+            <Badge variant="warning">Rebuild</Badge>
+          </div>
+          <div class="mt-3">
+            <div class="text-xl font-bold font-mono text-foreground">
+              {formatBytes(overview.images.reclaimable_bytes)}
+            </div>
+            <p class="text-[11px] text-muted-foreground mt-0.5">Unreferenced images</p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={dockerStore.isPruning || overview.images.reclaimable_bytes === 0}
+          onclick={() => dockerStore.pruneTarget('container.docker.unused_images')}
+          class="w-full text-xs gap-1.5 min-h-[30px]"
+        >
+          {#if dockerStore.isPruning}
+            <DeletingDots size="xs" />
+            <span>Pruning…</span>
+          {:else}
+            <Trash2 size={12} />
+            <span>Remove Unused</span>
           {/if}
         </Button>
       </Card>
 
       <!-- Stopped Containers (Rebuild) -->
-      <Card class="p-4 space-y-3 bg-card/60">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <Server size={15} class="text-amber-400" />
-            <span>Stopped Containers</span>
-          </div>
-          <Badge variant="warning">Rebuild</Badge>
-        </div>
+      <Card class="p-4 space-y-3 bg-card/60 flex flex-col justify-between">
         <div>
-          <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.containers.reclaimable_bytes)}
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <Server size={15} class="text-amber-400" />
+              <span>Containers</span>
+            </div>
+            <Badge variant="warning">Rebuild</Badge>
           </div>
-          <p class="text-[11px] text-muted-foreground mt-0.5">Exited container data</p>
+          <div class="mt-3">
+            <div class="text-xl font-bold font-mono text-foreground">
+              {formatBytes(overview.containers.reclaimable_bytes)}
+            </div>
+            <p class="text-[11px] text-muted-foreground mt-0.5">Exited container data</p>
+          </div>
         </div>
         <Button
           variant="outline"
@@ -178,19 +242,21 @@
       </Card>
 
       <!-- Unused Volumes (Manual) -->
-      <Card class="p-4 space-y-3 bg-card/60">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <HardDrive size={15} class="text-rose-400" />
-            <span>Local Volumes</span>
-          </div>
-          <Badge variant="danger">Manual</Badge>
-        </div>
+      <Card class="p-4 space-y-3 bg-card/60 flex flex-col justify-between">
         <div>
-          <div class="text-xl font-bold font-mono text-foreground">
-            {formatBytes(overview.volumes.reclaimable_bytes)}
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              <HardDrive size={15} class="text-rose-400" />
+              <span>Volumes</span>
+            </div>
+            <Badge variant="danger">Manual</Badge>
           </div>
-          <p class="text-[11px] text-muted-foreground mt-0.5">of {formatBytes(overview.volumes.total_bytes)} total</p>
+          <div class="mt-3">
+            <div class="text-xl font-bold font-mono text-foreground">
+              {formatBytes(overview.volumes.reclaimable_bytes)}
+            </div>
+            <p class="text-[11px] text-muted-foreground mt-0.5">of {formatBytes(overview.volumes.total_bytes)} total</p>
+          </div>
         </div>
         <Button
           variant="outline"

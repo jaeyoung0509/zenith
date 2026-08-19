@@ -8,4 +8,4 @@ pub use blacklist::Blacklist;
 pub use planner::SafetyPlanner;
 pub use symlink::SymlinkGuard;
 pub use toctou::ToctouGuard;
-pub use tree_deleter::SafeTreeDeleter;
+pub use tree_deleter::{SafeTreeDeleter, TreeDeleteReport};

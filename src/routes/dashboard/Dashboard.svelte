@@ -6,7 +6,6 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import StorageView from './StorageView.svelte';
-  import DiskView from './DiskView.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
@@ -28,13 +27,12 @@
 
   type Tab = DashboardTab | 'settings';
 
-  let currentTab = $state<Tab>('disk');
+  let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
   let settings = $derived(settingsStore.settings);
 
-  const tabDefs: Record<DashboardTab, { label: string; icon: any }> = {
-    disk: { label: 'Disks', icon: HardDrive },
-    storage: { label: 'Storage', icon: Disc3 },
+  const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any }>> = {
+    storage: { label: 'Storage', icon: HardDrive },
     docker: { label: 'Containers', icon: Container },
     models: { label: 'Local Models', icon: Boxes },
     memory: { label: 'Memory', icon: Activity },
@@ -83,13 +81,13 @@
 
       <!-- Navigation Tabs (Dynamically Ordered from Settings) -->
       <nav class="space-y-1">
-        {#each settings.dashboard_tabs as tabId (tabId)}
-          {@const tabInfo = tabDefs[tabId]}
+        {#each (settings.dashboard_tabs || ['storage', 'docker', 'models', 'memory', 'usage', 'awake']) as tabId (tabId)}
+          {@const tabInfo = tabDefs[tabId as DashboardTab]}
           {#if tabInfo}
             {@const Icon = tabInfo.icon}
             <button
               type="button"
-              onclick={() => selectTab(tabId)}
+              onclick={() => selectTab(tabId as Tab)}
               class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
               tabId && !selectedCategory
                 ? 'bg-secondary text-foreground shadow-sm'
@@ -132,13 +130,12 @@
       <CategoryDetailView
         categoryResult={selectedCategory}
         onBack={() => (selectedCategory = null)}
+        onNavigateTab={(tab) => selectTab(tab)}
       />
     {:else if currentTab === 'storage'}
       <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
     {:else if currentTab === 'docker'}
       <DockerView />
-    {:else if currentTab === 'disk'}
-      <DiskView onReviewCategory={(category) => (selectedCategory = category)} />
     {:else if currentTab === 'models'}
       <ModelsView />
     {:else if currentTab === 'usage'}

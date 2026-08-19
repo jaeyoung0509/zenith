@@ -15,6 +15,7 @@
       {
         "title": "Zenith",
         "label": "main",
+        "create": false,
         "width": 960,
         "height": 660,
         "minWidth": 800,
@@ -24,11 +25,12 @@
         "decorations": true,
         "transparent": false,
         "titleBarStyle": "Overlay",
-        "visible": true
+        "visible": false
       },
       {
         "title": "Zenith Quick",
         "label": "quick",
+        "create": false,
         "width": 360,
         "height": 520,
         "resizable": false,

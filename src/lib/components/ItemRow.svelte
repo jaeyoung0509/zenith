@@ -5,7 +5,7 @@
   import { tauriRevealInFinder } from '../utils/tauri';
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
-  import { FolderOpen } from 'lucide-svelte';
+  import { FolderOpen, ArrowUpRight } from 'lucide-svelte';
 
   interface Props {
     item: ScanItem;
@@ -34,10 +34,15 @@
 >
   <div class="flex items-start space-x-3 flex-1 min-w-0 pr-3">
     {#if isManual}
-      <div
-        class="mt-1 h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center shrink-0 opacity-40 cursor-not-allowed"
-        title="Manual item: requires dedicated adapter (manage in Local Models or Containers view)"
-      ></div>
+      <button
+        type="button"
+        onclick={handleReveal}
+        title="Manual item: requires dedicated adapter or review"
+        class="mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border border-rose-500/30 text-rose-400 bg-rose-500/10 flex items-center gap-0.5 shrink-0 hover:bg-rose-500/20 transition-colors cursor-pointer"
+      >
+        <span>Manual</span>
+        <ArrowUpRight size={10} />
+      </button>
     {:else}
       <input
         type="checkbox"

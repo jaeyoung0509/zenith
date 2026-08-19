@@ -11,6 +11,8 @@
   import ItemRow from '../../lib/components/ItemRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
+  import ProgressBar from '../../lib/components/ProgressBar.svelte';
+  import Card from '../../lib/components/Card.svelte';
   import {
     ArrowLeft,
     Search,
@@ -18,14 +20,18 @@
     Square,
     Info,
     Trash2,
+    Boxes,
+    Container,
+    AlertCircle,
   } from 'lucide-svelte';
 
   interface Props {
     categoryResult: CategoryResult;
     onBack: () => void;
+    onNavigateTab?: (tab: 'models' | 'docker') => void;
   }
 
-  let { categoryResult, onBack }: Props = $props();
+  let { categoryResult, onBack, onNavigateTab }: Props = $props();
 
   let searchQuery = $state('');
   let selectedRiskFilter = $state<RiskTier | 'all'>('all');
@@ -50,7 +56,8 @@
 
   let categorySelectedBytes = $derived.by(() =>
     categoryResult.items.reduce(
-      (total, item) => total + (item.risk !== 'manual' && scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
+      (total, item) =>
+        total + (item.risk !== 'manual' && scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
       0
     )
   );
@@ -62,7 +69,6 @@
       scanStore.setItemSelected(item.id, next);
     }
   }
-
 
   function cleanSelected() {
     scanStore.cleanItems(categoryResult.items).then((result) => {
@@ -104,6 +110,7 @@
           <span>Select Filtered</span>
         {/if}
       </Button>
+
       <Button
         variant="primary"
         size="sm"
@@ -121,6 +128,68 @@
       </Button>
     </div>
   </div>
+
+  <!-- Adapter Quick Link Banners for Stateful Categories -->
+  {#if categoryResult.category === 'model'}
+    <div class="flex items-center justify-between p-3.5 rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-300 text-xs">
+      <div class="flex items-center gap-2.5">
+        <Boxes size={16} class="text-amber-400 shrink-0" />
+        <span>Local models are stateful assets. Manage, inspect, or delete them safely in the Local Models manager.</span>
+      </div>
+      {#if onNavigateTab}
+        <Button
+          variant="outline"
+          size="sm"
+          class="border-amber-500/40 text-amber-300 hover:bg-amber-500/20 text-xs shrink-0"
+          onclick={() => onNavigateTab('models')}
+        >
+          <span>Open Local Models →</span>
+        </Button>
+      {/if}
+    </div>
+  {:else if categoryResult.category === 'container'}
+    <div class="flex items-center justify-between p-3.5 rounded-xl border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 text-xs">
+      <div class="flex items-center gap-2.5">
+        <Container size={16} class="text-cyan-400 shrink-0" />
+        <span>Docker containers and volumes are stateful resources. Inspect and manage them in the Containers manager.</span>
+      </div>
+      {#if onNavigateTab}
+        <Button
+          variant="outline"
+          size="sm"
+          class="border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20 text-xs shrink-0"
+          onclick={() => onNavigateTab('docker')}
+        >
+          <span>Open Containers →</span>
+        </Button>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Cleaning In Progress Bar -->
+  {#if scanStore.isCleaning}
+    <Card class="p-3.5 bg-secondary/50 border-primary/30 animate-pulse">
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-medium text-foreground">
+            Cleaning: {scanStore.cleanProgress.currentItem}
+          </span>
+          <span class="font-mono text-muted-foreground">
+            {scanStore.cleanProgress.percent}%
+          </span>
+        </div>
+        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" />
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Error Alert -->
+  {#if scanStore.error}
+    <div class="p-3 rounded-xl bg-destructive/15 border border-destructive/30 text-destructive flex items-center gap-2.5 text-xs">
+      <AlertCircle size={15} class="shrink-0" />
+      <span>{scanStore.error}</span>
+    </div>
+  {/if}
 
   <!-- Filter & Search Toolbar -->
   <div class="flex flex-col sm:flex-row items-center justify-between gap-3">

@@ -14,3 +14,8 @@ node_modules
 # IDE
 .vscode/
 .idea/
+
+# Project docs / local drafts
+prd.md
+*.prd.md
+

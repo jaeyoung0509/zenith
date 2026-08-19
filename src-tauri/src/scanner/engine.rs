@@ -32,7 +32,6 @@ impl ScanEngine {
             Category::Ai,
             Category::Developer,
             Category::Container,
-            Category::Model,
             Category::System,
         ]);
 

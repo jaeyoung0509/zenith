@@ -35,14 +35,7 @@ impl SizeCalculator {
         if meta.is_file() {
             let logical = meta.len();
             #[cfg(unix)]
-            let allocated = {
-                let blk = meta.blocks() * 512;
-                if blk == 0 && logical > 0 {
-                    Some(logical)
-                } else {
-                    Some(blk)
-                }
-            };
+            let allocated = Some(meta.blocks() * 512);
             #[cfg(not(unix))]
             let allocated = Some(logical);
 
@@ -110,8 +103,7 @@ impl SizeCalculator {
                     total_logical += len;
                     #[cfg(unix)]
                     {
-                        let blk = m.blocks() * 512;
-                        total_allocated += if blk == 0 && len > 0 { len } else { blk };
+                        total_allocated += m.blocks() * 512;
                     }
                     #[cfg(not(unix))]
                     {
@@ -128,8 +120,7 @@ impl SizeCalculator {
                     total_logical += len;
                     #[cfg(unix)]
                     {
-                        let blk = meta.blocks() * 512;
-                        total_allocated += if blk == 0 && len > 0 { len } else { blk };
+                        total_allocated += meta.blocks() * 512;
                     }
                     #[cfg(not(unix))]
                     {

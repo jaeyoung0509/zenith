@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isQuickPanelDismissShortcut, moveOrdered, toggleOrdered } from '../lib/utils/quickPanel';
+import { isQuickPanelDismissShortcut, moveOrdered, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
 
 describe('quick panel customization', () => {
   it('never removes the final visible section', () => {
@@ -13,6 +13,13 @@ describe('quick panel customization', () => {
   it('moves entries without crossing collection bounds', () => {
     expect(moveOrdered(['storage', 'memory'], 'memory', -1)).toEqual(['memory', 'storage']);
     expect(moveOrdered(['storage', 'memory'], 'storage', -1)).toEqual(['storage', 'memory']);
+  });
+
+  it('reorders entries with drag-and-drop', () => {
+    expect(reorderOrdered(['a', 'b', 'c', 'd'], 'd', 'b')).toEqual(['a', 'd', 'b', 'c']);
+    expect(reorderOrdered(['a', 'b', 'c', 'd'], 'a', 'c')).toEqual(['b', 'c', 'a', 'd']);
+    expect(reorderOrdered(['a', 'b'], 'a', 'a')).toEqual(['a', 'b']);
+    expect(reorderOrdered(['a', 'b'], 'unknown', 'a')).toEqual(['a', 'b']);
   });
 
   it('recognizes Escape and Cmd+W as dismiss shortcuts', () => {

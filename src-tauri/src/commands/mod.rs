@@ -317,7 +317,7 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window("main") {
+    if let Ok(window) = crate::ensure_window(&app_handle, "main") {
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -330,7 +330,7 @@ pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window("quick") {
+    if let Ok(window) = crate::ensure_window(&app_handle, "quick") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {

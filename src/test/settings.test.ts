@@ -1,22 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import type { DashboardTab } from '../lib/models/types';
-import { moveOrdered, toggleOrdered } from '../lib/utils/quickPanel';
+import { moveOrdered, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
 
 describe('dashboard tab reordering and customization', () => {
-  const defaultTabs: DashboardTab[] = ['disk', 'storage', 'docker', 'models', 'memory', 'usage', 'awake'];
+  const defaultTabs: DashboardTab[] = ['storage', 'docker', 'models', 'memory', 'usage', 'awake'];
 
   it('moves dashboard tabs up and down correctly', () => {
-    const movedUp = moveOrdered(defaultTabs, 'storage', -1);
-    expect(movedUp[0]).toBe('storage');
-    expect(movedUp[1]).toBe('disk');
+    const movedUp = moveOrdered(defaultTabs, 'docker', -1);
+    expect(movedUp[0]).toBe('docker');
+    expect(movedUp[1]).toBe('storage');
 
-    const movedDown = moveOrdered(defaultTabs, 'disk', 1);
-    expect(movedDown[0]).toBe('storage');
-    expect(movedDown[1]).toBe('disk');
+    const movedDown = moveOrdered(defaultTabs, 'storage', 1);
+    expect(movedDown[0]).toBe('docker');
+    expect(movedDown[1]).toBe('storage');
+  });
+
+  it('reorders dashboard tabs via drag and drop', () => {
+    const reordered = reorderOrdered(defaultTabs, 'memory', 'storage');
+    expect(reordered).toEqual(['memory', 'storage', 'docker', 'models', 'usage', 'awake']);
   });
 
   it('clamps tab movement at array boundaries', () => {
-    const topStay = moveOrdered(defaultTabs, 'disk', -1);
+    const topStay = moveOrdered(defaultTabs, 'storage', -1);
     expect(topStay).toEqual(defaultTabs);
 
     const bottomStay = moveOrdered(defaultTabs, 'awake', 1);
@@ -31,8 +36,8 @@ describe('dashboard tab reordering and customization', () => {
     expect(withDockerBack[withDockerBack.length - 1]).toBe('docker');
 
     // Never remove last tab
-    const singleTab: DashboardTab[] = ['disk'];
-    const preserved = toggleOrdered(singleTab, 'disk', true);
-    expect(preserved).toEqual(['disk']);
+    const singleTab: DashboardTab[] = ['storage'];
+    const preserved = toggleOrdered(singleTab, 'storage', true);
+    expect(preserved).toEqual(['storage']);
   });
 });

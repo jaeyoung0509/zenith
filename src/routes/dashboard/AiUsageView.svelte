@@ -20,6 +20,19 @@
       month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
     }).format(new Date(timestamp * 1000));
   }
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await usageStore.refresh(true);
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 </script>
 
 <div class="space-y-6">
@@ -33,8 +46,8 @@
         <p class="text-xs text-muted-foreground mt-0.5">OAuth account limits and local coding-agent activity</p>
       </div>
     </div>
-    <Button variant="outline" size="sm" class="gap-1.5" disabled={usageStore.isLoading} onclick={() => usageStore.refresh(true)}>
-      <RefreshCw size={13} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
+    <Button variant="outline" size="sm" class="gap-1.5" disabled={isRefreshing || usageStore.isLoading} onclick={handleRefresh}>
+      <RefreshCw size={13} class={isRefreshing || usageStore.isLoading ? 'animate-spin' : ''} />
       Refresh
     </Button>
   </div>

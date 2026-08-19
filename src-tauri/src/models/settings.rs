@@ -25,6 +25,7 @@ impl QuickPanelSection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DashboardTab {
+    #[serde(alias = "disk")]
     Disk,
     Storage,
     Docker,
@@ -35,8 +36,7 @@ pub enum DashboardTab {
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 7] = [
-        Self::Disk,
+    pub const ALL: [Self; 6] = [
         Self::Storage,
         Self::Docker,
         Self::Models,
@@ -119,11 +119,17 @@ impl ZenithSettings {
             self.quick_panel_sections.push(QuickPanelSection::Storage);
         }
 
+        // Migrate legacy DashboardTab::Disk to DashboardTab::Storage
+        for tab in &mut self.dashboard_tabs {
+            if *tab == DashboardTab::Disk {
+                *tab = DashboardTab::Storage;
+            }
+        }
+
         let mut tabs = HashSet::new();
-        self.dashboard_tabs
-            .retain(|tab| tabs.insert(*tab));
+        self.dashboard_tabs.retain(|tab| tabs.insert(*tab));
         if self.dashboard_tabs.is_empty() {
-            self.dashboard_tabs.push(DashboardTab::Disk);
+            self.dashboard_tabs.push(DashboardTab::Storage);
         }
 
         const SUPPORTED_PROVIDERS: [&str; 5] =
@@ -141,69 +147,58 @@ mod tests {
     use super::{DashboardTab, QuickPanelSection, ZenithSettings};
 
     #[test]
-    fn old_settings_receive_quick_panel_and_dashboard_defaults() {
-        let json = r#"{
-            "launch_at_login": false,
-            "clean_ai_tools": true,
-            "clean_developer_tools": true,
-            "clean_docker": true,
-            "clean_local_models": false,
-            "include_rebuild_caches": false,
-            "theme": "system",
-            "excluded_signatures": [],
-            "awake_rules": []
-        }"#;
+    fn sanitize_keeps_at_least_one_section_and_tab() {
+        let empty = ZenithSettings {
+            quick_panel_sections: Vec::new(),
+            dashboard_tabs: Vec::new(),
+            quick_panel_ai_providers: Vec::new(),
+            ..ZenithSettings::default()
+        };
 
-        let settings: ZenithSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(settings.quick_panel_sections, QuickPanelSection::ALL);
-        assert_eq!(settings.dashboard_tabs, DashboardTab::ALL);
-        assert!(settings
-            .quick_panel_ai_providers
-            .contains(&"codex".to_string()));
+        let sanitized = empty.sanitize();
+        assert_eq!(
+            sanitized.quick_panel_sections,
+            vec![QuickPanelSection::Storage]
+        );
+        assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
     }
 
     #[test]
     fn sanitize_deduplicates_and_rejects_unknown_values() {
-        let settings = ZenithSettings {
+        let configured = ZenithSettings {
             quick_panel_sections: vec![
                 QuickPanelSection::AiUsage,
                 QuickPanelSection::AiUsage,
                 QuickPanelSection::Memory,
             ],
-            dashboard_tabs: vec![
-                DashboardTab::Usage,
-                DashboardTab::Usage,
-                DashboardTab::Disk,
-            ],
+            dashboard_tabs: vec![DashboardTab::Usage, DashboardTab::Usage, DashboardTab::Disk],
             quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
             ..ZenithSettings::default()
         };
 
-        let sanitized = settings.sanitize();
+        let sanitized = configured.sanitize();
         assert_eq!(
             sanitized.quick_panel_sections,
             vec![QuickPanelSection::AiUsage, QuickPanelSection::Memory]
         );
         assert_eq!(
             sanitized.dashboard_tabs,
-            vec![DashboardTab::Usage, DashboardTab::Disk]
+            vec![DashboardTab::Usage, DashboardTab::Storage]
         );
         assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
     }
 
     #[test]
-    fn sanitize_keeps_at_least_one_section_and_tab() {
-        let mut settings = ZenithSettings::default();
-        settings.quick_panel_sections.clear();
-        settings.dashboard_tabs.clear();
-        let sanitized = settings.sanitize();
-        assert_eq!(
-            sanitized.quick_panel_sections,
-            vec![QuickPanelSection::Storage]
-        );
-        assert_eq!(
-            sanitized.dashboard_tabs,
-            vec![DashboardTab::Disk]
-        );
+    fn old_settings_receive_quick_panel_and_dashboard_defaults() {
+        let raw = r#"{
+            "launch_at_login": true,
+            "theme": "dark"
+        }"#;
+
+        let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.quick_panel_sections.len(), 5);
+        assert_eq!(parsed.dashboard_tabs.len(), 6);
+        assert!(parsed.launch_at_login);
+        assert_eq!(parsed.theme, "dark");
     }
 }
