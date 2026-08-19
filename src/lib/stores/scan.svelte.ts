@@ -64,6 +64,32 @@ class ScanStore {
     return total;
   });
 
+  rebuildSelectedBytes = $derived.by(() => {
+    if (!this.lastScan) return 0;
+    let total = 0;
+    for (const cat of this.lastScan.categories) {
+      for (const item of cat.items) {
+        if (item.risk === 'rebuild' && this.selectedMap[item.id]) {
+          total += item.size.allocated ?? item.size.logical;
+        }
+      }
+    }
+    return total;
+  });
+
+  manualSelectedBytes = $derived.by(() => {
+    if (!this.lastScan) return 0;
+    let total = 0;
+    for (const cat of this.lastScan.categories) {
+      for (const item of cat.items) {
+        if (item.risk === 'manual' && this.selectedMap[item.id]) {
+          total += item.size.allocated ?? item.size.logical;
+        }
+      }
+    }
+    return total;
+  });
+
   selectedCount = $derived.by(() => {
     return Object.values(this.selectedMap).filter(Boolean).length;
   });

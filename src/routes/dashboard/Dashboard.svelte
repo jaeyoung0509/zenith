@@ -44,7 +44,14 @@
     memoryStore.refreshDisk();
     awakeStore.refresh();
     void scanStore.init().then(() => {
-      if (scanStore.isStale()) void scanStore.runScan();
+      if (scanStore.isStale()) {
+        // Defer background revalidation so initial dashboard render is immediate
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(() => void scanStore.runScan(), { timeout: 1500 });
+        } else {
+          setTimeout(() => void scanStore.runScan(), 600);
+        }
+      }
     });
   });
 
@@ -64,39 +71,41 @@
       <div class="px-2.5 flex items-center space-x-2.5">
         <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
           <defs>
-            <linearGradient id="dash-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#27272f"/>
-              <stop offset="1" stop-color="#101014"/>
+            <linearGradient id="zenith-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#3b82f6" />
+              <stop offset="100%" stop-color="#10b981" />
             </linearGradient>
           </defs>
-          <rect width="1024" height="1024" rx="220" fill="url(#dash-bg-grad)"/>
-          <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
-          <circle cx="758" cy="300" r="44" fill="#34d399"/>
+          <rect width="1024" height="1024" rx="224" fill="#090d16" />
+          <path
+            d="M 256 320 L 768 320 L 320 704 L 768 704"
+            fill="none"
+            stroke="url(#zenith-glow)"
+            stroke-width="112"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
         </svg>
-        <div>
-          <h1 class="text-sm font-bold tracking-tight text-foreground">Zenith</h1>
-          <p class="text-[10px] text-muted-foreground font-mono">macOS Dev Manager</p>
-        </div>
+        <span class="text-sm font-semibold tracking-tight text-foreground">Zenith</span>
       </div>
 
-      <!-- Navigation Tabs (Dynamically Ordered from Settings) -->
+      <!-- Navigation Links -->
       <nav class="space-y-1">
-        {#each (settings.dashboard_tabs || ['storage', 'docker', 'models', 'memory', 'usage', 'awake']) as tabId (tabId)}
-          {@const tabInfo = tabDefs[tabId as DashboardTab]}
-          {#if tabInfo}
-            {@const Icon = tabInfo.icon}
+        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'] as tabId}
+          {@const def = tabDefs[tabId as DashboardTab]}
+          {#if def}
             <button
               type="button"
               onclick={() => selectTab(tabId as Tab)}
               class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-              tabId && !selectedCategory
+              tabId
                 ? 'bg-secondary text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
             >
-              <Icon size={15} />
-              <span>{tabInfo.label}</span>
-              {#if tabId === 'awake' && awakeStore.state.is_active}
-                <span class="ml-auto w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+              <def.icon size={15} />
+              <span>{def.label}</span>
+              {#if tabId === 'storage' && scanStore.reclaimableBytes > 0}
+                <span class="ml-auto flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
               {/if}
             </button>
           {/if}
@@ -118,9 +127,12 @@
     </div>
 
     <!-- Safety Badge at bottom -->
-    <div class="px-2.5 py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2">
+    <div
+      class="px-2.5 py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2"
+      title="Path, symlink and filesystem identity are verified immediately before deletion (TOCTOU protection)."
+    >
       <Shield size={13} class="text-emerald-500 shrink-0" />
-      <span class="truncate">TOCTOU Safety Guard</span>
+      <span class="truncate">Protected cleanup</span>
     </div>
   </aside>
 

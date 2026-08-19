@@ -28,6 +28,7 @@ pub struct AppState {
     pub ai_usage_refresh_lock: Arc<Mutex<()>>,
     pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
     pub operation_lock: Arc<Mutex<()>>,
+    pub memory_sampler: Arc<crate::metrics::MemorySampler>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -189,8 +190,11 @@ pub async fn execute_clean(
 }
 
 #[tauri::command]
-pub fn get_memory_metrics() -> Result<MemoryMetrics, String> {
-    Ok(MemoryInspector::get_metrics())
+pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetrics, String> {
+    let sampler = state.memory_sampler.clone();
+    tauri::async_runtime::spawn_blocking(move || sampler.sample())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

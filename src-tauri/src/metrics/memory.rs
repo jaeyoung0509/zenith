@@ -1,17 +1,33 @@
 use crate::models::{MemoryMetrics, MemoryPressure, ProcessMemory};
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::SystemTime;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 use sysinfo::{ProcessesToUpdate, Signal, System};
 
-pub struct MemoryInspector;
+pub struct MemorySampler {
+    system: Mutex<System>,
+    compressed_cache: Mutex<Option<(Instant, u64)>>,
+}
 
-impl MemoryInspector {
+impl Default for MemorySampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemorySampler {
+    pub fn new() -> Self {
+        Self {
+            system: Mutex::new(System::new_all()),
+            compressed_cache: Mutex::new(None),
+        }
+    }
+
     /// Captures current system memory metrics and top resource-consuming developer processes.
-    pub fn get_metrics() -> MemoryMetrics {
-        let mut sys = System::new_all();
+    pub fn sample(&self) -> MemoryMetrics {
+        let mut sys = self.system.lock().unwrap();
         sys.refresh_memory();
-        sys.refresh_processes(ProcessesToUpdate::All, true);
 
         let total_bytes = sys.total_memory();
         let used_bytes = sys.used_memory();
@@ -37,17 +53,36 @@ impl MemoryInspector {
             MemoryPressure::Normal
         };
 
-        // Estimate compressed memory on macOS (or fallback)
-        let compressed_bytes = Self::get_compressed_memory_macos().unwrap_or(0);
+        // Cache compressed memory for 8 seconds (to avoid running vm_stat subprocess on every 2.5s poll)
+        let compressed_bytes = {
+            let mut cache = self.compressed_cache.lock().unwrap();
+            let now = Instant::now();
+            if let Some((cached_at, val)) = *cache {
+                if now.duration_since(cached_at) < Duration::from_secs(8) {
+                    val
+                } else {
+                    let val = MemoryInspector::get_compressed_memory_macos().unwrap_or(0);
+                    *cache = Some((now, val));
+                    val
+                }
+            } else {
+                let val = MemoryInspector::get_compressed_memory_macos().unwrap_or(0);
+                *cache = Some((now, val));
+                val
+            }
+        };
+
+        // Refresh processes
+        sys.refresh_processes(ProcessesToUpdate::All, true);
 
         // Aggregate top processes
         let mut process_groups: HashMap<String, (u64, usize, u32, bool)> = HashMap::new();
 
         for (pid, process) in sys.processes() {
             let raw_name = process.name().to_string_lossy();
-            let norm_name = Self::normalize_process_name(&raw_name, process.exe());
+            let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
             let mem = process.memory();
-            let can_terminate = Self::can_terminate_process(&norm_name, process.exe());
+            let can_terminate = MemoryInspector::can_terminate_process(&norm_name, process.exe());
 
             let entry = process_groups
                 .entry(norm_name)
@@ -90,6 +125,15 @@ impl MemoryInspector {
             top_processes,
             timestamp,
         }
+    }
+}
+
+pub struct MemoryInspector;
+
+impl MemoryInspector {
+    /// Captures current system memory metrics and top resource-consuming developer processes.
+    pub fn get_metrics() -> MemoryMetrics {
+        MemorySampler::new().sample()
     }
 
     fn normalize_process_name(raw: &str, executable: Option<&Path>) -> String {

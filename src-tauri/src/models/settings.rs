@@ -13,12 +13,13 @@ pub enum QuickPanelSection {
 }
 
 impl QuickPanelSection {
+    pub const DEFAULTS: [Self; 4] = [Self::Cleanup, Self::Storage, Self::Memory, Self::AiUsage];
     pub const ALL: [Self; 5] = [
-        Self::Storage,
         Self::Cleanup,
+        Self::Storage,
+        Self::Memory,
         Self::AiUsage,
         Self::Categories,
-        Self::Memory,
     ];
 }
 
@@ -74,7 +75,7 @@ impl Default for ZenithSettings {
             include_rebuild_caches: false,
             theme: "system".to_string(),
             excluded_signatures: Vec::new(),
-            quick_panel_sections: QuickPanelSection::ALL.to_vec(),
+            quick_panel_sections: QuickPanelSection::DEFAULTS.to_vec(),
             quick_panel_ai_providers: vec![
                 "codex".to_string(),
                 "claude".to_string(),
@@ -196,7 +197,7 @@ mod tests {
         }"#;
 
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
-        assert_eq!(parsed.quick_panel_sections.len(), 5);
+        assert_eq!(parsed.quick_panel_sections.len(), 4);
         assert_eq!(parsed.dashboard_tabs.len(), 6);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");

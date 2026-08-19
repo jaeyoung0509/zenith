@@ -1,12 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import QuickPanel from './routes/quick/QuickPanel.svelte';
-  import Dashboard from './routes/dashboard/Dashboard.svelte';
+  import type { Component } from 'svelte';
   import { settingsStore } from './lib/stores/settings.svelte';
   import { isTauri } from './lib/utils/tauri';
   import { isQuickPanelDismissShortcut } from './lib/utils/quickPanel';
 
   let currentView = $state<'dashboard' | 'quick'>('dashboard');
+  let ActiveComponent = $state<Component<any> | null>(null);
+
+  async function loadViewComponent(view: 'dashboard' | 'quick') {
+    if (view === 'quick') {
+      const module: any = await import('./routes/quick/QuickPanel.svelte');
+      ActiveComponent = module.default ?? module;
+    } else {
+      const module: any = await import('./routes/dashboard/Dashboard.svelte');
+      ActiveComponent = module.default ?? module;
+    }
+  }
 
   onMount(() => {
     settingsStore.load();
@@ -16,7 +26,11 @@
     const checkRoute = () => {
       const hash = window.location.hash;
       const isQuickWindow = window.location.search.includes('quick') || hash.includes('quick');
-      currentView = isQuickWindow ? 'quick' : 'dashboard';
+      const nextView = isQuickWindow ? 'quick' : 'dashboard';
+      if (currentView !== nextView || !ActiveComponent) {
+        currentView = nextView;
+        void loadViewComponent(nextView);
+      }
     };
 
     checkRoute();
@@ -41,9 +55,14 @@
         const win = getCurrentWebviewWindow();
         if (!disposed && win.label === 'quick') {
           currentView = 'quick';
+          void loadViewComponent('quick');
+        } else if (!disposed && !ActiveComponent) {
+          void loadViewComponent('dashboard');
         }
       } catch {
-        // Browser or mock fallback
+        if (!disposed && !ActiveComponent) {
+          void loadViewComponent(currentView);
+        }
       }
     })();
 
@@ -55,8 +74,6 @@
   });
 </script>
 
-{#if currentView === 'quick'}
-  <QuickPanel />
-{:else}
-  <Dashboard />
+{#if ActiveComponent}
+  <ActiveComponent />
 {/if}
