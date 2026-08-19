@@ -77,7 +77,6 @@ impl KeepAwakeManager {
         duration_secs: Option<u64>,
         behavior: AwakeBehavior,
     ) -> Result<(), ZenithError> {
-        let mut manual = self.manual_mode.lock().unwrap();
         let expires_at = duration_secs.map(|s| {
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -86,18 +85,30 @@ impl KeepAwakeManager {
                 + s
         });
 
-        *manual = Some((behavior, expires_at));
-        drop(manual);
-
-        self.notify_watcher();
-        let res = self.ensure_assertion(
+        // Attempt assertion acquisition first
+        match self.ensure_assertion(
             behavior,
             "Zenith Manual Keep Awake",
             Some("Manual".to_string()),
             None,
-        );
-        self.evaluate();
-        res
+        ) {
+            Ok(()) => {
+                let mut manual = self.manual_mode.lock().unwrap();
+                *manual = Some((behavior, expires_at));
+                drop(manual);
+                self.notify_watcher();
+                self.evaluate();
+                Ok(())
+            }
+            Err(err) => {
+                let mut manual = self.manual_mode.lock().unwrap();
+                *manual = None;
+                drop(manual);
+                self.notify_watcher();
+                self.evaluate();
+                Err(err)
+            }
+        }
     }
 
     /// Disables manual Keep Awake mode.
@@ -118,7 +129,11 @@ impl KeepAwakeManager {
         let trigger = self.last_trigger_app.lock().unwrap().clone();
         let active_rule_id = self.last_active_rule_id.lock().unwrap().clone();
         let manual = self.manual_mode.lock().unwrap();
-        let manual_expires_at = manual.as_ref().and_then(|(_, exp)| *exp);
+        let manual_expires_at = if is_active {
+            manual.as_ref().and_then(|(_, exp)| *exp)
+        } else {
+            None
+        };
         let rules = self.rules.lock().unwrap();
         let rules_count = rules.iter().filter(|r| r.enabled).count();
         let power_source = *self.power_source_type.lock().unwrap();
@@ -128,7 +143,7 @@ impl KeepAwakeManager {
         AwakeState {
             is_active,
             behavior,
-            trigger_source: if manual.is_some() {
+            trigger_source: if manual.is_some() && is_active {
                 Some("Manual override".to_string())
             } else {
                 trigger.as_ref().map(|app| format!("Triggered by {}", app))
@@ -165,90 +180,86 @@ impl KeepAwakeManager {
             }
         };
 
-        // 2. Evaluate rules (single process snapshot)
+        // 2. Evaluate rules (single process snapshot pass)
         let rules = self.rules.lock().unwrap().clone();
-        let mut evaluations = Vec::new();
+        let any_enabled = rules.iter().any(|r| r.enabled);
+
+        let sys = if any_enabled {
+            let mut s = System::new();
+            s.refresh_processes(ProcessesToUpdate::All, true);
+            Some(s)
+        } else {
+            None
+        };
+
+        let mut evaluations = Vec::with_capacity(rules.len());
         let mut first_eligible_rule: Option<AwakeRule> = None;
 
-        if rules.iter().any(|r| r.enabled) {
-            let mut sys = System::new();
-            sys.refresh_processes(ProcessesToUpdate::All, true);
+        for rule in &rules {
+            let is_power_eligible = match rule.power_condition {
+                PowerCondition::Always => true,
+                PowerCondition::AcPowerOnly => power_source.is_ac(),
+            };
 
-            for rule in &rules {
-                if !rule.enabled {
-                    evaluations.push(AwakeRuleEvaluation {
-                        rule_id: rule.id.clone(),
-                        status: AwakeRuleStatus::Disabled,
-                        is_process_running: false,
-                        is_power_eligible: match rule.power_condition {
-                            PowerCondition::Always => true,
-                            PowerCondition::AcPowerOnly => power_source.is_ac(),
-                        },
-                    });
-                    continue;
-                }
-
-                let patterns: Vec<&str> = rule
-                    .executable_pattern
-                    .split('|')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-
-                let is_running = sys.processes().values().any(|proc| {
-                    let name = proc.name().to_string_lossy();
-                    patterns
-                        .iter()
-                        .any(|pat| name.to_lowercase().contains(&pat.to_lowercase()))
-                });
-
-                let is_power_eligible = match rule.power_condition {
-                    PowerCondition::Always => true,
-                    PowerCondition::AcPowerOnly => power_source.is_ac(),
-                };
-
-                let status = if !is_running {
-                    AwakeRuleStatus::WaitingProcess
-                } else if !is_power_eligible {
-                    AwakeRuleStatus::WaitingPower
-                } else {
-                    if first_eligible_rule.is_none() {
-                        first_eligible_rule = Some(rule.clone());
-                    }
-                    AwakeRuleStatus::Active
-                };
-
-                evaluations.push(AwakeRuleEvaluation {
-                    rule_id: rule.id.clone(),
-                    status,
-                    is_process_running: is_running,
-                    is_power_eligible,
-                });
-            }
-        } else {
-            for rule in &rules {
+            if !rule.enabled {
                 evaluations.push(AwakeRuleEvaluation {
                     rule_id: rule.id.clone(),
                     status: AwakeRuleStatus::Disabled,
                     is_process_running: false,
-                    is_power_eligible: match rule.power_condition {
-                        PowerCondition::Always => true,
-                        PowerCondition::AcPowerOnly => power_source.is_ac(),
-                    },
+                    is_power_eligible,
                 });
+                continue;
             }
+
+            let patterns: Vec<&str> = rule
+                .executable_pattern
+                .split('|')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let is_running = sys.as_ref().is_some_and(|s| {
+                s.processes().values().any(|proc| {
+                    let name = proc.name().to_string_lossy();
+                    patterns
+                        .iter()
+                        .any(|pat| name.to_lowercase().contains(&pat.to_lowercase()))
+                })
+            });
+
+            let status = if !is_running {
+                AwakeRuleStatus::WaitingProcess
+            } else if !is_power_eligible {
+                AwakeRuleStatus::WaitingPower
+            } else {
+                if first_eligible_rule.is_none() {
+                    first_eligible_rule = Some(rule.clone());
+                }
+                AwakeRuleStatus::Active
+            };
+
+            evaluations.push(AwakeRuleEvaluation {
+                rule_id: rule.id.clone(),
+                status,
+                is_process_running: is_running,
+                is_power_eligible,
+            });
         }
 
         *self.rule_evaluations.lock().unwrap() = evaluations;
 
         // 3. Manual mode overrides process rules
         if let Some((behavior, _)) = manual_snapshot {
-            let _ = self.ensure_assertion(
+            if let Err(err) = self.ensure_assertion(
                 behavior,
                 "Zenith Manual Keep Awake",
                 Some("Manual".to_string()),
                 None,
-            );
+            ) {
+                let _ = err;
+                let mut manual = self.manual_mode.lock().unwrap();
+                *manual = None;
+            }
             return;
         }
 
@@ -422,6 +433,8 @@ mod tests {
 
         let state = manager.get_state();
         assert!(!state.is_active);
+        assert_eq!(state.manual_expires_at, None);
+        assert_eq!(state.trigger_source, None);
         assert!(state.last_error.is_some());
         assert!(state
             .last_error
@@ -459,5 +472,42 @@ mod tests {
         let state2 = manager.get_state();
         assert!(!state2.is_active);
         assert!(state2.behavior.is_none());
+    }
+
+    #[test]
+    fn multi_rule_evaluation_and_priority() {
+        let power_mock = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
+        let assertion_mock = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power_mock, assertion_mock);
+
+        let rule1 = AwakeRule {
+            id: "rule.1".to_string(),
+            app_name: "App 1".to_string(),
+            executable_pattern: "non_existent_111".to_string(),
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::AcPowerOnly,
+            enabled: true,
+        };
+
+        let rule2 = AwakeRule {
+            id: "rule.2".to_string(),
+            app_name: "App 2".to_string(),
+            executable_pattern: "non_existent_222".to_string(),
+            behavior: AwakeBehavior::KeepDisplayAwake,
+            power_condition: PowerCondition::Always,
+            enabled: false,
+        };
+
+        manager.set_rules(vec![rule1, rule2]);
+        let state = manager.get_state();
+
+        assert_eq!(state.rule_evaluations.len(), 2);
+        assert_eq!(
+            state.rule_evaluations[0].status,
+            AwakeRuleStatus::WaitingProcess
+        );
+        assert_eq!(state.rule_evaluations[1].status, AwakeRuleStatus::Disabled);
+        assert_eq!(state.active_rules_count, 1);
+        assert_eq!(state.active_rule_id, None);
     }
 }

@@ -55,4 +55,53 @@ describe('awake models and state handling', () => {
     expect(acRule.power_condition).toBe('ac_power_only');
     expect(alwaysRule.power_condition).toBe('always');
   });
+
+  it('distinguishes active trigger rule from other rules', () => {
+    const state: AwakeState = {
+      is_active: true,
+      behavior: 'prevent_system_sleep',
+      trigger_source: 'Triggered by Codex',
+      active_process_name: 'Codex',
+      active_rule_id: 'rule.codex',
+      active_rules_count: 2,
+      power_source: 'ac',
+      rule_evaluations: [
+        {
+          rule_id: 'rule.codex',
+          status: 'active',
+          is_process_running: true,
+          is_power_eligible: true,
+        },
+        {
+          rule_id: 'rule.claude',
+          status: 'active',
+          is_process_running: true,
+          is_power_eligible: true,
+        },
+      ],
+    };
+
+    expect(state.active_rule_id).toBe('rule.codex');
+    expect(state.active_rule_id === 'rule.codex').toBe(true);
+    expect(state.active_rule_id === 'rule.claude').toBe(false);
+  });
+
+  it('accurately represents manual failure state without phantom expiration', () => {
+    const failedState: AwakeState = {
+      is_active: false,
+      behavior: undefined,
+      trigger_source: undefined,
+      active_process_name: undefined,
+      active_rule_id: undefined,
+      manual_expires_at: undefined,
+      active_rules_count: 2,
+      power_source: 'ac',
+      last_error: 'IOKit power assertion failed with return code: 5',
+      rule_evaluations: [],
+    };
+
+    expect(failedState.is_active).toBe(false);
+    expect(failedState.manual_expires_at).toBeUndefined();
+    expect(failedState.last_error).toContain('IOKit power assertion failed');
+  });
 });
