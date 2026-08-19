@@ -3,6 +3,7 @@
   import type { AiProviderId, DashboardTab, QuickPanelSection } from '../../lib/models/types';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
+  import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical } from 'lucide-svelte';
 
   const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
@@ -429,7 +430,7 @@
     <Card class="p-4 bg-card/70 text-xs space-y-2">
       <div class="flex items-center justify-between">
         <span class="font-medium text-foreground">Zenith macOS Developer System Manager</span>
-        <Badge variant="outline" class="font-mono">v0.1.0</Badge>
+        <Badge variant="outline" class="font-mono">{formatVersion(APP_VERSION)}</Badge>
       </div>
       <p class="text-muted-foreground leading-relaxed">
         Zenith is an ultra-lightweight open-source utility designed to safely manage AI caches, developer build artifacts, Docker storage, local LLMs, memory pressure, and keep-awake power assertions.

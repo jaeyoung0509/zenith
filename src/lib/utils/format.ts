@@ -33,3 +33,30 @@ export function formatDuration(seconds: number): string {
   const remainingMins = mins % 60;
   return `${hours}h ${remainingMins}m`;
 }
+
+export function formatTimeUntil(timestampSeconds?: number): string {
+  if (!timestampSeconds) return '';
+  const now = Math.floor(Date.now() / 1000);
+  const diff = timestampSeconds - now;
+  if (diff <= 0) return 'now';
+  if (diff < 60) return `${diff}s`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) {
+    const hours = Math.floor(diff / 3600);
+    const mins = Math.floor((diff % 3600) / 60);
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  const days = Math.floor(diff / 86400);
+  const remHours = Math.floor((diff % 86400) / 3600);
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
+export function formatResetDate(timestampSeconds?: number): string {
+  if (!timestampSeconds) return '';
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timestampSeconds * 1000));
+}

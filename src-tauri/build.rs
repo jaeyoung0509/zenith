@@ -25,6 +25,7 @@ fn main() {
         "reveal_in_finder",
         "open_dashboard_window",
         "toggle_quick_panel",
+        "get_app_version",
     ];
 
     tauri_build::try_build(

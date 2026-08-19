@@ -333,6 +333,11 @@ pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
 pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
     if let Ok(window) = crate::ensure_window(&app_handle, "quick") {
         if window.is_visible().unwrap_or(false) {
@@ -343,4 +348,23 @@ pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_version_is_semver_formatted() {
+        let version = get_app_version();
+        assert!(!version.is_empty());
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(parts.len(), 3, "Expected major.minor.patch semver format");
+        for part in parts {
+            assert!(
+                part.chars().all(|c| c.is_ascii_digit()),
+                "Expected numeric version segments"
+            );
+        }
+    }
 }
