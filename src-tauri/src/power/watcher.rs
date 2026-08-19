@@ -97,7 +97,6 @@ impl KeepAwakeManager {
                 *manual = Some((behavior, expires_at));
                 drop(manual);
                 self.notify_watcher();
-                self.evaluate();
                 Ok(())
             }
             Err(err) => {
@@ -509,5 +508,28 @@ mod tests {
         assert_eq!(state.rule_evaluations[1].status, AwakeRuleStatus::Disabled);
         assert_eq!(state.active_rules_count, 1);
         assert_eq!(state.active_rule_id, None);
+    }
+
+    #[test]
+    fn get_state_is_pure_in_memory_read_without_provider_calls() {
+        let power_mock = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
+        let assertion_mock = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power_mock.clone(), assertion_mock);
+
+        // evaluate once
+        manager.evaluate();
+        let calls_after_eval = power_mock.query_count();
+        assert!(calls_after_eval >= 1);
+
+        // multiple get_state calls must NOT invoke the power source provider or re-scan processes
+        for _ in 0..10 {
+            let _ = manager.get_state();
+        }
+
+        assert_eq!(
+            power_mock.query_count(),
+            calls_after_eval,
+            "get_state must be a pure in-memory read without invoking power source query or process enumeration"
+        );
     }
 }

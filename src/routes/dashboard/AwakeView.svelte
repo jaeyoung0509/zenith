@@ -24,14 +24,24 @@
     Trash2,
   } from 'lucide-svelte';
 
+  let now = $state(Date.now());
+
   onMount(() => {
-    awakeStore.refresh();
-    const interval = setInterval(() => {
-      awakeStore.refresh();
+    void awakeStore.refresh();
+
+    // Local 1s timer for smooth countdown re-rendering without IPC
+    const countdownTimer = setInterval(() => {
+      now = Date.now();
     }, 1000);
 
+    // 5s periodic refresh for lightweight AwakeState snapshot reading
+    const stateTimer = setInterval(() => {
+      void awakeStore.refresh();
+    }, 5000);
+
     return () => {
-      clearInterval(interval);
+      clearInterval(countdownTimer);
+      clearInterval(stateTimer);
     };
   });
 
@@ -106,11 +116,13 @@
   }
 
   function formatCountdown(expiresAt: number) {
-    const timeUntil = formatTimeUntil(expiresAt);
-    if (timeUntil) {
-      return `${timeUntil} remaining`;
+    // Reference `now` to guarantee reactive updates each second
+    const diffSecs = Math.max(0, expiresAt - Math.floor(now / 1000));
+    if (diffSecs <= 0) {
+      return 'expiring now';
     }
-    return 'expiring now';
+    const timeUntil = formatTimeUntil(expiresAt);
+    return timeUntil ? `${timeUntil} remaining` : `${diffSecs}s remaining`;
   }
 </script>
 
@@ -236,17 +248,17 @@
           type="button"
           onclick={() => (manualBehavior = 'prevent_system_sleep')}
           class="px-2.5 py-1 rounded text-[11px] font-medium transition-all {manualBehavior === 'prevent_system_sleep' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          title="Prevents system sleep; display may turn off to conserve energy"
+          title="Work continues while you're away; display may turn off"
         >
-          Prevent System Sleep
+          Keep Mac Awake
         </button>
         <button
           type="button"
           onclick={() => (manualBehavior = 'keep_display_awake')}
           class="px-2.5 py-1 rounded text-[11px] font-medium transition-all {manualBehavior === 'keep_display_awake' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          title="Keeps both Mac and display awake (screen remains on)"
+          title="Keeps both Mac and display awake while idle"
         >
-          Keep Display Awake
+          Keep Mac + Display Awake
         </button>
       </div>
     </div>
@@ -347,11 +359,11 @@
                       Active Trigger
                     </span>
                   {:else if evaluation.status === 'active'}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80" title="Process is running and eligible; ready to take over assertion if active trigger stops.">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80" title="Process is running and eligible; ready to maintain sleep assertion if active trigger stops.">
                       Running (Standby)
                     </span>
                   {:else if evaluation.status === 'waiting_power'}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-amber-500/30 bg-amber-500/10 text-amber-400" title="Process is running, but rule is set to AC Power Only while on battery.">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-amber-500/30 bg-amber-500/10 text-amber-400" title="Process is running, but rule requires AC Power while Mac is on battery.">
                       Waiting for AC power
                     </span>
                   {:else if evaluation.status === 'waiting_process'}
@@ -373,7 +385,7 @@
                 <span>•</span>
                 <span>{rule.power_condition === 'always' ? 'Always (AC & Battery)' : 'Plugged In (AC) Only'}</span>
                 <span>•</span>
-                <span>{rule.behavior === 'prevent_system_sleep' ? 'Prevent system sleep' : 'Keep display awake'}</span>
+                <span>{rule.behavior === 'prevent_system_sleep' ? 'Keep Mac awake' : 'Keep Mac + display awake'}</span>
               </div>
             </div>
 
@@ -508,9 +520,9 @@
               >
                 <div class="font-medium flex items-center gap-1.5">
                   <Moon size={13} class="text-indigo-400" />
-                  <span>Prevent System Sleep</span>
+                  <span>Keep Mac Awake</span>
                 </div>
-                <div class="text-[10px] text-muted-foreground mt-0.5">Mac stays awake. Display may turn off to conserve energy.</div>
+                <div class="text-[10px] text-muted-foreground mt-0.5">Work continues while you're away. The display may turn off.</div>
               </button>
 
               <button
@@ -520,9 +532,9 @@
               >
                 <div class="font-medium flex items-center gap-1.5">
                   <Monitor size={13} class="text-blue-400" />
-                  <span>Keep Display Awake</span>
+                  <span>Keep Mac + Display Awake</span>
                 </div>
-                <div class="text-[10px] text-muted-foreground mt-0.5">Mac and display stay awake. Screen will not sleep.</div>
+                <div class="text-[10px] text-muted-foreground mt-0.5">Work continues and the display stays on while idle.</div>
               </button>
             </div>
           </div>

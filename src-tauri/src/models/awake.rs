@@ -10,8 +10,8 @@ pub enum AwakeBehavior {
 impl AwakeBehavior {
     pub fn display_name(&self) -> &'static str {
         match self {
-            AwakeBehavior::PreventSystemSleep => "Prevent System Sleep",
-            AwakeBehavior::KeepDisplayAwake => "Keep Display Awake",
+            AwakeBehavior::PreventSystemSleep => "Keep Mac Awake",
+            AwakeBehavior::KeepDisplayAwake => "Keep Mac + Display Awake",
         }
     }
 }

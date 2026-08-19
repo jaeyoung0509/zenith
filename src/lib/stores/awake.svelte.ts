@@ -2,7 +2,6 @@ import type { AwakeBehavior, AwakeRule, AwakeState } from '../models/types';
 import {
   tauriDisableManualAwake,
   tauriGetAwakeState,
-  tauriSetAwakeRules,
   tauriSetManualAwake,
 } from '../utils/tauri';
 import { settingsStore } from './settings.svelte';
@@ -31,14 +30,12 @@ class AwakeStore {
       r.id === ruleId ? { ...r, enabled: !r.enabled } : r
     );
     await settingsStore.save({ awake_rules: updated });
-    await tauriSetAwakeRules(updated);
     await this.refresh();
   }
 
   async addRule(rule: AwakeRule) {
     const updated = [...settingsStore.settings.awake_rules, rule];
     await settingsStore.save({ awake_rules: updated });
-    await tauriSetAwakeRules(updated);
     await this.refresh();
   }
 
@@ -46,7 +43,6 @@ class AwakeStore {
     const current = settingsStore.settings.awake_rules;
     const updated = current.filter((r) => r.id !== ruleId);
     await settingsStore.save({ awake_rules: updated });
-    await tauriSetAwakeRules(updated);
     await this.refresh();
   }
 
@@ -54,7 +50,6 @@ class AwakeStore {
     const current = settingsStore.settings.awake_rules;
     const updated = current.map((r) => (r.id === rule.id ? rule : r));
     await settingsStore.save({ awake_rules: updated });
-    await tauriSetAwakeRules(updated);
     await this.refresh();
   }
 

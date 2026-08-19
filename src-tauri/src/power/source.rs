@@ -100,23 +100,35 @@ fn fallback_pmset_power_source() -> PowerSourceType {
     PowerSourceType::Unknown
 }
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 #[derive(Clone)]
 pub struct MockPowerSource {
     source: PowerSourceType,
+    query_count: Arc<AtomicUsize>,
 }
 
 impl MockPowerSource {
     pub fn new(source: PowerSourceType) -> Self {
-        Self { source }
+        Self {
+            source,
+            query_count: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     pub fn set_source(&mut self, source: PowerSourceType) {
         self.source = source;
     }
+
+    pub fn query_count(&self) -> usize {
+        self.query_count.load(Ordering::SeqCst)
+    }
 }
 
 impl PowerSourceProvider for MockPowerSource {
     fn current_power_source(&self) -> PowerSourceType {
+        self.query_count.fetch_add(1, Ordering::SeqCst);
         self.source
     }
 }

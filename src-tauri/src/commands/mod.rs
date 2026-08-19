@@ -252,7 +252,6 @@ pub fn delete_local_model(model_id: String) -> Result<u64, String> {
 
 #[tauri::command]
 pub fn get_awake_state(state: State<'_, AppState>) -> Result<AwakeState, String> {
-    state.awake_manager.evaluate();
     Ok(state.awake_manager.get_state())
 }
 
