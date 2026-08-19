@@ -36,12 +36,31 @@ run-fast:
     fi
 
 # ------------------------------------------------------------------------------
-# 📦 Production Build (배포용 단일 바이너리 / 앱 번들)
+# 📦 Production Build & Distribution (배포용 단일 바이너리 / 앱 번들)
 # ------------------------------------------------------------------------------
+
+# Clean existing binaries and build fresh release packages (.app & .dmg)
+distribute: clean-bin
+    pnpm tauri build
+    @echo ""
+    @echo "📦 Fresh release packages built successfully:"
+    @echo "  - App Bundle: target/release/bundle/macos/Zenith.app"
+    @echo "  - DMG Installer: target/release/bundle/dmg/"
+    @echo "👉 Run directly with: just run-bin"
+
+# Alias for distribute
+release: distribute
 
 # Build production macOS App bundle & DMG installer (.app / .dmg)
 build:
     pnpm tauri build
+
+# Clean existing binaries and build fresh standalone release macOS App bundle
+release-app: clean-bin
+    pnpm tauri build --bundles app
+    @echo ""
+    @echo "✅ Standalone release App built at: target/release/bundle/macos/Zenith.app"
+    @echo "👉 Run directly with: just run-bin"
 
 # Build standalone release macOS App bundle with full Dock/Finder branding
 build-bin:
@@ -101,7 +120,12 @@ run-bin:
 install:
     pnpm install
 
-# Clean all build artifacts and node_modules
+# Clean previous built binary, app bundles, dmg packages, and dist frontend
+clean-bin:
+    rm -rf dist target/release/bundle target/release/Zenith target/debug/bundle target/debug/Zenith src-tauri/target/release/bundle src-tauri/target/release/Zenith src-tauri/target/debug/bundle src-tauri/target/debug/Zenith
+    @echo "🗑️ Existing binary and bundle artifacts removed."
+
+# Clean all build artifacts, Cargo target, and node_modules
 clean:
     cargo clean
     rm -rf dist node_modules
