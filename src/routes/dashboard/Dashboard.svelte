@@ -71,20 +71,14 @@
       <div class="px-2.5 flex items-center space-x-2.5">
         <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
           <defs>
-            <linearGradient id="zenith-glow" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#3b82f6" />
-              <stop offset="100%" stop-color="#10b981" />
+            <linearGradient id="dash-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#27272f"/>
+              <stop offset="1" stop-color="#101014"/>
             </linearGradient>
           </defs>
-          <rect width="1024" height="1024" rx="224" fill="#090d16" />
-          <path
-            d="M 256 320 L 768 320 L 320 704 L 768 704"
-            fill="none"
-            stroke="url(#zenith-glow)"
-            stroke-width="112"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
+          <rect width="1024" height="1024" rx="220" fill="url(#dash-bg-grad)"/>
+          <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
+          <circle cx="758" cy="300" r="44" fill="#34d399"/>
         </svg>
         <span class="text-sm font-semibold tracking-tight text-foreground">Zenith</span>
       </div>
