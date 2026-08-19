@@ -29,6 +29,23 @@
     .map((id) => usageStore.snapshot?.providers.find((provider) => provider.id === id))
     .filter((provider): provider is AiProviderUsage => Boolean(provider)));
 
+  let quickCleanableBytes = $derived.by(() =>
+    scanStore.quickCleanableBytes(settings)
+  );
+
+  let cleanupState = $derived.by(() => {
+    if (!scan) {
+      return scanStore.isScanning ? 'scanning' : 'unknown';
+    }
+    if (scanStore.isScanning) {
+      return 'refreshing';
+    }
+    if (quickCleanableBytes > 0) {
+      return 'ready';
+    }
+    return 'clean';
+  });
+
   function hasSection(section: typeof settings.quick_panel_sections[number]) {
     return settings.quick_panel_sections.includes(section);
   }
@@ -94,11 +111,12 @@
     };
   });
 
-  function handleCleanSafe() {
+  async function handleCleanSafe() {
     scanStore.selectQuickCleanDefaults(settings);
-    scanStore.cleanSelected().then((result) => {
-      if (result) showResultModal = true;
-    });
+    const result = await scanStore.cleanSelected();
+    if (result) {
+      showResultModal = true;
+    }
   }
 
   function handleOpenDashboard() {
@@ -153,23 +171,35 @@
         <div class="p-3.5 bg-secondary/60 border border-border/70 rounded-xl flex items-center justify-between shadow-xs">
           <div>
             <div class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-              {scanStore.safeSelectedBytes > 0 ? 'Ready to Clean' : 'System Status'}
+              {cleanupState === 'ready' || cleanupState === 'refreshing' ? 'Ready to Clean' : 'System Status'}
             </div>
             <div class="text-2xl font-bold font-mono text-foreground mt-0.5">
-              {formatBytes(scanStore.safeSelectedBytes)}
-            </div>
-            <div class="text-[10px] text-emerald-500 font-medium mt-0.5 flex items-center gap-1">
-              {#if scanStore.safeSelectedBytes > 0}
-                <span>Safe cleanup available</span>
+              {#if cleanupState === 'unknown'}
+                <span>—</span>
+              {:else if cleanupState === 'scanning'}
+                <span class="text-base text-muted-foreground font-sans font-medium">Scanning…</span>
               {:else}
-                <span>Development caches clean</span>
+                <span>{formatBytes(quickCleanableBytes)}</span>
+              {/if}
+            </div>
+            <div class="text-[10px] font-medium mt-0.5 flex items-center gap-1">
+              {#if cleanupState === 'unknown'}
+                <span class="text-muted-foreground">Run a scan to check safe caches</span>
+              {:else if cleanupState === 'scanning'}
+                <span class="text-muted-foreground">Checking development caches</span>
+              {:else if cleanupState === 'refreshing'}
+                <span class="text-amber-500">Refreshing scan…</span>
+              {:else if cleanupState === 'ready'}
+                <span class="text-emerald-500">Safe cleanup available</span>
+              {:else}
+                <span class="text-emerald-500">Development caches clean</span>
               {/if}
             </div>
           </div>
           <Button
             variant="primary"
             size="sm"
-            disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.safeSelectedBytes === 0}
+            disabled={scanStore.isScanning || scanStore.isCleaning || !scan || quickCleanableBytes === 0}
             onclick={handleCleanSafe}
             class="gap-1.5 min-w-[88px] text-xs font-semibold py-2 px-3"
           >
