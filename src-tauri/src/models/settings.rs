@@ -86,10 +86,19 @@ impl Default for ZenithSettings {
             dashboard_tabs: DashboardTab::ALL.to_vec(),
             awake_rules: vec![
                 AwakeRule {
+                    id: "rule.codex".to_string(),
+                    app_name: "Codex".to_string(),
+                    executable_pattern: "codex".to_string(),
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: true,
+                },
+                AwakeRule {
                     id: "rule.claude".to_string(),
                     app_name: "Claude Code / Claude Desktop".to_string(),
                     executable_pattern: "claude".to_string(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: true,
                 },
                 AwakeRule {
@@ -97,6 +106,7 @@ impl Default for ZenithSettings {
                     app_name: "Docker Desktop".to_string(),
                     executable_pattern: "com.docker.backend".to_string(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
                 },
                 AwakeRule {
@@ -104,6 +114,7 @@ impl Default for ZenithSettings {
                     app_name: "Terminal / iTerm2 / Ghostty".to_string(),
                     executable_pattern: "Terminal|iTerm2|ghostty".to_string(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
                 },
             ],

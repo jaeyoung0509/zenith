@@ -232,12 +232,16 @@ export interface LocalModelItem {
 }
 
 export type AwakeBehavior = 'prevent_system_sleep' | 'keep_display_awake';
+export type PowerCondition = 'always' | 'ac_power_only';
+export type PowerSourceType = 'ac' | 'battery' | 'unknown';
+export type AwakeRuleStatus = 'active' | 'waiting_process' | 'waiting_power' | 'disabled';
 
 export interface AwakeRule {
   id: string;
   app_name: string;
   executable_pattern: string;
   behavior: AwakeBehavior;
+  power_condition?: PowerCondition;
   enabled: boolean;
 }
 
@@ -247,13 +251,24 @@ export interface SelectedApplication {
   path: string;
 }
 
+export interface AwakeRuleEvaluation {
+  rule_id: string;
+  status: AwakeRuleStatus;
+  is_process_running: boolean;
+  is_power_eligible: boolean;
+}
+
 export interface AwakeState {
   is_active: boolean;
   behavior?: AwakeBehavior;
   trigger_source?: string;
   active_process_name?: string;
+  active_rule_id?: string;
   manual_expires_at?: number;
   active_rules_count: number;
+  power_source: PowerSourceType;
+  last_error?: string;
+  rule_evaluations: AwakeRuleEvaluation[];
 }
 
 export interface ZenithSettings {
