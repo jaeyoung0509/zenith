@@ -32,19 +32,21 @@ use std::sync::LazyLock;
 
 static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        // sk-... (OpenAI, Anthropic, OpenRouter API keys)
+        // 0. sk-... (OpenAI, Anthropic, OpenRouter API keys)
         Regex::new(r"sk-[a-zA-Z0-9_\-]{8,}").unwrap(),
-        // GitHub personal access tokens
+        // 1. GitHub personal access tokens
         Regex::new(r"ghp_[a-zA-Z0-9]{20,}").unwrap(),
-        // GitLab personal access tokens
+        // 2. GitLab personal access tokens
         Regex::new(r"glpat-[a-zA-Z0-9_\-]{20,}").unwrap(),
-        // Slack tokens
+        // 3. Slack tokens
         Regex::new(r"xox[baprs]-[a-zA-Z0-9_\-]{10,}").unwrap(),
-        // Bearer <token>
+        // 4. Authorization headers (Bearer, Token, or raw)
+        Regex::new(r#"(?i)((?:authorization\s*[:=]\s*(?:bearer\s+|token\s+)?|auth\s*[:=]\s*["']?))[a-zA-Z0-9_\.\-]+"#).unwrap(),
+        // 5. Standalone Bearer <token>
         Regex::new(r"(?i)(bearer\s+)[a-zA-Z0-9_\.\-]+").unwrap(),
-        // Key-value pairs (e.g. OPENROUTER_API_KEY=..., token=..., api_key: "...", "api_key": "...")
-        Regex::new(r#"(?i)((?:api[_-]?key|token|secret|password|auth|authorization)[a-zA-Z0-9_\-]*\s*[:=]\s*["']?)[a-zA-Z0-9_\.\-]+"#).unwrap(),
-        // URL query parameters (e.g. ?token=..., &key=..., &api_key=...)
+        // 6. Key-value pairs (e.g. token=..., api_key: "...", "api_key": "...", OPENAI_API_KEY=..., password=...)
+        Regex::new(r#"(?i)(["']?(?:api[_-]?key|token|secret|password)[a-zA-Z0-9_\-]*["']?\s*[:=]\s*["']?)[a-zA-Z0-9_\.\-]+"#).unwrap(),
+        // 7. URL query parameters (e.g. ?token=..., &key=..., &api_key=...)
         Regex::new(r"(?i)([?&](?:token|key|api_key|secret|password)=)[^&\s]+").unwrap(),
     ]
 });
@@ -59,16 +61,20 @@ pub fn sanitize_log(msg: &str) -> String {
             .replace_all(&sanitized, "[REDACTED]")
             .to_string();
     }
-    // 2. Bearer <token>
+    // 2. Authorization header tokens
     sanitized = SECRET_PATTERNS[4]
         .replace_all(&sanitized, "${1}[REDACTED]")
         .to_string();
-    // 3. Key-value pairs (token=..., api_key: ..., OPENROUTER_API_KEY=..., etc.)
+    // 3. Standalone Bearer tokens
     sanitized = SECRET_PATTERNS[5]
         .replace_all(&sanitized, "${1}[REDACTED]")
         .to_string();
-    // 4. URL query parameters
+    // 4. Key-value pairs (token=..., api_key: ..., password: ..., etc.)
     sanitized = SECRET_PATTERNS[6]
+        .replace_all(&sanitized, "${1}[REDACTED]")
+        .to_string();
+    // 5. URL query parameters
+    sanitized = SECRET_PATTERNS[7]
         .replace_all(&sanitized, "${1}[REDACTED]")
         .to_string();
 
@@ -225,8 +231,24 @@ mod tests {
                 "OPENROUTER_API_KEY=[REDACTED]",
             ),
             (
+                "OPENAI_API_KEY=sk-proj-998877665544",
+                "OPENAI_API_KEY=[REDACTED]",
+            ),
+            (
+                "ANTHROPIC_API_KEY=sk-ant-112233445566",
+                "ANTHROPIC_API_KEY=[REDACTED]",
+            ),
+            (
+                "Authorization: Bearer my-jwt-secret-token",
+                "Authorization: Bearer [REDACTED]",
+            ),
+            (
                 r#"{"api_key":"sk-abcdef123456"}"#,
                 r#"{"api_key":"[REDACTED]"}"#,
+            ),
+            (
+                r#"{"token": "my-secret-token", "password": "super-secret-password"}"#,
+                r#"{"token": "[REDACTED]", "password": "[REDACTED]"}"#,
             ),
             (
                 "https://foo.com?token=secret123&other=val",
