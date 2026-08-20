@@ -7,7 +7,7 @@
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
-  import { isQuickPanelDismissShortcut } from '../../lib/utils/quickPanel';
+  import { isQuickPanelDismissShortcut, projectAiProviders } from '../../lib/utils/quickPanel';
   import { isTauri, tauriHideCurrentWindow, tauriOpenDashboard } from '../../lib/utils/tauri';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
@@ -26,9 +26,9 @@
   let memory = $derived(memoryStore.memory);
   let scan = $derived(scanStore.lastScan);
   let awakeState = $derived(awakeStore.state);
-  let selectedProviders = $derived.by(() => settings.quick_panel_ai_providers
-    .map((id) => usageStore.snapshot?.providers.find((provider) => provider.id === id))
-    .filter((provider): provider is AiProviderUsage => Boolean(provider)));
+  let selectedProviders = $derived(
+    projectAiProviders(settings.quick_panel_ai_providers, usageStore.snapshot?.providers)
+  );
 
   let quickCleanableBytes = $derived.by(() =>
     scanStore.quickCleanableBytes(settings)

@@ -676,7 +676,7 @@ export const mockApi = {
 
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {
     return {
-      app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.3',
+      app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.4',
       os_version: 'macOS 15.3.1 (Mock Preview)',
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',

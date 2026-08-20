@@ -3,6 +3,11 @@ import { tauriGetSettings, tauriSaveSettings } from '../utils/tauri';
 import { moveOrdered, reorderOrdered, toggleOrdered } from '../utils/quickPanel';
 import { serializeSettingsSnapshot } from '../utils/settings';
 
+interface SettingsStoreDependencies {
+  getSettings: () => Promise<ZenithSettings>;
+  saveSettings: (settings: ZenithSettings) => Promise<void>;
+}
+
 export class SettingsStore {
   settings = $state<ZenithSettings>({
     launch_at_login: false,
@@ -57,9 +62,17 @@ export class SettingsStore {
   private hasLoaded = false;
   private loadPromise: Promise<void> | null = null;
   private saveQueue: Promise<void> = Promise.resolve();
+  private saveRevision = 0;
   private persistedSettings: ZenithSettings | null = null;
   private mediaQueryList: MediaQueryList | null = null;
   private mediaQueryListener: ((e: MediaQueryListEvent) => void) | null = null;
+  private readonly getSettings: SettingsStoreDependencies['getSettings'];
+  private readonly saveSettings: SettingsStoreDependencies['saveSettings'];
+
+  constructor(dependencies: Partial<SettingsStoreDependencies> = {}) {
+    this.getSettings = dependencies.getSettings ?? tauriGetSettings;
+    this.saveSettings = dependencies.saveSettings ?? tauriSaveSettings;
+  }
 
   async load(force = false) {
     if (this.hasLoaded && !force) return;
@@ -75,7 +88,7 @@ export class SettingsStore {
   private async performLoad() {
     this.isLoading = true;
     try {
-      const fetched = await tauriGetSettings();
+      const fetched = await this.getSettings();
       const normalized: ZenithSettings = {
         ...fetched,
         quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
@@ -95,7 +108,7 @@ export class SettingsStore {
 
   async save(partial: Partial<ZenithSettings>) {
     const previousSettings = this.settings;
-    const previousTheme = previousSettings.theme;
+    const revision = ++this.saveRevision;
     this.settings = { ...this.settings, ...partial };
 
     if (partial.theme !== undefined) {
@@ -106,7 +119,7 @@ export class SettingsStore {
     try {
       snapshot = serializeSettingsSnapshot(this.settings);
     } catch (err: any) {
-      this.settings = this.persistedSettings ?? previousSettings;
+      this.settings = this.persistedSettings ?? serializeSettingsSnapshot(previousSettings);
       this.applyTheme(this.settings.theme);
       this.error = err?.toString() || 'Failed to serialize settings';
       return;
@@ -116,18 +129,24 @@ export class SettingsStore {
     const currentSave = this.saveQueue
       .catch(() => undefined)
       .then(async () => {
-        await tauriSaveSettings(snapshot);
+        await this.saveSettings(snapshot);
         this.persistedSettings = snapshot;
+        if (revision === this.saveRevision) {
+          this.error = null;
+        }
       });
     this.saveQueue = currentSave;
 
     try {
       await currentSave;
     } catch (error: any) {
-      this.error = error?.toString() || 'Could not save preferences';
-      this.settings = this.persistedSettings ?? previousSettings;
-      this.applyTheme(this.settings.theme);
-      throw error;
+      // A later queued snapshot contains this change as well. Let that save
+      // finish instead of allowing an older failure to clobber newer UI state.
+      if (revision === this.saveRevision) {
+        this.error = error?.toString() || 'Could not save preferences';
+        this.settings = this.persistedSettings ?? serializeSettingsSnapshot(previousSettings);
+        this.applyTheme(this.settings.theme);
+      }
     }
   }
 
@@ -234,4 +253,3 @@ export class SettingsStore {
 }
 
 export const settingsStore = new SettingsStore();
-

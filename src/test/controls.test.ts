@@ -1,26 +1,32 @@
 import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import Checkbox from '../lib/components/Checkbox.svelte';
+import Switch from '../lib/components/Switch.svelte';
 
 describe('selection controls state and visual contracts', () => {
-  it('verifies switch semantic styling and accessibility contract', () => {
-    const switchProps = {
+  it('renders the switch with semantic enabled styling and an accessible name', () => {
+    const { body } = render(Switch, { props: {
       checked: true,
       disabled: false,
-      color: 'peer-checked:bg-emerald-500',
       ariaLabel: 'AI Assistant Caches & Logs',
-    };
+    } });
 
-    expect(switchProps.color).toContain('emerald');
-    expect(switchProps.ariaLabel).toBeTruthy();
+    expect(body).toContain('aria-label="AI Assistant Caches &amp; Logs"');
+    expect(body).toContain('checked');
+    expect(body).toContain('peer-checked:bg-emerald-500');
+    expect(body).toContain('translate-x-4');
   });
 
-  it('verifies checkbox accessibility contract', () => {
-    const checkboxProps = {
+  it('renders the checkbox checked state and required accessible name', () => {
+    const { body } = render(Checkbox, { props: {
       checked: true,
       disabled: false,
       ariaLabel: 'Show Storage in sidebar',
-    };
+    } });
 
-    expect(checkboxProps.ariaLabel).toBe('Show Storage in sidebar');
-    expect(checkboxProps.checked).toBe(true);
+    expect(body).toContain('aria-label="Show Storage in sidebar"');
+    expect(body).toContain('checked');
+    expect(body).toContain('bg-emerald-500');
+    expect(body).toContain('stroke-white');
   });
 });

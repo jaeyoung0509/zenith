@@ -164,6 +164,9 @@ describe('SettingsStore persistence and lifecycle', () => {
   });
 
   it('handles rapid sequential saves and retains the final state without update loss', async () => {
+    const saveSettings = vi.fn(async (_settings: ZenithSettings) => undefined);
+    store = new SettingsStore({ saveSettings });
+
     const savePromise1 = store.save({ clean_docker: false });
     const savePromise2 = store.save({ clean_local_models: true });
     const savePromise3 = store.save({ theme: 'dark' });
@@ -174,6 +177,45 @@ describe('SettingsStore persistence and lifecycle', () => {
     expect(store.settings.clean_local_models).toBe(true);
     expect(store.settings.theme).toBe('dark');
     expect(store.error).toBeNull();
+    expect(saveSettings).toHaveBeenCalledTimes(3);
+    expect(saveSettings.mock.calls[2][0]).toMatchObject({
+      clean_docker: false,
+      clean_local_models: true,
+      theme: 'dark',
+    });
+  });
+
+  it('rolls back the latest failed save and reports the error without rejecting', async () => {
+    const saveSettings = vi.fn(async (_settings: ZenithSettings) => {
+      throw new Error('disk full');
+    });
+    store = new SettingsStore({ saveSettings });
+    const originalTheme = store.settings.theme;
+
+    await expect(store.save({ theme: 'light' })).resolves.toBeUndefined();
+
+    expect(store.settings.theme).toBe(originalTheme);
+    expect(store.error).toContain('disk full');
+  });
+
+  it('does not let an older failed save overwrite a newer successful snapshot', async () => {
+    const saveSettings = vi
+      .fn<(settings: ZenithSettings) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('transient write failure'))
+      .mockResolvedValueOnce(undefined);
+    store = new SettingsStore({ saveSettings });
+
+    const first = store.save({ clean_docker: false });
+    const second = store.save({ clean_local_models: true });
+    await Promise.all([first, second]);
+
+    expect(store.settings.clean_docker).toBe(false);
+    expect(store.settings.clean_local_models).toBe(true);
+    expect(store.error).toBeNull();
+    expect(saveSettings.mock.calls[1][0]).toMatchObject({
+      clean_docker: false,
+      clean_local_models: true,
+    });
   });
 });
 
