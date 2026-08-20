@@ -17,17 +17,27 @@ class SettingsStore {
     dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
     awake_rules: [
       {
+        id: 'rule.codex',
+        app_name: 'Codex',
+        executable_pattern: 'codex',
+        behavior: 'prevent_system_sleep',
+        power_condition: 'ac_power_only',
+        enabled: false,
+      },
+      {
         id: 'rule.claude',
         app_name: 'Claude Code',
         executable_pattern: 'claude',
         behavior: 'prevent_system_sleep',
-        enabled: true,
+        power_condition: 'ac_power_only',
+        enabled: false,
       },
       {
         id: 'rule.docker',
         app_name: 'Docker Desktop',
         executable_pattern: 'com.docker.backend',
         behavior: 'prevent_system_sleep',
+        power_condition: 'ac_power_only',
         enabled: false,
       },
       {
@@ -35,6 +45,7 @@ class SettingsStore {
         app_name: 'Terminal / iTerm2 / Ghostty',
         executable_pattern: 'Terminal|iTerm2|ghostty',
         behavior: 'prevent_system_sleep',
+        power_condition: 'ac_power_only',
         enabled: false,
       },
     ],

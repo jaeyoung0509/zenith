@@ -1,6 +1,7 @@
 pub mod ai_usage;
 pub mod cleaner;
 pub mod commands;
+pub mod diagnostics;
 pub mod docker;
 pub mod metrics;
 pub mod models;
@@ -253,6 +254,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::open_dashboard_window,
             commands::get_app_version,
             commands::toggle_quick_panel,
+            commands::get_diagnostics,
+            commands::open_logs_folder,
         ])
 }
 

@@ -16,6 +16,7 @@ export type {
   CleanStatus,
   DashboardTab_Deserialize,
   DashboardTab_Serialize,
+  DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
   DockerContainerItem,

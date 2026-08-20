@@ -7,6 +7,7 @@ import type {
   CleanEvent,
   CleanItemResult,
   CleanResult,
+  DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -635,7 +636,7 @@ export const mockApi = {
           executable_pattern: 'codex',
           behavior: 'prevent_system_sleep',
           power_condition: 'ac_power_only',
-          enabled: true,
+          enabled: false,
         },
         {
           id: 'rule.claude',
@@ -643,7 +644,7 @@ export const mockApi = {
           executable_pattern: 'claude',
           behavior: 'prevent_system_sleep',
           power_condition: 'ac_power_only',
-          enabled: true,
+          enabled: false,
         },
       ],
     };
@@ -671,6 +672,27 @@ export const mockApi = {
 
   async getAppVersion(): Promise<string> {
     return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
+  },
+
+  async getDiagnostics(): Promise<DiagnosticsSnapshot> {
+    return {
+      app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.3',
+      os_version: 'macOS 15.3.1 (Mock Preview)',
+      arch: 'aarch64',
+      log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
+      enabled_features: [
+        'dashboard_tabs: Storage, Docker, LocalModel, Memory, AiUsage, Awake',
+        'quick_panel_sections: Storage, Cleanup, AiUsage, Categories, Memory',
+        'clean_categories: ai=true, dev=true, docker=false, models=false',
+        'awake_rules: total=2, active=0',
+      ],
+      recent_errors: [],
+      settings_corrupt_recovered: false,
+    };
+  },
+
+  async openLogsFolder(): Promise<void> {
+    // No-op in browser mock
   },
 
   async hideCurrentWindow(): Promise<void> {

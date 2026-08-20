@@ -7,6 +7,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -133,6 +134,14 @@ export function tauriToggleQuick(): Promise<void> {
 
 export function tauriGetAppVersion(): Promise<string> {
   return api.getAppVersion();
+}
+
+export function tauriGetDiagnostics(): Promise<DiagnosticsSnapshot> {
+  return api.getDiagnostics();
+}
+
+export function tauriOpenLogsFolder(): Promise<void> {
+  return api.openLogsFolder();
 }
 
 export function tauriHideCurrentWindow(): Promise<void> {

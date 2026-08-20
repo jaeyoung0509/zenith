@@ -8,6 +8,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -161,6 +162,14 @@ export const nativeApi = {
     } catch {
       return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
     }
+  },
+
+  async getDiagnostics(): Promise<DiagnosticsSnapshot> {
+    return await unwrap(commands.getDiagnostics());
+  },
+
+  async openLogsFolder(): Promise<void> {
+    await unwrap(commands.openLogsFolder());
   },
 
   async hideCurrentWindow(): Promise<void> {

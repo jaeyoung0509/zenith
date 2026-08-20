@@ -91,7 +91,7 @@ impl Default for ZenithSettings {
                     executable_pattern: "codex".to_string(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
-                    enabled: true,
+                    enabled: false,
                 },
                 AwakeRule {
                     id: "rule.claude".to_string(),
@@ -99,7 +99,7 @@ impl Default for ZenithSettings {
                     executable_pattern: "claude".to_string(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
-                    enabled: true,
+                    enabled: false,
                 },
                 AwakeRule {
                     id: "rule.docker".to_string(),

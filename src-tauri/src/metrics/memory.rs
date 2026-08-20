@@ -286,7 +286,11 @@ impl MemoryInspector {
     #[cfg(target_os = "macos")]
     fn get_compressed_memory_macos() -> Option<u64> {
         use std::process::Command;
-        let out = Command::new("vm_stat").output().ok()?;
+        let out = crate::tooling::run_with_timeout(
+            Command::new("vm_stat"),
+            std::time::Duration::from_secs(3),
+        )
+        .ok()?;
         if !out.status.success() {
             return None;
         }
