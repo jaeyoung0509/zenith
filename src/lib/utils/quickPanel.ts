@@ -26,14 +26,3 @@ export function reorderOrdered<T>(items: T[], dragged: T, target: T): T[] {
 export function isQuickPanelDismissShortcut(key: string, metaKey: boolean): boolean {
   return key === 'Escape' || (metaKey && key.toLowerCase() === 'w');
 }
-
-export function projectAiProviders(
-  configuredIds: readonly string[],
-  providers: readonly AiProviderUsage[] | undefined
-): AiProviderUsage[] {
-  if (configuredIds.length === 0 || !providers) return [];
-  return configuredIds
-    .map((id) => providers.find((provider) => provider.id === id))
-    .filter((provider): provider is AiProviderUsage => Boolean(provider));
-}
-import type { AiProviderUsage } from '../models/types';
