@@ -172,7 +172,7 @@
       <div class="flex items-center gap-2 text-xs font-medium text-foreground pb-1">
         <LayoutList size={14} /> Sidebar Menu Order
       </div>
-      {#each orderedDashboardTabs() as tabOption}
+      {#each orderedDashboardTabs() as tabOption (tabOption.id)}
         {@const enabled = (settings.dashboard_tabs ?? []).includes(tabOption.id)}
         <div
           role="listitem"
@@ -234,7 +234,7 @@
         <div class="flex items-center gap-2 text-xs font-medium text-foreground">
           <PanelTop size={14} /> Sections
         </div>
-        {#each orderedSections() as option}
+        {#each orderedSections() as option (option.id)}
           {@const enabled = settings.quick_panel_sections.includes(option.id)}
           <div
             role="listitem"
@@ -285,7 +285,7 @@
           <Sparkles size={14} /> AI Provider Priority
         </div>
         <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order. Drag to reorder.</p>
-        {#each orderedProviders() as provider}
+        {#each orderedProviders() as provider (provider.id)}
           {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
           <div
             role="listitem"

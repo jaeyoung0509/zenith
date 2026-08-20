@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
-import { isQuickPanelDismissShortcut, moveOrdered, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
+import { isQuickPanelDismissShortcut, moveOrdered, projectAiProviders, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
 
 describe('quick panel customization', () => {
   it('never removes the final visible section', () => {
@@ -82,35 +82,25 @@ describe('quick panel AI provider projection', () => {
     ],
   };
 
-  function projectProviders(
-    configuredIds: AiProviderId[],
-    snapshot: AiUsageSnapshot | null
-  ): AiProviderUsage[] {
-    if (!configuredIds.length || !snapshot) return [];
-    return configuredIds
-      .map((id) => snapshot.providers.find((p) => p.id === id))
-      .filter((p): p is AiProviderUsage => Boolean(p));
-  }
-
   it('returns empty array when zero providers are enabled', () => {
-    const result = projectProviders([], mockSnapshot);
+    const result = projectAiProviders([], mockSnapshot.providers);
     expect(result).toEqual([]);
   });
 
   it('returns exactly one provider when only one is configured', () => {
-    const result = projectProviders(['codex'], mockSnapshot);
+    const result = projectAiProviders(['codex'], mockSnapshot.providers);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('codex');
     expect(result[0].name).toBe('Codex');
   });
 
   it('preserves configured order and excludes unselected providers', () => {
-    const result = projectProviders(['openrouter', 'codex'], mockSnapshot);
+    const result = projectAiProviders(['openrouter', 'codex'], mockSnapshot.providers);
     expect(result.map((p) => p.id)).toEqual(['openrouter', 'codex']);
   });
 
   it('handles configured provider ids that do not exist in snapshot safely', () => {
-    const result = projectProviders(['antigravity', 'claude'], mockSnapshot);
+    const result = projectAiProviders(['antigravity', 'claude'], mockSnapshot.providers);
     expect(result.map((p) => p.id)).toEqual(['claude']);
   });
 });

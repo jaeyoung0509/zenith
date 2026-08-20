@@ -152,14 +152,14 @@
     {/if}
 
     <!-- Action Toolbar -->
-    <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div class="flex flex-wrap items-center gap-2">
+    <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div class="flex flex-wrap items-center gap-1.5">
         <Button
           variant="outline"
           size="sm"
           disabled={scanStore.isScanning || scanStore.isCleaning}
           onclick={() => scanStore.runScan()}
-          class="gap-1.5"
+          class="gap-1.5 px-2.5"
         >
           <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
           <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Storage'}</span>
@@ -170,7 +170,7 @@
           size="sm"
           disabled={scanStore.isCleaning}
           onclick={() => scanStore.selectAllSafe()}
-          class="text-xs"
+          class="text-xs px-2.5"
         >
           <CheckSquare size={13} class="mr-1 text-emerald-500" />
           <span>Select Safe Only</span>
@@ -181,7 +181,7 @@
           size="sm"
           disabled={scanStore.isCleaning}
           onclick={() => scanStore.deselectAll()}
-          class="text-xs text-muted-foreground"
+          class="text-xs text-muted-foreground px-2.5"
         >
           <Square size={13} class="mr-1" />
           <span>Deselect All</span>
@@ -191,8 +191,9 @@
           variant="ghost"
           size="sm"
           onclick={() => tauriOpenDiskUtility()}
-          class="text-xs text-muted-foreground gap-1"
+          class="text-xs text-muted-foreground gap-1 px-2.5"
           title="Open macOS Disk Utility"
+          ariaLabel="Open macOS Disk Utility"
         >
           <ExternalLink size={12} />
           <span>Disk Utility</span>

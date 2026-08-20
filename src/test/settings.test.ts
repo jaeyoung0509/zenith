@@ -73,6 +73,8 @@ describe('SettingsStore persistence and lifecycle', () => {
   let mockDocument: any;
   let mockWindow: any;
   let classListSet: Set<string>;
+  let mockSaveSettings: ReturnType<typeof vi.fn>;
+  let mockGetSettings: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     classListSet = new Set<string>();
@@ -116,7 +118,24 @@ describe('SettingsStore persistence and lifecycle', () => {
 
     vi.stubGlobal('document', mockDocument);
     vi.stubGlobal('window', mockWindow);
-    store = new SettingsStore();
+
+    mockSaveSettings = vi.fn().mockResolvedValue(null);
+    mockGetSettings = vi.fn().mockResolvedValue({
+      launch_at_login: false,
+      clean_ai_tools: true,
+      clean_developer_tools: true,
+      clean_docker: true,
+      clean_local_models: false,
+      include_rebuild_caches: false,
+      theme: 'system',
+      excluded_signatures: [],
+      quick_panel_sections: ['storage', 'cleanup'],
+      quick_panel_ai_providers: ['codex', 'claude'],
+      dashboard_tabs: ['storage', 'memory'],
+      awake_rules: [],
+    });
+
+    store = new SettingsStore(mockGetSettings as any, mockSaveSettings as any);
   });
 
   afterEach(() => {
@@ -135,7 +154,6 @@ describe('SettingsStore persistence and lifecycle', () => {
     expect(root.classList.contains('dark')).toBe(false);
 
     store.applyTheme('system');
-    // In our mockMatchMedia, 'dark' matches
     expect(root.classList.contains('dark')).toBe(true);
   });
 
@@ -144,12 +162,10 @@ describe('SettingsStore persistence and lifecycle', () => {
     store.applyTheme('system');
     expect(root.classList.contains('dark')).toBe(true);
 
-    // Simulate OS appearance change to light mode
     if (listeners['change']) {
       listeners['change']({ matches: false } as MediaQueryListEvent);
       expect(root.classList.contains('dark')).toBe(false);
 
-      // Simulate OS appearance change back to dark mode
       listeners['change']({ matches: true } as MediaQueryListEvent);
       expect(root.classList.contains('dark')).toBe(true);
     }
@@ -163,17 +179,85 @@ describe('SettingsStore persistence and lifecycle', () => {
     expect(listeners['change']).toBeUndefined();
   });
 
-  it('handles rapid sequential saves and retains the final state without update loss', async () => {
-    const savePromise1 = store.save({ clean_docker: false });
-    const savePromise2 = store.save({ clean_local_models: true });
-    const savePromise3 = store.save({ theme: 'dark' });
+  it('handles rapid sequential saves, sends snapshots in order, and retains the final state', async () => {
+    await store.load();
+    mockSaveSettings.mockClear();
 
-    await Promise.all([savePromise1, savePromise2, savePromise3]);
+    const save1 = store.save({ clean_docker: false });
+    const save2 = store.save({ clean_local_models: true });
+    const save3 = store.save({ theme: 'dark' });
+
+    await Promise.all([save1, save2, save3]);
+
+    expect(mockSaveSettings).toHaveBeenCalledTimes(3);
+
+    const call1Snapshot = mockSaveSettings.mock.calls[0][0];
+    const call2Snapshot = mockSaveSettings.mock.calls[1][0];
+    const call3Snapshot = mockSaveSettings.mock.calls[2][0];
+
+    expect(call1Snapshot.clean_docker).toBe(false);
+    expect(call2Snapshot.clean_docker).toBe(false);
+    expect(call2Snapshot.clean_local_models).toBe(true);
+    expect(call3Snapshot.clean_docker).toBe(false);
+    expect(call3Snapshot.clean_local_models).toBe(true);
+    expect(call3Snapshot.theme).toBe('dark');
 
     expect(store.settings.clean_docker).toBe(false);
     expect(store.settings.clean_local_models).toBe(true);
     expect(store.settings.theme).toBe('dark');
     expect(store.error).toBeNull();
+  });
+
+  it('rolls back state, reverts theme, populates error, and handles rejection gracefully on latest failure', async () => {
+    await store.load();
+    expect(store.settings.theme).toBe('system');
+
+    mockSaveSettings.mockRejectedValueOnce(new Error('Disk write failed'));
+
+    // Should resolve gracefully without throwing unhandled event promise rejection
+    await expect(store.save({ theme: 'light', clean_docker: false })).resolves.toBeUndefined();
+
+    expect(store.error).toContain('Disk write failed');
+    expect(store.settings.theme).toBe('system');
+    expect(store.settings.clean_docker).toBe(true);
+    // Theme should be restored to system
+    expect(mockDocument.documentElement.classList.contains('dark')).toBe(true);
+  });
+
+  it('allows a newer queued save to succeed without rollback when an older save fails', async () => {
+    await store.load();
+
+    // First save fails, second save succeeds
+    mockSaveSettings
+      .mockRejectedValueOnce(new Error('Transient IPC error'))
+      .mockResolvedValueOnce(null);
+
+    const saveA = store.save({ clean_docker: false });
+    const saveB = store.save({ clean_local_models: true });
+
+    await Promise.all([saveA, saveB]);
+
+    // Save B is the latest revision, so its success should stand and error should be null
+    expect(store.settings.clean_docker).toBe(false);
+    expect(store.settings.clean_local_models).toBe(true);
+    expect(store.error).toBeNull();
+  });
+
+  it('rolls back to last known persisted snapshot when all queued saves fail', async () => {
+    await store.load();
+
+    mockSaveSettings
+      .mockRejectedValueOnce(new Error('First failure'))
+      .mockRejectedValueOnce(new Error('Second failure'));
+
+    const saveA = store.save({ clean_docker: false });
+    const saveB = store.save({ clean_local_models: true });
+
+    await Promise.all([saveA, saveB]);
+
+    expect(store.settings.clean_docker).toBe(true);
+    expect(store.settings.clean_local_models).toBe(false);
+    expect(store.error).toContain('Second failure');
   });
 });
 
@@ -228,5 +312,60 @@ describe('quick panel sections customization', () => {
   it('moves quick panel sections with boundary clamping', () => {
     const moved = moveOrdered([...defaultSections], 'storage', -1);
     expect(moved).toEqual(['storage', 'cleanup', 'memory', 'ai_usage']);
+  });
+});
+
+describe('quick panel AI provider toggling and order preservation', () => {
+  it('sequentially disables providers, preserving enabled order and moving disabled to end', async () => {
+    const mockSave = vi.fn().mockResolvedValue(null);
+    const mockGet = vi.fn().mockResolvedValue({
+      launch_at_login: false,
+      clean_ai_tools: true,
+      clean_developer_tools: true,
+      clean_docker: true,
+      clean_local_models: false,
+      include_rebuild_caches: false,
+      theme: 'system',
+      excluded_signatures: [],
+      quick_panel_sections: ['storage', 'cleanup'],
+      quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+      dashboard_tabs: ['storage', 'memory'],
+      awake_rules: [],
+    });
+
+    const testStore = new SettingsStore(mockGet as any, mockSave as any);
+    await testStore.load();
+
+    // Disable claude
+    await testStore.toggleQuickPanelProvider('claude');
+    expect(testStore.settings.quick_panel_ai_providers).toEqual([
+      'codex',
+      'opencode',
+      'openrouter',
+      'antigravity',
+    ]);
+
+    // Disable opencode
+    await testStore.toggleQuickPanelProvider('opencode');
+    expect(testStore.settings.quick_panel_ai_providers).toEqual([
+      'codex',
+      'openrouter',
+      'antigravity',
+    ]);
+
+    // Disable openrouter
+    await testStore.toggleQuickPanelProvider('openrouter');
+    expect(testStore.settings.quick_panel_ai_providers).toEqual([
+      'codex',
+      'antigravity',
+    ]);
+
+    // Re-enable claude (should be added at end of enabled list)
+    await testStore.toggleQuickPanelProvider('claude');
+    expect(testStore.settings.quick_panel_ai_providers).toEqual([
+      'codex',
+      'antigravity',
+      'claude',
+    ]);
   });
 });

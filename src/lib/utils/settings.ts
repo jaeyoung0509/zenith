@@ -1,36 +1,33 @@
 import type { AwakeRule, ZenithSettings } from '../models/types';
 
 /**
- * Converts reactive Svelte settings state into a clean, unproxied POJO snapshot
+ * Pure deep serializer that converts settings state into a clean, unproxied POJO snapshot
  * safe for structured cloning, JSON serialization, and Tauri IPC transfer.
+ * Explicitly copies and unwraps every property into plain primitives and arrays.
  */
 export function serializeSettingsSnapshot(settings: ZenithSettings): ZenithSettings {
-  const snap = typeof (globalThis as any).$state?.snapshot === 'function'
-    ? (globalThis as any).$state.snapshot(settings)
-    : settings;
-
   return {
-    launch_at_login: Boolean(snap.launch_at_login),
-    clean_ai_tools: Boolean(snap.clean_ai_tools),
-    clean_developer_tools: Boolean(snap.clean_developer_tools),
-    clean_docker: Boolean(snap.clean_docker),
-    clean_local_models: Boolean(snap.clean_local_models),
-    include_rebuild_caches: Boolean(snap.include_rebuild_caches),
-    theme: snap.theme ?? 'system',
-    excluded_signatures: Array.isArray(snap.excluded_signatures)
-      ? [...snap.excluded_signatures]
+    launch_at_login: Boolean(settings.launch_at_login),
+    clean_ai_tools: Boolean(settings.clean_ai_tools),
+    clean_developer_tools: Boolean(settings.clean_developer_tools),
+    clean_docker: Boolean(settings.clean_docker),
+    clean_local_models: Boolean(settings.clean_local_models),
+    include_rebuild_caches: Boolean(settings.include_rebuild_caches),
+    theme: settings.theme ?? 'system',
+    excluded_signatures: Array.isArray(settings.excluded_signatures)
+      ? [...settings.excluded_signatures]
       : [],
-    quick_panel_sections: Array.isArray(snap.quick_panel_sections)
-      ? [...snap.quick_panel_sections]
+    quick_panel_sections: Array.isArray(settings.quick_panel_sections)
+      ? [...settings.quick_panel_sections]
       : ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
-    quick_panel_ai_providers: Array.isArray(snap.quick_panel_ai_providers)
-      ? [...snap.quick_panel_ai_providers]
+    quick_panel_ai_providers: Array.isArray(settings.quick_panel_ai_providers)
+      ? [...settings.quick_panel_ai_providers]
       : ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-    dashboard_tabs: Array.isArray(snap.dashboard_tabs)
-      ? [...snap.dashboard_tabs]
+    dashboard_tabs: Array.isArray(settings.dashboard_tabs)
+      ? [...settings.dashboard_tabs]
       : ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
-    awake_rules: Array.isArray(snap.awake_rules)
-      ? snap.awake_rules.map((rule: AwakeRule) => ({
+    awake_rules: Array.isArray(settings.awake_rules)
+      ? settings.awake_rules.map((rule: AwakeRule) => ({
           id: String(rule.id),
           app_name: String(rule.app_name),
           executable_pattern: String(rule.executable_pattern),
