@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import { prefersReducedMotion } from 'svelte/motion';
   import type { CleanResult } from '../models/types';
   import { formatBytes } from '../utils/format';
   import Button from './Button.svelte';
@@ -26,10 +27,17 @@
 </script>
 
 <div
-  transition:fade={{ duration: 140 }}
+  transition:fade={{ duration: prefersReducedMotion.current ? 0 : 140 }}
   class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4"
 >
-  <div transition:scale={{ duration: 180, start: 0.96, easing: cubicOut }} class="w-full max-w-md">
+  <div
+    transition:scale={{
+      duration: prefersReducedMotion.current ? 0 : 180,
+      start: prefersReducedMotion.current ? 1 : 0.96,
+      easing: cubicOut,
+    }}
+    class="w-full max-w-md"
+  >
     <Card class="w-full bg-card shadow-2xl border-border">
     <div class="flex items-center justify-between pb-3 border-b border-border/80">
       <div class="flex items-center gap-2">

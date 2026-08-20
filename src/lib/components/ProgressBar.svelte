@@ -33,7 +33,7 @@
   {/if}
   <div class="w-full {height} bg-secondary/80 rounded-full overflow-hidden relative shadow-inner">
     <div
-      class="{height} {color} rounded-full transition-[width,background-color] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] relative overflow-hidden will-change-[width]"
+      class="{height} {color} rounded-full transition-[width,background-color] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] relative overflow-hidden"
       style="width: {percent}%;"
     >
       {#if animated}

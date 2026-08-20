@@ -3,7 +3,7 @@
     checked: boolean;
     disabled?: boolean;
     color?: string;
-    ariaLabel?: string;
+    ariaLabel: string;
     onchange?: (checked: boolean) => void;
   }
 

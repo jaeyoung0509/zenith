@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import { prefersReducedMotion } from 'svelte/motion';
   import type { CategoryResult, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
@@ -33,6 +34,7 @@
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
   let settings = $derived(settingsStore.settings);
+  let fadeDuration = $derived(prefersReducedMotion.current ? 0 : 140);
 
   const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any }>> = {
     storage: { label: 'Storage', icon: HardDrive },
@@ -142,7 +144,7 @@
   <!-- Main Content Area with fluid native transition -->
   <main class="flex-1 h-full overflow-y-auto p-8 pt-10">
     {#key selectedCategory ? selectedCategory.category : currentTab}
-      <div in:fade={{ duration: 140, easing: cubicOut }}>
+      <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>
         {#if selectedCategory}
           <CategoryDetailView
             categoryResult={selectedCategory}
