@@ -1,7 +1,7 @@
 import type { ProcessMemory } from '../models/types';
 
 /**
- * Filter a list of top processes case-insensitively by process/app name or PID substring.
+ * Filter a list of top processes case-insensitively by process/app name or any constituent PID substring.
  * Empty queries return the entire list untouched.
  */
 export function filterProcesses(processes: ProcessMemory[], query: string): ProcessMemory[] {
@@ -11,7 +11,9 @@ export function filterProcesses(processes: ProcessMemory[], query: string): Proc
 
   return processes.filter((proc) => {
     const nameMatch = proc.name.toLowerCase().includes(trimmed);
-    const pidMatch = String(proc.pid).includes(trimmed);
+    const pidMatch =
+      String(proc.pid).includes(trimmed) ||
+      (Array.isArray(proc.pids) && proc.pids.some((p) => String(p).includes(trimmed)));
     return nameMatch || pidMatch;
   });
 }

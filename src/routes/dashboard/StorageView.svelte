@@ -42,7 +42,7 @@
   let safeSelectedBytes = $derived(scanStore.safeSelectedBytes);
   let rebuildSelectedBytes = $derived(scanStore.rebuildSelectedBytes);
   let manualSelectedBytes = $derived(scanStore.manualSelectedBytes);
-  let hasRebuildSelected = $derived(rebuildSelectedBytes > 0);
+  let hasRebuildSelected = $derived(scanStore.rebuildSelectedBytes > 0);
 
   async function loadVolumes() {
     isLoadingVolumes = true;

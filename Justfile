@@ -113,24 +113,26 @@ check:
 
 # Check version consistency across package.json, Cargo.toml, and tauri.conf.json
 check-version:
-    @node -e '\
-        const fs = require("fs"); \
-        const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")).version; \
-        const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version; \
-        const cargoMatch = fs.readFileSync("src-tauri/Cargo.toml", "utf8").match(/version\s*=\s*"([^"]+)"/); \
-        const cargo = cargoMatch ? cargoMatch[1] : null; \
-        console.log(`📦 package.json:      ${pkg}`); \
-        console.log(`🦀 Cargo.toml:        ${cargo}`); \
-        console.log(`⚙️  tauri.conf.json:   ${tauri}`); \
-        if (pkg !== cargo || pkg !== tauri) { \
-            console.error("❌ Version mismatch detected!"); \
-            process.exit(1); \
-        } \
-        console.log("✅ All manifest versions are synchronized."); \
-    '
+    @node scripts/bump_version.cjs check
 
 # Display current application version
 version: check-version
+
+# Bump patch version (e.g. 0.1.5 -> 0.1.6) across all manifests
+bump-patch:
+    @node scripts/bump_version.cjs patch
+
+# Bump minor version (e.g. 0.1.5 -> 0.2.0) across all manifests
+bump-minor:
+    @node scripts/bump_version.cjs minor
+
+# Bump major version (e.g. 0.1.5 -> 1.0.0) across all manifests
+bump-major:
+    @node scripts/bump_version.cjs major
+
+# Set an explicit version across all manifests (e.g. just set-version 0.1.5)
+set-version version_str:
+    @node scripts/bump_version.cjs set {{version_str}}
 
 # ------------------------------------------------------------------------------
 # ⚡ Execution

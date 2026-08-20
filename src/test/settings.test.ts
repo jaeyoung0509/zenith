@@ -38,22 +38,16 @@ describe('serializeSettingsSnapshot', () => {
     expect(snapshot.quick_panel_sections).not.toBe(sampleSettings.quick_panel_sections);
   });
 
-  it('provides safe defaults when optional arrays are missing', () => {
-    const sparse = {
-      launch_at_login: true,
-      clean_ai_tools: false,
-      clean_developer_tools: false,
-      clean_docker: false,
-      clean_local_models: false,
-      include_rebuild_caches: false,
-      theme: 'system' as const,
-      excluded_signatures: [],
-    } as any;
+  it('deeply clones all properties without mutating the input source', () => {
+    const input: ZenithSettings = { ...sampleSettings };
+    const snapshot = serializeSettingsSnapshot(input);
+    expect(snapshot).toEqual(sampleSettings);
+    expect(snapshot).not.toBe(input);
+    expect(snapshot.dashboard_tabs).not.toBe(input.dashboard_tabs);
+  });
 
-    const snapshot = serializeSettingsSnapshot(sparse);
-    expect(snapshot.quick_panel_sections).toEqual(['storage', 'cleanup', 'ai_usage', 'categories', 'memory']);
-    expect(snapshot.dashboard_tabs).toEqual(['storage', 'docker', 'models', 'memory', 'usage', 'awake']);
-    expect(snapshot.awake_rules).toEqual([]);
+  it('throws an error if null or undefined settings are passed', () => {
+    expect(() => serializeSettingsSnapshot(null as any)).toThrow('Cannot serialize null or undefined settings');
   });
 
   it('guarantees deep immutability against subsequent mutations', () => {

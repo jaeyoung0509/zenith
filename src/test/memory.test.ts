@@ -6,6 +6,7 @@ describe('filterProcesses memory search utility', () => {
   const sampleProcesses: ProcessMemory[] = [
     {
       pid: 1042,
+      pids: [1042, 1043, 1044, 1045],
       name: 'Docker Desktop',
       memory_bytes: 1024 * 1024 * 500,
       process_count: 4,
@@ -13,6 +14,7 @@ describe('filterProcesses memory search utility', () => {
     },
     {
       pid: 2048,
+      pids: [2048, 2049],
       name: 'Claude Code Helper',
       memory_bytes: 1024 * 1024 * 300,
       process_count: 2,
@@ -20,6 +22,7 @@ describe('filterProcesses memory search utility', () => {
     },
     {
       pid: 5096,
+      pids: [5096],
       name: 'Ollama Runner',
       memory_bytes: 1024 * 1024 * 1200,
       process_count: 1,
@@ -27,6 +30,7 @@ describe('filterProcesses memory search utility', () => {
     },
     {
       pid: 88,
+      pids: [88],
       name: 'kernel_task',
       memory_bytes: 1024 * 1024 * 800,
       process_count: 1,
@@ -57,10 +61,15 @@ describe('filterProcesses memory search utility', () => {
     expect(mixed[0].name).toBe('Claude Code Helper');
   });
 
-  it('filters processes by exact and partial PID matching', () => {
+  it('filters processes by exact and partial PID matching on representative and constituent PIDs', () => {
     const exactPid = filterProcesses(sampleProcesses, '2048');
     expect(exactPid).toHaveLength(1);
     expect(exactPid[0].name).toBe('Claude Code Helper');
+
+    // Search by constituent child PID not equal to representative PID
+    const constituentChildPid = filterProcesses(sampleProcesses, '1044');
+    expect(constituentChildPid).toHaveLength(1);
+    expect(constituentChildPid[0].name).toBe('Docker Desktop');
 
     const partialPid = filterProcesses(sampleProcesses, '42');
     expect(partialPid).toHaveLength(1);
@@ -89,6 +98,7 @@ describe('filterProcesses memory search utility', () => {
       ),
       {
         pid: 9999,
+        pids: [9999],
         name: 'Ollama CLI',
         memory_bytes: 1024 * 1024 * 50,
         process_count: 1,

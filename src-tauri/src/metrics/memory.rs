@@ -50,7 +50,8 @@ impl MemorySampler {
             sys.refresh_processes(ProcessesToUpdate::All, true);
 
             // Aggregate top processes
-            let mut process_groups: HashMap<String, (u64, usize, u32, bool)> = HashMap::new();
+            let mut process_groups: HashMap<String, (u64, usize, u32, Vec<u32>, bool)> =
+                HashMap::new();
 
             for (pid, process) in sys.processes() {
                 let raw_name = process.name().to_string_lossy();
@@ -61,21 +62,27 @@ impl MemorySampler {
 
                 let entry = process_groups
                     .entry(norm_name)
-                    .or_insert((0, 0, pid.as_u32(), false));
+                    .or_insert_with(|| (0, 0, pid.as_u32(), Vec::new(), false));
                 entry.0 += mem;
                 entry.1 += 1;
-                entry.3 |= can_terminate;
+                entry.3.push(pid.as_u32());
+                entry.4 |= can_terminate;
             }
 
             let mut top_processes: Vec<ProcessMemory> = process_groups
                 .into_iter()
                 .map(
-                    |(name, (memory_bytes, process_count, pid, can_terminate))| ProcessMemory {
-                        pid,
-                        can_terminate,
-                        name,
-                        memory_bytes,
-                        process_count,
+                    |(name, (memory_bytes, process_count, _first_pid, mut pids, can_terminate))| {
+                        pids.sort_unstable();
+                        let representative_pid = pids.first().copied().unwrap_or(0);
+                        ProcessMemory {
+                            pid: representative_pid,
+                            pids,
+                            can_terminate,
+                            name,
+                            memory_bytes,
+                            process_count,
+                        }
                     },
                 )
                 .collect();

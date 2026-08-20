@@ -38,7 +38,7 @@ class ScanStore {
   selectedMap = $state<Record<string, boolean>>({});
 
   // Computed / Derived values
-  reclaimableBytes = $derived.by(() => {
+  get reclaimableBytes(): number {
     if (!this.lastScan) return 0;
     let total = 0;
     for (const cat of this.lastScan.categories) {
@@ -49,9 +49,9 @@ class ScanStore {
       }
     }
     return total;
-  });
+  }
 
-  safeSelectedBytes = $derived.by(() => {
+  get safeSelectedBytes(): number {
     if (!this.lastScan) return 0;
     let total = 0;
     for (const cat of this.lastScan.categories) {
@@ -62,9 +62,9 @@ class ScanStore {
       }
     }
     return total;
-  });
+  }
 
-  rebuildSelectedBytes = $derived.by(() => {
+  get rebuildSelectedBytes(): number {
     if (!this.lastScan) return 0;
     let total = 0;
     for (const cat of this.lastScan.categories) {
@@ -75,9 +75,9 @@ class ScanStore {
       }
     }
     return total;
-  });
+  }
 
-  manualSelectedBytes = $derived.by(() => {
+  get manualSelectedBytes(): number {
     if (!this.lastScan) return 0;
     let total = 0;
     for (const cat of this.lastScan.categories) {
@@ -88,11 +88,11 @@ class ScanStore {
       }
     }
     return total;
-  });
+  }
 
-  selectedCount = $derived.by(() => {
+  get selectedCount(): number {
     return Object.values(this.selectedMap).filter(Boolean).length;
-  });
+  }
 
   private initPromise: Promise<void> | null = null;
 
