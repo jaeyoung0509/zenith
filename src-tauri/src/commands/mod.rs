@@ -4,8 +4,8 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    DeletePlan, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview,
-    ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
+    DeletePlan, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem,
+    MemoryMetrics, PlanPreview, ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::power::{ApplicationPicker, KeepAwakeManager};
@@ -373,6 +373,26 @@ pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_diagnostics(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DiagnosticsSnapshot, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    Ok(crate::diagnostics::get_snapshot(&settings, &config_dir))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_logs_folder() -> Result<(), String> {
+    crate::diagnostics::open_logs_folder()
 }
 
 #[cfg(test)]

@@ -85,11 +85,9 @@ impl PowerSourceProvider for SystemPowerSource {
 
 #[cfg(target_os = "macos")]
 fn fallback_pmset_power_source() -> PowerSourceType {
-    if let Ok(output) = std::process::Command::new("pmset")
-        .arg("-g")
-        .arg("batt")
-        .output()
-    {
+    let mut cmd = std::process::Command::new("pmset");
+    cmd.args(["-g", "batt"]);
+    if let Ok(output) = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(3)) {
         let text = String::from_utf8_lossy(&output.stdout);
         if text.contains("AC Power") {
             return PowerSourceType::Ac;

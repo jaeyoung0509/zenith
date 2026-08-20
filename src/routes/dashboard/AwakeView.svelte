@@ -124,6 +124,16 @@
     const timeUntil = formatTimeUntil(expiresAt);
     return timeUntil ? `${timeUntil} remaining` : `${diffSecs}s remaining`;
   }
+
+  async function handleEnableRecommendedRules() {
+    const updatedRules = rules.map((r) => {
+      if (['rule.codex', 'rule.claude', 'rule.docker'].includes(r.id)) {
+        return { ...r, enabled: true, power_condition: 'ac_power_only' as PowerCondition };
+      }
+      return r;
+    });
+    await settingsStore.save({ awake_rules: updatedRules });
+  }
 </script>
 
 <div class="space-y-6">
@@ -305,6 +315,28 @@
       </Button>
     </div>
   </div>
+
+  <!-- Keep Awake Recommended Rules Onboarding (when all rules are disabled) -->
+  {#if rules.length > 0 && rules.every((r) => !r.enabled)}
+    <Card class="p-4 bg-indigo-500/5 border-indigo-500/20 space-y-3">
+      <div class="flex items-start gap-3">
+        <div class="h-8 w-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center shrink-0 mt-0.5">
+          <Zap size={16} />
+        </div>
+        <div class="space-y-1 flex-1">
+          <div class="text-xs font-semibold text-foreground">Enable Recommended Keep Awake Rules?</div>
+          <p class="text-[11px] text-muted-foreground leading-relaxed">
+            Zenith can automatically keep your Mac awake while you are actively working with development tools (Codex, Claude Code, Docker) and plugged into AC power. Rules stay disabled by default until you explicitly opt in.
+          </p>
+          <div class="pt-2">
+            <Button variant="primary" size="sm" onclick={handleEnableRecommendedRules}>
+              Enable Recommended Rules (AC Only)
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  {/if}
 
   <!-- Process-Triggered Automation Rules -->
   <div class="space-y-3 pt-2">

@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
-  import type { AiProviderId, DashboardTab, QuickPanelSection } from '../../lib/models/types';
+  import type { AiProviderId, DashboardTab, DiagnosticsSnapshot, QuickPanelSection } from '../../lib/models/types';
+  import { tauriGetDiagnostics, tauriOpenLogsFolder } from '../../lib/utils/tauri';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
+  import Button from '../../lib/components/Button.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
-  import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical } from 'lucide-svelte';
+  import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical, FolderOpen, FileText, AlertTriangle } from 'lucide-svelte';
 
   const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
     { id: 'storage', label: 'Storage & Disks', description: 'Primary storage, volumes, and developer/AI caches.' },
@@ -49,6 +52,44 @@
 
   function handleTheme(theme: string) {
     settingsStore.save({ theme });
+  }
+
+  let diagnosticsData = $state<DiagnosticsSnapshot | null>(null);
+  let copiedDiagnostics = $state(false);
+
+  onMount(() => {
+    void loadDiagnostics();
+  });
+
+  async function loadDiagnostics() {
+    try {
+      diagnosticsData = await tauriGetDiagnostics();
+    } catch {
+      // preview mode fallback
+    }
+  }
+
+  async function handleOpenLogs() {
+    try {
+      await tauriOpenLogsFolder();
+    } catch (e: any) {
+      settingsStore.error = e?.toString() || 'Failed to open logs folder';
+    }
+  }
+
+  async function handleExportDiagnostics() {
+    try {
+      diagnosticsData = await tauriGetDiagnostics();
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(JSON.stringify(diagnosticsData, null, 2));
+        copiedDiagnostics = true;
+        setTimeout(() => {
+          copiedDiagnostics = false;
+        }, 2500);
+      }
+    } catch (e: any) {
+      settingsStore.error = e?.toString() || 'Failed to export diagnostics';
+    }
   }
 
   function orderedDashboardTabs() {
@@ -419,6 +460,55 @@
           <span>Light</span>
         </button>
       </div>
+    </Card>
+  </div>
+
+  <!-- Diagnostics & Logs -->
+  <div class="space-y-3">
+    <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+      Diagnostics & Privacy Logs
+    </h3>
+    <Card class="p-4 bg-card/70 space-y-4">
+      <div class="space-y-1">
+        <div class="text-xs font-medium text-foreground">Local System & Error Logs</div>
+        <p class="text-[11px] text-muted-foreground leading-relaxed">
+          Zenith keeps zero telemetry and never transmits analytics or secrets. Error and subprocess failure logs are stored locally on your machine at <code class="font-mono text-[10px] bg-secondary/80 px-1 py-0.5 rounded">~/Library/Logs/Zenith</code>.
+        </p>
+      </div>
+
+      {#if diagnosticsData?.settings_corrupt_recovered}
+        <div class="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+          <AlertTriangle size={14} class="shrink-0" />
+          <span>A damaged configuration file was detected, safely backed up, and reset to defaults.</span>
+        </div>
+      {/if}
+
+      <div class="flex flex-wrap gap-2 pt-1">
+        <Button variant="secondary" size="sm" onclick={handleOpenLogs}>
+          <FolderOpen size={14} />
+          <span>Open Logs Folder</span>
+        </Button>
+        <Button variant="secondary" size="sm" onclick={handleExportDiagnostics}>
+          <FileText size={14} />
+          <span>{copiedDiagnostics ? 'Copied Diagnostics JSON' : 'Export Diagnostics'}</span>
+        </Button>
+      </div>
+
+      {#if diagnosticsData}
+        <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-[11px] font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto">
+          <div><span class="text-foreground font-semibold">Zenith:</span> {diagnosticsData.app_version} ({diagnosticsData.arch})</div>
+          <div><span class="text-foreground font-semibold">OS:</span> {diagnosticsData.os_version}</div>
+          <div><span class="text-foreground font-semibold">Log:</span> {diagnosticsData.log_path}</div>
+          {#if diagnosticsData.recent_errors.length > 0}
+            <div class="pt-2 text-red-400 font-semibold">Recent Errors ({diagnosticsData.recent_errors.length}):</div>
+            {#each diagnosticsData.recent_errors as err}
+              <div class="text-red-400/80 truncate">{err}</div>
+            {/each}
+          {:else}
+            <div class="pt-1 text-emerald-500/80">No recent errors logged.</div>
+          {/if}
+        </div>
+      {/if}
     </Card>
   </div>
 

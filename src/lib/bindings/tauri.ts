@@ -43,6 +43,8 @@ export const commands = {
 	openDashboardWindow: () => typedError<null, string>(__TAURI_INVOKE("open_dashboard_window")),
 	getAppVersion: () => __TAURI_INVOKE<string>("get_app_version"),
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
+	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
+	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
 };
 
 /* Types */
@@ -141,6 +143,16 @@ export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "usage" | "awake";
 
 export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "usage" | "awake";
+
+export type DiagnosticsSnapshot = {
+	app_version: string,
+	os_version: string,
+	arch: string,
+	log_path: string,
+	enabled_features: string[],
+	recent_errors: string[],
+	settings_corrupt_recovered: boolean,
+};
 
 export type DiskMetrics = {
 	mount_point: string,

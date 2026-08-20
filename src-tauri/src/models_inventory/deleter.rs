@@ -44,20 +44,22 @@ impl LocalModelManager {
             })
             .unwrap_or(0);
 
-        let output = tooling::command("ollama")
-            .args(Self::ollama_delete_args(model))
-            .output()
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
+        let mut cmd = tooling::command("ollama");
+        cmd.args(Self::ollama_delete_args(model));
+        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(15)).map_err(
+            |error| {
+                let err_str = error.to_string();
+                if err_str.contains("No such file") || err_str.contains("not found") {
                     ZenithError::ToolUnavailable("ollama".into())
                 } else {
-                    ZenithError::ExternalCommandFailed(error.to_string())
+                    ZenithError::ExternalCommandFailed(err_str)
                 }
-            })?;
+            },
+        )?;
         if !output.status.success() {
-            return Err(ZenithError::ExternalCommandFailed(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
+            let err_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            crate::diagnostics::log_error("models", &err_str);
+            return Err(ZenithError::ExternalCommandFailed(err_str));
         }
 
         let after_bytes = blobs_dir
