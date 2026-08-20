@@ -72,10 +72,11 @@ impl MemorySampler {
             let mut top_processes: Vec<ProcessMemory> = process_groups
                 .into_iter()
                 .map(
-                    |(name, (memory_bytes, process_count, pid, mut pids, can_terminate))| {
+                    |(name, (memory_bytes, process_count, _first_pid, mut pids, can_terminate))| {
                         pids.sort_unstable();
+                        let representative_pid = pids.first().copied().unwrap_or(0);
                         ProcessMemory {
-                            pid,
+                            pid: representative_pid,
                             pids,
                             can_terminate,
                             name,

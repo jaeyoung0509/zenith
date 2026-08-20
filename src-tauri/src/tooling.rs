@@ -54,23 +54,73 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     let mut stdout_stream = child.stdout.take();
     let mut stderr_stream = child.stderr.take();
 
-    let (tx_out, rx_out) = mpsc::channel();
+    let (tx_out, rx_out) = mpsc::channel::<Vec<u8>>();
     let stdout_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
         if let Some(mut stream) = stdout_stream.take() {
-            let _ = stream.read_to_end(&mut buf);
+            let mut chunk = [0u8; 8192];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx_out.send(chunk[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
         }
-        let _ = tx_out.send(buf);
     });
 
-    let (tx_err, rx_err) = mpsc::channel();
+    let (tx_err, rx_err) = mpsc::channel::<Vec<u8>>();
     let stderr_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
         if let Some(mut stream) = stderr_stream.take() {
-            let _ = stream.read_to_end(&mut buf);
+            let mut chunk = [0u8; 8192];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx_err.send(chunk[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
         }
-        let _ = tx_err.send(buf);
     });
+
+    let drain_stream = |rx: &mpsc::Receiver<Vec<u8>>,
+                        handle: std::thread::JoinHandle<()>,
+                        timeout_dur: Duration|
+     -> Vec<u8> {
+        let mut collected = Vec::new();
+        let deadline = Instant::now() + timeout_dur;
+        let mut finished = false;
+
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(15)) {
+                Ok(chunk) => collected.extend_from_slice(&chunk),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    finished = true;
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+
+        while let Ok(chunk) = rx.try_recv() {
+            collected.extend_from_slice(&chunk);
+        }
+
+        if finished {
+            let _ = handle.join();
+        }
+
+        collected
+    };
 
     let cleanup_and_drain = |kill_tree: bool| -> (Vec<u8>, Vec<u8>) {
         #[cfg(unix)]
@@ -81,16 +131,8 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
             }
         }
 
-        let stdout = rx_out
-            .recv_timeout(Duration::from_millis(200))
-            .unwrap_or_default();
-
-        let stderr = rx_err
-            .recv_timeout(Duration::from_millis(200))
-            .unwrap_or_default();
-
-        let _ = stdout_handle.join();
-        let _ = stderr_handle.join();
+        let stdout = drain_stream(&rx_out, stdout_handle, Duration::from_millis(200));
+        let stderr = drain_stream(&rx_err, stderr_handle, Duration::from_millis(200));
 
         (stdout, stderr)
     };
@@ -246,6 +288,22 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_secs(3),
             "Hanged for {elapsed:?} on background grandchild"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn run_with_timeout_terminates_even_with_detached_session_holding_pipe() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sh -c '(setsid sleep 10 >&1 &) ; exit 0'"]);
+        let start = std::time::Instant::now();
+        let result = super::run_with_timeout(cmd, std::time::Duration::from_millis(500));
+        let elapsed = start.elapsed();
+
+        assert!(result.is_ok());
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "Hanged for {elapsed:?} on detached session holding pipe"
         );
     }
 }
