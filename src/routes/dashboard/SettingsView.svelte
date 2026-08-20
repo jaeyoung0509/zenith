@@ -6,6 +6,7 @@
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
   import Button from '../../lib/components/Button.svelte';
+  import Switch from '../../lib/components/Switch.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical, FolderOpen, FileText, AlertTriangle } from 'lucide-svelte';
 
@@ -147,17 +148,11 @@
           <div class="flex items-center gap-2 font-medium text-foreground">Launch Zenith at login <Badge variant="outline">Planned</Badge></div>
           <div class="text-[11px] text-muted-foreground">Autostart is not enabled in this build.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-not-allowed opacity-60">
-          <input
-            type="checkbox"
-            checked={settings.launch_at_login}
-            disabled
-            class="sr-only peer"
-          />
-          <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
-          ></div>
-        </label>
+        <Switch
+          checked={settings.launch_at_login}
+          disabled={true}
+          ariaLabel="Launch Zenith at login"
+        />
       </div>
     </Card>
   </div>
@@ -345,17 +340,11 @@
           <div class="font-medium text-foreground">AI Assistant Caches & Logs</div>
           <div class="text-[11px] text-muted-foreground">Claude Code, Cursor, Gemini CLI, Codex, Aider.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.clean_ai_tools}
-            onchange={() => handleToggle('clean_ai_tools')}
-            class="sr-only peer"
-          />
-          <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
-          ></div>
-        </label>
+        <Switch
+          checked={settings.clean_ai_tools}
+          onchange={() => handleToggle('clean_ai_tools')}
+          ariaLabel="AI Assistant Caches & Logs"
+        />
       </div>
 
       <!-- Developer Tools -->
@@ -364,17 +353,11 @@
           <div class="font-medium text-foreground">Developer Compilers & Package Managers</div>
           <div class="text-[11px] text-muted-foreground">Go build, Cargo cache, npm, pnpm, uv, Xcode DerivedData.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.clean_developer_tools}
-            onchange={() => handleToggle('clean_developer_tools')}
-            class="sr-only peer"
-          />
-          <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
-          ></div>
-        </label>
+        <Switch
+          checked={settings.clean_developer_tools}
+          onchange={() => handleToggle('clean_developer_tools')}
+          ariaLabel="Developer Compilers & Package Managers"
+        />
       </div>
 
       <!-- Docker -->
@@ -383,17 +366,11 @@
           <div class="font-medium text-foreground">Docker Dangling Images & BuildKit Cache</div>
           <div class="text-[11px] text-muted-foreground">Clean safe Docker cache layers via official Docker CLI.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.clean_docker}
-            onchange={() => handleToggle('clean_docker')}
-            class="sr-only peer"
-          />
-          <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
-          ></div>
-        </label>
+        <Switch
+          checked={settings.clean_docker}
+          onchange={() => handleToggle('clean_docker')}
+          ariaLabel="Docker Dangling Images & BuildKit Cache"
+        />
       </div>
 
       <!-- Local Models -->
@@ -402,17 +379,11 @@
           <div class="font-medium text-foreground">Local Models (Ollama / HuggingFace)</div>
           <div class="text-[11px] text-muted-foreground">Always off by default to protect stateful weights.</div>
         </div>
-        <label class="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.clean_local_models}
-            onchange={() => handleToggle('clean_local_models')}
-            class="sr-only peer"
-          />
-          <div
-            class="w-9 h-5 bg-secondary peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-500/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"
-          ></div>
-        </label>
+        <Switch
+          checked={settings.clean_local_models}
+          onchange={() => handleToggle('clean_local_models')}
+          ariaLabel="Local Models"
+        />
       </div>
     </Card>
   </div>

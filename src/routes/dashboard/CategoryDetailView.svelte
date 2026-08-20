@@ -168,17 +168,18 @@
 
   <!-- Cleaning In Progress Bar -->
   {#if scanStore.isCleaning}
-    <Card class="p-3.5 bg-secondary/50 border-primary/30 animate-pulse">
+    <Card class="p-3.5 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
       <div class="space-y-1.5">
         <div class="flex items-center justify-between text-xs">
-          <span class="font-medium text-foreground">
-            Cleaning: {scanStore.cleanProgress.currentItem}
+          <span class="font-medium text-foreground flex items-center gap-2">
+            <DeletingDots size="xs" />
+            <span>Cleaning: {scanStore.cleanProgress.currentItem}</span>
           </span>
-          <span class="font-mono text-muted-foreground">
+          <span class="font-mono text-muted-foreground font-semibold">
             {scanStore.cleanProgress.percent}%
           </span>
         </div>
-        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" />
+        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" animated={true} />
       </div>
     </Card>
   {/if}

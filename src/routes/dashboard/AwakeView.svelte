@@ -8,6 +8,7 @@
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
+  import Switch from '../../lib/components/Switch.svelte';
   import {
     Moon,
     Sun,
@@ -147,7 +148,13 @@
         <div class="flex items-center gap-2">
           <h2 class="text-base font-semibold text-foreground tracking-tight">Keep Awake Engine</h2>
           {#if awakeState.is_active}
-            <Badge variant="warning" class="animate-pulse">Active</Badge>
+            <Badge variant="warning" class="gap-1.5 font-medium">
+              <span class="relative flex h-1.5 w-1.5">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
+              </span>
+              <span>Active</span>
+            </Badge>
           {:else}
             <Badge variant="secondary">Idle</Badge>
           {/if}
@@ -185,11 +192,11 @@
   {/if}
 
   <!-- Active Status Banner -->
-  <Card class="p-5 {awakeState.is_active ? 'bg-amber-500/10 border-amber-500/30 shadow-sm' : 'bg-card/60'} transition-all">
+  <Card class="p-5 {awakeState.is_active ? 'bg-amber-500/10 border-amber-500/30 shadow-sm' : 'bg-card/60'} transition-colors duration-200">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div class="space-y-1.5">
         <div class="flex items-center gap-2">
-          <Power size={16} class={awakeState.is_active ? 'text-amber-500 animate-pulse' : 'text-muted-foreground'} />
+          <Power size={16} class={awakeState.is_active ? 'text-amber-500 animate-pulse-soft' : 'text-muted-foreground'} />
           <h3 class="text-sm font-semibold text-foreground">
             {#if awakeState.is_active}
               {#if awakeState.manual_expires_at != null || awakeState.trigger_source?.includes('Manual')}
@@ -432,17 +439,11 @@
                 <Trash2 size={14} />
               </button>
 
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={rule.enabled}
-                  onchange={() => awakeStore.toggleRule(rule.id)}
-                  class="sr-only peer"
-                />
-                <div
-                  class="w-9 h-5 bg-secondary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"
-                ></div>
-              </label>
+              <Switch
+                checked={rule.enabled}
+                onchange={() => awakeStore.toggleRule(rule.id)}
+                ariaLabel={`Toggle ${rule.app_name} rule`}
+              />
             </div>
           </div>
         {/each}

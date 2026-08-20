@@ -53,7 +53,7 @@
 </script>
 
 <Card
-  class="group cursor-pointer hover:border-primary/40 transition-all duration-150 relative overflow-hidden"
+  class="group cursor-pointer hover:border-primary/50 hover:bg-card/90 transition-colors duration-150 relative overflow-hidden"
 >
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -80,7 +80,7 @@
       {/if}
 
       <div
-        class="h-9 w-9 rounded-lg bg-secondary flex items-center justify-center text-foreground group-hover:scale-105 transition-transform"
+        class="h-9 w-9 rounded-lg bg-secondary flex items-center justify-center text-foreground group-hover:bg-secondary/80 transition-colors"
       >
         <Icon size={18} />
       </div>

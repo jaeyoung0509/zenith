@@ -232,17 +232,18 @@
 
   <!-- Cleaning In Progress Bar -->
   {#if scanStore.isCleaning}
-    <Card class="p-4 bg-secondary/50 border-primary/30">
+    <Card class="p-4 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
       <div class="space-y-2">
         <div class="flex items-center justify-between text-xs">
-          <span class="font-medium text-foreground">
-            Cleaning: {scanStore.cleanProgress.currentItem}
+          <span class="font-medium text-foreground flex items-center gap-2">
+            <DeletingDots size="xs" />
+            <span>Cleaning: {scanStore.cleanProgress.currentItem}</span>
           </span>
-          <span class="font-mono text-muted-foreground">
+          <span class="font-mono text-muted-foreground font-semibold">
             {scanStore.cleanProgress.index} / {scanStore.cleanProgress.total} ({scanStore.cleanProgress.percent}%)
           </span>
         </div>
-        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" />
+        <ProgressBar value={scanStore.cleanProgress.percent} height="h-2" color="bg-primary" animated={true} />
       </div>
     </Card>
   {/if}
@@ -278,7 +279,7 @@
       </div>
     {:else}
       <div class="py-12 text-center text-muted-foreground text-sm space-y-3">
-        <RotateCw size={24} class="animate-spin mx-auto opacity-50" />
+        <RotateCw size={24} class="animate-gentle-spin mx-auto opacity-50" />
         <p>Scanning known development caches...</p>
       </div>
     {/if}
