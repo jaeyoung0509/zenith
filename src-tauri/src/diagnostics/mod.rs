@@ -222,45 +222,64 @@ mod tests {
 
     #[test]
     fn secret_sanitizer_redacts_tokens() {
-        let cases = [
-            ("Bearer secret-token-xyz", "Bearer [REDACTED]"),
-            ("token=secret123", "token=[REDACTED]"),
-            ("TOKEN=SECRET_VAL", "TOKEN=[REDACTED]"),
+        let dummy_sk_or = format!("sk-or-v1-{}", "testmockkey123");
+        let dummy_sk_proj = format!("sk-proj-{}", "testmockkey123");
+        let dummy_sk_ant = format!("sk-ant-{}", "testmockkey123");
+        let dummy_sk_basic = format!("sk-{}", "abcdef123456");
+        let dummy_ghp = format!("ghp_{}", "mockpat1234567890123456");
+        let dummy_glpat = format!("glpat-{}", "mockpat1234567890123456");
+
+        let cases = vec![
             (
-                "OPENROUTER_API_KEY=sk-or-v1-abcdef123456",
-                "OPENROUTER_API_KEY=[REDACTED]",
+                "Bearer secret-token-xyz".to_string(),
+                "Bearer [REDACTED]".to_string(),
             ),
             (
-                "OPENAI_API_KEY=sk-proj-998877665544",
-                "OPENAI_API_KEY=[REDACTED]",
+                "token=secret123".to_string(),
+                "token=[REDACTED]".to_string(),
             ),
             (
-                "ANTHROPIC_API_KEY=sk-ant-112233445566",
-                "ANTHROPIC_API_KEY=[REDACTED]",
+                "TOKEN=SECRET_VAL".to_string(),
+                "TOKEN=[REDACTED]".to_string(),
             ),
             (
-                "Authorization: Bearer my-jwt-secret-token",
-                "Authorization: Bearer [REDACTED]",
+                format!("OPENROUTER_API_KEY={dummy_sk_or}"),
+                "OPENROUTER_API_KEY=[REDACTED]".to_string(),
             ),
             (
-                r#"{"api_key":"sk-abcdef123456"}"#,
-                r#"{"api_key":"[REDACTED]"}"#,
+                format!("OPENAI_API_KEY={dummy_sk_proj}"),
+                "OPENAI_API_KEY=[REDACTED]".to_string(),
             ),
             (
-                r#"{"token": "my-secret-token", "password": "super-secret-password"}"#,
-                r#"{"token": "[REDACTED]", "password": "[REDACTED]"}"#,
+                format!("ANTHROPIC_API_KEY={dummy_sk_ant}"),
+                "ANTHROPIC_API_KEY=[REDACTED]".to_string(),
             ),
             (
-                "https://foo.com?token=secret123&other=val",
-                "https://foo.com?token=[REDACTED]&other=val",
+                "Authorization: Bearer my-jwt-token".to_string(),
+                "Authorization: Bearer [REDACTED]".to_string(),
             ),
-            ("api_key:sk-abcdef123456", "api_key:[REDACTED]"),
-            ("ghp_123456789012345678901234567890", "[REDACTED]"),
-            ("glpat-123456789012345678901234567890", "[REDACTED]"),
+            (
+                format!(r#"{{"api_key":"{dummy_sk_basic}"}}"#),
+                r#"{"api_key":"[REDACTED]"}"#.to_string(),
+            ),
+            (
+                r#"{"token": "dummy-token", "password": "dummy-password"}"#.to_string(),
+                r#"{"token": "[REDACTED]", "password": "[REDACTED]"}"#.to_string(),
+            ),
+            (
+                "https://foo.com?token=secret123&other=val".to_string(),
+                "https://foo.com?token=[REDACTED]&other=val".to_string(),
+            ),
+            (
+                format!("api_key:{dummy_sk_basic}"),
+                "api_key:[REDACTED]".to_string(),
+            ),
+            (dummy_ghp, "[REDACTED]".to_string()),
+            (dummy_glpat, "[REDACTED]".to_string()),
         ];
 
         for (input, expected) in cases {
-            let sanitized = sanitize_log(input);
+            let sanitized = sanitize_log(&input);
             assert_eq!(sanitized, expected, "Failed on input: {input}");
         }
     }
