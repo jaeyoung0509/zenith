@@ -152,8 +152,8 @@
     {/if}
 
     <!-- Action Toolbar -->
-    <div class="pt-4 border-t border-border/60 flex flex-wrap items-center justify-between gap-3">
-      <div class="flex items-center gap-2">
+    <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div class="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -199,9 +199,9 @@
         </Button>
       </div>
 
-      <div class="flex flex-col items-end gap-1.5">
+      <div class="flex flex-col sm:flex-row sm:items-center md:flex-col md:items-end gap-2 shrink-0">
         {#if scanStore.selectedCount > 0}
-          <div class="flex items-center gap-2.5 text-[11px] font-mono">
+          <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono">
             <span class="text-emerald-500 font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
             {#if rebuildSelectedBytes > 0}
               <span class="text-amber-500 font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
@@ -216,14 +216,14 @@
           size="md"
           disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
           onclick={handleCleanSelected}
-          class="gap-2 px-5 min-w-[140px]"
+          class="gap-2 px-5 min-w-[130px]"
         >
           {#if scanStore.isCleaning}
             <DeletingDots size="sm" />
             <span>Cleaning…</span>
           {:else}
             <Trash2 size={14} />
-            <span>{hasRebuildSelected ? 'Review & Clean' : 'Clean Safely'} · {formatBytes(scanStore.reclaimableBytes)}</span>
+            <span>{hasRebuildSelected ? 'Review & Clean' : 'Clean Safely'}</span>
           {/if}
         </Button>
       </div>

@@ -59,7 +59,7 @@
     void awakeStore.refresh();
     if (hasSection('storage')) void memoryStore.refreshDisk();
     if (hasSection('memory')) memoryStore.startPolling(3000);
-    if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length) {
+    if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length > 0) {
       void usageStore.refreshIfStale();
     }
     if (hasSection('cleanup') || hasSection('categories')) {
@@ -277,7 +277,9 @@
               <RotateCw size={12} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
             </button>
           </div>
-          {#if usageStore.isLoading && !usageStore.snapshot}
+          {#if settings.quick_panel_ai_providers.length === 0}
+            <div class="py-2 text-center text-[10px] text-muted-foreground">Configure in Settings.</div>
+          {:else if usageStore.isLoading && !usageStore.snapshot}
             <div class="py-2 text-center text-[10px] text-muted-foreground">Reading accounts…</div>
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}
