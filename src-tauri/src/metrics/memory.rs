@@ -50,7 +50,8 @@ impl MemorySampler {
             sys.refresh_processes(ProcessesToUpdate::All, true);
 
             // Aggregate top processes
-            let mut process_groups: HashMap<String, (u64, usize, u32, Vec<u32>, bool)> = HashMap::new();
+            let mut process_groups: HashMap<String, (u64, usize, u32, Vec<u32>, bool)> =
+                HashMap::new();
 
             for (pid, process) in sys.processes() {
                 let raw_name = process.name().to_string_lossy();
