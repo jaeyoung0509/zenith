@@ -1,8 +1,9 @@
 import type { AiProviderId, DashboardTab, QuickPanelSection, ZenithSettings } from '../models/types';
 import { tauriGetSettings, tauriSaveSettings } from '../utils/tauri';
 import { moveOrdered, reorderOrdered, toggleOrdered } from '../utils/quickPanel';
+import { serializeSettingsSnapshot } from '../utils/settings';
 
-class SettingsStore {
+export class SettingsStore {
   settings = $state<ZenithSettings>({
     launch_at_login: false,
     clean_ai_tools: true,
@@ -56,6 +57,20 @@ class SettingsStore {
   private hasLoaded = false;
   private loadPromise: Promise<void> | null = null;
   private saveQueue: Promise<void> = Promise.resolve();
+  private persistedSettings: ZenithSettings | null = null;
+  private saveRevision = 0;
+  private mediaQueryList: MediaQueryList | null = null;
+  private mediaQueryListener: ((e: MediaQueryListEvent) => void) | null = null;
+  private getSettingsFn: typeof tauriGetSettings;
+  private saveSettingsFn: typeof tauriSaveSettings;
+
+  constructor(
+    getSettingsFn: typeof tauriGetSettings = tauriGetSettings,
+    saveSettingsFn: typeof tauriSaveSettings = tauriSaveSettings
+  ) {
+    this.getSettingsFn = getSettingsFn;
+    this.saveSettingsFn = saveSettingsFn;
+  }
 
   async load(force = false) {
     if (this.hasLoaded && !force) return;
@@ -71,32 +86,66 @@ class SettingsStore {
   private async performLoad() {
     this.isLoading = true;
     try {
-      this.settings = await tauriGetSettings();
-      this.settings = {
-        ...this.settings,
-        quick_panel_sections: this.settings.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
-        quick_panel_ai_providers: this.settings.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-        dashboard_tabs: this.settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
+      const fetched = await this.getSettingsFn();
+      const normalized: ZenithSettings = {
+        ...fetched,
+        quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+        quick_panel_ai_providers: fetched.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+        dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
       };
+      this.settings = normalized;
+      this.persistedSettings = serializeSettingsSnapshot(normalized);
       this.hasLoaded = true;
       this.applyTheme(this.settings.theme);
     } catch {
-      // keep default
+      this.persistedSettings = serializeSettingsSnapshot(this.settings);
     } finally {
       this.isLoading = false;
     }
   }
 
   async save(partial: Partial<ZenithSettings>) {
+    const revision = ++this.saveRevision;
+    const previousSettings = this.settings;
     this.settings = { ...this.settings, ...partial };
-    const snapshot = structuredClone(this.settings);
-    this.error = null;
-    this.saveQueue = this.saveQueue.catch(() => undefined).then(() => tauriSaveSettings(snapshot));
+
+    if (partial.theme !== undefined) {
+      this.applyTheme(partial.theme);
+    }
+
+    let snapshot: ZenithSettings;
     try {
-      await this.saveQueue;
-      if (partial.theme) this.applyTheme(partial.theme);
+      snapshot = serializeSettingsSnapshot($state.snapshot(this.settings));
+    } catch (err: any) {
+      if (revision === this.saveRevision) {
+        this.settings = this.persistedSettings ?? serializeSettingsSnapshot(previousSettings);
+        this.applyTheme(this.settings.theme);
+        this.error = err?.toString() || 'Failed to serialize settings';
+      }
+      return;
+    }
+
+    const currentSave = this.saveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        await this.saveSettingsFn(snapshot);
+        this.persistedSettings = snapshot;
+        if (revision === this.saveRevision) {
+          this.error = null;
+        }
+      });
+    this.saveQueue = currentSave;
+
+    try {
+      await currentSave;
     } catch (error: any) {
-      this.error = error?.toString() || 'Could not save preferences';
+      // Only the latest queued save may roll back the optimistic UI.
+      // If a newer snapshot was queued, allow that newer save to complete without clobbering UI state.
+      if (revision === this.saveRevision) {
+        this.error = error?.toString() || 'Could not save preferences';
+        this.settings = this.persistedSettings ?? serializeSettingsSnapshot(previousSettings);
+        this.applyTheme(this.settings.theme);
+      }
     }
   }
 
@@ -151,19 +200,54 @@ class SettingsStore {
   applyTheme(theme: string) {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
+
+    this.removeSystemThemeListener();
+
     if (theme === 'dark') {
       root.classList.add('dark');
     } else if (theme === 'light') {
       root.classList.remove('dark');
     } else {
       // system
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      if (prefersDark) {
-        root.classList.add('dark');
-      } else {
-        root.classList.remove('dark');
+      if (typeof window !== 'undefined' && window.matchMedia) {
+        this.mediaQueryList = window.matchMedia('(prefers-color-scheme: dark)');
+        const updateTheme = (matches: boolean) => {
+          if (matches) {
+            root.classList.add('dark');
+          } else {
+            root.classList.remove('dark');
+          }
+        };
+
+        updateTheme(this.mediaQueryList.matches);
+
+        this.mediaQueryListener = (e: MediaQueryListEvent) => {
+          updateTheme(e.matches);
+        };
+
+        if (typeof this.mediaQueryList.addEventListener === 'function') {
+          this.mediaQueryList.addEventListener('change', this.mediaQueryListener);
+        } else if (typeof (this.mediaQueryList as any).addListener === 'function') {
+          (this.mediaQueryList as any).addListener(this.mediaQueryListener);
+        }
       }
     }
+  }
+
+  removeSystemThemeListener() {
+    if (this.mediaQueryList && this.mediaQueryListener) {
+      if (typeof this.mediaQueryList.removeEventListener === 'function') {
+        this.mediaQueryList.removeEventListener('change', this.mediaQueryListener);
+      } else if (typeof (this.mediaQueryList as any).removeListener === 'function') {
+        (this.mediaQueryList as any).removeListener(this.mediaQueryListener);
+      }
+      this.mediaQueryList = null;
+      this.mediaQueryListener = null;
+    }
+  }
+
+  cleanup() {
+    this.removeSystemThemeListener();
   }
 }
 

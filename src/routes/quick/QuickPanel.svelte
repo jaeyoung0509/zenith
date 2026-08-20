@@ -7,7 +7,7 @@
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
-  import { isQuickPanelDismissShortcut } from '../../lib/utils/quickPanel';
+  import { isQuickPanelDismissShortcut, projectAiProviders } from '../../lib/utils/quickPanel';
   import { isTauri, tauriHideCurrentWindow, tauriOpenDashboard } from '../../lib/utils/tauri';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
@@ -15,8 +15,21 @@
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
-    RotateCw, Trash2, ArrowRight, Sparkles, Code2, Container, Boxes,
-    Eye, Moon, Settings, X, Bot,
+    Sparkles,
+    Trash2,
+    HardDrive,
+    Activity,
+    Bot,
+    Moon,
+    Flame,
+    RotateCw,
+    X,
+    LayoutDashboard,
+    Settings,
+    Code2,
+    Container,
+    Boxes,
+    ArrowRight,
   } from 'lucide-svelte';
 
   let panelActive = false;
@@ -26,9 +39,9 @@
   let memory = $derived(memoryStore.memory);
   let scan = $derived(scanStore.lastScan);
   let awakeState = $derived(awakeStore.state);
-  let selectedProviders = $derived.by(() => settings.quick_panel_ai_providers
-    .map((id) => usageStore.snapshot?.providers.find((provider) => provider.id === id))
-    .filter((provider): provider is AiProviderUsage => Boolean(provider)));
+  let selectedProviders = $derived(
+    projectAiProviders(settings.quick_panel_ai_providers, usageStore.snapshot?.providers)
+  );
 
   let quickCleanableBytes = $derived.by(() =>
     scanStore.quickCleanableBytes(settings)
@@ -59,7 +72,7 @@
     void awakeStore.refresh();
     if (hasSection('storage')) void memoryStore.refreshDisk();
     if (hasSection('memory')) memoryStore.startPolling(3000);
-    if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length) {
+    if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length > 0) {
       void usageStore.refreshIfStale();
     }
     if (hasSection('cleanup') || hasSection('categories')) {
@@ -277,7 +290,9 @@
               <RotateCw size={12} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
             </button>
           </div>
-          {#if usageStore.isLoading && !usageStore.snapshot}
+          {#if settings.quick_panel_ai_providers.length === 0}
+            <div class="py-2 text-center text-[10px] text-muted-foreground">Configure in Settings.</div>
+          {:else if usageStore.isLoading && !usageStore.snapshot}
             <div class="py-2 text-center text-[10px] text-muted-foreground">Reading accounts…</div>
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}

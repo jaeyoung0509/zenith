@@ -152,14 +152,14 @@
     {/if}
 
     <!-- Action Toolbar -->
-    <div class="pt-4 border-t border-border/60 flex flex-wrap items-center justify-between gap-3">
-      <div class="flex items-center gap-2">
+    <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div class="flex flex-wrap items-center gap-1.5">
         <Button
           variant="outline"
           size="sm"
           disabled={scanStore.isScanning || scanStore.isCleaning}
           onclick={() => scanStore.runScan()}
-          class="gap-1.5"
+          class="gap-1.5 px-2.5"
         >
           <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
           <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Storage'}</span>
@@ -170,7 +170,7 @@
           size="sm"
           disabled={scanStore.isCleaning}
           onclick={() => scanStore.selectAllSafe()}
-          class="text-xs"
+          class="text-xs px-2.5"
         >
           <CheckSquare size={13} class="mr-1 text-emerald-500" />
           <span>Select Safe Only</span>
@@ -181,7 +181,7 @@
           size="sm"
           disabled={scanStore.isCleaning}
           onclick={() => scanStore.deselectAll()}
-          class="text-xs text-muted-foreground"
+          class="text-xs text-muted-foreground px-2.5"
         >
           <Square size={13} class="mr-1" />
           <span>Deselect All</span>
@@ -191,17 +191,18 @@
           variant="ghost"
           size="sm"
           onclick={() => tauriOpenDiskUtility()}
-          class="text-xs text-muted-foreground gap-1"
+          class="text-xs text-muted-foreground gap-1 px-2.5"
           title="Open macOS Disk Utility"
+          ariaLabel="Open macOS Disk Utility"
         >
           <ExternalLink size={12} />
           <span>Disk Utility</span>
         </Button>
       </div>
 
-      <div class="flex flex-col items-end gap-1.5">
+      <div class="flex flex-col sm:flex-row sm:items-center md:flex-col md:items-end gap-2 shrink-0">
         {#if scanStore.selectedCount > 0}
-          <div class="flex items-center gap-2.5 text-[11px] font-mono">
+          <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono">
             <span class="text-emerald-500 font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
             {#if rebuildSelectedBytes > 0}
               <span class="text-amber-500 font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
@@ -216,14 +217,14 @@
           size="md"
           disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
           onclick={handleCleanSelected}
-          class="gap-2 px-5 min-w-[140px]"
+          class="gap-2 px-5 min-w-[130px]"
         >
           {#if scanStore.isCleaning}
             <DeletingDots size="sm" />
             <span>Cleaning…</span>
           {:else}
             <Trash2 size={14} />
-            <span>{hasRebuildSelected ? 'Review & Clean' : 'Clean Safely'} · {formatBytes(scanStore.reclaimableBytes)}</span>
+            <span>{hasRebuildSelected ? 'Review & Clean' : 'Clean Safely'}</span>
           {/if}
         </Button>
       </div>
