@@ -39,8 +39,9 @@ run-fast:
 # 📦 Production Build & Distribution
 # ------------------------------------------------------------------------------
 
-# Clean existing binaries and build fresh release packages (.app & .dmg)
+# Clean existing binaries, kill running instances, and build fresh release packages (.app & .dmg)
 distribute: clean-bin
+    @pkill -f Zenith 2>/dev/null || true
     pnpm tauri build
     @echo ""
     @echo "📦 Fresh release packages built successfully:"
@@ -51,8 +52,13 @@ distribute: clean-bin
 # Alias for distribute
 release: distribute
 
+# Clean, build fresh release packages, and immediately launch the new app
+release-and-run: distribute
+    @just run-bin
+
 # Clean existing binaries and build fresh standalone release macOS App bundle
 release-app: clean-bin
+    @pkill -f Zenith 2>/dev/null || true
     pnpm tauri build --bundles app
     @echo ""
     @echo "✅ Standalone release App built at: target/release/bundle/macos/Zenith.app"
