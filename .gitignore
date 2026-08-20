@@ -18,4 +18,8 @@ node_modules
 # Project docs / local drafts
 prd.md
 *.prd.md
+review.md
+*.review.md
+study.md
+*.study.md
 

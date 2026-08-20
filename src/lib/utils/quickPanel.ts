@@ -1,3 +1,5 @@
+import type { AiProviderUsage } from '../models/types';
+
 export function toggleOrdered<T>(items: T[], item: T, keepOne = false): T[] {
   if (!items.includes(item)) return [...items, item];
   if (keepOne && items.length === 1) return items;
@@ -25,4 +27,14 @@ export function reorderOrdered<T>(items: T[], dragged: T, target: T): T[] {
 
 export function isQuickPanelDismissShortcut(key: string, metaKey: boolean): boolean {
   return key === 'Escape' || (metaKey && key.toLowerCase() === 'w');
+}
+
+export function projectAiProviders(
+  configuredIds: readonly string[],
+  providers: readonly AiProviderUsage[] | undefined
+): AiProviderUsage[] {
+  if (!configuredIds.length || !providers) return [];
+  return configuredIds
+    .map((id) => providers.find((provider) => provider.id === id))
+    .filter((provider): provider is AiProviderUsage => Boolean(provider));
 }

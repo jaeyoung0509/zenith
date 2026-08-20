@@ -103,6 +103,7 @@
       loadGeneration++;
       removeHashListener?.();
       window.removeEventListener('keydown', closeOnCommandW, true);
+      settingsStore.cleanup();
     };
   });
 </script>

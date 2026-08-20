@@ -96,7 +96,7 @@
         onclick={handleRefresh}
         class="gap-1.5 text-xs"
       >
-        <RotateCw size={13} class={isRefreshing || localModelsStore.isLoading ? 'animate-spin' : ''} />
+        <RotateCw size={13} class={isRefreshing || localModelsStore.isLoading ? 'animate-gentle-spin' : ''} />
         <span>Rescan Models</span>
       </Button>
     </div>

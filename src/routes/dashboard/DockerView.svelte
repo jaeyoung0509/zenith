@@ -78,7 +78,7 @@
       onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={isRefreshing || dockerStore.isLoading ? 'animate-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || dockerStore.isLoading ? 'animate-gentle-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>

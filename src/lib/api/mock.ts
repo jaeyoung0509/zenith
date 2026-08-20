@@ -432,11 +432,11 @@ export const mockApi = {
       swap_total_bytes: 2 * 1024 * 1024 * 1024,
       pressure: 'normal',
       top_processes: [
-        { pid: 102, name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true },
-        { pid: 101, name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true },
-        { pid: 103, name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true },
-        { pid: 104, name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true },
-        { pid: 105, name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true },
+        { pid: 102, pids: [102, 106, 107, 108], name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true },
+        { pid: 101, pids: [101, 109], name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true },
+        { pid: 103, pids: [103, 110, 111, 112], name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true },
+        { pid: 104, pids: [104, 113], name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true },
+        { pid: 105, pids: [105, 114, 115], name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true },
       ],
       timestamp: Math.floor(Date.now() / 1000),
     };
@@ -676,7 +676,7 @@ export const mockApi = {
 
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {
     return {
-      app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.3',
+      app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.4',
       os_version: 'macOS 15.3.1 (Mock Preview)',
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',

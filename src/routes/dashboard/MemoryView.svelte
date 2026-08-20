@@ -3,6 +3,7 @@
   import type { ProcessMemory } from '../../lib/models/types';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { formatBytes } from '../../lib/utils/format';
+  import { filterProcesses } from '../../lib/utils/memory';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
@@ -16,6 +17,8 @@
     Zap,
     LogOut,
     TriangleAlert,
+    Search,
+    X,
   } from 'lucide-svelte';
 
   onMount(() => {
@@ -39,6 +42,11 @@
   let memory = $derived(memoryStore.memory);
   let pendingProcess = $state<ProcessMemory | null>(null);
   let isRefreshing = $state(false);
+  let searchQuery = $state('');
+
+  let filteredProcesses = $derived(
+    filterProcesses(memory?.top_processes ?? [], searchQuery)
+  );
 
   let topReclaimableApp = $derived(
     memory?.top_processes.find((p) => p.can_terminate && p.memory_bytes > 400 * 1024 * 1024)
@@ -99,8 +107,9 @@
         <div class="flex items-center gap-2">
           <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
           {#if memory}
-            <div class="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium border {pressureColors[memory.pressure]}">
-              Pressure: {memory.pressure.toUpperCase()}
+            <div class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
+              <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-rose-500 animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}"></span>
+              <span>Pressure: {memory.pressure.toUpperCase()}</span>
             </div>
           {/if}
         </div>
@@ -117,7 +126,7 @@
       onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-gentle-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>
@@ -177,6 +186,13 @@
             <span class="text-xs font-normal text-muted-foreground">/ {formatBytes(memory.swap_total_bytes)}</span>
           {/if}
         </div>
+        {#if memory.swap_total_bytes > 0}
+          <ProgressBar
+            value={(memory.swap_used_bytes / memory.swap_total_bytes) * 100}
+            height="h-1.5"
+            color="bg-blue-500"
+          />
+        {/if}
         <p class="text-[11px] text-muted-foreground mt-1">
           Secondary disk paging memory usage.
         </p>
@@ -185,56 +201,95 @@
 
     <!-- Top Developer Processes Table -->
     <div class="space-y-3 pt-2">
-      <div class="flex items-center justify-between">
-        <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Top Resource Consuming Processes
-        </h3>
-        <span class="text-[11px] text-muted-foreground font-mono">
-          Updating every 2.5s
-        </span>
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Top Resource Consuming Processes
+          </h3>
+          <span class="text-[10px] text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
+            2.5s live
+          </span>
+        </div>
+
+        <div class="relative w-full sm:w-64">
+          <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            bind:value={searchQuery}
+            placeholder="Search process or PID…"
+            aria-label="Search processes by name or PID"
+            class="w-full h-8 pl-8 pr-7 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {#if searchQuery}
+            <button
+              type="button"
+              onclick={() => (searchQuery = '')}
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label="Clear search"
+            >
+              <X size={13} />
+            </button>
+          {/if}
+        </div>
       </div>
 
-      <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
-        {#each memory.top_processes as proc}
-          <div class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
-            <div class="flex items-center gap-3">
-              <div class="font-mono text-[11px] text-muted-foreground w-12">
-                PID {proc.pid}
+      {#if filteredProcesses.length > 0}
+        <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
+          {#each filteredProcesses as proc (proc.name)}
+            <div class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
+              <div class="flex items-center gap-3 min-w-0 pr-2">
+                <div
+                  class="font-mono text-[11px] text-muted-foreground w-12 shrink-0"
+                  title={proc.pids && proc.pids.length > 1 ? `PIDs: ${proc.pids.join(', ')}` : undefined}
+                >
+                  PID {proc.pid}
+                </div>
+                <div class="min-w-0 truncate">
+                  <span class="font-medium text-foreground">{proc.name}</span>
+                  {#if proc.process_count > 1}
+                    <span class="text-muted-foreground ml-1.5 text-[11px]">
+                      ({proc.process_count} instances)
+                    </span>
+                  {/if}
+                </div>
               </div>
-              <div>
-                <span class="font-medium text-foreground">{proc.name}</span>
-                {#if proc.process_count > 1}
-                  <span class="text-muted-foreground ml-1.5 text-[11px]">
-                    ({proc.process_count} instances)
-                  </span>
+
+              <div class="flex items-center gap-4 shrink-0">
+                <span class="font-mono font-semibold text-foreground">
+                  {formatBytes(proc.memory_bytes)}
+                </span>
+                {#if proc.can_terminate}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="gap-1.5 opacity-70 group-hover:opacity-100"
+                    disabled={memoryStore.terminating !== null}
+                    onclick={() => (pendingProcess = proc)}
+                  >
+                    <LogOut size={12} />
+                    Quit
+                  </Button>
                 {/if}
               </div>
             </div>
-
-            <div class="flex items-center gap-4">
-              <span class="font-mono font-semibold text-foreground">
-                {formatBytes(proc.memory_bytes)}
-              </span>
-              {#if proc.can_terminate}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  class="gap-1.5 opacity-70 group-hover:opacity-100"
-                  disabled={memoryStore.terminating !== null}
-                  onclick={() => (pendingProcess = proc)}
-                >
-                  <LogOut size={12} />
-                  Quit
-                </Button>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
+          {/each}
+        </div>
+      {:else if searchQuery.trim()}
+        <div class="p-8 text-center border border-border/80 rounded-xl bg-card/70 space-y-2">
+          <p class="text-xs text-muted-foreground">No processes matching "{searchQuery}"</p>
+          <Button variant="ghost" size="sm" onclick={() => (searchQuery = '')} class="text-xs">
+            Clear Search
+          </Button>
+        </div>
+      {:else}
+        <div class="p-8 text-center border border-border/80 rounded-xl bg-card/70 text-xs text-muted-foreground">
+          No high-memory processes detected.
+        </div>
+      {/if}
     </div>
   {:else}
     <div class="py-16 text-center text-xs text-muted-foreground space-y-2">
-      <RotateCw size={20} class="animate-spin mx-auto opacity-50" />
+      <RotateCw size={20} class="animate-gentle-spin mx-auto opacity-50" />
       <p>Reading macOS memory statistics...</p>
     </div>
   {/if}

@@ -111,7 +111,36 @@
 }
 
 .animate-gentle-spin {
-  animation: gentle-spin 0.85s linear infinite;
+  animation: gentle-spin 0.75s linear infinite;
+  will-change: transform;
+}
+
+@keyframes shimmer-active {
+  0% {
+    transform: translateX(-100%) skewX(-12deg);
+  }
+  100% {
+    transform: translateX(200%) skewX(-12deg);
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer-active 2s infinite ease-in-out;
+}
+
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.96);
+  }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2.4s infinite ease-in-out;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -47,7 +47,7 @@
       </div>
     </div>
     <Button variant="outline" size="sm" class="gap-1.5" disabled={isRefreshing || usageStore.isLoading} onclick={handleRefresh}>
-      <RefreshCw size={13} class={isRefreshing || usageStore.isLoading ? 'animate-spin' : ''} />
+      <RefreshCw size={13} class={isRefreshing || usageStore.isLoading ? 'animate-gentle-spin' : ''} />
       Refresh
     </Button>
   </div>
@@ -63,7 +63,7 @@
     <div class="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-red-400">{usageStore.error}</div>
   {:else if usageStore.isLoading && !usageStore.snapshot}
     <div class="py-20 text-center text-muted-foreground">
-      <RefreshCw size={22} class="animate-spin mx-auto mb-3" />
+      <RefreshCw size={22} class="animate-gentle-spin mx-auto mb-3" />
       <p class="text-xs">Reading connected AI accounts…</p>
     </div>
   {:else if usageStore.snapshot}

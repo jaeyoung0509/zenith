@@ -5,6 +5,7 @@
   import { tauriRevealInFinder } from '../utils/tauri';
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
+  import Checkbox from './Checkbox.svelte';
   import { FolderOpen, ArrowUpRight } from 'lucide-svelte';
 
   interface Props {
@@ -44,11 +45,11 @@
         <ArrowUpRight size={10} />
       </button>
     {:else}
-      <input
-        type="checkbox"
+      <Checkbox
         checked={isSelected}
         onchange={handleToggle}
-        class="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring cursor-pointer accent-primary shrink-0"
+        ariaLabel={`Select ${item.name}`}
+        class="mt-0.5 shrink-0"
       />
     {/if}
 
