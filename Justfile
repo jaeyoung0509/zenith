@@ -77,6 +77,12 @@ build-front:
 # 🧪 Testing & Verification
 # ------------------------------------------------------------------------------
 
+# Generate TypeScript bindings from Rust via Tauri Specta
+generate-bindings:
+    mkdir -p dist
+    cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+    @echo "✨ Generated TypeScript bindings at: src/lib/bindings/tauri.ts"
+
 # Run all test suites (Backend Rust Safety + Frontend Vitest)
 test: test-rust test-front
     @echo "🎉 All Rust & Frontend tests passed!"

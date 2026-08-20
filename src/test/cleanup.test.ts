@@ -14,6 +14,7 @@ function item(overrides: Partial<ScanItem>): ScanItem {
     file_count: 1,
     description: 'Generated cache',
     is_selected: false,
+    last_modified: null,
     exists: true,
     ...overrides,
   };

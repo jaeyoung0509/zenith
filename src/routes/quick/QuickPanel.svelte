@@ -133,7 +133,7 @@
   function providerValue(provider: AiProviderUsage) {
     if (provider.windows[0]) {
       const window = provider.windows[0];
-      const percent = Math.round(window.used_percent);
+      const percent = Math.round(window.used_percent ?? 0);
       if (window.resets_at) {
         const timeUntil = formatTimeUntil(window.resets_at);
         if (timeUntil) {
@@ -149,7 +149,7 @@
 
   function providerTitle(provider: AiProviderUsage) {
     if (provider.windows[0]?.resets_at) {
-      return `${provider.name}: ${Math.round(provider.windows[0].used_percent)}% used, resets on ${formatResetDate(provider.windows[0].resets_at)} (in ${formatTimeUntil(provider.windows[0].resets_at)})`;
+      return `${provider.name}: ${Math.round(provider.windows[0].used_percent ?? 0)}% used, resets on ${formatResetDate(provider.windows[0].resets_at)} (in ${formatTimeUntil(provider.windows[0].resets_at)})`;
     }
     return provider.status_message || provider.auth_label || provider.name;
   }
@@ -237,7 +237,7 @@
             <span class="text-muted-foreground">Mac Storage</span>
             <span class="font-mono text-foreground">{formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}</span>
           </div>
-          <ProgressBar value={disk.percent_used} height="h-2" />
+          <ProgressBar value={disk.percent_used ?? 0} height="h-2" />
         </div>
       {:else if section === 'memory' && memory}
         <!-- Memory Gauge -->

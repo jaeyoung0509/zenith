@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.1.2"
+version = "0.1.3"
 description = "Zenith - macOS AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
@@ -29,9 +29,12 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 sha2 = "0.10"
 url = "2.5"
+specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid"] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
 
 [dev-dependencies]
 tempfile = "3.13"
+specta-typescript = "=0.0.12"
 
 [features]
 # Plain `cargo build` must produce a self-contained desktop binary. The

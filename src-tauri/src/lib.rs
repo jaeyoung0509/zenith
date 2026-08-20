@@ -216,7 +216,17 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(specta_builder().invoke_handler())
+        .run(tauri::generate_context!())
+        .expect("error while running zenith application");
+}
+
+pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
+        // Zenith's IPC u64 values are bounded well below JS MAX_SAFE_INTEGER.
+        // Revisit before introducing arbitrary external 64-bit identifiers/counters.
+        .dangerously_cast_bigints_to_number()
+        .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
             commands::connect_openrouter_oauth,
             commands::start_scan,
@@ -241,16 +251,15 @@ pub fn run() {
             commands::save_settings,
             commands::reveal_in_finder,
             commands::open_dashboard_window,
-            commands::toggle_quick_panel,
             commands::get_app_version,
+            commands::toggle_quick_panel,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running zenith application");
 }
 
 #[cfg(test)]
 mod tests {
     use super::quick_panel_position;
+    use super::specta_builder;
     use tauri::{PhysicalPosition, PhysicalSize};
 
     #[test]
@@ -273,5 +282,17 @@ mod tests {
             PhysicalSize::new(3_456, 2_234),
         );
         assert_eq!(position, PhysicalPosition::new(0, 1_194));
+    }
+
+    #[test]
+    #[ignore = "code generation"]
+    fn export_typescript_bindings() {
+        let builder = specta_builder();
+        builder
+            .export(
+                specta_typescript::Typescript::default(),
+                "../src/lib/bindings/tauri.ts",
+            )
+            .expect("Failed to export TypeScript bindings");
     }
 }

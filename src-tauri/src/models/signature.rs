@@ -1,7 +1,7 @@
 use crate::models::{Category, CleanStrategy, RiskTier};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Signature {
     pub id: String,
     pub name: String,
@@ -25,7 +25,7 @@ fn default_strategy() -> CleanStrategy {
     CleanStrategy::DeleteContents
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct SignatureManifest {
     #[serde(default)]
     pub signatures: Vec<Signature>,

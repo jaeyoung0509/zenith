@@ -79,12 +79,12 @@
           </span>
           {#if disk}
             <span class="font-mono text-sm font-semibold text-foreground">
-              {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({disk.percent_used}%)
+              {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({disk.percent_used?.toFixed(1) ?? '—'}%)
             </span>
           {/if}
         </div>
         {#if disk}
-          <ProgressBar value={disk.percent_used} height="h-2.5" />
+          <ProgressBar value={disk.percent_used ?? 0} height="h-2.5" />
           <div class="flex justify-between text-[11px] text-muted-foreground font-mono">
             <span>Free: {formatBytes(disk.free_bytes)}</span>
             <span>Used: {formatBytes(disk.used_bytes)}</span>
@@ -133,7 +133,7 @@
                   {/if}
                 </div>
                 <p class="text-[10px] font-mono text-muted-foreground mt-0.5">
-                  {formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)} ({volume.percent_used.toFixed(0)}%)
+                  {formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)} ({volume.percent_used != null ? `${volume.percent_used.toFixed(0)}%` : '—'})
                 </p>
               </div>
               <Button

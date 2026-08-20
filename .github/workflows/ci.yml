@@ -36,6 +36,14 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install
 
+      - name: Generate Tauri bindings
+        run: |
+          mkdir -p dist
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+
+      - name: Verify generated bindings (drift check)
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts
+
       - name: Svelte Typecheck
         run: pnpm check
 
