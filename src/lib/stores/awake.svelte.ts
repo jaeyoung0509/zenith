@@ -9,8 +9,14 @@ import { settingsStore } from './settings.svelte';
 class AwakeStore {
   state = $state<AwakeState>({
     is_active: false,
+    behavior: null,
+    trigger_source: null,
+    active_process_name: null,
+    active_rule_id: null,
+    manual_expires_at: null,
     active_rules_count: 0,
     power_source: 'unknown',
+    last_error: null,
     rule_evaluations: [],
   });
   isLoading = $state(false);

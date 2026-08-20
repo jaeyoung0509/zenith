@@ -10,11 +10,11 @@
 
   const compactNumber = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
-  function formatTokens(value?: number) {
+  function formatTokens(value?: number | null) {
     return value == null ? '—' : compactNumber.format(value);
   }
 
-  function formatReset(timestamp?: number) {
+  function formatReset(timestamp?: number | null) {
     if (!timestamp) return '';
     return new Intl.DateTimeFormat('en', {
       month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
@@ -93,9 +93,9 @@
                 <div class="space-y-1.5">
                   <div class="flex justify-between text-[11px]">
                     <span class="text-muted-foreground">{window.label}</span>
-                    <span class="font-mono">{Math.round(window.used_percent)}% used</span>
+                    <span class="font-mono">{window.used_percent != null ? `${Math.round(window.used_percent)}% used` : '—'}</span>
                   </div>
-                  <ProgressBar value={window.used_percent} height="h-1.5" />
+                  <ProgressBar value={window.used_percent ?? 0} height="h-1.5" />
                   <p class="text-[9px] text-muted-foreground text-right">Resets {formatReset(window.resets_at)}</p>
                 </div>
               {/each}

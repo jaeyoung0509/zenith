@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DockerImageItem {
     pub id: String,
     pub repository: String,
@@ -10,7 +10,7 @@ pub struct DockerImageItem {
     pub is_in_use: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DockerContainerItem {
     pub id: String,
     pub name: String,
@@ -20,7 +20,7 @@ pub struct DockerContainerItem {
     pub is_running: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DockerVolumeItem {
     pub name: String,
     pub driver: String,
@@ -28,7 +28,7 @@ pub struct DockerVolumeItem {
     pub is_in_use: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DockerBuildCacheItem {
     pub id: String,
     pub cache_type: String,
@@ -36,13 +36,13 @@ pub struct DockerBuildCacheItem {
     pub is_in_use: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 pub struct DockerResourceUsage {
     pub total_bytes: u64,
     pub reclaimable_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 pub struct DockerOverview {
     pub images: DockerResourceUsage,
     pub containers: DockerResourceUsage,
@@ -53,7 +53,7 @@ pub struct DockerOverview {
     pub safe_cleanable_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DockerStatus {
     pub is_available: bool,
     pub is_running: bool,

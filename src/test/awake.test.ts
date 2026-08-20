@@ -9,8 +9,10 @@ describe('awake models and state handling', () => {
       trigger_source: 'Triggered by Codex',
       active_process_name: 'Codex',
       active_rule_id: 'rule.codex',
+      manual_expires_at: null,
       active_rules_count: 2,
       power_source: 'ac',
+      last_error: null,
       rule_evaluations: [
         {
           rule_id: 'rule.codex',
@@ -63,8 +65,10 @@ describe('awake models and state handling', () => {
       trigger_source: 'Triggered by Codex',
       active_process_name: 'Codex',
       active_rule_id: 'rule.codex',
+      manual_expires_at: null,
       active_rules_count: 2,
       power_source: 'ac',
+      last_error: null,
       rule_evaluations: [
         {
           rule_id: 'rule.codex',
@@ -89,11 +93,11 @@ describe('awake models and state handling', () => {
   it('accurately represents manual failure state without phantom expiration', () => {
     const failedState: AwakeState = {
       is_active: false,
-      behavior: undefined,
-      trigger_source: undefined,
-      active_process_name: undefined,
-      active_rule_id: undefined,
-      manual_expires_at: undefined,
+      behavior: null,
+      trigger_source: null,
+      active_process_name: null,
+      active_rule_id: null,
+      manual_expires_at: null,
       active_rules_count: 2,
       power_source: 'ac',
       last_error: 'IOKit power assertion failed with return code: 5',
@@ -101,7 +105,7 @@ describe('awake models and state handling', () => {
     };
 
     expect(failedState.is_active).toBe(false);
-    expect(failedState.manual_expires_at).toBeUndefined();
+    expect(failedState.manual_expires_at).toBeNull();
     expect(failedState.last_error).toContain('IOKit power assertion failed');
   });
 });

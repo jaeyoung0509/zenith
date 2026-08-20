@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryPressure {
     Normal,
@@ -18,7 +18,7 @@ impl MemoryPressure {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ProcessMemory {
     pub pid: u32,
     pub name: String,
@@ -27,7 +27,7 @@ pub struct ProcessMemory {
     pub can_terminate: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct MemoryMetrics {
     pub total_bytes: u64,
     pub used_bytes: u64,
@@ -41,7 +41,7 @@ pub struct MemoryMetrics {
     pub timestamp: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct DiskMetrics {
     pub mount_point: String,
     pub total_bytes: u64,
@@ -51,7 +51,7 @@ pub struct DiskMetrics {
     pub percent_used: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct DiskVolume {
     pub name: String,
     pub mount_point: String,

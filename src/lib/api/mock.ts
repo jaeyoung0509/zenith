@@ -1,0 +1,676 @@
+import type {
+  AiUsageSnapshot,
+  AwakeBehavior,
+  AwakeRule,
+  AwakeState,
+  Category,
+  CleanEvent,
+  CleanItemResult,
+  CleanResult,
+  DiskMetrics,
+  DiskVolume,
+  DockerStatus,
+  LocalModelItem,
+  MemoryMetrics,
+  PlanPreview,
+  ScanEvent,
+  ScanItem,
+  ScanResult,
+  SelectedApplication,
+  ZenithSettings,
+  ZenithSettings_Serialize,
+} from '../models/types';
+
+export const mockApi = {
+  async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
+    return {
+      fetched_at: Math.floor(Date.now() / 1000),
+      providers: [
+        {
+          id: 'codex',
+          name: 'Codex',
+          installed: true,
+          connected: true,
+          auth_label: 'plus · OAuth',
+          status_message: 'Live account limits from the official Codex app-server.',
+          support: 'live',
+          windows: [{ label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 }],
+          summary: {
+            lifetime_tokens: 7111812241,
+            last_7d_tokens: 452818756,
+            peak_daily_tokens: null,
+            current_streak_days: 3,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+        {
+          id: 'claude',
+          name: 'Claude Code',
+          installed: true,
+          connected: false,
+          auth_label: 'Claude.ai OAuth',
+          status_message: 'Open /usage in Claude Code for subscription limits.',
+          support: 'manual',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+        {
+          id: 'opencode',
+          name: 'OpenCode',
+          installed: true,
+          connected: true,
+          auth_label: '4 OAuth providers',
+          status_message: 'Local activity from opencode stats.',
+          support: 'local',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: 18,
+            local_cost_usd: 1.42,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+        {
+          id: 'openrouter',
+          name: 'OpenRouter',
+          installed: true,
+          connected: false,
+          auth_label: 'OAuth PKCE',
+          status_message: 'No Zenith OAuth session is connected yet.',
+          support: 'live',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+        {
+          id: 'antigravity',
+          name: 'Antigravity',
+          installed: true,
+          connected: false,
+          auth_label: 'Google OAuth',
+          status_message: 'Google does not publish an account-usage API.',
+          support: 'manual',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+      ],
+    };
+  },
+
+  async connectOpenRouter(): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async startScan(
+    onEvent: (event: ScanEvent) => void,
+    _categories?: Category[]
+  ): Promise<ScanResult> {
+    return new Promise((resolve) => {
+      const scanId = 'mock-scan-' + Date.now();
+      onEvent({ type: 'Started', scan_id: scanId });
+
+      setTimeout(() => {
+        onEvent({ type: 'CategoryStarted', category: 'ai' });
+        onEvent({
+          type: 'ItemFound',
+          item: {
+            id: 'ai.cursor.cache',
+            signature_id: 'ai.cursor.cache',
+            name: 'Cursor Editor Cache',
+            category: 'ai',
+            risk: 'safe',
+            path: '~/Library/Caches/Cursor',
+            size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
+            file_count: 3200,
+            description: 'V8 code cache and GPU shader cache',
+            is_selected: true,
+            last_modified: null,
+            exists: true,
+          },
+        });
+        onEvent({
+          type: 'ItemFound',
+          item: {
+            id: 'ai.claude.logs',
+            signature_id: 'ai.claude.logs',
+            name: 'Claude Code Logs',
+            category: 'ai',
+            risk: 'safe',
+            path: '~/.claude/logs',
+            size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
+            file_count: 140,
+            description: 'Session diagnostic logs',
+            is_selected: true,
+            last_modified: null,
+            exists: true,
+          },
+        });
+        onEvent({ type: 'CategoryFinished', category: 'ai', bytes: 3.2 * 1024 * 1024 * 1024, item_count: 2 });
+      }, 150);
+
+      setTimeout(() => {
+        onEvent({ type: 'CategoryStarted', category: 'developer' });
+        onEvent({
+          type: 'ItemFound',
+          item: {
+            id: 'dev.go.build',
+            signature_id: 'dev.go.build',
+            name: 'Go Build Cache',
+            category: 'developer',
+            risk: 'safe',
+            path: '~/Library/Caches/go-build',
+            size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
+            file_count: 12000,
+            description: 'Compiled packages cache',
+            is_selected: true,
+            last_modified: null,
+            exists: true,
+          },
+        });
+        onEvent({
+          type: 'ItemFound',
+          item: {
+            id: 'dev.cargo.registry.cache',
+            signature_id: 'dev.cargo.registry.cache',
+            name: 'Cargo Registry Cache',
+            category: 'developer',
+            risk: 'rebuild',
+            path: '~/.cargo/registry/cache',
+            size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
+            file_count: 850,
+            description: 'Downloaded crates archive',
+            is_selected: false,
+            last_modified: null,
+            exists: true,
+          },
+        });
+        onEvent({ type: 'CategoryFinished', category: 'developer', bytes: 5.1 * 1024 * 1024 * 1024, item_count: 2 });
+      }, 300);
+
+      setTimeout(() => {
+        const result: ScanResult = {
+          scan_id: scanId,
+          started_at: Math.floor(Date.now() / 1000) - 1,
+          finished_at: Math.floor(Date.now() / 1000),
+          categories: [
+            {
+              category: 'ai',
+              display_name: 'AI Tools',
+              items: [
+                {
+                  id: 'ai.cursor.cache',
+                  signature_id: 'ai.cursor.cache',
+                  name: 'Cursor Editor Cache',
+                  category: 'ai',
+                  risk: 'safe',
+                  path: '~/Library/Caches/Cursor',
+                  size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
+                  file_count: 3200,
+                  description: 'V8 code cache and GPU shader cache',
+                  is_selected: true,
+                  last_modified: null,
+                  exists: true,
+                },
+                {
+                  id: 'ai.claude.logs',
+                  signature_id: 'ai.claude.logs',
+                  name: 'Claude Code Logs',
+                  category: 'ai',
+                  risk: 'safe',
+                  path: '~/.claude/logs',
+                  size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
+                  file_count: 140,
+                  description: 'Session diagnostic logs',
+                  is_selected: true,
+                  last_modified: null,
+                  exists: true,
+                },
+              ],
+              total_bytes: 3.2 * 1024 * 1024 * 1024,
+              safe_bytes: 3.2 * 1024 * 1024 * 1024,
+              rebuild_bytes: 0,
+              manual_bytes: 0,
+            },
+            {
+              category: 'developer',
+              display_name: 'Developer',
+              items: [
+                {
+                  id: 'dev.go.build',
+                  signature_id: 'dev.go.build',
+                  name: 'Go Build Cache',
+                  category: 'developer',
+                  risk: 'safe',
+                  path: '~/Library/Caches/go-build',
+                  size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
+                  file_count: 12000,
+                  description: 'Compiled packages cache',
+                  is_selected: true,
+                  last_modified: null,
+                  exists: true,
+                },
+                {
+                  id: 'dev.cargo.registry.cache',
+                  signature_id: 'dev.cargo.registry.cache',
+                  name: 'Cargo Registry Cache',
+                  category: 'developer',
+                  risk: 'rebuild',
+                  path: '~/.cargo/registry/cache',
+                  size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
+                  file_count: 850,
+                  description: 'Downloaded crates archive',
+                  is_selected: false,
+                  last_modified: null,
+                  exists: true,
+                },
+              ],
+              total_bytes: 5.1 * 1024 * 1024 * 1024,
+              safe_bytes: 3.1 * 1024 * 1024 * 1024,
+              rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
+              manual_bytes: 0,
+            },
+          ],
+          total_bytes: 8.3 * 1024 * 1024 * 1024,
+          safe_bytes: 6.3 * 1024 * 1024 * 1024,
+          rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
+          manual_bytes: 0,
+        };
+
+        onEvent({ type: 'Finished', result });
+        resolve(result);
+      }, 450);
+    });
+  },
+
+  async getLastScan(): Promise<ScanResult | null> {
+    return null;
+  },
+
+  async createPlan(_scanId: string, items: ScanItem[]): Promise<PlanPreview> {
+    return {
+      id: 'mock-plan-1',
+      targets: items.map((i) => ({
+        item_id: i.id,
+        name: i.name,
+        expected_bytes: i.size.allocated ?? i.size.logical,
+        risk: i.risk,
+      })),
+      expected_reclaim_bytes: items.reduce(
+        (acc, i) => acc + (i.size.allocated ?? i.size.logical),
+        0
+      ),
+      risk: {
+        safe_count: items.filter((i) => i.risk === 'safe').length,
+        rebuild_count: items.filter((i) => i.risk === 'rebuild').length,
+        manual_count: items.filter((i) => i.risk === 'manual').length,
+        safe_bytes: items
+          .filter((i) => i.risk === 'safe')
+          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+        rebuild_bytes: items
+          .filter((i) => i.risk === 'rebuild')
+          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+        manual_bytes: items
+          .filter((i) => i.risk === 'manual')
+          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+      },
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    };
+  },
+
+  async executeClean(
+    plan: PlanPreview,
+    onEvent: (event: CleanEvent) => void
+  ): Promise<CleanResult> {
+    return new Promise((resolve) => {
+      onEvent({
+        type: 'Started',
+        plan_id: plan.id,
+        total_targets: plan.targets.length,
+        expected_bytes: plan.expected_reclaim_bytes,
+      });
+
+      const items: CleanItemResult[] = [];
+      plan.targets.forEach((t, i) => {
+        setTimeout(() => {
+          onEvent({
+            type: 'ItemStarted',
+            item_id: t.item_id,
+            name: t.name,
+            index: i + 1,
+            total: plan.targets.length,
+          });
+
+          setTimeout(() => {
+            onEvent({
+              type: 'ItemFinished',
+              item_id: t.item_id,
+              name: t.name,
+              success: true,
+              reclaimed_bytes: t.expected_bytes,
+              error: null,
+            });
+            items.push({
+              item_id: t.item_id,
+              name: t.name,
+              path: '',
+              status: 'success',
+              success: true,
+              bytes_reclaimed: t.expected_bytes,
+              failure_reason: null,
+              error_message: null,
+            });
+
+            if (items.length === plan.targets.length) {
+              const res: CleanResult = {
+                plan_id: plan.id,
+                started_at: plan.expires_at - 300,
+                finished_at: Math.floor(Date.now() / 1000),
+                total_reclaimed_bytes: plan.expected_reclaim_bytes,
+                total_failed_bytes: 0,
+                items,
+                actual_disk_free_delta: plan.expected_reclaim_bytes,
+              };
+              onEvent({ type: 'Finished', result: res });
+              resolve(res);
+            }
+          }, 100);
+        }, i * 200);
+      });
+    });
+  },
+
+  async getMemoryMetrics(): Promise<MemoryMetrics> {
+    return {
+      total_bytes: 16 * 1024 * 1024 * 1024,
+      used_bytes: 11.8 * 1024 * 1024 * 1024,
+      available_bytes: 4.2 * 1024 * 1024 * 1024,
+      free_bytes: 1.2 * 1024 * 1024 * 1024,
+      compressed_bytes: 2.1 * 1024 * 1024 * 1024,
+      swap_used_bytes: 650 * 1024 * 1024,
+      swap_total_bytes: 2 * 1024 * 1024 * 1024,
+      pressure: 'normal',
+      top_processes: [
+        { pid: 102, name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true },
+        { pid: 101, name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true },
+        { pid: 103, name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true },
+        { pid: 104, name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true },
+        { pid: 105, name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true },
+      ],
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+  },
+
+  async terminateProcessGroup(name: string, _force: boolean): Promise<number> {
+    return name === 'Google Chrome' ? 109 : 1;
+  },
+
+  async pickKeepAwakeApplication(): Promise<SelectedApplication | null> {
+    return {
+      name: 'Blender',
+      executable_pattern: 'Blender',
+      path: '/Applications/Blender.app',
+    };
+  },
+
+  async getDiskMetrics(): Promise<DiskMetrics> {
+    return {
+      mount_point: '/',
+      total_bytes: 494 * 1024 * 1024 * 1024,
+      used_bytes: 341 * 1024 * 1024 * 1024,
+      free_bytes: 153 * 1024 * 1024 * 1024,
+      available_bytes: 153 * 1024 * 1024 * 1024,
+      percent_used: 69.0,
+    };
+  },
+
+  async getDiskVolumes(): Promise<DiskVolume[]> {
+    return [
+      {
+        name: 'Macintosh HD',
+        mount_point: '/',
+        file_system: 'APFS',
+        disk_type: 'SSD',
+        total_bytes: 228.3 * 1024 * 1024 * 1024,
+        used_bytes: 190.5 * 1024 * 1024 * 1024,
+        available_bytes: 37.8 * 1024 * 1024 * 1024,
+        percent_used: 83.5,
+        is_removable: false,
+        is_primary: true,
+      },
+      {
+        name: 'Developer SSD',
+        mount_point: '/Volumes/Developer SSD',
+        file_system: 'APFS',
+        disk_type: 'SSD',
+        total_bytes: 1_000 * 1024 * 1024 * 1024,
+        used_bytes: 642 * 1024 * 1024 * 1024,
+        available_bytes: 358 * 1024 * 1024 * 1024,
+        percent_used: 64.2,
+        is_removable: true,
+        is_primary: false,
+      },
+    ];
+  },
+
+  async openDiskUtility(): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async getDockerStatus(): Promise<DockerStatus> {
+    return {
+      is_available: true,
+      is_running: true,
+      version: 'Docker version 27.0.3',
+      error_message: null,
+      overview: {
+        images: { total_bytes: 7.2 * 1024 * 1024 * 1024, reclaimable_bytes: 2.1 * 1024 * 1024 * 1024 },
+        build_cache: { total_bytes: 8.1 * 1024 * 1024 * 1024, reclaimable_bytes: 8.1 * 1024 * 1024 * 1024 },
+        containers: { total_bytes: 1.4 * 1024 * 1024 * 1024, reclaimable_bytes: 1.4 * 1024 * 1024 * 1024 },
+        volumes: { total_bytes: 1.6 * 1024 * 1024 * 1024, reclaimable_bytes: 600 * 1024 * 1024 },
+        total_bytes: 18.3 * 1024 * 1024 * 1024,
+        total_reclaimable_bytes: 12.2 * 1024 * 1024 * 1024,
+        safe_cleanable_bytes: 10.2 * 1024 * 1024 * 1024,
+      },
+      images: [],
+      containers: [],
+      volumes: [],
+    };
+  },
+
+  async pruneDocker(_signatureId: string): Promise<number> {
+    return 1024 * 1024 * 1024;
+  },
+
+  async getLocalModels(): Promise<LocalModelItem[]> {
+    return [
+      {
+        id: 'ollama.llama3:70b',
+        name: 'llama3:70b',
+        source: 'ollama',
+        path: '~/.ollama/models/manifests/registry.ollama.ai/library/llama3/70b',
+        size_bytes: 18.2 * 1024 * 1024 * 1024,
+        format: 'GGUF',
+        parameter_size: null,
+        quantization: null,
+        last_modified: Math.floor(Date.now() / 1000) - 86400 * 3,
+      },
+      {
+        id: 'ollama.qwen2.5-coder:32b',
+        name: 'qwen2.5-coder:32b',
+        source: 'ollama',
+        path: '~/.ollama/models/manifests/registry.ollama.ai/library/qwen2.5-coder/32b',
+        size_bytes: 9.8 * 1024 * 1024 * 1024,
+        format: 'GGUF',
+        parameter_size: null,
+        quantization: null,
+        last_modified: Math.floor(Date.now() / 1000) - 86400 * 1,
+      },
+      {
+        id: 'hf.meta-llama/Llama-3.2-3B',
+        name: 'meta-llama/Llama-3.2-3B',
+        source: 'huggingface',
+        path: '~/.cache/huggingface/hub/models--meta-llama--Llama-3.2-3B',
+        size_bytes: 4.2 * 1024 * 1024 * 1024,
+        format: 'safetensors',
+        parameter_size: null,
+        quantization: null,
+        last_modified: Math.floor(Date.now() / 1000) - 86400 * 5,
+      },
+    ];
+  },
+
+  async deleteLocalModel(_modelId: string): Promise<number> {
+    return 4.2 * 1024 * 1024 * 1024;
+  },
+
+  async getAwakeState(): Promise<AwakeState> {
+    return {
+      is_active: false,
+      behavior: null,
+      trigger_source: null,
+      active_process_name: null,
+      active_rule_id: null,
+      manual_expires_at: null,
+      active_rules_count: 2,
+      power_source: 'ac',
+      last_error: null,
+      rule_evaluations: [
+        {
+          rule_id: 'rule.codex',
+          status: 'waiting_process',
+          is_process_running: false,
+          is_power_eligible: true,
+        },
+        {
+          rule_id: 'rule.claude',
+          status: 'waiting_process',
+          is_process_running: false,
+          is_power_eligible: true,
+        },
+      ],
+    };
+  },
+
+  async setAwakeRules(_rules: AwakeRule[]): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async setManualAwake(
+    _durationSecs: number | null,
+    _behavior: AwakeBehavior
+  ): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async disableManualAwake(): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async getSettings(): Promise<ZenithSettings_Serialize> {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('zenith.settings') : null;
+    if (raw) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        // Fallback
+      }
+    }
+    return {
+      launch_at_login: false,
+      clean_ai_tools: true,
+      clean_developer_tools: true,
+      clean_docker: true,
+      clean_local_models: false,
+      include_rebuild_caches: false,
+      theme: 'system',
+      excluded_signatures: [],
+      quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+      quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
+      awake_rules: [
+        {
+          id: 'rule.codex',
+          app_name: 'Codex',
+          executable_pattern: 'codex',
+          behavior: 'prevent_system_sleep',
+          power_condition: 'ac_power_only',
+          enabled: true,
+        },
+        {
+          id: 'rule.claude',
+          app_name: 'Claude Code',
+          executable_pattern: 'claude',
+          behavior: 'prevent_system_sleep',
+          power_condition: 'ac_power_only',
+          enabled: true,
+        },
+      ],
+    };
+  },
+
+  async saveSettings(settings: ZenithSettings): Promise<void> {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('zenith.settings', JSON.stringify(settings));
+    }
+  },
+
+  async revealInFinder(_path: string): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async openDashboard(): Promise<void> {
+    if (typeof window !== 'undefined') {
+      window.location.hash = '#dashboard';
+    }
+  },
+
+  async toggleQuick(): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async getAppVersion(): Promise<string> {
+    return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
+  },
+
+  async hideCurrentWindow(): Promise<void> {
+    // No-op in browser mock
+  },
+};

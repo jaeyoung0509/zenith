@@ -248,9 +248,43 @@ pub fn run() {
         .expect("error while running zenith application");
 }
 
+pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .dangerously_cast_bigints_to_number()
+        .commands(tauri_specta::collect_commands![
+            commands::get_ai_usage,
+            commands::connect_openrouter_oauth,
+            commands::start_scan,
+            commands::get_last_scan,
+            commands::create_delete_plan,
+            commands::execute_clean,
+            commands::get_memory_metrics,
+            commands::terminate_process_group,
+            commands::pick_keep_awake_application,
+            commands::get_disk_metrics,
+            commands::get_disk_volumes,
+            commands::open_disk_utility,
+            commands::get_docker_status,
+            commands::prune_docker_target,
+            commands::get_local_models,
+            commands::delete_local_model,
+            commands::get_awake_state,
+            commands::set_awake_rules,
+            commands::set_manual_awake,
+            commands::disable_manual_awake,
+            commands::get_settings,
+            commands::save_settings,
+            commands::reveal_in_finder,
+            commands::open_dashboard_window,
+            commands::get_app_version,
+            commands::toggle_quick_panel,
+        ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::quick_panel_position;
+    use super::specta_builder;
     use tauri::{PhysicalPosition, PhysicalSize};
 
     #[test]
@@ -273,5 +307,16 @@ mod tests {
             PhysicalSize::new(3_456, 2_234),
         );
         assert_eq!(position, PhysicalPosition::new(0, 1_194));
+    }
+
+    #[test]
+    fn test_export_typescript_bindings() {
+        let builder = specta_builder();
+        builder
+            .export(
+                specta_typescript::Typescript::default(),
+                "../src/lib/bindings/tauri.ts",
+            )
+            .expect("Failed to export TypeScript bindings");
     }
 }
