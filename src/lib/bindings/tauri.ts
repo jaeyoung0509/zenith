@@ -282,6 +282,7 @@ export type PowerSourceType = "ac" | "battery" | "unknown";
 
 export type ProcessMemory = {
 	pid: number,
+	pids: number[],
 	name: string,
 	memory_bytes: number,
 	process_count: number,

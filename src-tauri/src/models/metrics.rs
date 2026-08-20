@@ -21,6 +21,8 @@ impl MemoryPressure {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ProcessMemory {
     pub pid: u32,
+    #[serde(default)]
+    pub pids: Vec<u32>,
     pub name: String,
     pub memory_bytes: u64,
     pub process_count: usize,

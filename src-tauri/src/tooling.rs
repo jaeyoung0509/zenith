@@ -31,8 +31,6 @@ pub fn command(name: &str) -> Command {
 }
 
 #[cfg(unix)]
-use std::os::unix::io::AsRawFd;
-#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::sync::mpsc;
 
@@ -55,11 +53,6 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
 
     let mut stdout_stream = child.stdout.take();
     let mut stderr_stream = child.stderr.take();
-
-    #[cfg(unix)]
-    let stdout_fd = stdout_stream.as_ref().map(|s| s.as_raw_fd());
-    #[cfg(unix)]
-    let stderr_fd = stderr_stream.as_ref().map(|s| s.as_raw_fd());
 
     let (tx_out, rx_out) = mpsc::channel();
     let stdout_handle = std::thread::spawn(move || {
@@ -88,36 +81,13 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
             }
         }
 
-        // Wait up to 100ms for pipes to drain naturally
-        let stdout = match rx_out.recv_timeout(Duration::from_millis(100)) {
-            Ok(buf) => buf,
-            Err(_) => {
-                #[cfg(unix)]
-                if let Some(fd) = stdout_fd {
-                    unsafe {
-                        libc::close(fd);
-                    }
-                }
-                rx_out
-                    .recv_timeout(Duration::from_millis(50))
-                    .unwrap_or_default()
-            }
-        };
+        let stdout = rx_out
+            .recv_timeout(Duration::from_millis(200))
+            .unwrap_or_default();
 
-        let stderr = match rx_err.recv_timeout(Duration::from_millis(100)) {
-            Ok(buf) => buf,
-            Err(_) => {
-                #[cfg(unix)]
-                if let Some(fd) = stderr_fd {
-                    unsafe {
-                        libc::close(fd);
-                    }
-                }
-                rx_err
-                    .recv_timeout(Duration::from_millis(50))
-                    .unwrap_or_default()
-            }
-        };
+        let stderr = rx_err
+            .recv_timeout(Duration::from_millis(200))
+            .unwrap_or_default();
 
         let _ = stdout_handle.join();
         let _ = stderr_handle.join();

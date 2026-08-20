@@ -235,10 +235,13 @@
 
       {#if filteredProcesses.length > 0}
         <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
-          {#each filteredProcesses as proc (`${proc.pid}:${proc.name}`)}
+          {#each filteredProcesses as proc (proc.name)}
             <div class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
               <div class="flex items-center gap-3 min-w-0 pr-2">
-                <div class="font-mono text-[11px] text-muted-foreground w-12 shrink-0">
+                <div
+                  class="font-mono text-[11px] text-muted-foreground w-12 shrink-0"
+                  title={proc.pids && proc.pids.length > 1 ? `PIDs: ${proc.pids.join(', ')}` : undefined}
+                >
                   PID {proc.pid}
                 </div>
                 <div class="min-w-0 truncate">
