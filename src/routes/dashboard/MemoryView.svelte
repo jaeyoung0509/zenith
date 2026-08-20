@@ -19,14 +19,60 @@
   } from 'lucide-svelte';
 
   onMount(() => {
-    memoryStore.startPolling(2500);
+    function updatePolling() {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        memoryStore.startPolling(2500);
+      } else {
+        memoryStore.stopPolling();
+      }
+    }
+
+    updatePolling();
+    document.addEventListener('visibilitychange', updatePolling);
+
     return () => {
+      document.removeEventListener('visibilitychange', updatePolling);
       memoryStore.stopPolling();
     };
   });
 
   let memory = $derived(memoryStore.memory);
   let pendingProcess = $state<ProcessMemory | null>(null);
+  let isRefreshing = $state(false);
+
+  let topReclaimableApp = $derived(
+    memory?.top_processes.find((p) => p.can_terminate && p.memory_bytes > 400 * 1024 * 1024)
+  );
+
+  let memoryHealthTitle = $derived.by(() => {
+    if (!memory) return 'Reading memory metrics…';
+    if (memory.pressure === 'critical') return 'Memory pressure is high';
+    if (memory.pressure === 'warning') return 'Elevated memory usage';
+    return 'Memory looks healthy';
+  });
+
+  let memoryHealthSubtitle = $derived.by(() => {
+    if (!memory) return '';
+    if (memory.pressure === 'critical' || memory.pressure === 'warning') {
+      if (topReclaimableApp) {
+        return `Closing ${topReclaimableApp.name} could recover ~${formatBytes(topReclaimableApp.memory_bytes)}.`;
+      }
+      return 'Consider closing background developer apps to relieve system memory.';
+    }
+    return 'System memory allocations and swap are well within safe thresholds. No action needed.';
+  });
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await memoryStore.refreshMemory();
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 
   async function terminatePending(force: boolean) {
     if (!pendingProcess) return;
@@ -51,15 +97,15 @@
       </div>
       <div>
         <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground tracking-tight">Memory Inspector</h2>
+          <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
           {#if memory}
             <div class="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium border {pressureColors[memory.pressure]}">
-              Estimated: {memory.pressure.toUpperCase()}
+              Pressure: {memory.pressure.toUpperCase()}
             </div>
           {/if}
         </div>
         <p class="text-xs text-muted-foreground mt-0.5">
-          Real-time macOS memory pressure, compressed memory, swap usage, and developer processes.
+          {memoryHealthSubtitle}
         </p>
       </div>
     </div>
@@ -67,11 +113,11 @@
     <Button
       variant="outline"
       size="sm"
-      disabled={memoryStore.isLoading}
-      onclick={() => memoryStore.refreshMemory()}
+      disabled={isRefreshing || memoryStore.isLoading}
+      onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={memoryStore.isLoading ? 'animate-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>

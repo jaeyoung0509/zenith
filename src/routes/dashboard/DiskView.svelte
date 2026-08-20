@@ -63,7 +63,7 @@
         Disk Utility
       </Button>
       <Button variant="outline" size="sm" class="gap-1.5" disabled={isLoading} onclick={refresh}>
-        <RefreshCw size={13} class={isLoading ? 'animate-spin' : ''} />
+        <RefreshCw size={13} class={isLoading ? 'animate-gentle-spin' : ''} />
         Refresh
       </Button>
     </div>
@@ -85,10 +85,10 @@
         </div>
       </div>
       <div class="mt-5 space-y-2">
-        <ProgressBar value={primary.percent_used} height="h-2" />
+        <ProgressBar value={primary.percent_used ?? 0} height="h-2" />
         <div class="flex justify-between text-[10px] font-mono text-muted-foreground">
           <span>{formatBytes(primary.used_bytes)} used</span>
-          <span>{primary.percent_used.toFixed(1)}%</span>
+          <span>{primary.percent_used != null ? `${primary.percent_used.toFixed(1)}%` : '—'}</span>
         </div>
       </div>
     </Card>
@@ -118,9 +118,9 @@
             <div class="mt-4 space-y-1.5">
               <div class="flex justify-between text-[10px]">
                 <span class="font-mono">{formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)}</span>
-                <span class="text-muted-foreground">{volume.percent_used.toFixed(1)}%</span>
+                <span class="text-muted-foreground">{volume.percent_used != null ? `${volume.percent_used.toFixed(1)}%` : '—'}</span>
               </div>
-              <ProgressBar value={volume.percent_used} height="h-1.5" />
+              <ProgressBar value={volume.percent_used ?? 0} height="h-1.5" />
             </div>
           </Card>
         {/each}

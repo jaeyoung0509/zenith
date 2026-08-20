@@ -128,3 +128,27 @@ impl Drop for PowerAssertion {
         }
     }
 }
+
+pub trait PowerAssertionProvider: Send + Sync {
+    fn acquire(&self, behavior: AwakeBehavior, reason: &str)
+        -> Result<PowerAssertion, ZenithError>;
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct NativeAssertionProvider;
+
+impl NativeAssertionProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl PowerAssertionProvider for NativeAssertionProvider {
+    fn acquire(
+        &self,
+        behavior: AwakeBehavior,
+        reason: &str,
+    ) -> Result<PowerAssertion, ZenithError> {
+        PowerAssertion::acquire(behavior, reason)
+    }
+}

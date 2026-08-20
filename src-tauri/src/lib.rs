@@ -1,6 +1,7 @@
 pub mod ai_usage;
 pub mod cleaner;
 pub mod commands;
+pub mod diagnostics;
 pub mod docker;
 pub mod metrics;
 pub mod models;
@@ -20,7 +21,28 @@ use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow, WebviewWindowBuilder,
+};
+
+pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == label)
+        .cloned()
+        .ok_or_else(|| {
+            tauri::Error::AssetNotFound(format!("Window config for {label} not found"))
+        })?;
+
+    WebviewWindowBuilder::from_config(app, &config)?.build()
+}
 
 fn tray_anchor(window: &WebviewWindow, rect: Rect) -> PhysicalPosition<f64> {
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -82,6 +104,7 @@ pub fn run() {
     let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
     let delete_plans = Arc::new(Mutex::new(HashMap::new()));
     let operation_lock = Arc::new(Mutex::new(()));
+    let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
 
     let app_state = AppState {
         registry,
@@ -93,16 +116,21 @@ pub fn run() {
         ai_usage_refresh_lock,
         delete_plans,
         operation_lock,
+        memory_sampler,
     };
 
     tauri::Builder::default()
         .manage(app_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Zenith is a menu-bar utility: Cmd+W and the red traffic-light
-                // button hide the focused window while the tray process stays alive.
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "quick" {
+                    // Quick panel hides to stay responsive
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if window.label() == "main" {
+                    // Main dashboard is destroyed on close to release WKWebView memory back to the OS.
+                    // The tray keeps the application alive.
+                }
             }
         })
         .setup(move |app| {
@@ -137,13 +165,13 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open_dashboard" => {
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Ok(window) = ensure_window(app, "main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
                     }
                     "toggle_quick" => {
-                        if let Some(window) = app.get_webview_window("quick") {
+                        if let Ok(window) = ensure_window(app, "quick") {
                             if window.is_visible().unwrap_or(false) {
                                 let _ = window.hide();
                             } else {
@@ -166,7 +194,8 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        if let Some(quick_win) = tray.app_handle().get_webview_window("quick") {
+                        let app = tray.app_handle();
+                        if let Ok(quick_win) = ensure_window(app, "quick") {
                             let is_vis = quick_win.is_visible().unwrap_or(false);
                             if is_vis {
                                 let _ = quick_win.hide();
@@ -188,7 +217,17 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(specta_builder().invoke_handler())
+        .run(tauri::generate_context!())
+        .expect("error while running zenith application");
+}
+
+pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
+        // Zenith's IPC u64 values are bounded well below JS MAX_SAFE_INTEGER.
+        // Revisit before introducing arbitrary external 64-bit identifiers/counters.
+        .dangerously_cast_bigints_to_number()
+        .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
             commands::connect_openrouter_oauth,
             commands::start_scan,
@@ -213,15 +252,17 @@ pub fn run() {
             commands::save_settings,
             commands::reveal_in_finder,
             commands::open_dashboard_window,
+            commands::get_app_version,
             commands::toggle_quick_panel,
+            commands::get_diagnostics,
+            commands::open_logs_folder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running zenith application");
 }
 
 #[cfg(test)]
 mod tests {
     use super::quick_panel_position;
+    use super::specta_builder;
     use tauri::{PhysicalPosition, PhysicalSize};
 
     #[test]
@@ -244,5 +285,17 @@ mod tests {
             PhysicalSize::new(3_456, 2_234),
         );
         assert_eq!(position, PhysicalPosition::new(0, 1_194));
+    }
+
+    #[test]
+    #[ignore = "code generation"]
+    fn export_typescript_bindings() {
+        let builder = specta_builder();
+        builder
+            .export(
+                specta_typescript::Typescript::default(),
+                "../src/lib/bindings/tauri.ts",
+            )
+            .expect("Failed to export TypeScript bindings");
     }
 }

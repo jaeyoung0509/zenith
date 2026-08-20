@@ -1,6 +1,6 @@
-import type { AiProviderId, QuickPanelSection, ZenithSettings } from '../models/types';
+import type { AiProviderId, DashboardTab, QuickPanelSection, ZenithSettings } from '../models/types';
 import { tauriGetSettings, tauriSaveSettings } from '../utils/tauri';
-import { moveOrdered, toggleOrdered } from '../utils/quickPanel';
+import { moveOrdered, reorderOrdered, toggleOrdered } from '../utils/quickPanel';
 
 class SettingsStore {
   settings = $state<ZenithSettings>({
@@ -12,21 +12,32 @@ class SettingsStore {
     include_rebuild_caches: false,
     theme: 'system',
     excluded_signatures: [],
-    quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+    quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
     awake_rules: [
+      {
+        id: 'rule.codex',
+        app_name: 'Codex',
+        executable_pattern: 'codex',
+        behavior: 'prevent_system_sleep',
+        power_condition: 'ac_power_only',
+        enabled: false,
+      },
       {
         id: 'rule.claude',
         app_name: 'Claude Code',
         executable_pattern: 'claude',
         behavior: 'prevent_system_sleep',
-        enabled: true,
+        power_condition: 'ac_power_only',
+        enabled: false,
       },
       {
         id: 'rule.docker',
         app_name: 'Docker Desktop',
         executable_pattern: 'com.docker.backend',
         behavior: 'prevent_system_sleep',
+        power_condition: 'ac_power_only',
         enabled: false,
       },
       {
@@ -34,6 +45,7 @@ class SettingsStore {
         app_name: 'Terminal / iTerm2 / Ghostty',
         executable_pattern: 'Terminal|iTerm2|ghostty',
         behavior: 'prevent_system_sleep',
+        power_condition: 'ac_power_only',
         enabled: false,
       },
     ],
@@ -64,6 +76,7 @@ class SettingsStore {
         ...this.settings,
         quick_panel_sections: this.settings.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
         quick_panel_ai_providers: this.settings.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+        dashboard_tabs: this.settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
       };
       this.hasLoaded = true;
       this.applyTheme(this.settings.theme);
@@ -87,6 +100,22 @@ class SettingsStore {
     }
   }
 
+  async toggleDashboardTab(tab: DashboardTab) {
+    const current = this.settings.dashboard_tabs;
+    const next = toggleOrdered(current, tab, true);
+    await this.save({ dashboard_tabs: next });
+  }
+
+  async moveDashboardTab(tab: DashboardTab, direction: -1 | 1) {
+    const next = moveOrdered(this.settings.dashboard_tabs, tab, direction);
+    await this.save({ dashboard_tabs: next });
+  }
+
+  async reorderDashboardTabs(dragged: DashboardTab, target: DashboardTab) {
+    const next = reorderOrdered(this.settings.dashboard_tabs, dragged, target);
+    await this.save({ dashboard_tabs: next });
+  }
+
   async toggleQuickPanelSection(section: QuickPanelSection) {
     const current = this.settings.quick_panel_sections;
     const next = toggleOrdered(current, section, true);
@@ -98,6 +127,11 @@ class SettingsStore {
     await this.save({ quick_panel_sections: next });
   }
 
+  async reorderQuickPanelSections(dragged: QuickPanelSection, target: QuickPanelSection) {
+    const next = reorderOrdered(this.settings.quick_panel_sections, dragged, target);
+    await this.save({ quick_panel_sections: next });
+  }
+
   async toggleQuickPanelProvider(provider: AiProviderId) {
     const current = this.settings.quick_panel_ai_providers;
     const next = toggleOrdered(current, provider);
@@ -106,6 +140,11 @@ class SettingsStore {
 
   async moveQuickPanelProvider(provider: AiProviderId, direction: -1 | 1) {
     const next = moveOrdered(this.settings.quick_panel_ai_providers, provider, direction);
+    await this.save({ quick_panel_ai_providers: next });
+  }
+
+  async reorderQuickPanelProviders(dragged: AiProviderId, target: AiProviderId) {
+    const next = reorderOrdered(this.settings.quick_panel_ai_providers, dragged, target);
     await this.save({ quick_panel_ai_providers: next });
   }
 

@@ -45,15 +45,17 @@ impl ApplicationPicker {
             .ok_or_else(|| "The selected application has an invalid name".to_string())?
             .to_string();
         let info_plist = path.join("Contents/Info.plist");
-        let executable_pattern = Command::new("plutil")
+        let mut plutil_cmd = Command::new("plutil");
+        plutil_cmd
             .args(["-extract", "CFBundleExecutable", "raw", "-o", "-"])
-            .arg(&info_plist)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| name.clone());
+            .arg(&info_plist);
+        let executable_pattern =
+            crate::tooling::run_with_timeout(plutil_cmd, std::time::Duration::from_secs(3))
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| name.clone());
 
         Ok(SelectedApplication {
             name,

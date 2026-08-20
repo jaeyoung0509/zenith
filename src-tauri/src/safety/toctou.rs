@@ -19,18 +19,19 @@ impl ToctouGuard {
                 inode: meta.ino(),
                 is_dir: meta.is_dir(),
                 size: meta.len(),
-                mtime_secs: meta.mtime() as u64,
+                mtime_secs: meta.mtime().max(0) as u64,
+                mtime_nanos: meta.mtime_nsec().max(0) as u32,
             })
         }
 
         #[cfg(not(unix))]
         {
-            let mtime_secs = meta
+            let (mtime_secs, mtime_nanos) = meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+                .map(|d| (d.as_secs(), d.subsec_nanos()))
+                .unwrap_or((0, 0));
 
             Some(FileIdentity {
                 device: 0,
@@ -38,6 +39,7 @@ impl ToctouGuard {
                 is_dir: meta.is_dir(),
                 size: meta.len(),
                 mtime_secs,
+                mtime_nanos,
             })
         }
     }
@@ -84,6 +86,26 @@ impl ToctouGuard {
                 current.is_dir,
                 path.display()
             )));
+        }
+
+        // For individual files, modification timestamp and size must match
+        if !current.is_dir {
+            if current.mtime_secs != expected.mtime_secs
+                || current.mtime_nanos != expected.mtime_nanos
+            {
+                return Err(ZenithError::ChangedSinceScan(format!(
+                    "File {} was modified after scanning (mtime mismatch)",
+                    path.display()
+                )));
+            }
+            if current.size != expected.size {
+                return Err(ZenithError::ChangedSinceScan(format!(
+                    "File {} size changed from {} to {} bytes after scanning",
+                    path.display(),
+                    expected.size,
+                    current.size
+                )));
+            }
         }
 
         Ok(())

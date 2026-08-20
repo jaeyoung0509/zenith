@@ -5,7 +5,7 @@
   import { tauriRevealInFinder } from '../utils/tauri';
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
-  import { FolderOpen } from 'lucide-svelte';
+  import { FolderOpen, ArrowUpRight } from 'lucide-svelte';
 
   interface Props {
     item: ScanItem;
@@ -13,9 +13,11 @@
 
   let { item }: Props = $props();
 
-  let isSelected = $derived(!!scanStore.selectedMap[item.id]);
+  let isManual = $derived(item.risk === 'manual');
+  let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual);
 
   function handleToggle() {
+    if (isManual) return;
     scanStore.toggleItem(item.id);
   }
 
@@ -31,12 +33,24 @@
     : ''}"
 >
   <div class="flex items-start space-x-3 flex-1 min-w-0 pr-3">
-    <input
-      type="checkbox"
-      checked={isSelected}
-      onchange={handleToggle}
-      class="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring cursor-pointer accent-primary shrink-0"
-    />
+    {#if isManual}
+      <button
+        type="button"
+        onclick={handleReveal}
+        title="Manual item: requires dedicated adapter or review"
+        class="mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border border-rose-500/30 text-rose-400 bg-rose-500/10 flex items-center gap-0.5 shrink-0 hover:bg-rose-500/20 transition-colors cursor-pointer"
+      >
+        <span>Manual</span>
+        <ArrowUpRight size={10} />
+      </button>
+    {:else}
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onchange={handleToggle}
+        class="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring cursor-pointer accent-primary shrink-0"
+      />
+    {/if}
 
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2">

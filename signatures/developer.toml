@@ -180,7 +180,7 @@ description = "Diagnostic caches, documentation indexes, and Simulator temporary
 id = "dev.gradle.caches"
 name = "Gradle Caches"
 category = "developer"
-risk = "safe"
+risk = "rebuild"
 strategy = "delete_contents"
 paths = [
     "~/.gradle/caches"

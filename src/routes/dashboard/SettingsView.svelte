@@ -1,9 +1,22 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
-  import type { AiProviderId, QuickPanelSection } from '../../lib/models/types';
+  import type { AiProviderId, DashboardTab, DiagnosticsSnapshot, QuickPanelSection } from '../../lib/models/types';
+  import { tauriGetDiagnostics, tauriOpenLogsFolder } from '../../lib/utils/tauri';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
-  import { Settings, Sparkles, Moon, Sun, Monitor, ChevronUp, ChevronDown, PanelTop } from 'lucide-svelte';
+  import Button from '../../lib/components/Button.svelte';
+  import { APP_VERSION, formatVersion } from '../../lib/utils/version';
+  import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical, FolderOpen, FileText, AlertTriangle } from 'lucide-svelte';
+
+  const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
+    { id: 'storage', label: 'Storage & Disks', description: 'Primary storage, volumes, and developer/AI caches.' },
+    { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
+    { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
+    { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
+    { id: 'usage', label: 'AI Usage', description: 'OAuth coding agent limits and local token insights.' },
+    { id: 'awake', label: 'Keep Awake', description: 'Prevent system and display sleep rules.' },
+  ];
 
   const sectionOptions: { id: QuickPanelSection; label: string; description: string }[] = [
     { id: 'storage', label: 'Storage', description: 'Primary disk capacity and usage.' },
@@ -22,6 +35,15 @@
 
   let settings = $derived(settingsStore.settings);
 
+  let draggedTab = $state<DashboardTab | null>(null);
+  let dragOverTab = $state<DashboardTab | null>(null);
+
+  let draggedSection = $state<QuickPanelSection | null>(null);
+  let dragOverSection = $state<QuickPanelSection | null>(null);
+
+  let draggedProvider = $state<AiProviderId | null>(null);
+  let dragOverProvider = $state<AiProviderId | null>(null);
+
   function handleToggle(key: keyof typeof settings) {
     if (typeof settings[key] === 'boolean') {
       settingsStore.save({ [key]: !settings[key] });
@@ -30,6 +52,51 @@
 
   function handleTheme(theme: string) {
     settingsStore.save({ theme });
+  }
+
+  let diagnosticsData = $state<DiagnosticsSnapshot | null>(null);
+  let copiedDiagnostics = $state(false);
+
+  onMount(() => {
+    void loadDiagnostics();
+  });
+
+  async function loadDiagnostics() {
+    try {
+      diagnosticsData = await tauriGetDiagnostics();
+    } catch {
+      // preview mode fallback
+    }
+  }
+
+  async function handleOpenLogs() {
+    try {
+      await tauriOpenLogsFolder();
+    } catch (e: any) {
+      settingsStore.error = e?.toString() || 'Failed to open logs folder';
+    }
+  }
+
+  async function handleExportDiagnostics() {
+    try {
+      diagnosticsData = await tauriGetDiagnostics();
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(JSON.stringify(diagnosticsData, null, 2));
+        copiedDiagnostics = true;
+        setTimeout(() => {
+          copiedDiagnostics = false;
+        }, 2500);
+      }
+    } catch (e: any) {
+      settingsStore.error = e?.toString() || 'Failed to export diagnostics';
+    }
+  }
+
+  function orderedDashboardTabs() {
+    const selected = (settings.dashboard_tabs ?? [])
+      .map((id) => tabOptions.find((option) => option.id === id))
+      .filter((option): option is (typeof tabOptions)[number] => Boolean(option));
+    return [...selected, ...tabOptions.filter((option) => !(settings.dashboard_tabs ?? []).includes(option.id))];
   }
 
   function orderedSections() {
@@ -95,6 +162,69 @@
     </Card>
   </div>
 
+  <!-- Dashboard Navigation Customization -->
+  <div class="space-y-3">
+    <div>
+      <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Dashboard Navigation Menu
+      </h3>
+      <p class="text-[11px] text-muted-foreground mt-1">
+        Customize the tabs displayed in the left sidebar and drag to reorder.
+      </p>
+    </div>
+    <Card class="p-4 bg-card/70 space-y-3">
+      <div class="flex items-center gap-2 text-xs font-medium text-foreground pb-1">
+        <LayoutList size={14} /> Sidebar Menu Order
+      </div>
+      {#each orderedDashboardTabs() as tabOption}
+        {@const enabled = (settings.dashboard_tabs ?? []).includes(tabOption.id)}
+        <div
+          role="listitem"
+          draggable={enabled}
+          ondragstart={() => {
+            if (enabled) draggedTab = tabOption.id;
+          }}
+          ondragover={(e) => {
+            if (enabled && draggedTab) {
+              e.preventDefault();
+              dragOverTab = tabOption.id;
+            }
+          }}
+          ondragleave={() => {
+            if (dragOverTab === tabOption.id) dragOverTab = null;
+          }}
+          ondrop={(e) => {
+            e.preventDefault();
+            if (draggedTab && draggedTab !== tabOption.id) {
+              settingsStore.reorderDashboardTabs(draggedTab, tabOption.id);
+            }
+            draggedTab = null;
+            dragOverTab = null;
+          }}
+          ondragend={() => {
+            draggedTab = null;
+            dragOverTab = null;
+          }}
+          class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverTab === tabOption.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedTab === tabOption.id ? 'opacity-40' : ''}"
+        >
+          <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={enabled && (settings.dashboard_tabs ?? []).length === 1}
+            onchange={() => settingsStore.toggleDashboardTab(tabOption.id)}
+            aria-label={`Show ${tabOption.label} in sidebar`}
+            class="h-3.5 w-3.5 accent-primary cursor-pointer"
+          />
+          <div class="min-w-0 flex-1 select-none">
+            <div class="text-xs font-medium text-foreground">{tabOption.label}</div>
+            <div class="text-[10px] text-muted-foreground">{tabOption.description}</div>
+          </div>
+        </div>
+      {/each}
+    </Card>
+  </div>
+
   <!-- Quick Panel Customization -->
   <div class="space-y-3">
     <div>
@@ -102,7 +232,7 @@
         Menu Bar Quick Panel
       </h3>
       <p class="text-[11px] text-muted-foreground mt-1">
-        Choose what appears below the menu bar icon and set the display priority.
+        Choose what appears below the menu bar icon and drag to set display priority.
       </p>
     </div>
     <Card class="p-4 bg-card/70 space-y-5">
@@ -112,24 +242,48 @@
         </div>
         {#each orderedSections() as option}
           {@const enabled = settings.quick_panel_sections.includes(option.id)}
-          {@const index = settings.quick_panel_sections.indexOf(option.id)}
-          <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2.5">
+          <div
+            role="listitem"
+            draggable={enabled}
+            ondragstart={() => {
+              if (enabled) draggedSection = option.id;
+            }}
+            ondragover={(e) => {
+              if (enabled && draggedSection) {
+                e.preventDefault();
+                dragOverSection = option.id;
+              }
+            }}
+            ondragleave={() => {
+              if (dragOverSection === option.id) dragOverSection = null;
+            }}
+            ondrop={(e) => {
+              e.preventDefault();
+              if (draggedSection && draggedSection !== option.id) {
+                settingsStore.reorderQuickPanelSections(draggedSection, option.id);
+              }
+              draggedSection = null;
+              dragOverSection = null;
+            }}
+            ondragend={() => {
+              draggedSection = null;
+              dragOverSection = null;
+            }}
+            class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverSection === option.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedSection === option.id ? 'opacity-40' : ''}"
+          >
+            <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
             <input
               type="checkbox"
               checked={enabled}
               disabled={enabled && settings.quick_panel_sections.length === 1}
               onchange={() => settingsStore.toggleQuickPanelSection(option.id)}
               aria-label={`Show ${option.label} in quick panel`}
-              class="h-3.5 w-3.5 accent-primary"
+              class="h-3.5 w-3.5 accent-primary cursor-pointer"
             />
-            <div class="min-w-0 flex-1">
+            <div class="min-w-0 flex-1 select-none">
               <div class="text-xs font-medium text-foreground">{option.label}</div>
               <div class="text-[10px] text-muted-foreground">{option.description}</div>
             </div>
-            {#if enabled}
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelSection(option.id, -1)} aria-label={`Move ${option.label} up`}><ChevronUp size={14} /></button>
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === settings.quick_panel_sections.length - 1} onclick={() => settingsStore.moveQuickPanelSection(option.id, 1)} aria-label={`Move ${option.label} down`}><ChevronDown size={14} /></button>
-            {/if}
           </div>
         {/each}
       </div>
@@ -138,17 +292,41 @@
         <div class="flex items-center gap-2 text-xs font-medium text-foreground">
           <Sparkles size={14} /> AI Provider Priority
         </div>
-        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order.</p>
+        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order. Drag to reorder.</p>
         {#each orderedProviders() as provider}
           {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
-          {@const index = settings.quick_panel_ai_providers.indexOf(provider.id)}
-          <div class="flex items-center gap-3 rounded-lg border border-border/60 px-3 py-2">
-            <input type="checkbox" checked={enabled} onchange={() => settingsStore.toggleQuickPanelProvider(provider.id)} aria-label={`Show ${provider.label} usage`} class="h-3.5 w-3.5 accent-primary" />
-            <span class="flex-1 text-xs font-medium text-foreground">{provider.label}</span>
-            {#if enabled}
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === 0} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, -1)} aria-label={`Move ${provider.label} up`}><ChevronUp size={14} /></button>
-              <button type="button" class="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" disabled={index === settings.quick_panel_ai_providers.length - 1} onclick={() => settingsStore.moveQuickPanelProvider(provider.id, 1)} aria-label={`Move ${provider.label} down`}><ChevronDown size={14} /></button>
-            {/if}
+          <div
+            role="listitem"
+            draggable={enabled}
+            ondragstart={() => {
+              if (enabled) draggedProvider = provider.id;
+            }}
+            ondragover={(e) => {
+              if (enabled && draggedProvider) {
+                e.preventDefault();
+                dragOverProvider = provider.id;
+              }
+            }}
+            ondragleave={() => {
+              if (dragOverProvider === provider.id) dragOverProvider = null;
+            }}
+            ondrop={(e) => {
+              e.preventDefault();
+              if (draggedProvider && draggedProvider !== provider.id) {
+                settingsStore.reorderQuickPanelProviders(draggedProvider, provider.id);
+              }
+              draggedProvider = null;
+              dragOverProvider = null;
+            }}
+            ondragend={() => {
+              draggedProvider = null;
+              dragOverProvider = null;
+            }}
+            class="flex items-center gap-3 rounded-lg border px-3 py-2 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverProvider === provider.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedProvider === provider.id ? 'opacity-40' : ''}"
+          >
+            <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
+            <input type="checkbox" checked={enabled} onchange={() => settingsStore.toggleQuickPanelProvider(provider.id)} aria-label={`Show ${provider.label} usage`} class="h-3.5 w-3.5 accent-primary cursor-pointer" />
+            <span class="flex-1 text-xs font-medium text-foreground select-none">{provider.label}</span>
           </div>
         {/each}
       </div>
@@ -285,6 +463,55 @@
     </Card>
   </div>
 
+  <!-- Diagnostics & Logs -->
+  <div class="space-y-3">
+    <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+      Diagnostics & Privacy Logs
+    </h3>
+    <Card class="p-4 bg-card/70 space-y-4">
+      <div class="space-y-1">
+        <div class="text-xs font-medium text-foreground">Local System & Error Logs</div>
+        <p class="text-[11px] text-muted-foreground leading-relaxed">
+          Zenith keeps zero telemetry and never transmits analytics or secrets. Error and subprocess failure logs are stored locally on your machine at <code class="font-mono text-[10px] bg-secondary/80 px-1 py-0.5 rounded">~/Library/Logs/Zenith</code>.
+        </p>
+      </div>
+
+      {#if diagnosticsData?.settings_corrupt_recovered}
+        <div class="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+          <AlertTriangle size={14} class="shrink-0" />
+          <span>A damaged configuration file was detected, safely backed up, and reset to defaults.</span>
+        </div>
+      {/if}
+
+      <div class="flex flex-wrap gap-2 pt-1">
+        <Button variant="secondary" size="sm" onclick={handleOpenLogs}>
+          <FolderOpen size={14} />
+          <span>Open Logs Folder</span>
+        </Button>
+        <Button variant="secondary" size="sm" onclick={handleExportDiagnostics}>
+          <FileText size={14} />
+          <span>{copiedDiagnostics ? 'Copied Diagnostics JSON' : 'Export Diagnostics'}</span>
+        </Button>
+      </div>
+
+      {#if diagnosticsData}
+        <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-[11px] font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto">
+          <div><span class="text-foreground font-semibold">Zenith:</span> {diagnosticsData.app_version} ({diagnosticsData.arch})</div>
+          <div><span class="text-foreground font-semibold">OS:</span> {diagnosticsData.os_version}</div>
+          <div><span class="text-foreground font-semibold">Log:</span> {diagnosticsData.log_path}</div>
+          {#if diagnosticsData.recent_errors.length > 0}
+            <div class="pt-2 text-red-400 font-semibold">Recent Errors ({diagnosticsData.recent_errors.length}):</div>
+            {#each diagnosticsData.recent_errors as err}
+              <div class="text-red-400/80 truncate">{err}</div>
+            {/each}
+          {:else}
+            <div class="pt-1 text-emerald-500/80">No recent errors logged.</div>
+          {/if}
+        </div>
+      {/if}
+    </Card>
+  </div>
+
   <!-- About -->
   <div class="space-y-3 pt-2">
     <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
@@ -293,7 +520,7 @@
     <Card class="p-4 bg-card/70 text-xs space-y-2">
       <div class="flex items-center justify-between">
         <span class="font-medium text-foreground">Zenith macOS Developer System Manager</span>
-        <Badge variant="outline" class="font-mono">v0.1.0</Badge>
+        <Badge variant="outline" class="font-mono">{formatVersion(APP_VERSION)}</Badge>
       </div>
       <p class="text-muted-foreground leading-relaxed">
         Zenith is an ultra-lightweight open-source utility designed to safely manage AI caches, developer build artifacts, Docker storage, local LLMs, memory pressure, and keep-awake power assertions.

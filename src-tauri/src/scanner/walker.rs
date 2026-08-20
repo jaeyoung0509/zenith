@@ -4,7 +4,9 @@ use crate::signatures::SignatureLoader;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
-use walkdir::WalkDir;
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 pub struct DirectoryScanner;
 
@@ -118,14 +120,21 @@ impl DirectoryScanner {
                 continue;
             }
 
-            let Some(modified) = latest_modified(&path) else {
+            // Single-pass fail-closed tree measurement
+            let stats = Self::measure_tree_stats(&path, &signature.exclusions, 0, 32);
+            // Fail-closed: If scan encountered permission errors or depth cutoff, exclude from stale cleanup
+            if !stats.complete {
+                continue;
+            }
+
+            let Some(modified) = stats.newest_mtime else {
                 continue;
             };
             if now.duration_since(modified).unwrap_or_default() < minimum_age {
                 continue;
             }
 
-            let (size, file_count) = SizeCalculator::measure_path(&path, &signature.exclusions);
+            let size = FileSize::new(stats.logical, Some(stats.allocated));
             if size.reclaimable() == 0 {
                 continue;
             }
@@ -137,7 +146,7 @@ impl DirectoryScanner {
                 risk: signature.risk,
                 path: path.to_string_lossy().to_string(),
                 size,
-                file_count,
+                file_count: stats.file_count,
                 description: format!(
                     "{} (unchanged for at least {} days)",
                     signature.description, min_age_days
@@ -153,16 +162,121 @@ impl DirectoryScanner {
 
         items
     }
+
+    /// Measures directory statistics (size, count, newest mtime) in a single recursive pass.
+    /// Marks complete = false if any error, symlink escape, or depth cutoff occurs.
+    pub fn measure_tree_stats(
+        path: &Path,
+        exclusions: &[String],
+        current_depth: usize,
+        max_depth: usize,
+    ) -> TreeStats {
+        let mut stats = TreeStats {
+            logical: 0,
+            allocated: 0,
+            file_count: 0,
+            newest_mtime: None,
+            complete: true,
+        };
+
+        if current_depth > max_depth {
+            stats.complete = false;
+            return stats;
+        }
+
+        let meta = match fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(_) => {
+                stats.complete = false;
+                return stats;
+            }
+        };
+
+        if let Ok(modified) = meta.modified() {
+            stats.newest_mtime = Some(match stats.newest_mtime {
+                Some(existing) => existing.max(modified),
+                None => modified,
+            });
+        }
+
+        if meta.file_type().is_symlink() || meta.is_file() {
+            let len = meta.len();
+            stats.logical = len;
+            #[cfg(unix)]
+            {
+                stats.allocated = meta.blocks() * 512;
+            }
+            #[cfg(not(unix))]
+            {
+                stats.allocated = len;
+            }
+            stats.file_count = 1;
+            return stats;
+        }
+
+        if !meta.is_dir() {
+            return stats;
+        }
+
+        let entries = match fs::read_dir(path) {
+            Ok(e) => e,
+            Err(_) => {
+                stats.complete = false;
+                return stats;
+            }
+        };
+
+        for entry in entries {
+            let ent = match entry {
+                Ok(e) => e,
+                Err(_) => {
+                    stats.complete = false;
+                    continue;
+                }
+            };
+            let child_path = ent.path();
+
+            if crate::safety::Blacklist::is_blacklisted(&child_path) {
+                continue;
+            }
+
+            let child_str = child_path.to_string_lossy();
+            if exclusions.iter().any(|ex| {
+                child_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n == ex)
+                    .unwrap_or(false)
+                    || child_str.contains(ex)
+            }) {
+                continue;
+            }
+
+            let sub_stats =
+                Self::measure_tree_stats(&child_path, exclusions, current_depth + 1, max_depth);
+            if !sub_stats.complete {
+                stats.complete = false;
+            }
+            stats.logical += sub_stats.logical;
+            stats.allocated += sub_stats.allocated;
+            stats.file_count += sub_stats.file_count;
+            if let Some(sub_mtime) = sub_stats.newest_mtime {
+                stats.newest_mtime = Some(match stats.newest_mtime {
+                    Some(existing) => existing.max(sub_mtime),
+                    None => sub_mtime,
+                });
+            }
+        }
+
+        stats
+    }
 }
 
-/// Uses the newest timestamp in a candidate tree so an actively-written temp
-/// directory is never considered stale merely because its root mtime is old.
-fn latest_modified(path: &Path) -> Option<SystemTime> {
-    WalkDir::new(path)
-        .follow_links(false)
-        .max_depth(32)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter_map(|entry| fs::symlink_metadata(entry.path()).ok()?.modified().ok())
-        .max()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeStats {
+    pub logical: u64,
+    pub allocated: u64,
+    pub file_count: usize,
+    pub newest_mtime: Option<SystemTime>,
+    pub complete: bool,
 }

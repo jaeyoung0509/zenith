@@ -4,6 +4,7 @@ use std::fmt;
 pub enum ZenithError {
     PermissionDenied(String),
     PathNotAllowed(String),
+    SymlinkEscape(String),
     ChangedSinceScan(String),
     SignatureMismatch(String),
     ToolUnavailable(String),
@@ -19,6 +20,7 @@ impl fmt::Display for ZenithError {
         match self {
             ZenithError::PermissionDenied(p) => write!(f, "Permission denied for path: {}", p),
             ZenithError::PathNotAllowed(p) => write!(f, "Path is not allowed: {}", p),
+            ZenithError::SymlinkEscape(p) => write!(f, "Symlink escape attempt rejected: {}", p),
             ZenithError::ChangedSinceScan(p) => write!(f, "File changed since scan: {}", p),
             ZenithError::SignatureMismatch(id) => write!(f, "Signature mismatch: {}", id),
             ZenithError::ToolUnavailable(t) => write!(f, "Tool unavailable: {}", t),

@@ -171,7 +171,13 @@ impl LocalModelScanner {
         };
 
         let mut models = Vec::new();
-        Self::collect_gguf_files(&lm_root, ModelSource::LmStudio, "lmstudio", &mut models);
+        Self::collect_gguf_files(
+            &lm_root,
+            &lm_root,
+            ModelSource::LmStudio,
+            "lmstudio",
+            &mut models,
+        );
         models
     }
 
@@ -186,12 +192,20 @@ impl LocalModelScanner {
         if let Ok(entries) = fs::read_dir(&mlx_root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
+                let meta = match fs::symlink_metadata(&path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if meta.file_type().is_symlink() {
+                    continue;
+                }
+
+                if meta.is_dir() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let (size, _) = SizeCalculator::measure_path(&path, &[]);
-                    let last_modified = fs::metadata(&path)
+                    let last_modified = meta
+                        .modified()
                         .ok()
-                        .and_then(|m| m.modified().ok())
                         .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs());
 
@@ -214,6 +228,7 @@ impl LocalModelScanner {
 
     fn collect_gguf_files(
         dir: &Path,
+        root: &Path,
         source: ModelSource,
         prefix: &str,
         out: &mut Vec<LocalModelItem>,
@@ -221,23 +236,36 @@ impl LocalModelScanner {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
-                    Self::collect_gguf_files(&path, source, prefix, out);
+                let meta = match fs::symlink_metadata(&path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                // Anti-symlink protection: NEVER follow symlinks in local model scanning
+                if meta.file_type().is_symlink() {
+                    continue;
+                }
+
+                if meta.is_dir() {
+                    Self::collect_gguf_files(&path, root, source, prefix, out);
                 } else if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
                     let file_name = path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                    let last_modified = fs::metadata(&path)
+                    let size = meta.len();
+                    let last_modified = meta
+                        .modified()
                         .ok()
-                        .and_then(|m| m.modified().ok())
                         .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs());
 
+                    let rel_path = path.strip_prefix(root).unwrap_or(&path);
+                    let unique_id = format!("{}:{}", prefix, rel_path.to_string_lossy());
+
                     out.push(LocalModelItem {
-                        id: format!("{}.{}", prefix, file_name),
+                        id: unique_id,
                         name: file_name,
                         source,
                         path: path.to_string_lossy().to_string(),

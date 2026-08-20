@@ -30,6 +30,9 @@
     "allow-save-settings",
     "allow-reveal-in-finder",
     "allow-open-dashboard-window",
-    "allow-toggle-quick-panel"
+    "allow-toggle-quick-panel",
+    "allow-get-app-version",
+    "allow-get-diagnostics",
+    "allow-open-logs-folder"
   ]
 }

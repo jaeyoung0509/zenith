@@ -213,10 +213,22 @@
           "markdownDescription": "Enables the get_ai_usage command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_app_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-app-version",
+          "markdownDescription": "Enables the get_app_version command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_awake_state command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-awake-state",
           "markdownDescription": "Enables the get_awake_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-diagnostics",
+          "markdownDescription": "Enables the get_diagnostics command without any pre-configured scope."
         },
         {
           "description": "Enables the get_disk_metrics command without any pre-configured scope.",
@@ -271,6 +283,12 @@
           "type": "string",
           "const": "allow-open-disk-utility",
           "markdownDescription": "Enables the open_disk_utility command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_logs_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-logs-folder",
+          "markdownDescription": "Enables the open_logs_folder command without any pre-configured scope."
         },
         {
           "description": "Enables the pick_keep_awake_application command without any pre-configured scope.",
@@ -363,10 +381,22 @@
           "markdownDescription": "Denies the get_ai_usage command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_app_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-app-version",
+          "markdownDescription": "Denies the get_app_version command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_awake_state command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-awake-state",
           "markdownDescription": "Denies the get_awake_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-diagnostics",
+          "markdownDescription": "Denies the get_diagnostics command without any pre-configured scope."
         },
         {
           "description": "Denies the get_disk_metrics command without any pre-configured scope.",
@@ -421,6 +451,12 @@
           "type": "string",
           "const": "deny-open-disk-utility",
           "markdownDescription": "Denies the open_disk_utility command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_logs_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-logs-folder",
+          "markdownDescription": "Denies the open_logs_folder command without any pre-configured scope."
         },
         {
           "description": "Denies the pick_keep_awake_application command without any pre-configured scope.",

@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct UsageWindow {
     pub label: String,
     pub used_percent: f64,
     pub resets_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 pub struct UsageSummary {
     pub lifetime_tokens: Option<u64>,
     pub last_7d_tokens: Option<u64>,
@@ -19,7 +19,7 @@ pub struct UsageSummary {
     pub limit_remaining_usd: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageSupport {
     Live,
@@ -27,7 +27,7 @@ pub enum UsageSupport {
     Manual,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct AiProviderUsage {
     pub id: String,
     pub name: String,
@@ -41,7 +41,7 @@ pub struct AiProviderUsage {
     pub action_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct AiUsageSnapshot {
     pub providers: Vec<AiProviderUsage>,
     pub fetched_at: u64,

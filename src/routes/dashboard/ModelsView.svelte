@@ -7,6 +7,7 @@
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
     Boxes,
     RotateCw,
@@ -53,6 +54,20 @@
     await localModelsStore.deleteModel(modelToDelete);
     modelToDelete = null;
   }
+
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await localModelsStore.refresh();
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
+  }
 </script>
 
 <div class="space-y-6">
@@ -77,15 +92,22 @@
       <Button
         variant="outline"
         size="sm"
-        disabled={localModelsStore.isLoading}
-        onclick={() => localModelsStore.refresh()}
+        disabled={isRefreshing || localModelsStore.isLoading}
+        onclick={handleRefresh}
         class="gap-1.5 text-xs"
       >
-        <RotateCw size={13} class={localModelsStore.isLoading ? 'animate-spin' : ''} />
+        <RotateCw size={13} class={isRefreshing || localModelsStore.isLoading ? 'animate-spin' : ''} />
         <span>Rescan Models</span>
       </Button>
     </div>
   </div>
+
+  {#if localModelsStore.error}
+    <div class="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-500 flex items-center justify-between">
+      <span>{localModelsStore.error}</span>
+      <Button variant="ghost" size="sm" onclick={() => (localModelsStore.error = null)} class="text-xs h-6 px-2 text-rose-400">Dismiss</Button>
+    </div>
+  {/if}
 
   <!-- Search Toolbar -->
   <div class="relative w-full sm:w-80">
@@ -191,8 +213,15 @@
             size="sm"
             disabled={localModelsStore.isDeleting}
             onclick={executeDeleteModel}
+            class="min-w-[95px] gap-1.5"
           >
-            {localModelsStore.isDeleting ? 'Deleting...' : 'Delete Model'}
+            {#if localModelsStore.isDeleting}
+              <DeletingDots size="xs" />
+              <span>Deleting…</span>
+            {:else}
+              <Trash2 size={12} />
+              <span>Delete Model</span>
+            {/if}
           </Button>
         </div>
       </Card>

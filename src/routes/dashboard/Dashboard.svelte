@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { CategoryResult } from '../../lib/models/types';
+  import type { CategoryResult, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
+  import { settingsStore } from '../../lib/stores/settings.svelte';
   import StorageView from './StorageView.svelte';
-  import DiskView from './DiskView.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
@@ -13,6 +13,7 @@
   import MemoryView from './MemoryView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
+  import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import {
     HardDrive,
     Container,
@@ -22,18 +23,36 @@
     Settings,
     Shield,
     ChartNoAxesCombined,
+    Disc3,
   } from 'lucide-svelte';
 
-  type Tab = 'storage' | 'disk' | 'docker' | 'models' | 'usage' | 'memory' | 'awake' | 'settings';
+  type Tab = DashboardTab | 'settings';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
+  let settings = $derived(settingsStore.settings);
+
+  const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any }>> = {
+    storage: { label: 'Storage', icon: HardDrive },
+    docker: { label: 'Containers', icon: Container },
+    models: { label: 'Local Models', icon: Boxes },
+    memory: { label: 'Memory', icon: Activity },
+    usage: { label: 'AI Usage', icon: ChartNoAxesCombined },
+    awake: { label: 'Keep Awake', icon: Moon },
+  };
 
   onMount(() => {
     memoryStore.refreshDisk();
     awakeStore.refresh();
     void scanStore.init().then(() => {
-      if (scanStore.isStale()) void scanStore.runScan();
+      if (scanStore.isStale()) {
+        // Defer background revalidation so initial dashboard render is immediate
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(() => void scanStore.runScan(), { timeout: 1500 });
+        } else {
+          setTimeout(() => void scanStore.runScan(), 600);
+        }
+      }
     });
   });
 
@@ -51,104 +70,43 @@
     <div class="space-y-6">
       <!-- Title & Branding -->
       <div class="px-2.5 flex items-center space-x-2.5">
-        <div class="h-6 w-6 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs">
-          Z
-        </div>
-        <div>
-          <h1 class="text-sm font-bold tracking-tight text-foreground">Zenith</h1>
-          <p class="text-[10px] text-muted-foreground font-mono">macOS Dev Manager</p>
-        </div>
+        <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
+          <defs>
+            <linearGradient id="dash-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#27272f"/>
+              <stop offset="1" stop-color="#101014"/>
+            </linearGradient>
+          </defs>
+          <rect width="1024" height="1024" rx="220" fill="url(#dash-bg-grad)"/>
+          <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
+          <circle cx="758" cy="300" r="44" fill="#34d399"/>
+        </svg>
+        <span class="text-sm font-semibold tracking-tight text-foreground">Zenith</span>
       </div>
 
-      <!-- Navigation Tabs -->
+      <!-- Navigation Links -->
       <nav class="space-y-1">
-        <button
-          type="button"
-          onclick={() => selectTab('disk')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'disk'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <HardDrive size={15} />
-          <span>Disks</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('storage')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-            'storage' && !selectedCategory
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <HardDrive size={15} />
-          <span>Storage</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('docker')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'docker'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Container size={15} />
-          <span>Containers</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('models')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'models'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Boxes size={15} />
-          <span>Local Models</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('memory')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'memory'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Activity size={15} />
-          <span>Memory</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('usage')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'usage'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <ChartNoAxesCombined size={15} />
-          <span>AI Usage</span>
-        </button>
-
-        <button
-          type="button"
-          onclick={() => selectTab('awake')}
-          class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-          'awake'
-            ? 'bg-secondary text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-        >
-          <Moon size={15} />
-          <span>Keep Awake</span>
-          {#if awakeStore.state.is_active}
-            <span class="ml-auto w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'] as tabId}
+          {@const def = tabDefs[tabId as DashboardTab]}
+          {#if def}
+            <button
+              type="button"
+              onclick={() => selectTab(tabId as Tab)}
+              class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+              tabId
+                ? 'bg-secondary text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+            >
+              <def.icon size={15} />
+              <span>{def.label}</span>
+              {#if tabId === 'storage' && scanStore.reclaimableBytes > 0}
+                <span class="ml-auto flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+              {/if}
+            </button>
           {/if}
-        </button>
+        {/each}
 
+        <!-- Fixed Settings Tab -->
         <button
           type="button"
           onclick={() => selectTab('settings')}
@@ -163,10 +121,19 @@
       </nav>
     </div>
 
-    <!-- Safety Badge at bottom -->
-    <div class="px-2.5 py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2">
-      <Shield size={13} class="text-emerald-500 shrink-0" />
-      <span class="truncate">TOCTOU Safety Guard</span>
+    <!-- Safety Badge & Version at bottom -->
+    <div class="space-y-2">
+      <div
+        class="px-2.5 py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2"
+        title="Path, symlink and filesystem identity are verified immediately before deletion (TOCTOU protection)."
+      >
+        <Shield size={13} class="text-emerald-500 shrink-0" />
+        <span class="truncate">Protected cleanup</span>
+      </div>
+      <div class="px-2.5 flex items-center justify-between text-[10px] text-muted-foreground/60 font-mono select-none">
+        <span>Zenith</span>
+        <span>{formatVersion(APP_VERSION)}</span>
+      </div>
     </div>
   </aside>
 
@@ -176,13 +143,12 @@
       <CategoryDetailView
         categoryResult={selectedCategory}
         onBack={() => (selectedCategory = null)}
+        onNavigateTab={(tab) => selectTab(tab)}
       />
     {:else if currentTab === 'storage'}
       <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
     {:else if currentTab === 'docker'}
       <DockerView />
-    {:else if currentTab === 'disk'}
-      <DiskView onReviewCategory={(category) => (selectedCategory = category)} />
     {:else if currentTab === 'models'}
       <ModelsView />
     {:else if currentTab === 'usage'}

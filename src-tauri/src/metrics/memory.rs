@@ -1,24 +1,101 @@
 use crate::models::{MemoryMetrics, MemoryPressure, ProcessMemory};
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::SystemTime;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 use sysinfo::{ProcessesToUpdate, Signal, System};
 
-pub struct MemoryInspector;
+pub struct MemorySampler {
+    system: Mutex<Option<System>>,
+    compressed_cache: Mutex<Option<(Instant, u64)>>,
+}
 
-impl MemoryInspector {
+impl Default for MemorySampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MemorySampler {
+    pub fn new() -> Self {
+        Self {
+            system: Mutex::new(None),
+            compressed_cache: Mutex::new(None),
+        }
+    }
+
     /// Captures current system memory metrics and top resource-consuming developer processes.
-    pub fn get_metrics() -> MemoryMetrics {
-        let mut sys = System::new_all();
-        sys.refresh_memory();
-        sys.refresh_processes(ProcessesToUpdate::All, true);
+    pub fn sample(&self) -> MemoryMetrics {
+        let (
+            total_bytes,
+            used_bytes,
+            available_bytes,
+            free_bytes,
+            swap_total_bytes,
+            swap_used_bytes,
+            top_processes,
+        ) = {
+            let mut guard = self.system.lock().unwrap();
+            let sys = guard.get_or_insert_with(System::new_all);
+            sys.refresh_memory();
 
-        let total_bytes = sys.total_memory();
-        let used_bytes = sys.used_memory();
-        let free_bytes = sys.free_memory();
-        let available_bytes = sys.available_memory();
-        let swap_total_bytes = sys.total_swap();
-        let swap_used_bytes = sys.used_swap();
+            let total_bytes = sys.total_memory();
+            let used_bytes = sys.used_memory();
+            let free_bytes = sys.free_memory();
+            let available_bytes = sys.available_memory();
+            let swap_total_bytes = sys.total_swap();
+            let swap_used_bytes = sys.used_swap();
+
+            // Refresh processes
+            sys.refresh_processes(ProcessesToUpdate::All, true);
+
+            // Aggregate top processes
+            let mut process_groups: HashMap<String, (u64, usize, u32, bool)> = HashMap::new();
+
+            for (pid, process) in sys.processes() {
+                let raw_name = process.name().to_string_lossy();
+                let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
+                let mem = process.memory();
+                let can_terminate =
+                    MemoryInspector::can_terminate_process(&norm_name, process.exe());
+
+                let entry = process_groups
+                    .entry(norm_name)
+                    .or_insert((0, 0, pid.as_u32(), false));
+                entry.0 += mem;
+                entry.1 += 1;
+                entry.3 |= can_terminate;
+            }
+
+            let mut top_processes: Vec<ProcessMemory> = process_groups
+                .into_iter()
+                .map(
+                    |(name, (memory_bytes, process_count, pid, can_terminate))| ProcessMemory {
+                        pid,
+                        can_terminate,
+                        name,
+                        memory_bytes,
+                        process_count,
+                    },
+                )
+                .collect();
+
+            top_processes.sort_by_key(|process| std::cmp::Reverse(process.memory_bytes));
+            top_processes.truncate(15);
+
+            (
+                total_bytes,
+                used_bytes,
+                available_bytes,
+                free_bytes,
+                swap_total_bytes,
+                swap_used_bytes,
+                top_processes,
+            )
+        };
+
+        // System lock is released before calculating compressed memory
+        let compressed_bytes = self.compressed_memory();
 
         // Calculate memory pressure
         let used_ratio = if total_bytes > 0 {
@@ -37,42 +114,6 @@ impl MemoryInspector {
             MemoryPressure::Normal
         };
 
-        // Estimate compressed memory on macOS (or fallback)
-        let compressed_bytes = Self::get_compressed_memory_macos().unwrap_or(0);
-
-        // Aggregate top processes
-        let mut process_groups: HashMap<String, (u64, usize, u32, bool)> = HashMap::new();
-
-        for (pid, process) in sys.processes() {
-            let raw_name = process.name().to_string_lossy();
-            let norm_name = Self::normalize_process_name(&raw_name, process.exe());
-            let mem = process.memory();
-            let can_terminate = Self::can_terminate_process(&norm_name, process.exe());
-
-            let entry = process_groups
-                .entry(norm_name)
-                .or_insert((0, 0, pid.as_u32(), false));
-            entry.0 += mem;
-            entry.1 += 1;
-            entry.3 |= can_terminate;
-        }
-
-        let mut top_processes: Vec<ProcessMemory> = process_groups
-            .into_iter()
-            .map(
-                |(name, (memory_bytes, process_count, pid, can_terminate))| ProcessMemory {
-                    pid,
-                    can_terminate,
-                    name,
-                    memory_bytes,
-                    process_count,
-                },
-            )
-            .collect();
-
-        top_processes.sort_by_key(|process| std::cmp::Reverse(process.memory_bytes));
-        top_processes.truncate(15);
-
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
@@ -90,6 +131,34 @@ impl MemoryInspector {
             top_processes,
             timestamp,
         }
+    }
+
+    fn compressed_memory(&self) -> u64 {
+        const CACHE_TTL: Duration = Duration::from_secs(8);
+        let now = Instant::now();
+
+        {
+            let cache = self.compressed_cache.lock().unwrap();
+            if let Some((cached_at, value)) = *cache {
+                if now.duration_since(cached_at) < CACHE_TTL {
+                    return value;
+                }
+            }
+        }
+
+        // Run subprocess outside the mutex
+        let value = MemoryInspector::get_compressed_memory_macos().unwrap_or(0);
+        *self.compressed_cache.lock().unwrap() = Some((now, value));
+        value
+    }
+}
+
+pub struct MemoryInspector;
+
+impl MemoryInspector {
+    /// Captures current system memory metrics and top resource-consuming developer processes.
+    pub fn get_metrics() -> MemoryMetrics {
+        MemorySampler::new().sample()
     }
 
     fn normalize_process_name(raw: &str, executable: Option<&Path>) -> String {
@@ -217,7 +286,11 @@ impl MemoryInspector {
     #[cfg(target_os = "macos")]
     fn get_compressed_memory_macos() -> Option<u64> {
         use std::process::Command;
-        let out = Command::new("vm_stat").output().ok()?;
+        let out = crate::tooling::run_with_timeout(
+            Command::new("vm_stat"),
+            std::time::Duration::from_secs(3),
+        )
+        .ok()?;
         if !out.status.success() {
             return None;
         }
@@ -249,7 +322,7 @@ impl MemoryInspector {
 
 #[cfg(test)]
 mod tests {
-    use super::MemoryInspector;
+    use super::{MemoryInspector, MemorySampler};
 
     #[test]
     fn browser_helpers_are_grouped_with_their_parent_app() {
@@ -308,5 +381,17 @@ mod tests {
             ))
         ));
         assert!(!MemoryInspector::can_terminate_process("Zenith", None));
+    }
+
+    #[test]
+    fn memory_sampler_initializes_system_lazily() {
+        let sampler = MemorySampler::new();
+        // Before sampling, the inner System must be None
+        assert!(sampler.system.lock().unwrap().is_none());
+
+        // After sampling, the inner System is populated
+        let metrics = sampler.sample();
+        assert!(sampler.system.lock().unwrap().is_some());
+        assert!(metrics.total_bytes > 0);
     }
 }

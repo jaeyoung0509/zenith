@@ -33,6 +33,30 @@ The menu-bar panel stops recurring metrics and provider work while hidden. Disk
 metrics refresh when the panel opens, memory polling runs only while visible,
 and AI usage snapshots use a short backend cache.
 
+## Public Beta Installation (macOS)
+
+Zenith is currently distributed as an unsigned public beta for Apple Silicon (ARM64) Macs. Pre-built `.dmg` disk images and SHA256 checksums are available under [GitHub Releases](https://github.com/jaeyoung0509/zenith/releases).
+
+### Opening Unsigned Beta Builds on macOS
+
+Because beta builds are not notarized with a paid Apple Developer ID, macOS Gatekeeper will display a security warning on first launch (*"cannot be opened because the developer cannot be verified"* or *"is damaged and can't be opened"*).
+
+To launch Zenith on macOS:
+1. Open the downloaded `.dmg` and drag **Zenith.app** into `/Applications`.
+2. In Finder, navigate to `/Applications`, right-click (or Control-click) **Zenith.app**, and select **Open**.
+3. In the confirmation dialog, click **Open**. (You only need to do this once).
+4. *Alternatively*, clear the macOS quarantine attribute in Terminal:
+   ```bash
+   xattr -cr /Applications/Zenith.app
+   ```
+
+## Privacy & Local Diagnostics
+
+- **100% Local**: Zero telemetry, zero cloud tracking, and zero remote analytics.
+- **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
+- **Local Logs**: Rotating error logs are stored on your Mac at `~/Library/Logs/Zenith/zenith.log`.
+- **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
+
 ## Cleanup safety
 
 Zenith does not expose an arbitrary path deletion command. Every cleanup target

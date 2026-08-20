@@ -10,6 +10,7 @@ pub struct FileIdentity {
     pub is_dir: bool,
     pub size: u64,
     pub mtime_secs: u64,
+    pub mtime_nanos: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub struct DeleteTarget {
     pub risk: RiskTier,
     pub identity: Option<FileIdentity>,
     pub exclusions: Vec<String>,
+    pub min_age_days: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +37,7 @@ pub struct DeletePlan {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct PlanTargetPreview {
     pub item_id: String,
     pub name: String,
@@ -43,7 +45,7 @@ pub struct PlanTargetPreview {
     pub risk: RiskTier,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct PlanPreview {
     pub id: Uuid,
     pub targets: Vec<PlanTargetPreview>,
@@ -73,7 +75,7 @@ impl DeletePlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanFailureReason {
     PermissionDenied,
@@ -125,18 +127,27 @@ impl CleanFailureReason {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanStatus {
+    Success,
+    Partial,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct CleanItemResult {
     pub item_id: String,
     pub name: String,
     pub path: String,
+    pub status: CleanStatus,
     pub success: bool,
     pub bytes_reclaimed: u64,
     pub failure_reason: Option<CleanFailureReason>,
     pub error_message: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct CleanResult {
     pub plan_id: Uuid,
     pub started_at: u64,
@@ -147,7 +158,7 @@ pub struct CleanResult {
     pub actual_disk_free_delta: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type")]
 pub enum CleanEvent {
     Started {

@@ -1,7 +1,7 @@
 use crate::models::{Category, RiskTier};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 pub struct FileSize {
     pub logical: u64,
     pub allocated: Option<u64>,
@@ -13,14 +13,11 @@ impl FileSize {
     }
 
     pub fn reclaimable(&self) -> u64 {
-        match self.allocated {
-            Some(alloc) if alloc > 0 => alloc,
-            _ => self.logical,
-        }
+        self.allocated.unwrap_or(self.logical)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ScanItem {
     pub id: String,
     pub signature_id: String,
@@ -36,7 +33,7 @@ pub struct ScanItem {
     pub exists: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct CategoryResult {
     pub category: Category,
     pub display_name: String,
@@ -47,7 +44,7 @@ pub struct CategoryResult {
     pub manual_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ScanResult {
     pub scan_id: String,
     pub started_at: u64,
@@ -59,7 +56,7 @@ pub struct ScanResult {
     pub manual_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type")]
 pub enum ScanEvent {
     Started {

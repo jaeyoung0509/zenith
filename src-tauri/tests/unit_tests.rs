@@ -214,3 +214,44 @@ fn test_power_assertion_raii_lifecycle() {
     let state_after = manager.get_state();
     assert!(!state_after.is_active);
 }
+
+#[test]
+fn test_keep_awake_power_conditions_and_ac_awareness() {
+    use std::sync::Arc;
+    use zenith_lib::models::{AwakeRule, AwakeRuleStatus, PowerCondition, PowerSourceType};
+    use zenith_lib::power::{MockPowerSource, NativeAssertionProvider};
+
+    let power_mock = Arc::new(MockPowerSource::new(PowerSourceType::Battery));
+    let assertion_mock = Arc::new(NativeAssertionProvider::new());
+    let manager = KeepAwakeManager::with_providers(power_mock.clone(), assertion_mock);
+
+    let rule_ac = AwakeRule {
+        id: "rule.ac".to_string(),
+        app_name: "AC App".to_string(),
+        executable_pattern: "non_existent_process_abc".to_string(),
+        behavior: AwakeBehavior::PreventSystemSleep,
+        power_condition: PowerCondition::AcPowerOnly,
+        enabled: true,
+    };
+
+    let rule_always = AwakeRule {
+        id: "rule.always".to_string(),
+        app_name: "Always App".to_string(),
+        executable_pattern: "non_existent_process_def".to_string(),
+        behavior: AwakeBehavior::KeepDisplayAwake,
+        power_condition: PowerCondition::Always,
+        enabled: true,
+    };
+
+    manager.set_rules(vec![rule_ac, rule_always]);
+    let state = manager.get_state();
+
+    assert_eq!(state.rule_evaluations.len(), 2);
+    assert_eq!(state.power_source, PowerSourceType::Battery);
+    assert_eq!(
+        state.rule_evaluations[0].status,
+        AwakeRuleStatus::WaitingProcess
+    );
+    assert!(!state.rule_evaluations[0].is_power_eligible);
+    assert!(state.rule_evaluations[1].is_power_eligible);
+}

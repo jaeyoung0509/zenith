@@ -114,12 +114,12 @@ risk = "safe"
 strategy = "delete_contents"
 paths = [
     "~/.codex/cache",
-    "~/.codex/tmp",
-    "~/.codex/sessions"
+    "~/.codex/tmp"
 ]
 exclusions = [
     "~/.codex/auth.json",
-    "~/.codex/config.toml"
+    "~/.codex/config.toml",
+    "~/.codex/sessions"
 ]
 description = "Codex prompt caches and temporary scratchpads."
 

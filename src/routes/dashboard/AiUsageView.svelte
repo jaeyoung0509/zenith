@@ -10,15 +10,28 @@
 
   const compactNumber = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
-  function formatTokens(value?: number) {
+  function formatTokens(value?: number | null) {
     return value == null ? '—' : compactNumber.format(value);
   }
 
-  function formatReset(timestamp?: number) {
+  function formatReset(timestamp?: number | null) {
     if (!timestamp) return '';
     return new Intl.DateTimeFormat('en', {
       month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
     }).format(new Date(timestamp * 1000));
+  }
+  let isRefreshing = $state(false);
+
+  async function handleRefresh() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+    const start = Date.now();
+    await usageStore.refresh(true);
+    const elapsed = Date.now() - start;
+    if (elapsed < 600) {
+      await new Promise((r) => setTimeout(r, 600 - elapsed));
+    }
+    isRefreshing = false;
   }
 </script>
 
@@ -33,8 +46,8 @@
         <p class="text-xs text-muted-foreground mt-0.5">OAuth account limits and local coding-agent activity</p>
       </div>
     </div>
-    <Button variant="outline" size="sm" class="gap-1.5" disabled={usageStore.isLoading} onclick={() => usageStore.refresh(true)}>
-      <RefreshCw size={13} class={usageStore.isLoading ? 'animate-spin' : ''} />
+    <Button variant="outline" size="sm" class="gap-1.5" disabled={isRefreshing || usageStore.isLoading} onclick={handleRefresh}>
+      <RefreshCw size={13} class={isRefreshing || usageStore.isLoading ? 'animate-spin' : ''} />
       Refresh
     </Button>
   </div>
@@ -80,9 +93,9 @@
                 <div class="space-y-1.5">
                   <div class="flex justify-between text-[11px]">
                     <span class="text-muted-foreground">{window.label}</span>
-                    <span class="font-mono">{Math.round(window.used_percent)}% used</span>
+                    <span class="font-mono">{window.used_percent != null ? `${Math.round(window.used_percent)}% used` : '—'}</span>
                   </div>
-                  <ProgressBar value={window.used_percent} height="h-1.5" />
+                  <ProgressBar value={window.used_percent ?? 0} height="h-1.5" />
                   <p class="text-[9px] text-muted-foreground text-right">Resets {formatReset(window.resets_at)}</p>
                 </div>
               {/each}

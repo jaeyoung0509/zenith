@@ -162,15 +162,18 @@ impl AiUsageCollector {
         provider.support = UsageSupport::Local;
         provider.action_url = Some("https://opencode.ai/docs/providers".into());
 
-        let auth = match tooling::command("opencode").args(["auth", "list"]).output() {
+        let mut auth_cmd = tooling::command("opencode");
+        auth_cmd.args(["auth", "list"]);
+        let auth = match tooling::run_with_timeout(auth_cmd, Duration::from_secs(4)) {
             Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                provider.status_message = "OpenCode is not installed.".into();
-                return provider;
-            }
             Err(error) => {
-                provider.installed = true;
-                provider.status_message = format!("Could not inspect OpenCode: {error}");
+                let error_str = error.to_string();
+                if error_str.contains("No such file") || error_str.contains("not found") {
+                    provider.status_message = "OpenCode is not installed.".into();
+                } else {
+                    provider.installed = true;
+                    provider.status_message = format!("Could not inspect OpenCode: {error}");
+                }
                 return provider;
             }
         };
@@ -188,10 +191,9 @@ impl AiUsageCollector {
         provider.status_message =
             "Local activity from `opencode stats`; quotas remain provider-owned.".into();
 
-        if let Ok(output) = tooling::command("opencode")
-            .args(["stats", "--days", "7"])
-            .output()
-        {
+        let mut stats_cmd = tooling::command("opencode");
+        stats_cmd.args(["stats", "--days", "7"]);
+        if let Ok(output) = tooling::run_with_timeout(stats_cmd, Duration::from_secs(4)) {
             let stats = strip_ansi(&String::from_utf8_lossy(&output.stdout));
             provider.summary.local_sessions = parse_stat_u64(&stats, "Sessions");
             provider.summary.local_cost_usd = parse_stat_f64(&stats, "Total Cost");
@@ -216,7 +218,22 @@ impl AiUsageCollector {
         let Some(key) = key else {
             return provider;
         };
-        match reqwest::blocking::Client::new()
+
+        let client = match reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(5))
+            .build()
+        {
+            Ok(c) => c,
+            Err(err) => {
+                let msg = format!("Failed to create OpenRouter HTTP client: {err}");
+                crate::diagnostics::log_error("ai_usage", &msg);
+                provider.status_message = msg;
+                return provider;
+            }
+        };
+
+        match client
             .get("https://openrouter.ai/api/v1/key")
             .bearer_auth(key)
             .send()
@@ -233,7 +250,9 @@ impl AiUsageCollector {
                     .and_then(Value::as_f64);
             }
             Err(error) => {
-                provider.status_message = format!("OpenRouter usage request failed: {error}");
+                let msg = format!("OpenRouter usage request failed: {error}");
+                crate::diagnostics::log_error("ai_usage", &msg);
+                provider.status_message = msg;
             }
         }
         provider
@@ -326,7 +345,17 @@ pub fn connect_openrouter() -> Result<String, String> {
         }
     };
 
-    let response = reqwest::blocking::Client::new()
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| {
+            let msg = format!("Failed to create OpenRouter HTTP client: {err}");
+            crate::diagnostics::log_error("ai_usage", &msg);
+            msg
+        })?;
+
+    let response = client
         .post("https://openrouter.ai/api/v1/auth/keys")
         .json(&json!({
             "code": code,
@@ -335,9 +364,17 @@ pub fn connect_openrouter() -> Result<String, String> {
         }))
         .send()
         .and_then(|response| response.error_for_status())
-        .map_err(|error| format!("OpenRouter token exchange failed: {error}"))?
+        .map_err(|error| {
+            let msg = format!("OpenRouter token exchange failed: {error}");
+            crate::diagnostics::log_error("ai_usage", &msg);
+            msg
+        })?
         .json::<Value>()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let msg = error.to_string();
+            crate::diagnostics::log_error("ai_usage", &msg);
+            msg
+        })?;
 
     response
         .get("key")

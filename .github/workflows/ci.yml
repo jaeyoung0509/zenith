@@ -1,0 +1,66 @@
+name: CI
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master, develop]
+
+jobs:
+  ci:
+    name: Full CI Pipeline (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> src-tauri/target'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install Frontend Dependencies
+        run: pnpm install
+
+      - name: Generate Tauri bindings
+        run: |
+          mkdir -p dist
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+
+      - name: Verify generated bindings (drift check)
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts
+
+      - name: Svelte Typecheck
+        run: pnpm check
+
+      - name: Vitest Frontend Tests
+        run: pnpm test
+
+      - name: Vite Production Build
+        run: pnpm build
+
+      - name: Rust Format Check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust Clippy Linter
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust Unit & Safety Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust Cargo Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml

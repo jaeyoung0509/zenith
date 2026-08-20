@@ -1,8 +1,8 @@
 use crate::docker::DockerAdapter;
 use crate::metrics::DiskMetricsCollector;
 use crate::models::{
-    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStrategy, DeletePlan,
-    DeleteTarget,
+    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanStrategy,
+    DeletePlan, DeleteTarget,
 };
 use crate::safety::{Blacklist, SafeTreeDeleter, SymlinkGuard, ToctouGuard};
 use std::time::SystemTime;
@@ -47,6 +47,12 @@ impl CleanExecutor {
                 total_reclaimed_bytes += result.bytes_reclaimed;
             } else {
                 total_failed_bytes += target.expected_bytes;
+                if let Some(ref err) = result.error_message {
+                    crate::diagnostics::log_error(
+                        "cleanup",
+                        &format!("Target `{}` ({}) failed: {err}", result.name, result.path),
+                    );
+                }
             }
 
             on_event(CleanEvent::ItemFinished {
@@ -96,6 +102,7 @@ impl CleanExecutor {
                     item_id: target.item_id.clone(),
                     name: target.name.clone(),
                     path: target.path.to_string_lossy().to_string(),
+                    status: CleanStatus::Success,
                     success: true,
                     bytes_reclaimed: reclaimed,
                     failure_reason: None,
@@ -105,6 +112,7 @@ impl CleanExecutor {
                     item_id: target.item_id.clone(),
                     name: target.name.clone(),
                     path: target.path.to_string_lossy().to_string(),
+                    status: CleanStatus::Failed,
                     success: false,
                     bytes_reclaimed: 0,
                     failure_reason: Some(CleanFailureReason::ExternalCommandFailed),
@@ -115,12 +123,25 @@ impl CleanExecutor {
 
         let path = &target.path;
 
-        // 1. Blacklist check
+        // 1. Blacklist check (lexical & canonical)
         if let Err(e) = Blacklist::validate(path) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
                 path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Failed,
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(CleanFailureReason::Blacklisted),
+                error_message: Some(e.to_string()),
+            };
+        }
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist(path) {
+            return CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Failed,
                 success: false,
                 bytes_reclaimed: 0,
                 failure_reason: Some(CleanFailureReason::Blacklisted),
@@ -134,6 +155,7 @@ impl CleanExecutor {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
                 path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Success,
                 success: true,
                 bytes_reclaimed: 0,
                 failure_reason: None,
@@ -148,6 +170,7 @@ impl CleanExecutor {
                     item_id: target.item_id.clone(),
                     name: target.name.clone(),
                     path: path.to_string_lossy().to_string(),
+                    status: CleanStatus::Failed,
                     success: false,
                     bytes_reclaimed: 0,
                     failure_reason: Some(CleanFailureReason::ChangedSinceScan),
@@ -156,50 +179,138 @@ impl CleanExecutor {
             }
         }
 
+        // 3b. Stale Temp Directory TOCTOU: re-verify freshness invariant if target has min_age_days
+        if let Some(days) = target.min_age_days {
+            if path.is_dir() {
+                let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+                    path,
+                    &target.exclusions,
+                    0,
+                    32,
+                );
+                if !stats.complete {
+                    return CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                        error_message: Some(
+                            "Directory structure could not be fully verified; aborted to protect active files"
+                                .to_string(),
+                        ),
+                    };
+                }
+                let Some(newest) = stats.newest_mtime else {
+                    return CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                        error_message: Some(
+                            "Directory modification timestamp unavailable; aborted to protect active files"
+                                .to_string(),
+                        ),
+                    };
+                };
+                let minimum_age = std::time::Duration::from_secs(days as u64 * 86_400);
+                if std::time::SystemTime::now()
+                    .duration_since(newest)
+                    .unwrap_or_default()
+                    < minimum_age
+                {
+                    return CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                        error_message: Some(format!(
+                            "Directory contains files modified within the last {} day(s); aborted to protect active files",
+                            days
+                        )),
+                    };
+                }
+            }
+        }
+
         // 4. Perform non-destructive deletion according to strategy
-        let clean_op = match target.strategy {
+        let report = match target.strategy {
             CleanStrategy::DeleteContents => {
                 SafeTreeDeleter::delete_contents(path, &target.exclusions)
             }
             CleanStrategy::DeleteDirectory => {
                 SafeTreeDeleter::delete_path(path, &target.exclusions)
             }
-            CleanStrategy::Manual => Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "manual cleanup requires a dedicated adapter",
-            )),
+            CleanStrategy::Manual => {
+                return CleanItemResult {
+                    item_id: target.item_id.clone(),
+                    name: target.name.clone(),
+                    path: path.to_string_lossy().to_string(),
+                    status: CleanStatus::Failed,
+                    success: false,
+                    bytes_reclaimed: 0,
+                    failure_reason: Some(CleanFailureReason::Unknown),
+                    error_message: Some("Manual cleanup requires a dedicated adapter".to_string()),
+                };
+            }
             CleanStrategy::ExternalCommand => {
                 SafeTreeDeleter::delete_contents(path, &target.exclusions)
             }
             CleanStrategy::DockerPrune => unreachable!(),
         };
 
-        match clean_op {
-            Ok(bytes) => CleanItemResult {
+        if report.is_success() {
+            CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
                 path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Success,
                 success: true,
-                bytes_reclaimed: bytes,
+                bytes_reclaimed: report.reclaimed_bytes,
                 failure_reason: None,
                 error_message: None,
-            },
-            Err(e) => {
-                let failure_reason = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => CleanFailureReason::PermissionDenied,
-                    std::io::ErrorKind::NotFound => CleanFailureReason::NotFound,
-                    _ => CleanFailureReason::Unknown,
-                };
-                let user_msg = failure_reason.user_message(&target.name);
-                CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(failure_reason),
-                    error_message: Some(user_msg),
-                }
+            }
+        } else if report.reclaimed_bytes > 0 {
+            // Partial success: accurately record partial status and reclaimed bytes
+            CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Partial,
+                success: true,
+                bytes_reclaimed: report.reclaimed_bytes,
+                failure_reason: None,
+                error_message: Some(format!(
+                    "{} file(s) could not be removed (e.g. locked or permission denied)",
+                    report.errors.len()
+                )),
+            }
+        } else {
+            let error_str = report.errors.join("; ");
+            let failure_reason = if error_str.contains("Permission denied") {
+                CleanFailureReason::PermissionDenied
+            } else if error_str.contains("No such file") {
+                CleanFailureReason::NotFound
+            } else {
+                CleanFailureReason::Unknown
+            };
+            CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Failed,
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(failure_reason),
+                error_message: Some(error_str),
             }
         }
     }

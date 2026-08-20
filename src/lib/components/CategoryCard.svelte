@@ -30,13 +30,15 @@
 
   let Icon = $derived(icons[categoryResult.category] || Boxes);
 
+  let cleanableItems = $derived(categoryResult.items.filter((i) => i.risk !== 'manual'));
+
   let allSelected = $derived.by(() => {
-    if (categoryResult.items.length === 0) return false;
-    return categoryResult.items.every((i) => scanStore.selectedMap[i.id]);
+    if (cleanableItems.length === 0) return false;
+    return cleanableItems.every((i) => scanStore.selectedMap[i.id]);
   });
 
   let selectedBytes = $derived.by(() => {
-    return categoryResult.items.reduce((acc, i) => {
+    return cleanableItems.reduce((acc, i) => {
       return scanStore.selectedMap[i.id]
         ? acc + (i.size.allocated ?? i.size.logical)
         : acc;
@@ -45,6 +47,7 @@
 
   function handleToggleCheckbox(e: MouseEvent) {
     e.stopPropagation();
+    if (cleanableItems.length === 0) return;
     scanStore.toggleCategory(categoryResult.category, !allSelected);
   }
 </script>
@@ -59,13 +62,22 @@
     onclick={() => onSelectCategory?.(categoryResult)}
   >
     <div class="flex items-center space-x-3">
-      <!-- Custom Checkbox -->
-      <input
-        type="checkbox"
-        checked={allSelected}
-        onclick={handleToggleCheckbox}
-        class="h-4 w-4 rounded border-border text-primary focus:ring-ring transition-colors cursor-pointer accent-primary"
-      />
+      <!-- Custom Checkbox (only for cleanable categories) -->
+      {#if cleanableItems.length > 0}
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onclick={handleToggleCheckbox}
+          class="h-4 w-4 rounded border-border text-primary focus:ring-ring transition-colors cursor-pointer accent-primary"
+        />
+      {:else}
+        <div
+          class="h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center text-[9px] text-muted-foreground"
+          title="Manual category: stateful resources are managed in dedicated adapter"
+        >
+          -
+        </div>
+      {/if}
 
       <div
         class="h-9 w-9 rounded-lg bg-secondary flex items-center justify-center text-foreground group-hover:scale-105 transition-transform"
@@ -91,6 +103,11 @@
           {#if categoryResult.rebuild_bytes > 0}
             <span class="text-[11px] text-amber-500 font-mono">
               • Rebuild: {formatBytes(categoryResult.rebuild_bytes)}
+            </span>
+          {/if}
+          {#if categoryResult.manual_bytes > 0}
+            <span class="text-[11px] text-rose-500 font-mono">
+              • Manual: {formatBytes(categoryResult.manual_bytes)}
             </span>
           {/if}
         </div>

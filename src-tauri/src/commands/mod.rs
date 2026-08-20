@@ -4,8 +4,8 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    DeletePlan, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview,
-    ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
+    DeletePlan, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem,
+    MemoryMetrics, PlanPreview, ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::power::{ApplicationPicker, KeepAwakeManager};
@@ -28,6 +28,7 @@ pub struct AppState {
     pub ai_usage_refresh_lock: Arc<Mutex<()>>,
     pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
     pub operation_lock: Arc<Mutex<()>>,
+    pub memory_sampler: Arc<crate::metrics::MemorySampler>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -38,6 +39,7 @@ fn unix_timestamp() -> u64 {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn get_ai_usage(
     force: Option<bool>,
     state: State<'_, AppState>,
@@ -72,6 +74,7 @@ pub async fn get_ai_usage(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), String> {
     let openrouter_key = state.openrouter_key.clone();
     let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
@@ -83,6 +86,7 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn start_scan(
     on_event: Channel<ScanEvent>,
     categories: Option<Vec<Category>>,
@@ -109,11 +113,13 @@ pub async fn start_scan(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_last_scan(state: State<'_, AppState>) -> Option<ScanResult> {
     state.last_scan.lock().unwrap().clone()
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn create_delete_plan(
     scan_id: String,
     selected_item_ids: Vec<String>,
@@ -149,6 +155,7 @@ pub fn create_delete_plan(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn execute_clean(
     plan_id: uuid::Uuid,
     on_event: Channel<CleanEvent>,
@@ -189,16 +196,22 @@ pub async fn execute_clean(
 }
 
 #[tauri::command]
-pub fn get_memory_metrics() -> Result<MemoryMetrics, String> {
-    Ok(MemoryInspector::get_metrics())
+#[specta::specta]
+pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetrics, String> {
+    let sampler = state.memory_sampler.clone();
+    tauri::async_runtime::spawn_blocking(move || sampler.sample())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn terminate_process_group(name: String, force: bool) -> Result<usize, String> {
     MemoryInspector::terminate_group(&name, force)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn pick_keep_awake_application() -> Result<Option<SelectedApplication>, String> {
     tauri::async_runtime::spawn_blocking(ApplicationPicker::pick)
         .await
@@ -206,16 +219,19 @@ pub async fn pick_keep_awake_application() -> Result<Option<SelectedApplication>
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_disk_metrics() -> Result<DiskMetrics, String> {
     DiskMetricsCollector::get_primary_disk().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_disk_volumes() -> Vec<DiskVolume> {
     DiskMetricsCollector::get_volumes()
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn open_disk_utility() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     std::process::Command::new("open")
@@ -227,38 +243,44 @@ pub fn open_disk_utility() -> Result<(), String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_docker_status() -> Result<DockerStatus, String> {
     Ok(DockerAdapter::get_status())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn prune_docker_target(signature_id: String) -> Result<u64, String> {
     DockerAdapter::prune_category(&signature_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_local_models() -> Result<Vec<LocalModelItem>, String> {
     Ok(LocalModelScanner::scan_all_models())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn delete_local_model(model_id: String) -> Result<u64, String> {
     LocalModelManager::delete_by_id(&model_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_awake_state(state: State<'_, AppState>) -> Result<AwakeState, String> {
-    state.awake_manager.evaluate();
     Ok(state.awake_manager.get_state())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn set_awake_rules(rules: Vec<AwakeRule>, state: State<'_, AppState>) -> Result<(), String> {
     state.awake_manager.set_rules(rules);
     Ok(())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn set_manual_awake(
     duration_secs: Option<u64>,
     behavior: AwakeBehavior,
@@ -271,18 +293,21 @@ pub fn set_manual_awake(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), String> {
     state.awake_manager.disable_manual();
     Ok(())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String> {
     let s = state.settings.lock().unwrap();
     Ok(s.clone())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn save_settings(
     settings: ZenithSettings,
     app_handle: AppHandle,
@@ -301,6 +326,7 @@ pub fn save_settings(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn reveal_in_finder(path: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -316,8 +342,9 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window("main") {
+    if let Ok(window) = crate::ensure_window(&app_handle, "main") {
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -329,8 +356,15 @@ pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[specta::specta]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window("quick") {
+    if let Ok(window) = crate::ensure_window(&app_handle, "quick") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {
@@ -339,4 +373,43 @@ pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_diagnostics(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DiagnosticsSnapshot, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    Ok(crate::diagnostics::get_snapshot(&settings, &config_dir))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_logs_folder() -> Result<(), String> {
+    crate::diagnostics::open_logs_folder()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_version_is_semver_formatted() {
+        let version = get_app_version();
+        assert!(!version.is_empty());
+        let parts: Vec<&str> = version.split('.').collect();
+        assert_eq!(parts.len(), 3, "Expected major.minor.patch semver format");
+        for part in parts {
+            assert!(
+                part.chars().all(|c| c.is_ascii_digit()),
+                "Expected numeric version segments"
+            );
+        }
+    }
 }

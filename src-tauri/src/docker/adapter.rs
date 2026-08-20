@@ -9,7 +9,9 @@ pub struct DockerAdapter;
 impl DockerAdapter {
     /// Checks if the Docker CLI is installed and the daemon is currently running.
     pub fn get_status() -> DockerStatus {
-        let cli_check = tooling::command("docker").arg("--version").output();
+        let mut cli_cmd = tooling::command("docker");
+        cli_cmd.arg("--version");
+        let cli_check = tooling::run_with_timeout(cli_cmd, std::time::Duration::from_secs(3));
 
         let (is_available, version) = match cli_check {
             Ok(output) if output.status.success() => {
@@ -33,9 +35,9 @@ impl DockerAdapter {
         }
 
         // Check if Docker daemon is running
-        let ping = tooling::command("docker")
-            .args(["info", "--format", "{{.ServerVersion}}"])
-            .output();
+        let mut ping_cmd = tooling::command("docker");
+        ping_cmd.args(["info", "--format", "{{.ServerVersion}}"]);
+        let ping = tooling::run_with_timeout(ping_cmd, std::time::Duration::from_secs(4));
 
         let is_running = matches!(ping, Ok(output) if output.status.success());
 
@@ -71,19 +73,22 @@ impl DockerAdapter {
 
     /// Generates ScanItems for Docker artifacts when the Docker daemon is active.
     pub fn scan_items() -> Vec<ScanItem> {
-        let status = Self::get_status();
-        if !status.is_running {
+        let overview = Self::get_overview();
+        if overview.total_bytes == 0 && overview.total_reclaimable_bytes == 0 {
             return Vec::new();
         }
 
-        let overview = match status.overview {
-            Some(o) => o,
-            None => return Vec::new(),
-        };
-
+        let images = Self::get_images();
         let mut items = Vec::new();
 
-        if overview.images.reclaimable_bytes > 0 {
+        let dangling_size: u64 = images
+            .iter()
+            .filter(|i| i.is_dangling)
+            .map(|i| i.size_bytes)
+            .sum();
+        let dangling_count = images.iter().filter(|i| i.is_dangling).count();
+
+        if dangling_count > 0 {
             items.push(ScanItem {
                 id: "container.docker.dangling_images".to_string(),
                 signature_id: "container.docker.dangling_images".to_string(),
@@ -91,12 +96,9 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Safe,
                 path: "docker://images/dangling".to_string(),
-                size: FileSize::new(
-                    overview.images.reclaimable_bytes,
-                    Some(overview.images.reclaimable_bytes),
-                ),
-                file_count: 0,
-                description: "Untagged intermediate image layers".to_string(),
+                size: FileSize::new(dangling_size, Some(dangling_size)),
+                file_count: dangling_count,
+                description: format!("{dangling_count} untagged intermediate image layers"),
                 is_selected: true,
                 last_modified: None,
                 exists: true,
@@ -118,6 +120,28 @@ impl DockerAdapter {
                 file_count: 0,
                 description: "Reusable BuildKit build cache layers".to_string(),
                 is_selected: true,
+                last_modified: None,
+                exists: true,
+            });
+        }
+
+        if overview.images.reclaimable_bytes > 0 {
+            let unused_count = images.iter().filter(|i| !i.is_in_use).count();
+            items.push(ScanItem {
+                id: "container.docker.unused_images".to_string(),
+                signature_id: "container.docker.unused_images".to_string(),
+                name: "Docker Unused Images".to_string(),
+                category: Category::Container,
+                risk: RiskTier::Rebuild,
+                path: "docker://images/unused".to_string(),
+                size: FileSize::new(
+                    overview.images.reclaimable_bytes,
+                    Some(overview.images.reclaimable_bytes),
+                ),
+                file_count: unused_count,
+                description: "Images not referenced by any running or stopped container"
+                    .to_string(),
+                is_selected: false,
                 last_modified: None,
                 exists: true,
             });
@@ -168,9 +192,9 @@ impl DockerAdapter {
 
     /// Queries `docker system df` and parses image, container, volume, and build cache usage.
     pub fn get_overview() -> DockerOverview {
-        let output = tooling::command("docker")
-            .args(["system", "df", "--format", "{{json .}}"])
-            .output();
+        let mut cmd = tooling::command("docker");
+        cmd.args(["system", "df", "--format", "{{json .}}"]);
+        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
         let stdout = match output {
             Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
@@ -196,25 +220,25 @@ impl DockerAdapter {
                 .and_then(|v| v.as_str())
                 .unwrap_or("0B");
 
-            let total_bytes = Self::parse_docker_size(size_str);
-            let reclaim_bytes = Self::parse_docker_reclaimable(reclaim_str);
+            let size = Self::parse_docker_size(size_str);
+            let reclaim = Self::parse_docker_reclaimable(reclaim_str);
 
             match item_type {
                 "Images" => {
-                    overview.images.total_bytes = total_bytes;
-                    overview.images.reclaimable_bytes = reclaim_bytes;
+                    overview.images.total_bytes = size;
+                    overview.images.reclaimable_bytes = reclaim;
                 }
                 "Containers" => {
-                    overview.containers.total_bytes = total_bytes;
-                    overview.containers.reclaimable_bytes = reclaim_bytes;
+                    overview.containers.total_bytes = size;
+                    overview.containers.reclaimable_bytes = reclaim;
                 }
                 "Local Volumes" => {
-                    overview.volumes.total_bytes = total_bytes;
-                    overview.volumes.reclaimable_bytes = reclaim_bytes;
+                    overview.volumes.total_bytes = size;
+                    overview.volumes.reclaimable_bytes = reclaim;
                 }
                 "Build Cache" => {
-                    overview.build_cache.total_bytes = total_bytes;
-                    overview.build_cache.reclaimable_bytes = reclaim_bytes;
+                    overview.build_cache.total_bytes = size;
+                    overview.build_cache.reclaimable_bytes = reclaim;
                 }
                 _ => {}
             }
@@ -266,9 +290,14 @@ impl DockerAdapter {
     }
 
     pub fn get_images() -> Vec<DockerImageItem> {
-        let output = tooling::command("docker")
-            .args(["images", "--format", "{{json .}}"])
-            .output();
+        let used_images: std::collections::HashSet<String> = Self::get_containers()
+            .into_iter()
+            .map(|c| c.image)
+            .collect();
+
+        let mut cmd = tooling::command("docker");
+        cmd.args(["images", "--format", "{{json .}}"]);
+        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
         let mut images = Vec::new();
         if let Ok(out) = output {
@@ -294,13 +323,19 @@ impl DockerAdapter {
                         let size_bytes = Self::parse_docker_size(size_str);
                         let is_dangling = repo == "<none>" || tag == "<none>";
 
+                        let full_name = format!("{repo}:{tag}");
+                        let is_in_use = !is_dangling
+                            && (used_images.contains(&id)
+                                || used_images.contains(&repo)
+                                || used_images.contains(&full_name));
+
                         images.push(DockerImageItem {
                             id,
                             repository: repo,
                             tag,
                             size_bytes,
                             is_dangling,
-                            is_in_use: !is_dangling,
+                            is_in_use,
                         });
                     }
                 }
@@ -310,9 +345,9 @@ impl DockerAdapter {
     }
 
     pub fn get_containers() -> Vec<DockerContainerItem> {
-        let output = tooling::command("docker")
-            .args(["ps", "-a", "--format", "{{json .}}"])
-            .output();
+        let mut cmd = tooling::command("docker");
+        cmd.args(["ps", "-a", "--format", "{{json .}}"]);
+        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
         let mut containers = Vec::new();
         if let Ok(out) = output {
@@ -359,9 +394,9 @@ impl DockerAdapter {
     }
 
     pub fn get_volumes() -> Vec<DockerVolumeItem> {
-        let output = tooling::command("docker")
-            .args(["volume", "ls", "--format", "{{json .}}"])
-            .output();
+        let mut cmd = tooling::command("docker");
+        cmd.args(["volume", "ls", "--format", "{{json .}}"]);
+        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
         let mut volumes = Vec::new();
         if let Ok(out) = output {
@@ -396,19 +431,56 @@ impl DockerAdapter {
     pub fn prune_category(signature_id: &str) -> Result<u64, ZenithError> {
         let overview_before = Self::get_overview();
 
-        let res = match signature_id {
-            "container.docker.dangling_images" => tooling::command("docker")
-                .args(["image", "prune", "-f"])
-                .output(),
-            "container.docker.builder" => tooling::command("docker")
-                .args(["builder", "prune", "-f"])
-                .output(),
-            "container.docker.stopped_containers" => tooling::command("docker")
-                .args(["container", "prune", "-f"])
-                .output(),
-            "container.docker.unused_volumes" => tooling::command("docker")
-                .args(["volume", "prune", "-f"])
-                .output(),
+        enum CategoryDelta {
+            Images,
+            BuildCache,
+            Containers,
+            Volumes,
+        }
+
+        let prune_timeout = std::time::Duration::from_secs(30);
+
+        let (res, delta_kind) = match signature_id {
+            "container.docker.dangling_images" => {
+                let mut cmd = tooling::command("docker");
+                cmd.args(["image", "prune", "-f"]);
+                (
+                    tooling::run_with_timeout(cmd, prune_timeout),
+                    CategoryDelta::Images,
+                )
+            }
+            "container.docker.unused_images" => {
+                let mut cmd = tooling::command("docker");
+                cmd.args(["image", "prune", "-a", "-f"]);
+                (
+                    tooling::run_with_timeout(cmd, prune_timeout),
+                    CategoryDelta::Images,
+                )
+            }
+            "container.docker.builder" => {
+                let mut cmd = tooling::command("docker");
+                cmd.args(["builder", "prune", "-f"]);
+                (
+                    tooling::run_with_timeout(cmd, prune_timeout),
+                    CategoryDelta::BuildCache,
+                )
+            }
+            "container.docker.stopped_containers" => {
+                let mut cmd = tooling::command("docker");
+                cmd.args(["container", "prune", "-f"]);
+                (
+                    tooling::run_with_timeout(cmd, prune_timeout),
+                    CategoryDelta::Containers,
+                )
+            }
+            "container.docker.unused_volumes" => {
+                let mut cmd = tooling::command("docker");
+                cmd.args(["volume", "prune", "-f"]);
+                (
+                    tooling::run_with_timeout(cmd, prune_timeout),
+                    CategoryDelta::Volumes,
+                )
+            }
             _ => {
                 return Err(ZenithError::SignatureMismatch(format!(
                     "Unknown docker signature: {}",
@@ -420,16 +492,36 @@ impl DockerAdapter {
         match res {
             Ok(output) if output.status.success() => {
                 let overview_after = Self::get_overview();
-                let reclaimed = overview_before
-                    .total_bytes
-                    .saturating_sub(overview_after.total_bytes);
+                let reclaimed = match delta_kind {
+                    CategoryDelta::Images => overview_before
+                        .images
+                        .total_bytes
+                        .saturating_sub(overview_after.images.total_bytes),
+                    CategoryDelta::BuildCache => overview_before
+                        .build_cache
+                        .total_bytes
+                        .saturating_sub(overview_after.build_cache.total_bytes),
+                    CategoryDelta::Containers => overview_before
+                        .containers
+                        .total_bytes
+                        .saturating_sub(overview_after.containers.total_bytes),
+                    CategoryDelta::Volumes => overview_before
+                        .volumes
+                        .total_bytes
+                        .saturating_sub(overview_after.volumes.total_bytes),
+                };
                 Ok(reclaimed)
             }
             Ok(output) => {
-                let err_str = String::from_utf8_lossy(&output.stderr);
-                Err(ZenithError::ExternalCommandFailed(err_str.to_string()))
+                let err_str = String::from_utf8_lossy(&output.stderr).to_string();
+                crate::diagnostics::log_error("docker", &err_str);
+                Err(ZenithError::ExternalCommandFailed(err_str))
             }
-            Err(e) => Err(ZenithError::ExternalCommandFailed(e.to_string())),
+            Err(e) => {
+                let err_str = e.to_string();
+                crate::diagnostics::log_error("docker", &err_str);
+                Err(ZenithError::ExternalCommandFailed(err_str))
+            }
         }
     }
 }
