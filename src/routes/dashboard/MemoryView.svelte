@@ -99,8 +99,9 @@
         <div class="flex items-center gap-2">
           <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
           {#if memory}
-            <div class="px-2 py-0.5 rounded-full text-[10px] font-mono font-medium border {pressureColors[memory.pressure]}">
-              Pressure: {memory.pressure.toUpperCase()}
+            <div class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
+              <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-rose-500 animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}"></span>
+              <span>Pressure: {memory.pressure.toUpperCase()}</span>
             </div>
           {/if}
         </div>
@@ -117,7 +118,7 @@
       onclick={handleRefresh}
       class="gap-1.5 text-xs"
     >
-      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-spin' : ''} />
+      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-gentle-spin' : ''} />
       <span>Refresh</span>
     </Button>
   </div>
@@ -177,6 +178,13 @@
             <span class="text-xs font-normal text-muted-foreground">/ {formatBytes(memory.swap_total_bytes)}</span>
           {/if}
         </div>
+        {#if memory.swap_total_bytes > 0}
+          <ProgressBar
+            value={(memory.swap_used_bytes / memory.swap_total_bytes) * 100}
+            height="h-1.5"
+            color="bg-blue-500"
+          />
+        {/if}
         <p class="text-[11px] text-muted-foreground mt-1">
           Secondary disk paging memory usage.
         </p>
@@ -234,7 +242,7 @@
     </div>
   {:else}
     <div class="py-16 text-center text-xs text-muted-foreground space-y-2">
-      <RotateCw size={20} class="animate-spin mx-auto opacity-50" />
+      <RotateCw size={20} class="animate-gentle-spin mx-auto opacity-50" />
       <p>Reading macOS memory statistics...</p>
     </div>
   {/if}

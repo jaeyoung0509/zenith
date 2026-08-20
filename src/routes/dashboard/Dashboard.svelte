@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import type { CategoryResult, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
@@ -137,28 +139,32 @@
     </div>
   </aside>
 
-  <!-- Main Content Area -->
+  <!-- Main Content Area with fluid native transition -->
   <main class="flex-1 h-full overflow-y-auto p-8 pt-10">
-    {#if selectedCategory}
-      <CategoryDetailView
-        categoryResult={selectedCategory}
-        onBack={() => (selectedCategory = null)}
-        onNavigateTab={(tab) => selectTab(tab)}
-      />
-    {:else if currentTab === 'storage'}
-      <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
-    {:else if currentTab === 'docker'}
-      <DockerView />
-    {:else if currentTab === 'models'}
-      <ModelsView />
-    {:else if currentTab === 'usage'}
-      <AiUsageView />
-    {:else if currentTab === 'memory'}
-      <MemoryView />
-    {:else if currentTab === 'awake'}
-      <AwakeView />
-    {:else if currentTab === 'settings'}
-      <SettingsView />
-    {/if}
+    {#key selectedCategory ? selectedCategory.category : currentTab}
+      <div in:fade={{ duration: 140, easing: cubicOut }}>
+        {#if selectedCategory}
+          <CategoryDetailView
+            categoryResult={selectedCategory}
+            onBack={() => (selectedCategory = null)}
+            onNavigateTab={(tab) => selectTab(tab)}
+          />
+        {:else if currentTab === 'storage'}
+          <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+        {:else if currentTab === 'docker'}
+          <DockerView />
+        {:else if currentTab === 'models'}
+          <ModelsView />
+        {:else if currentTab === 'usage'}
+          <AiUsageView />
+        {:else if currentTab === 'memory'}
+          <MemoryView />
+        {:else if currentTab === 'awake'}
+          <AwakeView />
+        {:else if currentTab === 'settings'}
+          <SettingsView />
+        {/if}
+      </div>
+    {/key}
   </main>
 </div>

@@ -174,7 +174,10 @@
     </div>
     <div class="flex items-center space-x-1">
       {#if awakeState.is_active}
-        <div class="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-medium border border-amber-500/20"><Moon size={10} /><span>Awake</span></div>
+        <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-medium border border-amber-500/20">
+          <span class="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse-soft"></span>
+          <span>Awake</span>
+        </div>
       {/if}
       <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-foreground" onclick={handleOpenDashboard} ariaLabel="Open settings"><Settings size={14} /></Button>
       <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-secondary" onclick={handleClose} ariaLabel="Close quick panel" title="Close"><X size={15} /></Button>

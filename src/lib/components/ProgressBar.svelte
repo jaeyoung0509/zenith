@@ -1,11 +1,12 @@
 <script lang="ts">
   interface Props {
-    value: number; // 0 to 100
+    value: number; // 0 to 100 or current units
     max?: number;
     height?: string;
     class?: string;
     showPercent?: boolean;
     color?: string;
+    animated?: boolean;
   }
 
   let {
@@ -15,26 +16,31 @@
     class: className = '',
     showPercent = false,
     color = 'bg-primary',
+    animated = false,
   }: Props = $props();
 
-  let percent = $derived(Math.min(100, Math.max(0, (value / max) * 100)));
+  let percent = $derived(
+    max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
+  );
 </script>
 
-<div class="w-full space-y-1 {className}">
+<div class="w-full space-y-1.5 {className}">
   {#if showPercent}
     <div class="flex justify-between text-[11px] text-muted-foreground font-mono">
       <span>Progress</span>
       <span>{Math.round(percent)}%</span>
     </div>
   {/if}
-  <div class="w-full {height} bg-secondary/80 rounded-full overflow-hidden relative">
+  <div class="w-full {height} bg-secondary/80 rounded-full overflow-hidden relative shadow-inner">
     <div
-      class="{height} {color} rounded-full transition-all duration-300 ease-out relative overflow-hidden"
+      class="{height} {color} rounded-full transition-[width,background-color] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] relative overflow-hidden will-change-[width]"
       style="width: {percent}%;"
     >
-      <div
-        class="absolute inset-0 bg-white/20 animate-[shimmer_2s_infinite] -skew-x-12"
-      ></div>
+      {#if animated}
+        <div
+          class="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"
+        ></div>
+      {/if}
     </div>
   </div>
 </div>

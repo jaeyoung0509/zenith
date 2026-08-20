@@ -51,12 +51,22 @@ distribute: clean-bin
 # Alias for distribute
 release: distribute
 
+# Build fresh release and launch immediately
+release-and-run: release
+    @echo "🚀 Launching fresh release build..."
+    @just run-bin
+
 # Clean existing binaries and build fresh standalone release macOS App bundle
 release-app: clean-bin
     pnpm tauri build --bundles app
     @echo ""
     @echo "✅ Standalone release App built at: target/release/bundle/macos/Zenith.app"
     @echo "👉 Run directly with: just run-bin"
+
+# Build fresh standalone release app and launch immediately
+release-app-and-run: release-app
+    @echo "🚀 Launching fresh release build..."
+    @just run-bin
 
 # Build production macOS App bundle & DMG installer (.app / .dmg)
 build:
@@ -150,6 +160,7 @@ install:
 
 # Clean previous built binary, app bundles, dmg packages, and dist frontend
 clean-bin:
+    @-killall Zenith 2>/dev/null || true
     rm -rf dist target/release/bundle target/release/Zenith target/debug/bundle target/debug/Zenith src-tauri/target/release/bundle src-tauri/target/release/Zenith src-tauri/target/debug/bundle src-tauri/target/debug/Zenith
     @echo "🗑️ Existing binary and bundle artifacts removed."
 
