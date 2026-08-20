@@ -27,38 +27,52 @@ pub fn log_file_path() -> PathBuf {
     log_dir().join("zenith.log")
 }
 
-/// Redacts known secret patterns (e.g. `sk-...`, `Bearer ...`, `token=...`) from log messages.
+use regex::Regex;
+use std::sync::LazyLock;
+
+static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        // sk-... (OpenAI, Anthropic, OpenRouter API keys)
+        Regex::new(r"sk-[a-zA-Z0-9_\-]{8,}").unwrap(),
+        // GitHub personal access tokens
+        Regex::new(r"ghp_[a-zA-Z0-9]{20,}").unwrap(),
+        // GitLab personal access tokens
+        Regex::new(r"glpat-[a-zA-Z0-9_\-]{20,}").unwrap(),
+        // Slack tokens
+        Regex::new(r"xox[baprs]-[a-zA-Z0-9_\-]{10,}").unwrap(),
+        // Bearer <token>
+        Regex::new(r"(?i)(bearer\s+)[a-zA-Z0-9_\.\-]+").unwrap(),
+        // Key-value pairs (e.g. OPENROUTER_API_KEY=..., token=..., api_key: "...", "api_key": "...")
+        Regex::new(r#"(?i)((?:api[_-]?key|token|secret|password|auth|authorization)[a-zA-Z0-9_\-]*\s*[:=]\s*["']?)[a-zA-Z0-9_\.\-]+"#).unwrap(),
+        // URL query parameters (e.g. ?token=..., &key=..., &api_key=...)
+        Regex::new(r"(?i)([?&](?:token|key|api_key|secret|password)=)[^&\s]+").unwrap(),
+    ]
+});
+
+/// Redacts known secret patterns (API keys, bearer tokens, passwords, query params) from log messages.
 pub fn sanitize_log(msg: &str) -> String {
-    let mut result = Vec::new();
-    let mut redact_next = false;
+    let mut sanitized = msg.to_string();
 
-    for word in msg.split_whitespace() {
-        if redact_next {
-            result.push("[REDACTED]");
-            redact_next = false;
-            continue;
-        }
-
-        let lower = word.to_ascii_lowercase();
-        if lower.starts_with("sk-")
-            || lower.starts_with("ghp_")
-            || lower.starts_with("glpat-")
-            || lower.starts_with("token=")
-            || lower.starts_with("key=")
-            || lower.starts_with("secret=")
-            || lower.starts_with("password=")
-            || lower.starts_with("api_key=")
-            || lower.starts_with("apikey=")
-        {
-            result.push("[REDACTED]");
-        } else if lower == "bearer" || lower == "token" || lower == "key" || lower == "secret" {
-            result.push(word);
-            redact_next = true;
-        } else {
-            result.push(word);
-        }
+    // 1. Exact token formats (sk-..., ghp_..., glpat-..., xox-...)
+    for idx in 0..4 {
+        sanitized = SECRET_PATTERNS[idx]
+            .replace_all(&sanitized, "[REDACTED]")
+            .to_string();
     }
-    result.join(" ")
+    // 2. Bearer <token>
+    sanitized = SECRET_PATTERNS[4]
+        .replace_all(&sanitized, "${1}[REDACTED]")
+        .to_string();
+    // 3. Key-value pairs (token=..., api_key: ..., OPENROUTER_API_KEY=..., etc.)
+    sanitized = SECRET_PATTERNS[5]
+        .replace_all(&sanitized, "${1}[REDACTED]")
+        .to_string();
+    // 4. URL query parameters
+    sanitized = SECRET_PATTERNS[6]
+        .replace_all(&sanitized, "${1}[REDACTED]")
+        .to_string();
+
+    sanitized
 }
 
 pub fn log_error(category: &str, message: &str) {
@@ -117,6 +131,16 @@ pub fn get_recent_errors(limit: usize) -> Vec<String> {
     }
 }
 
+pub fn normalized_log_path() -> String {
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let full = log_file_path();
+        if let Ok(rel) = full.strip_prefix(&home) {
+            return format!("~/{}", rel.display());
+        }
+    }
+    log_file_path().to_string_lossy().to_string()
+}
+
 pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> DiagnosticsSnapshot {
     let mut features = Vec::new();
 
@@ -167,7 +191,7 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         os_version,
         arch: std::env::consts::ARCH.to_string(),
-        log_path: log_file_path().to_string_lossy().to_string(),
+        log_path: normalized_log_path(),
         enabled_features: features,
         recent_errors: get_recent_errors(20),
         settings_corrupt_recovered: crate::settings_store::has_corrupted_backup(config_dir),
@@ -192,20 +216,47 @@ mod tests {
 
     #[test]
     fn secret_sanitizer_redacts_tokens() {
-        let text = "Failed with key sk-123456789abcdef and Bearer secret-token-xyz during auth";
-        let clean = sanitize_log(text);
-        assert!(!clean.contains("sk-123456789abcdef"));
-        assert!(!clean.contains("secret-token-xyz"));
-        assert!(clean.contains("[REDACTED]"));
+        let cases = [
+            ("Bearer secret-token-xyz", "Bearer [REDACTED]"),
+            ("token=secret123", "token=[REDACTED]"),
+            ("TOKEN=SECRET_VAL", "TOKEN=[REDACTED]"),
+            (
+                "OPENROUTER_API_KEY=sk-or-v1-abcdef123456",
+                "OPENROUTER_API_KEY=[REDACTED]",
+            ),
+            (
+                r#"{"api_key":"sk-abcdef123456"}"#,
+                r#"{"api_key":"[REDACTED]"}"#,
+            ),
+            (
+                "https://foo.com?token=secret123&other=val",
+                "https://foo.com?token=[REDACTED]&other=val",
+            ),
+            ("api_key:sk-abcdef123456", "api_key:[REDACTED]"),
+            ("ghp_123456789012345678901234567890", "[REDACTED]"),
+            ("glpat-123456789012345678901234567890", "[REDACTED]"),
+        ];
+
+        for (input, expected) in cases {
+            let sanitized = sanitize_log(input);
+            assert_eq!(sanitized, expected, "Failed on input: {input}");
+        }
     }
 
     #[test]
-    fn diagnostics_snapshot_contains_system_info() {
+    fn diagnostics_snapshot_contains_system_info_and_normalized_path() {
         let dir = tempfile::tempdir().unwrap();
         let settings = ZenithSettings::default();
         let snapshot = get_snapshot(&settings, dir.path());
         assert_eq!(snapshot.app_version, env!("CARGO_PKG_VERSION"));
         assert!(!snapshot.arch.is_empty());
         assert!(!snapshot.enabled_features.is_empty());
+        if std::env::var_os("HOME").is_some() {
+            assert!(
+                snapshot.log_path.starts_with("~/"),
+                "Expected normalized log path starting with ~/, got {}",
+                snapshot.log_path
+            );
+        }
     }
 }

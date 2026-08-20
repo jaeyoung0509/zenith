@@ -125,14 +125,14 @@
     return timeUntil ? `${timeUntil} remaining` : `${diffSecs}s remaining`;
   }
 
-  function handleEnableRecommendedRules() {
+  async function handleEnableRecommendedRules() {
     const updatedRules = rules.map((r) => {
       if (['rule.codex', 'rule.claude', 'rule.docker'].includes(r.id)) {
         return { ...r, enabled: true, power_condition: 'ac_power_only' as PowerCondition };
       }
       return r;
     });
-    settingsStore.save({ awake_rules: updatedRules });
+    await settingsStore.save({ awake_rules: updatedRules });
   }
 </script>
 

@@ -20,6 +20,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          targets: aarch64-apple-darwin
           components: rustfmt, clippy
 
       - name: Rust Cache
@@ -41,6 +42,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Verify release tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "❌ Release tag ($TAG_VERSION) does not match package.json ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "✅ Release tag matches manifest version: $PKG_VERSION"
+
       - name: Generate Tauri bindings & verify drift
         run: |
           mkdir -p dist
@@ -56,16 +68,25 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-      - name: Build macOS DMG Bundle
-        run: pnpm tauri build
+      - name: Build macOS DMG Bundle (ARM64)
+        run: pnpm tauri build --target aarch64-apple-darwin
 
       - name: Prepare Release Artifacts and Checksums
         run: |
           mkdir -p artifacts
-          find target/release/bundle/dmg src-tauri/target/release/bundle/dmg -name "*.dmg" -exec cp {} artifacts/ \; 2>/dev/null || true
+          find target/aarch64-apple-darwin/release/bundle/dmg src-tauri/target/aarch64-apple-darwin/release/bundle/dmg target/release/bundle/dmg src-tauri/target/release/bundle/dmg -name "*.dmg" -exec cp {} artifacts/ \; 2>/dev/null || true
           cd artifacts
           shasum -a 256 *.dmg > SHA256SUMS
           cat SHA256SUMS
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenith-macos-arm64
+          path: |
+            artifacts/*.dmg
+            artifacts/SHA256SUMS
+          if-no-files-found: error
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

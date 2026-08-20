@@ -47,6 +47,12 @@ impl CleanExecutor {
                 total_reclaimed_bytes += result.bytes_reclaimed;
             } else {
                 total_failed_bytes += target.expected_bytes;
+                if let Some(ref err) = result.error_message {
+                    crate::diagnostics::log_error(
+                        "cleanup",
+                        &format!("Target `{}` ({}) failed: {err}", result.name, result.path),
+                    );
+                }
             }
 
             on_event(CleanEvent::ItemFinished {

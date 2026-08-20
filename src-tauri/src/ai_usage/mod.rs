@@ -219,11 +219,19 @@ impl AiUsageCollector {
             return provider;
         };
 
-        let client = reqwest::blocking::Client::builder()
+        let client = match reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(5))
             .build()
-            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+        {
+            Ok(c) => c,
+            Err(err) => {
+                let msg = format!("Failed to create OpenRouter HTTP client: {err}");
+                crate::diagnostics::log_error("ai_usage", &msg);
+                provider.status_message = msg;
+                return provider;
+            }
+        };
 
         match client
             .get("https://openrouter.ai/api/v1/key")
@@ -242,7 +250,9 @@ impl AiUsageCollector {
                     .and_then(Value::as_f64);
             }
             Err(error) => {
-                provider.status_message = format!("OpenRouter usage request failed: {error}");
+                let msg = format!("OpenRouter usage request failed: {error}");
+                crate::diagnostics::log_error("ai_usage", &msg);
+                provider.status_message = msg;
             }
         }
         provider
@@ -339,7 +349,11 @@ pub fn connect_openrouter() -> Result<String, String> {
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
         .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+        .map_err(|err| {
+            let msg = format!("Failed to create OpenRouter HTTP client: {err}");
+            crate::diagnostics::log_error("ai_usage", &msg);
+            msg
+        })?;
 
     let response = client
         .post("https://openrouter.ai/api/v1/auth/keys")
@@ -350,9 +364,17 @@ pub fn connect_openrouter() -> Result<String, String> {
         }))
         .send()
         .and_then(|response| response.error_for_status())
-        .map_err(|error| format!("OpenRouter token exchange failed: {error}"))?
+        .map_err(|error| {
+            let msg = format!("OpenRouter token exchange failed: {error}");
+            crate::diagnostics::log_error("ai_usage", &msg);
+            msg
+        })?
         .json::<Value>()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let msg = error.to_string();
+            crate::diagnostics::log_error("ai_usage", &msg);
+            msg
+        })?;
 
     response
         .get("key")
