@@ -20,6 +20,9 @@ import type {
   ZenithSettings,
   ZenithSettings_Serialize,
 } from '../models/types';
+import type { nativeApi } from './native';
+
+type ZenithApi = typeof nativeApi;
 
 export const mockApi = {
   async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
@@ -673,4 +676,4 @@ export const mockApi = {
   async hideCurrentWindow(): Promise<void> {
     // No-op in browser mock
   },
-};
+} satisfies ZenithApi;
