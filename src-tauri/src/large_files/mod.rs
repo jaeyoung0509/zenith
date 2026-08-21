@@ -1,7 +1,6 @@
 use crate::models::{
     LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
 };
-use crate::safety::Blacklist;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,6 +15,7 @@ use std::os::unix::fs::MetadataExt;
 const MAX_RESULTS: usize = 10_000;
 const MIN_THRESHOLD: u64 = 100 * 1024 * 1024;
 const MAX_THRESHOLD: u64 = 64 * 1024 * 1024 * 1024;
+const LARGE_FILE_ROOTS: [&str; 4] = ["Downloads", "Desktop", "Documents", "Movies"];
 
 #[derive(Debug, Clone)]
 pub struct LargeFileRecord {
@@ -56,6 +56,24 @@ impl FileIdentity {
             modified: modified_secs(&meta),
         })
     }
+}
+
+pub fn is_allowed_large_file_path(path: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    let inside_allowed_root = LARGE_FILE_ROOTS
+        .iter()
+        .any(|root| path.starts_with(home.join(root)));
+    if !inside_allowed_root {
+        return false;
+    }
+    !path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(value) if value == ".git"
+        )
+    })
 }
 
 pub struct LargeFileScanner;
@@ -143,7 +161,7 @@ impl LargeFileScanner {
                         });
                     }
 
-                    if Blacklist::is_blacklisted(&path) {
+                    if !is_allowed_large_file_path(&path) {
                         skipped_entries += 1;
                         continue;
                     }
@@ -351,5 +369,23 @@ mod tests {
             "/tmp/Photos.photoslibrary"
         )));
         assert!(!should_skip_directory(Path::new("/tmp/project")));
+    }
+
+    #[test]
+    fn dedicated_scope_allows_reviewed_user_content_but_protects_git() {
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            assert!(is_allowed_large_file_path(
+                &home.join("Documents/video.mov")
+            ));
+            assert!(is_allowed_large_file_path(
+                &home.join("Desktop/archive.zip")
+            ));
+            assert!(!is_allowed_large_file_path(
+                &home.join("Documents/project/.git/objects/pack.bin")
+            ));
+            assert!(!is_allowed_large_file_path(
+                &home.join("Library/Caches/cache.bin")
+            ));
+        }
     }
 }
