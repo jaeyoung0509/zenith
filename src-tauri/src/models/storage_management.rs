@@ -43,17 +43,29 @@ pub struct LargeFileScanResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LargeFileScanEvent {
-    Started { scan_id: String },
-    RootStarted { root: String },
+    Started {
+        scan_id: String,
+    },
+    RootStarted {
+        root: String,
+    },
     Progress {
         root: String,
         entries_scanned: u64,
         matches_found: u64,
     },
-    ItemFound { item: LargeFileItem },
-    RootFinished { root: String },
-    Finished { result: LargeFileScanResult },
-    Cancelled { scan_id: String },
+    ItemFound {
+        item: LargeFileItem,
+    },
+    RootFinished {
+        root: String,
+    },
+    Finished {
+        result: LargeFileScanResult,
+    },
+    Cancelled {
+        scan_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
