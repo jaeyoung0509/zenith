@@ -1,5 +1,5 @@
 use crate::applications::AppInspectionRecord;
-use crate::large_files::{FileIdentity, LargeFileInventory};
+use crate::large_files::{is_allowed_large_file_path, FileIdentity, LargeFileInventory};
 use crate::models::{TrashItemResult, TrashPlanPreview, TrashResult};
 use crate::safety::Blacklist;
 use std::path::{Path, PathBuf};
@@ -181,14 +181,33 @@ impl TrashExecutor {
 }
 
 fn validate_target(target: &TrashTarget) -> Result<(), String> {
-    if Blacklist::is_blacklisted(&target.path) {
-        return Err("Skipped because the path is protected by Zenith.".to_string());
+    match &target.scope {
+        TrashScope::LargeFile { .. } => {
+            if !is_allowed_large_file_path(&target.path) {
+                return Err(
+                    "Skipped because the file moved outside the approved Large Files scope."
+                        .to_string(),
+                );
+            }
+        }
+        TrashScope::AppBundle => {
+            if !is_application_root(&target.path) {
+                return Err("Skipped because the app moved outside Applications.".to_string());
+            }
+        }
+        TrashScope::AppRelated => {
+            if Blacklist::is_blacklisted(&target.path) {
+                return Err("Skipped because the path is protected by Zenith.".to_string());
+            }
+        }
     }
+
     let current = FileIdentity::from_path(&target.path)
         .ok_or_else(|| "Skipped because the item disappeared or became a symlink.".to_string())?;
     if current != target.identity {
         return Err("Skipped because the filesystem item changed after review.".to_string());
     }
+
     match &target.scope {
         TrashScope::LargeFile { approved_parent } => {
             if target.path.parent() != Some(approved_parent.as_path()) {
@@ -206,9 +225,6 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
                     "Skipped because the reviewed app bundle is no longer an app.".to_string(),
                 );
             }
-            if !is_application_root(&target.path) {
-                return Err("Skipped because the app moved outside Applications.".to_string());
-            }
         }
         TrashScope::AppRelated => {
             if !is_allowed_app_data_path(&target.path) {
@@ -223,12 +239,15 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
 }
 
 fn is_application_root(path: &Path) -> bool {
-    if path.starts_with("/Applications") {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if parent == Path::new("/Applications") {
         return true;
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|home| path.starts_with(home.join("Applications")))
+        .map(|home| parent == home.join("Applications"))
         .unwrap_or(false)
 }
 
@@ -261,6 +280,7 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn personal_documents_are_not_app_data_scope() {
@@ -270,6 +290,39 @@ mod tests {
             ));
             assert!(is_allowed_app_data_path(
                 &home.join("Library/Caches/com.example.app")
+            ));
+        }
+    }
+
+    #[test]
+    fn app_bundle_must_be_a_direct_child_of_an_application_root() {
+        assert!(is_application_root(Path::new("/Applications/Example.app")));
+        assert!(!is_application_root(Path::new(
+            "/Applications/Nested/Example.app"
+        )));
+        assert!(!is_application_root(Path::new("/System/Applications/Mail.app")));
+    }
+
+    #[test]
+    fn large_file_planner_rejects_forged_item_ids() {
+        let inventory = LargeFileInventory {
+            scan_id: "scan-1".to_string(),
+            records: HashMap::new(),
+            created_at: unix_timestamp(),
+        };
+        let error = TrashPlanner::from_large_files(&inventory, &["forged".to_string()])
+            .expect_err("unknown frontend ids must be rejected");
+        assert!(error.contains("inventory changed"));
+    }
+
+    #[test]
+    fn dedicated_large_file_scope_intentionally_differs_from_generic_blacklist() {
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            let document = home.join("Documents/large-video.mov");
+            assert!(Blacklist::is_blacklisted(&document));
+            assert!(is_allowed_large_file_path(&document));
+            assert!(!is_allowed_large_file_path(
+                &home.join("Documents/project/.git/objects/pack.bin")
             ));
         }
     }
