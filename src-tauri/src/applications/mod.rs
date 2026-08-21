@@ -245,7 +245,7 @@ impl ApplicationScanner {
             .values()
             .map(|record| record.item.clone())
             .collect::<Vec<_>>();
-        related_items.sort_by(|left, right| right.allocated_size.cmp(&left.allocated_size));
+        related_items.sort_by_key(|left| std::cmp::Reverse(left.allocated_size));
         let inspection = AppUninstallInspection {
             inspection_id,
             app: record.app.clone(),
