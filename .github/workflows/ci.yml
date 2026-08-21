@@ -5,9 +5,6 @@ on:
   pull_request:
     branches: [main, develop]
 
-permissions:
-  contents: write
-
 jobs:
   ci:
     name: Full CI Pipeline (macOS)
@@ -44,33 +41,11 @@ jobs:
           mkdir -p dist
           cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
 
-      - name: Sync generated Cargo.lock to PR branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'jaeyoung0509'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          if git diff --quiet -- Cargo.lock; then
-            exit 0
-          fi
-          lock_sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/Cargo.lock?ref=${HEAD_BRANCH}" --jq .sha)"
-          lock_content="$(base64 < Cargo.lock | tr -d '\n')"
-          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/Cargo.lock" \
-            -f message='chore: update Cargo.lock for storage management' \
-            -f content="${lock_content}" \
-            -f sha="${lock_sha}" \
-            -f branch="${HEAD_BRANCH}"
-          git add Cargo.lock
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit -m 'chore: update Cargo.lock for storage management'
-
       - name: Verify generated bindings (drift check)
         run: git diff --exit-code -- src/lib/bindings/tauri.ts
 
       - name: Verify Cargo.lock (drift check)
-        run: |
-          git diff -- Cargo.lock
-          git diff --exit-code -- Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
 
       - name: Svelte Typecheck
         run: pnpm check
