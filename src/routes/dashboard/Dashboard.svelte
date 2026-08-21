@@ -9,6 +9,7 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import StorageView from './StorageView.svelte';
+  import StorageTools from './StorageTools.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
@@ -21,11 +22,9 @@
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import {
     Activity,
-    AppWindow,
     Boxes,
     ChartNoAxesCombined,
     Container,
-    FileSearch,
     HardDrive,
     Moon,
     Settings,
@@ -113,34 +112,6 @@
           {/if}
         {/each}
 
-        <div class="pt-2 mt-2 border-t border-border/50 space-y-1">
-          <div class="px-2.5 pb-1 text-[9px] uppercase tracking-wider text-muted-foreground/60">
-            Storage tools
-          </div>
-          <button
-            type="button"
-            onclick={() => selectTab('large-files')}
-            class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-            'large-files'
-              ? 'bg-secondary text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-          >
-            <FileSearch size={15} />
-            <span>Large Files</span>
-          </button>
-          <button
-            type="button"
-            onclick={() => selectTab('applications')}
-            class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-            'applications'
-              ? 'bg-secondary text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
-          >
-            <AppWindow size={15} />
-            <span>Applications</span>
-          </button>
-        </div>
-
         <!-- Fixed Settings Tab -->
         <button
           type="button"
@@ -183,7 +154,13 @@
             onNavigateTab={(tab) => selectTab(tab)}
           />
         {:else if currentTab === 'storage'}
-          <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+          <div class="space-y-6">
+            <StorageTools
+              onOpenLargeFiles={() => selectTab('large-files')}
+              onOpenApplications={() => selectTab('applications')}
+            />
+            <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+          </div>
         {:else if currentTab === 'large-files'}
           <LargeFilesView onBack={() => selectTab('storage')} />
         {:else if currentTab === 'applications'}
