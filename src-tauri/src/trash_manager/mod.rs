@@ -39,7 +39,11 @@ impl TrashPlan {
             id: self.id,
             item_count: self.targets.len(),
             logical_size: self.targets.iter().map(|target| target.logical_size).sum(),
-            allocated_size: self.targets.iter().map(|target| target.allocated_size).sum(),
+            allocated_size: self
+                .targets
+                .iter()
+                .map(|target| target.allocated_size)
+                .sum(),
             expires_at: self.created_at + PLAN_TTL_SECS,
         }
     }
@@ -105,10 +109,9 @@ impl TrashPlanner {
         });
 
         for id in selected_related_ids {
-            let record = inspection
-                .related
-                .get(id)
-                .ok_or_else(|| "The app inspection changed. Review the uninstall again.".to_string())?;
+            let record = inspection.related.get(id).ok_or_else(|| {
+                "The app inspection changed. Review the uninstall again.".to_string()
+            })?;
             targets.push(TrashTarget {
                 item_id: id.clone(),
                 path: record.path.clone(),
@@ -189,7 +192,9 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
     match &target.scope {
         TrashScope::LargeFile { approved_parent } => {
             if target.path.parent() != Some(approved_parent.as_path()) {
-                return Err("Skipped because the file moved outside the reviewed scope.".to_string());
+                return Err(
+                    "Skipped because the file moved outside the reviewed scope.".to_string()
+                );
             }
             if target.path.is_dir() {
                 return Err("Large Files only moves reviewed files, not directories.".to_string());
@@ -197,7 +202,9 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
         }
         TrashScope::AppBundle => {
             if target.path.extension().and_then(|value| value.to_str()) != Some("app") {
-                return Err("Skipped because the reviewed app bundle is no longer an app.".to_string());
+                return Err(
+                    "Skipped because the reviewed app bundle is no longer an app.".to_string(),
+                );
             }
             if !is_application_root(&target.path) {
                 return Err("Skipped because the app moved outside Applications.".to_string());
@@ -205,7 +212,10 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
         }
         TrashScope::AppRelated => {
             if !is_allowed_app_data_path(&target.path) {
-                return Err("Skipped because related data moved outside the approved Library scope.".to_string());
+                return Err(
+                    "Skipped because related data moved outside the approved Library scope."
+                        .to_string(),
+                );
             }
         }
     }
@@ -255,8 +265,12 @@ mod tests {
     #[test]
     fn personal_documents_are_not_app_data_scope() {
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            assert!(!is_allowed_app_data_path(&home.join("Documents/App Project")));
-            assert!(is_allowed_app_data_path(&home.join("Library/Caches/com.example.app")));
+            assert!(!is_allowed_app_data_path(
+                &home.join("Documents/App Project")
+            ));
+            assert!(is_allowed_app_data_path(
+                &home.join("Library/Caches/com.example.app")
+            ));
         }
     }
 }
