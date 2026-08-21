@@ -300,7 +300,9 @@ mod tests {
         assert!(!is_application_root(Path::new(
             "/Applications/Nested/Example.app"
         )));
-        assert!(!is_application_root(Path::new("/System/Applications/Mail.app")));
+        assert!(!is_application_root(Path::new(
+            "/System/Applications/Mail.app"
+        )));
     }
 
     #[test]
