@@ -16,8 +16,8 @@ static LARGE_FILE_INVENTORY: LazyLock<Mutex<Option<LargeFileInventory>>> =
 static LARGE_FILE_CANCEL: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static APP_INVENTORY: LazyLock<Mutex<Option<AppInventory>>> = LazyLock::new(|| Mutex::new(None));
-static APP_INSPECTIONS: LazyLock<Mutex<HashMap<String, AppInspectionRecord>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static APP_INSPECTION: LazyLock<Mutex<Option<AppInspectionRecord>>> =
+    LazyLock::new(|| Mutex::new(None));
 static TRASH_PLANS: LazyLock<Mutex<HashMap<uuid::Uuid, TrashPlan>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static STORAGE_OPERATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -49,16 +49,27 @@ pub async fn start_large_file_scan(
             let _ = on_event.send(event);
         })?;
         LARGE_FILE_CANCEL.lock().unwrap().remove(&inventory.scan_id);
-        let result = emitted_result.unwrap_or_else(|| LargeFileScanResult {
-            scan_id: inventory.scan_id.clone(),
-            items: inventory
+        let result = emitted_result.unwrap_or_else(|| {
+            let mut items = inventory
                 .records
                 .values()
                 .map(|record| record.item.clone())
-                .collect(),
-            entries_scanned: 0,
-            skipped_entries: 0,
-            cancelled: true,
+                .collect::<Vec<_>>();
+            items.sort_by(|left, right| {
+                right
+                    .allocated_size
+                    .cmp(&left.allocated_size)
+                    .then_with(|| right.logical_size.cmp(&left.logical_size))
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+            LargeFileScanResult {
+                scan_id: inventory.scan_id.clone(),
+                items,
+                entries_scanned: inventory.entries_scanned,
+                skipped_entries: inventory.skipped_entries,
+                cancelled: true,
+                truncated: inventory.truncated,
+            }
         });
         *LARGE_FILE_INVENTORY.lock().unwrap() = Some(inventory);
         Ok::<_, String>(result)
@@ -143,10 +154,7 @@ pub async fn inspect_app_uninstall(app_id: String) -> Result<AppUninstallInspect
     .await
     .map_err(|_| "App inspection worker panicked".to_string())??;
     let result = inspection.inspection.clone();
-    APP_INSPECTIONS
-        .lock()
-        .unwrap()
-        .insert(result.inspection_id.clone(), inspection);
+    *APP_INSPECTION.lock().unwrap() = Some(inspection);
     Ok(result)
 }
 
@@ -156,11 +164,11 @@ pub fn prepare_app_uninstall(
     inspection_id: String,
     selected_related_ids: Vec<String>,
 ) -> Result<TrashPlanPreview, String> {
-    let inspection = APP_INSPECTIONS
+    let inspection = APP_INSPECTION
         .lock()
         .unwrap()
-        .get(&inspection_id)
-        .cloned()
+        .clone()
+        .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
         .filter(|inspection| {
             unix_timestamp().saturating_sub(inspection.created_at) < INVENTORY_TTL_SECS
         })

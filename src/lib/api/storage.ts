@@ -243,6 +243,7 @@ const mockStorageApi: StorageManagementApi = {
       entries_scanned: mockScanCancelled ? 0 : 3600,
       skipped_entries: 14,
       cancelled: mockScanCancelled,
+      truncated: false,
     };
     mockScans.set(scanId, result);
     if (mockScanCancelled) {

@@ -4,7 +4,6 @@ use crate::models::{
     InstalledApp,
 };
 use crate::safety::Blacklist;
-use crate::scanner::SizeCalculator;
 use plist::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -12,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug, Clone)]
 pub struct AppRecord {
@@ -63,6 +65,12 @@ impl ApplicationScanner {
             .collect::<Vec<_>>();
 
         for root in roots {
+            if fs::symlink_metadata(&root)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true)
+            {
+                continue;
+            }
             let Ok(entries) = fs::read_dir(root) else {
                 continue;
             };
@@ -75,7 +83,7 @@ impl ApplicationScanner {
                     continue;
                 };
                 let metadata = read_bundle_metadata(&path);
-                let (size, _) = SizeCalculator::measure_path(&path, &[]);
+                let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
                 let name = metadata
                     .display_name
                     .or_else(|| {
@@ -84,6 +92,7 @@ impl ApplicationScanner {
                             .map(str::to_string)
                     })
                     .unwrap_or_else(|| "Unknown App".to_string());
+                let is_system_protected = is_zenith_identity(&name, metadata.bundle_id.as_deref());
                 let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
                 let is_running = running_paths.iter().any(|exe| exe.starts_with(&canonical));
                 let id = Uuid::new_v4().to_string();
@@ -94,8 +103,8 @@ impl ApplicationScanner {
                     version: metadata.version,
                     display_path: path.to_string_lossy().to_string(),
                     executable_name: metadata.executable,
-                    logical_size: size.logical,
-                    allocated_size: size.allocated.unwrap_or(size.logical),
+                    logical_size,
+                    allocated_size,
                     modified_at: fs::metadata(&path)
                         .ok()
                         .and_then(|value| value.modified().ok())
@@ -103,7 +112,7 @@ impl ApplicationScanner {
                         .map(|value| value.as_secs()),
                     install_source: detect_install_source(&path),
                     is_running,
-                    is_system_protected: false,
+                    is_system_protected,
                 };
                 records.insert(
                     id,
@@ -128,8 +137,7 @@ impl ApplicationScanner {
             .records
             .get(app_id)
             .ok_or_else(|| "Application inventory is stale. Refresh applications.".to_string())?;
-        if record.app.name == "Zenith" || record.app.bundle_id.as_deref() == Some("com.zenith.app")
-        {
+        if is_zenith_app(&record.app) {
             return Err("Zenith cannot uninstall itself.".to_string());
         }
         if record.app.is_running {
@@ -177,6 +185,15 @@ impl ApplicationScanner {
 
         for (relative, kind) in roots {
             let root = home.join(relative);
+            if fs::symlink_metadata(&root)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true)
+            {
+                if root.exists() {
+                    incomplete = true;
+                }
+                continue;
+            }
             let Ok(entries) = fs::read_dir(&root) else {
                 if root.exists() {
                     incomplete = true;
@@ -205,7 +222,7 @@ impl ApplicationScanner {
                 let Some(identity) = FileIdentity::from_path(&path) else {
                     continue;
                 };
-                let (size, _) = SizeCalculator::measure_path(&path, &[]);
+                let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
                 let id = Uuid::new_v4().to_string();
                 let selected_by_default = confidence == AppRelatedConfidence::High;
                 let item = AppRelatedItem {
@@ -215,8 +232,8 @@ impl ApplicationScanner {
                     kind,
                     confidence,
                     evidence,
-                    logical_size: size.logical,
-                    allocated_size: size.allocated.unwrap_or(size.logical),
+                    logical_size,
+                    allocated_size,
                     selected_by_default,
                 };
                 related.insert(
@@ -261,6 +278,62 @@ impl ApplicationScanner {
             created_at: unix_timestamp(),
         })
     }
+}
+
+fn is_zenith_app(app: &InstalledApp) -> bool {
+    app.is_system_protected || is_zenith_identity(&app.name, app.bundle_id.as_deref())
+}
+
+fn is_zenith_identity(name: &str, bundle_id: Option<&str>) -> bool {
+    name == "Zenith" || bundle_id == Some("com.zenith.desktop")
+}
+
+fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
+    let Ok(root_metadata) = fs::symlink_metadata(path) else {
+        return (0, 0);
+    };
+    if root_metadata.file_type().is_symlink() {
+        return (0, 0);
+    }
+
+    #[cfg(unix)]
+    let root_device = root_metadata.dev();
+    let mut logical_size = 0u64;
+    let mut allocated_size = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        let Ok(metadata) = fs::symlink_metadata(&current) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        #[cfg(unix)]
+        if metadata.dev() != root_device {
+            continue;
+        }
+        if metadata.is_file() {
+            logical_size = logical_size.saturating_add(metadata.len());
+            #[cfg(unix)]
+            {
+                allocated_size =
+                    allocated_size.saturating_add(metadata.blocks().saturating_mul(512));
+            }
+            #[cfg(not(unix))]
+            {
+                allocated_size = allocated_size.saturating_add(metadata.len());
+            }
+            continue;
+        }
+        if metadata.is_dir() {
+            if let Ok(entries) = fs::read_dir(&current) {
+                stack.extend(entries.flatten().map(|entry| entry.path()));
+            }
+        }
+    }
+
+    (logical_size, allocated_size)
 }
 
 #[derive(Default)]
@@ -343,6 +416,7 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn exact_bundle_identifier_is_high_confidence() {
@@ -377,5 +451,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(confidence, AppRelatedConfidence::Shared);
+    }
+
+    #[test]
+    fn recognizes_the_configured_zenith_bundle_identifier() {
+        let app = InstalledApp {
+            id: "zenith".to_string(),
+            name: "Renamed App".to_string(),
+            bundle_id: Some("com.zenith.desktop".to_string()),
+            version: None,
+            display_path: "/Applications/Renamed App.app".to_string(),
+            executable_name: None,
+            logical_size: 0,
+            allocated_size: 0,
+            modified_at: None,
+            install_source: AppInstallSource::ApplicationBundle,
+            is_running: false,
+            is_system_protected: false,
+        };
+        assert!(is_zenith_app(&app));
+    }
+
+    #[test]
+    fn dedicated_app_size_measurement_counts_files_without_following_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("Example.app");
+        fs::create_dir_all(bundle.join("Contents")).unwrap();
+        let mut file = fs::File::create(bundle.join("Contents/payload.bin")).unwrap();
+        file.write_all(&[7; 4096]).unwrap();
+        drop(file);
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(temp.path(), bundle.join("Contents/escape")).unwrap();
+
+        let (logical, allocated) = measure_path_without_symlinks(&bundle);
+        assert_eq!(logical, 4096);
+        assert!(allocated > 0);
     }
 }

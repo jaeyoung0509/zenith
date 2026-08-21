@@ -164,6 +164,8 @@
       trashResult = result;
       if (result.items.some((item) => item.item_id === appId && item.success)) {
         apps = apps.filter((app) => app.id !== appId);
+        inspection = null;
+        selectedRelatedIds = [];
       }
       plan = null;
     } catch (cause) {
@@ -205,11 +207,18 @@
   {/if}
 
   {#if trashResult}
-    <Card class="p-4 border-emerald-500/30 bg-emerald-500/5">
+    <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
       <div class="flex items-center justify-between gap-3 text-xs">
-        <span class="font-medium text-emerald-500 flex items-center gap-2">
-          <CheckCircle2 size={15} />
+        <span class={`font-medium flex items-center gap-2 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-amber-500' : 'text-emerald-500'}`}>
+          {#if trashResult.failed_count + trashResult.skipped_count > 0}
+            <AlertCircle size={15} />
+          {:else}
+            <CheckCircle2 size={15} />
+          {/if}
           Moved {trashResult.moved_count} reviewed item{trashResult.moved_count === 1 ? '' : 's'} to Trash
+          {#if trashResult.failed_count + trashResult.skipped_count > 0}
+            · {trashResult.failed_count + trashResult.skipped_count} not moved
+          {/if}
         </span>
         <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)}</span>
       </div>
@@ -391,7 +400,7 @@
               </div>
             </div>
             <p class="text-[11px] text-muted-foreground">
-              Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
+              This review expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
             </p>
           </Card>
         {:else}

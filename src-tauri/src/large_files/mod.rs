@@ -1,7 +1,7 @@
 use crate::models::{
     LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +29,9 @@ pub struct LargeFileInventory {
     pub scan_id: String,
     pub records: HashMap<String, LargeFileRecord>,
     pub created_at: u64,
+    pub entries_scanned: u64,
+    pub skipped_entries: u64,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,13 +62,7 @@ impl FileIdentity {
 }
 
 pub fn is_allowed_large_file_path(path: &Path) -> bool {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return false;
-    };
-    let inside_allowed_root = LARGE_FILE_ROOTS
-        .iter()
-        .any(|root| path.starts_with(home.join(root)));
-    if !inside_allowed_root {
+    if allowed_large_file_root(path).is_none() {
         return false;
     }
     !path.components().any(|component| {
@@ -74,6 +71,14 @@ pub fn is_allowed_large_file_path(path: &Path) -> bool {
             std::path::Component::Normal(value) if value == ".git"
         )
     })
+}
+
+pub fn allowed_large_file_root(path: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    LARGE_FILE_ROOTS
+        .iter()
+        .map(|root| home.join(root))
+        .find(|root| path.starts_with(root))
 }
 
 pub struct LargeFileScanner;
@@ -94,20 +99,24 @@ impl LargeFileScanner {
             scan_id: scan_id.clone(),
         });
 
-        let mut records = HashMap::new();
+        let mut retained = BTreeMap::new();
         let mut entries_scanned = 0u64;
         let mut skipped_entries = 0u64;
+        let mut matches_found = 0u64;
+        let mut truncated = false;
 
         for root in roots {
             if cancel.load(Ordering::Relaxed) {
                 on_event(LargeFileScanEvent::Cancelled {
                     scan_id: scan_id.clone(),
                 });
-                return Ok(LargeFileInventory {
+                return Ok(inventory_from_retained(
                     scan_id,
-                    records,
-                    created_at: unix_timestamp(),
-                });
+                    retained,
+                    entries_scanned,
+                    skipped_entries,
+                    truncated,
+                ));
             }
 
             let display_root = root.to_string_lossy().to_string();
@@ -115,7 +124,7 @@ impl LargeFileScanner {
                 root: display_root.clone(),
             });
 
-            let Ok(root_meta) = fs::symlink_metadata(&root) else {
+            let Some(root_meta) = safe_scan_root_metadata(&root) else {
                 skipped_entries += 1;
                 continue;
             };
@@ -130,11 +139,13 @@ impl LargeFileScanner {
                     on_event(LargeFileScanEvent::Cancelled {
                         scan_id: scan_id.clone(),
                     });
-                    return Ok(LargeFileInventory {
+                    return Ok(inventory_from_retained(
                         scan_id,
-                        records,
-                        created_at: unix_timestamp(),
-                    });
+                        retained,
+                        entries_scanned,
+                        skipped_entries,
+                        truncated,
+                    ));
                 }
 
                 let entries = match fs::read_dir(&dir) {
@@ -157,7 +168,7 @@ impl LargeFileScanner {
                         on_event(LargeFileScanEvent::Progress {
                             root: display_root.clone(),
                             entries_scanned,
-                            matches_found: records.len() as u64,
+                            matches_found,
                         });
                     }
 
@@ -234,31 +245,32 @@ impl LargeFileScanner {
                         size: meta.len(),
                         modified: modified_secs(&meta),
                     };
-                    records.insert(
-                        id,
-                        LargeFileRecord {
-                            item: item.clone(),
-                            path,
-                            identity,
-                        },
-                    );
-                    on_event(LargeFileScanEvent::ItemFound { item });
-
-                    if records.len() >= MAX_RESULTS {
-                        break;
+                    matches_found = matches_found.saturating_add(1);
+                    let rank = (allocated_size, meta.len(), id);
+                    let record = LargeFileRecord {
+                        item: item.clone(),
+                        path,
+                        identity,
+                    };
+                    if retain_largest(&mut retained, rank, record, MAX_RESULTS) {
+                        on_event(LargeFileScanEvent::ItemFound { item });
+                    } else {
+                        truncated = true;
                     }
-                }
-                if records.len() >= MAX_RESULTS {
-                    break;
                 }
             }
             on_event(LargeFileScanEvent::RootFinished { root: display_root });
-            if records.len() >= MAX_RESULTS {
-                break;
-            }
         }
 
-        let mut items = records
+        let inventory = inventory_from_retained(
+            scan_id.clone(),
+            retained,
+            entries_scanned,
+            skipped_entries,
+            truncated,
+        );
+        let mut items = inventory
+            .records
             .values()
             .map(|record| record.item.clone())
             .collect::<Vec<_>>();
@@ -275,15 +287,54 @@ impl LargeFileScanner {
             entries_scanned,
             skipped_entries,
             cancelled: false,
+            truncated,
         };
         on_event(LargeFileScanEvent::Finished {
             result: result.clone(),
         });
-        Ok(LargeFileInventory {
-            scan_id,
-            records,
-            created_at: unix_timestamp(),
-        })
+        Ok(inventory)
+    }
+}
+
+fn retain_largest(
+    retained: &mut BTreeMap<(u64, u64, String), LargeFileRecord>,
+    rank: (u64, u64, String),
+    record: LargeFileRecord,
+    limit: usize,
+) -> bool {
+    if retained.len() < limit {
+        retained.insert(rank, record);
+        return true;
+    }
+    let should_replace = retained
+        .first_key_value()
+        .map(|(smallest, _)| &rank > smallest)
+        .unwrap_or(false);
+    if should_replace {
+        retained.pop_first();
+        retained.insert(rank, record);
+    }
+    false
+}
+
+fn inventory_from_retained(
+    scan_id: String,
+    retained: BTreeMap<(u64, u64, String), LargeFileRecord>,
+    entries_scanned: u64,
+    skipped_entries: u64,
+    truncated: bool,
+) -> LargeFileInventory {
+    let records = retained
+        .into_values()
+        .map(|record| (record.item.id.clone(), record))
+        .collect();
+    LargeFileInventory {
+        scan_id,
+        records,
+        created_at: unix_timestamp(),
+        entries_scanned,
+        skipped_entries,
+        truncated,
     }
 }
 
@@ -291,12 +342,17 @@ fn resolve_roots(tokens: &[String]) -> Result<Vec<PathBuf>, String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
+    resolve_roots_for_home(tokens, &home)
+}
+
+fn resolve_roots_for_home(tokens: &[String], home: &Path) -> Result<Vec<PathBuf>, String> {
     let requested = if tokens.is_empty() {
         vec!["downloads", "desktop", "documents", "movies"]
     } else {
         tokens.iter().map(String::as_str).collect()
     };
     let mut roots = Vec::new();
+    let mut seen = HashSet::new();
     for token in requested {
         let name = match token.to_ascii_lowercase().as_str() {
             "downloads" => "Downloads",
@@ -306,11 +362,24 @@ fn resolve_roots(tokens: &[String]) -> Result<Vec<PathBuf>, String> {
             _ => return Err(format!("Unsupported large-file scan root: {token}")),
         };
         let root = home.join(name);
-        if root.is_dir() {
+        if seen.insert(root.clone()) && safe_scan_root_metadata(&root).is_some() {
             roots.push(root);
         }
     }
+    if roots.is_empty() {
+        return Err(
+            "None of the selected Large Files folders exist or are safe to scan.".to_string(),
+        );
+    }
     Ok(roots)
+}
+
+fn safe_scan_root_metadata(path: &Path) -> Option<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    Some(metadata)
 }
 
 fn should_skip_directory(path: &Path) -> bool {
@@ -387,5 +456,76 @@ mod tests {
                 &home.join("Library/Caches/cache.bin")
             ));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_scan_roots_are_not_safe_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let linked = temp.path().join("linked");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+
+        assert!(safe_scan_root_metadata(&real).is_some());
+        assert!(safe_scan_root_metadata(&linked).is_none());
+    }
+
+    #[test]
+    fn root_resolution_rejects_an_empty_or_missing_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = resolve_roots_for_home(&["movies".to_string()], temp.path()).unwrap_err();
+        assert!(error.contains("None of the selected"));
+    }
+
+    #[test]
+    fn bounded_results_retain_the_largest_candidates() {
+        fn record(id: &str, allocated_size: u64) -> LargeFileRecord {
+            LargeFileRecord {
+                item: LargeFileItem {
+                    id: id.to_string(),
+                    name: format!("{id}.bin"),
+                    display_parent: "/tmp".to_string(),
+                    logical_size: allocated_size,
+                    allocated_size,
+                    modified_at: None,
+                    kind: LargeFileKind::Other,
+                    extension: Some("bin".to_string()),
+                },
+                path: PathBuf::from(format!("/tmp/{id}.bin")),
+                identity: FileIdentity {
+                    device: 1,
+                    inode: allocated_size,
+                    size: allocated_size,
+                    modified: None,
+                },
+            }
+        }
+
+        let mut retained = BTreeMap::new();
+        assert!(retain_largest(
+            &mut retained,
+            (10, 10, "small".to_string()),
+            record("small", 10),
+            2,
+        ));
+        assert!(retain_largest(
+            &mut retained,
+            (20, 20, "medium".to_string()),
+            record("medium", 20),
+            2,
+        ));
+        assert!(!retain_largest(
+            &mut retained,
+            (30, 30, "large".to_string()),
+            record("large", 30),
+            2,
+        ));
+
+        let ids = retained
+            .values()
+            .map(|candidate| candidate.item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["medium", "large"]);
     }
 }

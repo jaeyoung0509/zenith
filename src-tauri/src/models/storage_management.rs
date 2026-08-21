@@ -38,6 +38,7 @@ pub struct LargeFileScanResult {
     pub entries_scanned: u64,
     pub skipped_entries: u64,
     pub cancelled: bool,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

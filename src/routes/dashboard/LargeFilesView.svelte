@@ -300,14 +300,24 @@
   {/if}
 
   {#if trashResult}
-    <Card class="p-4 border-emerald-500/30 bg-emerald-500/5">
+    <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
       <div class="flex items-center justify-between gap-3 text-xs">
-        <span class="font-medium text-emerald-500">
+        <span class={`font-medium ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-amber-500' : 'text-emerald-500'}`}>
           Moved {trashResult.moved_count} item{trashResult.moved_count === 1 ? '' : 's'} to Trash
+          {#if trashResult.failed_count + trashResult.skipped_count > 0}
+            · {trashResult.failed_count + trashResult.skipped_count} not moved
+          {/if}
         </span>
         <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)}</span>
       </div>
     </Card>
+  {/if}
+
+  {#if scanResult?.truncated}
+    <div class="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-500 flex items-center gap-2.5 text-xs">
+      <AlertCircle size={16} class="shrink-0" />
+      <span>More than 10,000 files matched. Results show the 10,000 largest files.</span>
+    </div>
   {/if}
 
   {#if plan}
@@ -328,7 +338,7 @@
         </div>
       </div>
       <p class="text-[11px] text-muted-foreground">
-        The plan is one-shot and expires automatically. Zenith revalidates file identity and scope before each move.
+        The plan is one-shot and expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Zenith revalidates file identity and scope before each move.
       </p>
     </Card>
   {/if}
@@ -348,11 +358,11 @@
 
     {#if items.length > 0}
       <div class="flex items-center gap-1.5">
-        <Button variant="ghost" size="sm" onclick={selectAll} disabled={isExecuting}>
+        <Button variant="ghost" size="sm" onclick={selectAll} disabled={isScanning || isExecuting}>
           <CheckSquare size={13} />
           Select all
         </Button>
-        <Button variant="ghost" size="sm" onclick={deselectAll} disabled={isExecuting}>
+        <Button variant="ghost" size="sm" onclick={deselectAll} disabled={isScanning || isExecuting}>
           <Square size={13} />
           Clear
         </Button>
@@ -360,7 +370,7 @@
           variant="primary"
           size="md"
           onclick={reviewTrash}
-          disabled={selectedIds.length === 0 || isPreparing || isExecuting}
+          disabled={isScanning || selectedIds.length === 0 || isPreparing || isExecuting}
           class="gap-1.5 ml-1"
         >
           <Trash2 size={14} />
@@ -379,7 +389,7 @@
               type="checkbox"
               checked={selectedIds.includes(item.id)}
               onchange={() => toggleItem(item.id)}
-              disabled={isExecuting}
+              disabled={isScanning || isExecuting}
               aria-label={`Select ${item.name}`}
               class="accent-emerald-500 shrink-0"
             />

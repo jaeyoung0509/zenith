@@ -1,9 +1,13 @@
 use crate::applications::AppInspectionRecord;
-use crate::large_files::{is_allowed_large_file_path, FileIdentity, LargeFileInventory};
+use crate::large_files::{
+    allowed_large_file_root, is_allowed_large_file_path, FileIdentity, LargeFileInventory,
+};
 use crate::models::{TrashItemResult, TrashPlanPreview, TrashResult};
-use crate::safety::Blacklist;
+use crate::safety::{Blacklist, SymlinkGuard};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
 
 const PLAN_TTL_SECS: u64 = 300;
@@ -64,7 +68,11 @@ impl TrashPlanner {
             return Err("Select at least one file to move to Trash.".to_string());
         }
         let mut targets = Vec::with_capacity(selected_ids.len());
+        let mut seen = HashSet::with_capacity(selected_ids.len());
         for id in selected_ids {
+            if !seen.insert(id) {
+                continue;
+            }
             let record = inventory
                 .records
                 .get(id)
@@ -108,7 +116,11 @@ impl TrashPlanner {
             scope: TrashScope::AppBundle,
         });
 
+        let mut seen = HashSet::with_capacity(selected_related_ids.len());
         for id in selected_related_ids {
+            if !seen.insert(id) {
+                continue;
+            }
             let record = inspection.related.get(id).ok_or_else(|| {
                 "The app inspection changed. Review the uninstall again.".to_string()
             })?;
@@ -135,6 +147,15 @@ pub struct TrashExecutor;
 
 impl TrashExecutor {
     pub fn execute(plan: TrashPlan) -> TrashResult {
+        Self::execute_with(plan, |path| {
+            trash::delete(path).map_err(|error| format!("Could not move to Trash: {error}"))
+        })
+    }
+
+    fn execute_with<F>(plan: TrashPlan, mut move_to_trash: F) -> TrashResult
+    where
+        F: FnMut(&Path) -> Result<(), String>,
+    {
         let mut result = TrashResult {
             moved_count: 0,
             failed_count: 0,
@@ -143,10 +164,29 @@ impl TrashExecutor {
             items: Vec::new(),
         };
 
-        for target in plan.targets {
+        let app_uninstall = matches!(
+            plan.targets.first().map(|target| &target.scope),
+            Some(TrashScope::AppBundle)
+        );
+        let mut app_bundle_moved = !app_uninstall;
+
+        for (index, target) in plan.targets.into_iter().enumerate() {
+            if app_uninstall && index > 0 && !app_bundle_moved {
+                result.skipped_count += 1;
+                result.items.push(TrashItemResult {
+                    item_id: target.item_id,
+                    success: false,
+                    message: "Skipped because the reviewed app bundle was not moved to Trash."
+                        .to_string(),
+                });
+                continue;
+            }
             match validate_target(&target) {
-                Ok(()) => match trash::delete(&target.path) {
+                Ok(()) => match move_to_trash(&target.path) {
                     Ok(()) => {
+                        if matches!(target.scope, TrashScope::AppBundle) {
+                            app_bundle_moved = true;
+                        }
                         result.moved_count += 1;
                         result.moved_allocated_size = result
                             .moved_allocated_size
@@ -157,12 +197,12 @@ impl TrashExecutor {
                             message: "Moved to Trash".to_string(),
                         });
                     }
-                    Err(error) => {
+                    Err(message) => {
                         result.failed_count += 1;
                         result.items.push(TrashItemResult {
                             item_id: target.item_id,
                             success: false,
-                            message: format!("Could not move to Trash: {error}"),
+                            message,
                         });
                     }
                 },
@@ -189,16 +229,28 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
                         .to_string(),
                 );
             }
+            let root = allowed_large_file_root(&target.path).ok_or_else(|| {
+                "Skipped because the file has no approved Large Files root.".to_string()
+            })?;
+            validate_no_symlink_components(&target.path, &root)?;
         }
         TrashScope::AppBundle => {
-            if !is_application_root(&target.path) {
+            let Some(root) = application_root_for_path(&target.path) else {
                 return Err("Skipped because the app moved outside Applications.".to_string());
+            };
+            validate_no_symlink_components(&target.path, &root)?;
+            if is_application_running(&target.path) {
+                return Err("Skipped because the reviewed application is running.".to_string());
             }
         }
         TrashScope::AppRelated => {
             if Blacklist::is_blacklisted(&target.path) {
                 return Err("Skipped because the path is protected by Zenith.".to_string());
             }
+            let root = app_data_root_for_path(&target.path).ok_or_else(|| {
+                "Skipped because related data moved outside the approved Library scope.".to_string()
+            })?;
+            validate_no_symlink_components(&target.path, &root)?;
         }
     }
 
@@ -238,23 +290,23 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
     Ok(())
 }
 
-fn is_application_root(path: &Path) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
+fn application_root_for_path(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
     if parent == Path::new("/Applications") {
-        return true;
+        return Some(PathBuf::from("/Applications"));
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|home| parent == home.join("Applications"))
-        .unwrap_or(false)
+        .map(|home| home.join("Applications"))
+        .filter(|root| parent == root)
 }
 
 fn is_allowed_app_data_path(path: &Path) -> bool {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return false;
-    };
+    app_data_root_for_path(path).is_some()
+}
+
+fn app_data_root_for_path(path: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
     const ROOTS: [&str; 10] = [
         "Library/Application Support",
         "Library/Caches",
@@ -267,7 +319,26 @@ fn is_allowed_app_data_path(path: &Path) -> bool {
         "Library/HTTPStorages",
         "Library/WebKit",
     ];
-    ROOTS.iter().any(|root| path.starts_with(home.join(root)))
+    ROOTS
+        .iter()
+        .map(|root| home.join(root))
+        .find(|root| path.parent() == Some(root.as_path()))
+}
+
+fn validate_no_symlink_components(path: &Path, root: &Path) -> Result<(), String> {
+    SymlinkGuard::validate_no_symlink_ancestors(path, root)
+        .map_err(|_| "Skipped because the reviewed path contains a symbolic link.".to_string())
+}
+
+fn is_application_running(path: &Path) -> bool {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    system
+        .processes()
+        .values()
+        .filter_map(|process| process.exe())
+        .any(|executable| executable.starts_with(&canonical))
 }
 
 fn unix_timestamp() -> u64 {
@@ -296,13 +367,9 @@ mod tests {
 
     #[test]
     fn app_bundle_must_be_a_direct_child_of_an_application_root() {
-        assert!(is_application_root(Path::new("/Applications/Example.app")));
-        assert!(!is_application_root(Path::new(
-            "/Applications/Nested/Example.app"
-        )));
-        assert!(!is_application_root(Path::new(
-            "/System/Applications/Mail.app"
-        )));
+        assert!(application_root_for_path(Path::new("/Applications/Example.app")).is_some());
+        assert!(application_root_for_path(Path::new("/Applications/Nested/Example.app")).is_none());
+        assert!(application_root_for_path(Path::new("/System/Applications/Mail.app")).is_none());
     }
 
     #[test]
@@ -311,10 +378,48 @@ mod tests {
             scan_id: "scan-1".to_string(),
             records: HashMap::new(),
             created_at: unix_timestamp(),
+            entries_scanned: 0,
+            skipped_entries: 0,
+            truncated: false,
         };
         let error = TrashPlanner::from_large_files(&inventory, &["forged".to_string()])
             .expect_err("unknown frontend ids must be rejected");
         assert!(error.contains("inventory changed"));
+    }
+
+    #[test]
+    fn large_file_planner_deduplicates_frontend_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("large.bin");
+        std::fs::write(&path, [1, 2, 3]).unwrap();
+        let item = crate::models::LargeFileItem {
+            id: "item".to_string(),
+            name: "large.bin".to_string(),
+            display_parent: temp.path().to_string_lossy().to_string(),
+            logical_size: 3,
+            allocated_size: 3,
+            modified_at: None,
+            kind: crate::models::LargeFileKind::Other,
+            extension: Some("bin".to_string()),
+        };
+        let record = crate::large_files::LargeFileRecord {
+            item,
+            path: path.clone(),
+            identity: FileIdentity::from_path(&path).unwrap(),
+        };
+        let inventory = LargeFileInventory {
+            scan_id: "scan-1".to_string(),
+            records: HashMap::from([("item".to_string(), record)]),
+            created_at: unix_timestamp(),
+            entries_scanned: 1,
+            skipped_entries: 0,
+            truncated: false,
+        };
+
+        let plan =
+            TrashPlanner::from_large_files(&inventory, &["item".to_string(), "item".to_string()])
+                .unwrap();
+        assert_eq!(plan.targets.len(), 1);
     }
 
     #[test]
@@ -327,5 +432,63 @@ mod tests {
                 &home.join("Documents/project/.git/objects/pack.bin")
             ));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reviewed_targets_reject_symlinked_parent_components() {
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_root = temp.path().join("trusted");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&trusted_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, trusted_root.join("redirect")).unwrap();
+        let target = trusted_root.join("redirect/file.bin");
+
+        let error = validate_no_symlink_components(&target, &trusted_root).unwrap_err();
+        assert!(error.contains("symbolic link"));
+    }
+
+    #[test]
+    fn app_related_items_are_skipped_when_the_app_bundle_cannot_move() {
+        let missing = PathBuf::from("/Applications/Missing Example.app");
+        let identity = FileIdentity {
+            device: 0,
+            inode: 0,
+            size: 0,
+            modified: None,
+        };
+        let plan = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: "inspection".to_string(),
+            targets: vec![
+                TrashTarget {
+                    item_id: "app".to_string(),
+                    path: missing,
+                    identity: identity.clone(),
+                    logical_size: 0,
+                    allocated_size: 0,
+                    scope: TrashScope::AppBundle,
+                },
+                TrashTarget {
+                    item_id: "related".to_string(),
+                    path: PathBuf::from("/unused"),
+                    identity,
+                    logical_size: 0,
+                    allocated_size: 0,
+                    scope: TrashScope::AppRelated,
+                },
+            ],
+        };
+        let mut move_attempts = 0;
+        let result = TrashExecutor::execute_with(plan, |_| {
+            move_attempts += 1;
+            Ok(())
+        });
+
+        assert_eq!(move_attempts, 0);
+        assert_eq!(result.skipped_count, 2);
+        assert!(result.items[1].message.contains("app bundle was not moved"));
     }
 }
