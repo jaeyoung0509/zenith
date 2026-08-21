@@ -1,10 +1,10 @@
 use crate::large_files::FileIdentity;
 use crate::models::{
-    AppInstallSource, AppRelatedConfidence, AppRelatedItem, AppRelatedKind,
-    AppUninstallInspection, InstalledApp,
+    AppInstallSource, AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection,
+    InstalledApp,
 };
-use crate::scanner::SizeCalculator;
 use crate::safety::Blacklist;
+use crate::scanner::SizeCalculator;
 use plist::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -105,7 +105,14 @@ impl ApplicationScanner {
                     is_running,
                     is_system_protected: false,
                 };
-                records.insert(id, AppRecord { app, path, identity });
+                records.insert(
+                    id,
+                    AppRecord {
+                        app,
+                        path,
+                        identity,
+                    },
+                );
             }
         }
 
@@ -121,8 +128,7 @@ impl ApplicationScanner {
             .records
             .get(app_id)
             .ok_or_else(|| "Application inventory is stale. Refresh applications.".to_string())?;
-        if record.app.name == "Zenith"
-            || record.app.bundle_id.as_deref() == Some("com.zenith.app")
+        if record.app.name == "Zenith" || record.app.bundle_id.as_deref() == Some("com.zenith.app")
         {
             return Err("Zenith cannot uninstall itself.".to_string());
         }
@@ -133,7 +139,9 @@ impl ApplicationScanner {
             ));
         }
         if FileIdentity::from_path(&record.path).as_ref() != Some(&record.identity) {
-            return Err("The application changed after inventory. Refresh applications.".to_string());
+            return Err(
+                "The application changed after inventory. Refresh applications.".to_string(),
+            );
         }
 
         let home = std::env::var_os("HOME")
@@ -271,11 +279,7 @@ fn read_bundle_metadata(path: &Path) -> BundleMetadata {
     let Some(dict) = value.as_dictionary() else {
         return BundleMetadata::default();
     };
-    let get = |key: &str| {
-        dict.get(key)
-            .and_then(Value::as_string)
-            .map(str::to_string)
-    };
+    let get = |key: &str| dict.get(key).and_then(Value::as_string).map(str::to_string);
     BundleMetadata {
         display_name: get("CFBundleDisplayName").or_else(|| get("CFBundleName")),
         bundle_id: get("CFBundleIdentifier"),
