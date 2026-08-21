@@ -48,7 +48,12 @@ coordination therefore live in Rust `AppState`, not in a browser singleton.
 ## Scan and cleanup flow
 
 ```text
-registered signatures / domain adapters
+persisted settings snapshot
+   standard | intensive cleanup
+                 |
+                 v
+registered signatures -- mode-aware filtering
+        / domain adapters
                  |
                  v
           Rust ScanEngine
@@ -82,6 +87,29 @@ Generic cleanup supports only signature-scoped `Safe` and explicitly selected
 For example, Ollama deletion resolves a freshly scanned model ID and calls
 `ollama rm <model-name>`; it never deletes the manifest path supplied by a UI.
 
+### Standard and intensive scan scopes
+
+Cleanup scope is a backend decision. `start_scan` snapshots the persisted
+`intensive_cleanup` preference together with excluded signature IDs before
+moving work to the blocking scanner thread. `SignatureRegistry` then omits
+signatures marked `intensive_only` in standard mode and includes them in
+intensive mode. The frontend cannot promote an individual signature into the
+broader scope.
+
+Intensive signatures remain declarative TOML entries and use the same scan,
+planning, and execution pipeline as standard signatures. Broad cache and log
+roots are never emitted as a single recursive target. The scanner considers
+only their direct children, rejects symlinks and protected prefixes, and emits
+a child only when the newest timestamp in its candidate tree satisfies the
+signature's inactivity threshold. Cleanup repeats that tree-age check directly
+before deletion.
+
+The initial intensive scope covers stale third-party children of
+`~/Library/Caches` and stale application-log groups under `~/Library/Logs`.
+Apple/system cache namespaces and diagnostic/crash reports are excluded.
+Temporary cleanup remains a separate known-prefix allowlist and never becomes
+an unrestricted `/tmp` scan.
+
 See [SAFETY.md](SAFETY.md) for the full deletion contract.
 
 ## Concurrency and lifecycle
@@ -111,9 +139,10 @@ an interrupted save does not replace the last valid configuration. Missing
 fields receive safe defaults during upgrades.
 
 The stored settings drive theme, quick-panel section/provider order, Keep Awake
-rules, excluded signatures, and Quick Clean category defaults. Launch-at-login
-is deliberately marked as unavailable until a native autostart integration is
-implemented.
+rules, excluded signatures, Quick Clean category defaults, and the opt-in
+intensive scan scope. `intensive_cleanup` defaults to `false`, including when an
+older settings file does not contain the field. Launch-at-login is deliberately
+marked as unavailable until a native autostart integration is implemented.
 
 ## IPC security
 
@@ -135,4 +164,3 @@ Finder-launched macOS applications often receive a smaller `PATH` than an
 interactive shell. `tooling.rs` resolves CLIs through the inherited path and
 common Homebrew, local-user, Docker, and Ollama locations before spawning them.
 Adapters still fail closed when a required tool is unavailable.
-
