@@ -248,6 +248,8 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         description: "test-only signature".into(),
         min_age_days: None,
         include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
     });
 
     let scan_item = ScanItem {
@@ -331,6 +333,8 @@ fn manual_strategy_never_enters_generic_cleaner() {
         description: "adapter-only".into(),
         min_age_days: None,
         include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
     });
     let item = ScanItem {
         id: "test.manual-model".into(),
@@ -516,6 +520,8 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         description: "stale temp test".into(),
         min_age_days: Some(3),
         include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
     });
 
     let scan_item = ScanItem {

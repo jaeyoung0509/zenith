@@ -38,6 +38,32 @@ keychains, source-control metadata such as nested `.git`, and standard user
 content directories. Temporary cleanup never targets all of `/tmp`; candidates
 must match known tool prefixes and inactivity rules.
 
+## Intensive cleanup
+
+Intensive cleanup broadens discovery without weakening deletion authority. It
+is disabled by default, persisted as a validated setting, and only enables
+registered signatures marked `intensive_only`.
+
+Broad user cache and log signatures are constrained as follows:
+
+- only direct children of the registered root can become targets;
+- the root itself is never returned as a cleanup item;
+- symlink children and protected Apple/system prefixes are skipped;
+- the newest timestamp anywhere in the candidate tree must exceed the declared
+  minimum inactivity age;
+- incomplete traversal, permission failure, or recursion depth cutoff excludes
+  the candidate;
+- the planner accepts only a direct child of the resolved signature root; and
+- the executor repeats the full-tree inactivity check immediately before
+  deletion and aborts if anything became recent.
+
+The current thresholds are seven days for third-party children under
+`~/Library/Caches` and fourteen days for application-log groups under
+`~/Library/Logs`. Diagnostic and crash-report groups remain protected.
+Intensive mode does not scan user documents, preferences, credentials,
+databases, browser profiles, model weights, arbitrary system cache roots, or
+unknown `/tmp` children.
+
 ## Risk tiers
 
 - `Safe`: disposable cache or log data; may be selected by default.
@@ -70,6 +96,6 @@ partial failure into a success.
 Changes to a safety boundary require a temporary-fixture regression test. The
 suite covers forged selections, manual-strategy rejection, nested `.git` and
 declared exclusions, path traversal, protected roots, symlinks, TOCTOU identity
-changes, typed model deletion, and Docker total-versus-reclaimable accounting.
-Tests must never point at real user directories.
-
+changes, intensive-mode opt-in filtering, protected cache prefixes, typed model
+deletion, and Docker total-versus-reclaimable accounting. Tests must never
+point at real user directories.

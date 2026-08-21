@@ -113,6 +113,7 @@ describe('quick clean eligibility and predicate consistency', () => {
       clean_docker: true,
       clean_local_models: false,
       include_rebuild_caches: true, // Even if include_rebuild_caches is true, Quick Clean must be Safe only!
+      intensive_cleanup: true,
       theme: 'system',
       excluded_signatures: [],
       quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'] as any,

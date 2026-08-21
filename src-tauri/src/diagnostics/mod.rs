@@ -175,6 +175,7 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
         settings.clean_docker,
         settings.clean_local_models
     ));
+    features.push(format!("intensive_cleanup: {}", settings.intensive_cleanup));
     features.push(format!(
         "awake_rules: total={}, active={}",
         settings.awake_rules.len(),

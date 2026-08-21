@@ -95,14 +95,26 @@ pub async fn start_scan(
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
     let operation_lock = state.operation_lock.clone();
-    let excluded_signatures = state.settings.lock().unwrap().excluded_signatures.clone();
+    let (excluded_signatures, intensive_cleanup) = {
+        let settings = state.settings.lock().unwrap();
+        (
+            settings.excluded_signatures.clone(),
+            settings.intensive_cleanup,
+        )
+    };
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _operation_guard = operation_lock.lock().unwrap();
         let cat_ref = categories.as_deref();
-        let result = ScanEngine::scan(&registry, cat_ref, &excluded_signatures, |event| {
-            let _ = on_event.send(event);
-        });
+        let result = ScanEngine::scan(
+            &registry,
+            cat_ref,
+            &excluded_signatures,
+            intensive_cleanup,
+            |event| {
+                let _ = on_event.send(event);
+            },
+        );
         *last_scan_store.lock().unwrap() = Some(result.clone());
         result
     })
