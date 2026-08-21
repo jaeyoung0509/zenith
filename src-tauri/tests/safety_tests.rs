@@ -553,3 +553,62 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
     assert!(temp_child.exists());
     assert!(new_file.exists());
 }
+
+#[test]
+fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
+    let dir = tempdir().expect("create temp dir");
+    let cache_dir = dir.path().join("cache");
+    fs::create_dir_all(&cache_dir).unwrap();
+
+    let onboarding_file = cache_dir.join("onboarding.json");
+    let project_id_file = cache_dir.join("default_project_id.txt");
+    let transient_cache = cache_dir.join("ephemeral_prompt_cache.bin");
+
+    fs::write(&onboarding_file, b"{\"onboardingComplete\": true}").unwrap();
+    fs::write(&project_id_file, b"project-12345").unwrap();
+    fs::write(&transient_cache, b"transient session data").unwrap();
+
+    let registry = SignatureRegistry::load_embedded().expect("load embedded");
+    let gemini_sig = registry
+        .get("ai.gemini.cache")
+        .expect("ai.gemini.cache signature exists");
+
+    // Verify exclusions contain onboarding.json and default_project_id.txt
+    assert!(gemini_sig
+        .exclusions
+        .iter()
+        .any(|ex| ex == "onboarding.json" || ex.ends_with("onboarding.json")));
+    assert!(gemini_sig
+        .exclusions
+        .iter()
+        .any(|ex| ex == "default_project_id.txt" || ex.ends_with("default_project_id.txt")));
+
+    // Measure size with signature exclusions
+    let (measured_size, measured_count) =
+        SizeCalculator::measure_path(&cache_dir, &gemini_sig.exclusions);
+    assert_eq!(
+        measured_count, 1,
+        "Only transient_cache should be counted as reclaimable"
+    );
+    assert_eq!(
+        measured_size.logical,
+        b"transient session data".len() as u64
+    );
+
+    // Perform delete_contents
+    let report = SafeTreeDeleter::delete_contents(&cache_dir, &gemini_sig.exclusions);
+    assert!(report.is_success());
+    assert_eq!(report.deleted_files, 1);
+    assert_eq!(report.skipped_files, 2);
+
+    // Onboarding and project ID must be preserved!
+    assert!(
+        onboarding_file.exists(),
+        "onboarding.json must be preserved"
+    );
+    assert!(
+        project_id_file.exists(),
+        "default_project_id.txt must be preserved"
+    );
+    assert!(!transient_cache.exists(), "transient_cache must be deleted");
+}
