@@ -51,7 +51,11 @@ pub async fn start_large_file_scan(
         LARGE_FILE_CANCEL.lock().unwrap().remove(&inventory.scan_id);
         let result = emitted_result.unwrap_or_else(|| LargeFileScanResult {
             scan_id: inventory.scan_id.clone(),
-            items: inventory.records.values().map(|record| record.item.clone()).collect(),
+            items: inventory
+                .records
+                .values()
+                .map(|record| record.item.clone())
+                .collect(),
             entries_scanned: 0,
             skipped_entries: 0,
             cancelled: true,
@@ -88,7 +92,9 @@ pub fn prepare_large_file_trash(
         .unwrap()
         .clone()
         .filter(|inventory| inventory.scan_id == scan_id)
-        .filter(|inventory| unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS)
+        .filter(|inventory| {
+            unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS
+        })
         .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
     let plan = TrashPlanner::from_large_files(&inventory, &selected_item_ids)?;
     let preview = plan.preview();
@@ -105,8 +111,16 @@ pub async fn get_installed_apps() -> Result<Vec<InstalledApp>, String> {
     })
     .await
     .map_err(|_| "Application inventory worker panicked".to_string())?;
-    let mut apps = inventory.records.values().map(|record| record.app.clone()).collect::<Vec<_>>();
-    apps.sort_by(|left, right| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()));
+    let mut apps = inventory
+        .records
+        .values()
+        .map(|record| record.app.clone())
+        .collect::<Vec<_>>();
+    apps.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
     *APP_INVENTORY.lock().unwrap() = Some(inventory);
     Ok(apps)
 }
@@ -118,7 +132,9 @@ pub async fn inspect_app_uninstall(app_id: String) -> Result<AppUninstallInspect
         .lock()
         .unwrap()
         .clone()
-        .filter(|inventory| unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS)
+        .filter(|inventory| {
+            unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS
+        })
         .ok_or_else(|| "Application inventory expired. Refresh applications.".to_string())?;
     let inspection = tauri::async_runtime::spawn_blocking(move || {
         let _guard = STORAGE_OPERATION_LOCK.lock().unwrap();
@@ -145,7 +161,9 @@ pub fn prepare_app_uninstall(
         .unwrap()
         .get(&inspection_id)
         .cloned()
-        .filter(|inspection| unix_timestamp().saturating_sub(inspection.created_at) < INVENTORY_TTL_SECS)
+        .filter(|inspection| {
+            unix_timestamp().saturating_sub(inspection.created_at) < INVENTORY_TTL_SECS
+        })
         .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
     let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
     let preview = plan.preview();
