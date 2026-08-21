@@ -135,7 +135,7 @@ impl LargeFileScanner {
                     let path = entry.path();
                     entries_scanned += 1;
 
-                    if entries_scanned % 500 == 0 {
+                    if entries_scanned.is_multiple_of(500) {
                         on_event(LargeFileScanEvent::Progress {
                             root: display_root.clone(),
                             entries_scanned,
