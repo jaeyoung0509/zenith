@@ -306,6 +306,7 @@ export type LargeFileScanResult = {
 	entries_scanned: number,
 	skipped_entries: number,
 	cancelled: boolean,
+	truncated: boolean,
 };
 
 export type LocalModelItem = {

@@ -88,13 +88,15 @@ path.
 
 Traversal and execution enforce these rules:
 
-1. Symlinks are never followed or retained as candidates.
+1. Symlinked roots and candidates are rejected, symlinks are never followed,
+   and every path component is checked again before Trash.
 2. A traversal does not cross the device ID of the selected root.
 3. `.app`, Photos-library, Music-library, and iMovie-library packages are not
    descended as ordinary files.
 4. Paths containing `.git` remain protected even though user-content roots are
    intentionally allowed for this workflow.
-5. Results are bounded and only matching candidates are retained.
+5. Results are bounded to the 10,000 largest matches. If more files match, the
+   result is marked as truncated and the UI discloses the limit.
 6. Selection is empty by default. There is no Quick Clean integration.
 7. A Trash plan resolves only opaque IDs from the current backend inventory.
 8. Immediately before Trash, the executor verifies the item still lives inside
@@ -114,7 +116,8 @@ Application inventory is limited to direct `.app` children of `/Applications`
 and `~/Applications`. System applications are outside the removable inventory.
 The selected app is resolved by opaque ID and its filesystem identity is stored
 in Rust. A running app is rejected before uninstall inspection, and Zenith
-cannot create an uninstall inspection for itself.
+cannot create an uninstall inspection for itself. The backend retains only the
+current inspection, so selecting another app invalidates the earlier review.
 
 Related-data discovery is precision-first. The current approved roots are:
 
@@ -138,8 +141,15 @@ The app bundle is a deliberate exception to the generic `/Applications`
 blacklist, but only inside this dedicated workflow. Immediately before Trash,
 the executor requires it to still be a direct child of `/Applications` or
 `~/Applications`, still end in `.app`, and still match the reviewed filesystem
-identity. Related Library items continue to pass the generic blacklist in
-addition to the approved Library-root check.
+identity. It also checks for a newly running app and symlinks in every path
+component. Related Library items continue to pass the generic blacklist in
+addition to the approved Library-root check. If the app bundle cannot be moved,
+the executor skips all related data rather than performing a leftovers-only
+partial uninstall.
+
+App bundle identity intentionally includes directory metadata in addition to
+device and inode. Any observed bundle change after review is treated as stale
+and requires a fresh inspection rather than weakening the fail-closed check.
 
 ## Native Trash semantics
 

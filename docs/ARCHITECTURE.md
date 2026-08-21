@@ -158,11 +158,13 @@ backend-owned ephemeral inventory
 Large Files only accepts the named user-content roots `Downloads`, `Desktop`,
 `Documents`, and `Movies`. It does not follow symlinks, does not cross filesystem
 boundaries, skips package directories such as `.app` and Photos libraries, and
-keeps a bounded result set. The generic cleanup blacklist deliberately protects
+keeps the 10,000 largest matches in a bounded result set while reporting
+truncation to the UI. The generic cleanup blacklist deliberately protects
 whole user-content directories, so Large Files uses its own narrower scope
 predicate: a candidate must still be inside one of the approved roots and paths
-containing `.git` remain protected. This exception does not widen generic
-cleanup authority.
+containing `.git` remain protected. Symlinked roots are rejected, and every
+component from the trusted root to the reviewed target is rechecked before
+Trash. This exception does not widen generic cleanup authority.
 
 App inventory scans only direct `.app` children of `/Applications` and
 `~/Applications`. Related data is inspected only below an approved set of
@@ -171,6 +173,10 @@ app-name matches are medium confidence; Group Containers are treated as shared
 unless exclusive ownership is proven. The app bundle itself is allowed through
 the dedicated App Uninstaller scope even though `/Applications` is protected by
 the generic blacklist.
+
+Only the current app-uninstall inspection is retained. Execution rechecks that
+the app is not running, moves the app bundle first, and skips all related data
+if that first move does not succeed.
 
 Both workflows use the native Trash adapter instead of permanent deletion.
 Moving to Trash does not mean disk space has already been reclaimed; the UI
