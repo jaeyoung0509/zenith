@@ -23,10 +23,15 @@ macOS menu bar
      scanner      safety      adapters      metrics/power
         |        planner +     Docker,       memory, disk,
    signatures    plan store    models, AI    Keep Awake
+        |
+        +-- dedicated storage management
+            large-file inventory, app inventory,
+            one-shot Trash plans
 ```
 
 The windows have separate frontend runtimes and stores. Shared authority and
-coordination therefore live in Rust `AppState`, not in a browser singleton.
+coordination therefore live in Rust `AppState`, backend-owned inventories, or
+Rust process state rather than in a browser singleton.
 
 ## Repository map
 
@@ -34,13 +39,22 @@ coordination therefore live in Rust `AppState`, not in a browser singleton.
 - `src-tauri/src/scanner`: signature-driven discovery and size measurement.
 - `src-tauri/src/safety`: planning, blacklist checks, and guarded tree deletion.
 - `src-tauri/src/cleaner`: execution of verified generic filesystem plans.
+- `src-tauri/src/large_files`: bounded traversal of approved user-content roots,
+  streamed progress, file classification, and filesystem identity capture.
+- `src-tauri/src/applications`: installed-app inventory plus constrained related
+  Library-data inspection.
+- `src-tauri/src/storage_commands`: IPC orchestration and ephemeral inventories
+  for Large Files and App Uninstaller.
+- `src-tauri/src/trash_manager`: separate one-shot Trash planning and execution
+  for user-reviewed files and apps.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
   for resources that must not be treated as arbitrary files.
 - `src-tauri/src/metrics` and `src-tauri/src/power`: macOS system integration.
 - `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry
   points.
-- `src/lib/utils/tauri.ts`: the only frontend IPC wrapper, including deterministic
-  browser-preview mocks.
+- `src/lib/utils/tauri.ts`: frontend command wrappers.
+- `src/lib/api/storage.ts`: native and browser-preview API for the dedicated
+  storage-management workflows.
 - `src/lib/stores`: Svelte state and lifecycle orchestration.
 - `src/routes/dashboard` and `src/routes/quick`: the two window surfaces.
 - `signatures`: reviewed cleanup definitions embedded in the Rust binary.
@@ -112,12 +126,64 @@ an unrestricted `/tmp` scan.
 
 See [SAFETY.md](SAFETY.md) for the full deletion contract.
 
+## User-reviewed storage management
+
+Large Files and App Uninstaller intentionally do not reuse `SignatureRegistry`,
+`ScanEngine`, or generic `DeletePlan`. Those abstractions mean “Zenith has
+classified this resource as disposable or rebuildable.” User files and inferred
+app leftovers have a different trust model.
+
+```text
+Large Files / Applications UI
+            |
+       typed request
+            v
+backend-owned ephemeral inventory
+            |
+    opaque selected item IDs
+            v
+       TrashPlanner
+ scope + identity captured in Rust
+            |
+  TrashPlanPreview + opaque UUID
+            |
+      explicit confirmation
+            v
+       TrashExecutor
+ scope + type + identity revalidation
+            |
+        macOS Trash
+```
+
+Large Files only accepts the named user-content roots `Downloads`, `Desktop`,
+`Documents`, and `Movies`. It does not follow symlinks, does not cross filesystem
+boundaries, skips package directories such as `.app` and Photos libraries, and
+keeps a bounded result set. The generic cleanup blacklist deliberately protects
+whole user-content directories, so Large Files uses its own narrower scope
+predicate: a candidate must still be inside one of the approved roots and paths
+containing `.git` remain protected. This exception does not widen generic
+cleanup authority.
+
+App inventory scans only direct `.app` children of `/Applications` and
+`~/Applications`. Related data is inspected only below an approved set of
+`~/Library` roots. Exact bundle-identifier matches are high confidence; exact
+app-name matches are medium confidence; Group Containers are treated as shared
+unless exclusive ownership is proven. The app bundle itself is allowed through
+the dedicated App Uninstaller scope even though `/Applications` is protected by
+the generic blacklist.
+
+Both workflows use the native Trash adapter instead of permanent deletion.
+Moving to Trash does not mean disk space has already been reclaimed; the UI
+reports the amount moved and describes it as potentially reclaimable after the
+Trash is emptied.
+
 ## Concurrency and lifecycle
 
 Filesystem scan and cleanup share a Rust operation mutex. This prevents the two
 WebViews from starting overlapping mutations or duplicate scans against shared
-state. Blocking filesystem, process, CLI, and synchronous HTTP work runs outside
-the async command thread.
+state. Large-file traversal, app inventory/inspection, and Trash execution use
+the same storage-operation serialization. Blocking filesystem, process, CLI,
+and synchronous HTTP work runs outside the async command thread.
 
 The quick window is persistent but inactive while hidden:
 
@@ -151,7 +217,8 @@ Tauri capabilities are split by window:
 - `capabilities/quick.json` grants read-oriented commands plus backend-owned
   safe plan creation/execution.
 - `capabilities/main.json` additionally grants model deletion, Docker pruning,
-  process termination, settings writes, and power controls.
+  process termination, settings writes, power controls, Large Files inspection,
+  app inspection, and dedicated Trash-plan execution.
 
 The global Tauri JavaScript object is disabled and a Content Security Policy is
 applied in development and production. Adding a command requires all three:
