@@ -16,20 +16,23 @@
   import MemoryView from './MemoryView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
+  import LargeFilesView from './LargeFilesView.svelte';
+  import ApplicationsView from './ApplicationsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import {
-    HardDrive,
-    Container,
-    Boxes,
     Activity,
+    AppWindow,
+    Boxes,
+    ChartNoAxesCombined,
+    Container,
+    FileSearch,
+    HardDrive,
     Moon,
     Settings,
     Shield,
-    ChartNoAxesCombined,
-    Disc3,
   } from 'lucide-svelte';
 
-  type Tab = DashboardTab | 'settings';
+  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -110,6 +113,34 @@
           {/if}
         {/each}
 
+        <div class="pt-2 mt-2 border-t border-border/50 space-y-1">
+          <div class="px-2.5 pb-1 text-[9px] uppercase tracking-wider text-muted-foreground/60">
+            Storage tools
+          </div>
+          <button
+            type="button"
+            onclick={() => selectTab('large-files')}
+            class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+            'large-files'
+              ? 'bg-secondary text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+          >
+            <FileSearch size={15} />
+            <span>Large Files</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => selectTab('applications')}
+            class="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+            'applications'
+              ? 'bg-secondary text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+          >
+            <AppWindow size={15} />
+            <span>Applications</span>
+          </button>
+        </div>
+
         <!-- Fixed Settings Tab -->
         <button
           type="button"
@@ -153,6 +184,10 @@
           />
         {:else if currentTab === 'storage'}
           <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+        {:else if currentTab === 'large-files'}
+          <LargeFilesView onBack={() => selectTab('storage')} />
+        {:else if currentTab === 'applications'}
+          <ApplicationsView onBack={() => selectTab('storage')} />
         {:else if currentTab === 'docker'}
           <DockerView />
         {:else if currentTab === 'models'}
