@@ -234,15 +234,16 @@ impl LargeFileScanner {
                     break;
                 }
             }
-            on_event(LargeFileScanEvent::RootFinished {
-                root: display_root,
-            });
+            on_event(LargeFileScanEvent::RootFinished { root: display_root });
             if records.len() >= MAX_RESULTS {
                 break;
             }
         }
 
-        let mut items = records.values().map(|record| record.item.clone()).collect::<Vec<_>>();
+        let mut items = records
+            .values()
+            .map(|record| record.item.clone())
+            .collect::<Vec<_>>();
         items.sort_by(|left, right| {
             right
                 .allocated_size
@@ -346,7 +347,9 @@ mod tests {
     #[test]
     fn package_directories_are_not_descended() {
         assert!(should_skip_directory(Path::new("/tmp/Test.app")));
-        assert!(should_skip_directory(Path::new("/tmp/Photos.photoslibrary")));
+        assert!(should_skip_directory(Path::new(
+            "/tmp/Photos.photoslibrary"
+        )));
         assert!(!should_skip_directory(Path::new("/tmp/project")));
     }
 }
