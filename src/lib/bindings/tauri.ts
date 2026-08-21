@@ -45,6 +45,13 @@ export const commands = {
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
 	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
+	startLargeFileScan: (request: LargeFileScanRequest, onEvent: Channel<LargeFileScanEvent>) => typedError<LargeFileScanResult, string>(__TAURI_INVOKE("start_large_file_scan", { request, onEvent })),
+	cancelLargeFileScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_large_file_scan", { scanId })),
+	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
+	getInstalledApps: () => typedError<InstalledApp[], string>(__TAURI_INVOKE("get_installed_apps")),
+	inspectAppUninstall: (appId: string) => typedError<AppUninstallInspection, string>(__TAURI_INVOKE("inspect_app_uninstall", { appId })),
+	prepareAppUninstall: (inspectionId: string, selectedRelatedIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_app_uninstall", { inspectionId, selectedRelatedIds })),
+	executeTrashPlan: (planId: string) => typedError<TrashResult, string>(__TAURI_INVOKE("execute_trash_plan", { planId })),
 };
 
 /* Types */
@@ -64,6 +71,32 @@ export type AiProviderUsage = {
 export type AiUsageSnapshot = {
 	providers: AiProviderUsage[],
 	fetched_at: number,
+};
+
+export type AppInstallSource = "application_bundle" | "homebrew_cask" | "installer_package" | "unknown";
+
+export type AppRelatedConfidence = "high" | "medium" | "shared";
+
+export type AppRelatedItem = {
+	id: string,
+	name: string,
+	display_path: string,
+	kind: AppRelatedKind,
+	confidence: AppRelatedConfidence,
+	evidence: string,
+	logical_size: number,
+	allocated_size: number,
+	selected_by_default: boolean,
+};
+
+export type AppRelatedKind = "app_bundle" | "application_support" | "cache" | "log" | "preference" | "saved_state" | "container" | "group_container" | "application_scripts" | "http_storage" | "web_kit";
+
+export type AppUninstallInspection = {
+	inspection_id: string,
+	app: InstalledApp,
+	related_items: AppRelatedItem[],
+	incomplete: boolean,
+	warnings: string[],
 };
 
 export type AwakeBehavior = "prevent_system_sleep" | "keep_display_awake";
@@ -232,6 +265,49 @@ export type FileSize = {
 	allocated: number | null,
 };
 
+export type InstalledApp = {
+	id: string,
+	name: string,
+	bundle_id: string | null,
+	version: string | null,
+	display_path: string,
+	executable_name: string | null,
+	logical_size: number,
+	allocated_size: number,
+	modified_at: number | null,
+	install_source: AppInstallSource,
+	is_running: boolean,
+	is_system_protected: boolean,
+};
+
+export type LargeFileItem = {
+	id: string,
+	name: string,
+	display_parent: string,
+	logical_size: number,
+	allocated_size: number,
+	modified_at: number | null,
+	kind: LargeFileKind,
+	extension: string | null,
+};
+
+export type LargeFileKind = "video" | "archive" | "disk_image" | "vm_image" | "ai_model" | "database" | "developer_artifact" | "other";
+
+export type LargeFileScanEvent = { type: "started"; scan_id: string } | { type: "root_started"; root: string } | { type: "progress"; root: string; entries_scanned: number; matches_found: number } | { type: "item_found"; item: LargeFileItem } | { type: "root_finished"; root: string } | { type: "finished"; result: LargeFileScanResult } | { type: "cancelled"; scan_id: string };
+
+export type LargeFileScanRequest = {
+	roots: string[],
+	min_size_bytes: number,
+};
+
+export type LargeFileScanResult = {
+	scan_id: string,
+	items: LargeFileItem[],
+	entries_scanned: number,
+	skipped_entries: number,
+	cancelled: boolean,
+};
+
 export type LocalModelItem = {
 	id: string,
 	name: string,
@@ -334,6 +410,28 @@ export type SelectedApplication = {
 	name: string,
 	executable_pattern: string,
 	path: string,
+};
+
+export type TrashItemResult = {
+	item_id: string,
+	success: boolean,
+	message: string,
+};
+
+export type TrashPlanPreview = {
+	id: string,
+	item_count: number,
+	logical_size: number,
+	allocated_size: number,
+	expires_at: number,
+};
+
+export type TrashResult = {
+	moved_count: number,
+	failed_count: number,
+	skipped_count: number,
+	moved_allocated_size: number,
+	items: TrashItemResult[],
 };
 
 export type UsageSummary = {
