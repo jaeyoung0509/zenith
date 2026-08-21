@@ -15,6 +15,11 @@ include_prefixes = [
     "codex_",
     "com.anthropic.",
     "com.openai.",
+    "com.brave.",
+    "com.google.Chrome.",
+    "com.spotify.",
+    "com.tinyspeck.",
+    "discord-",
     "esbuild-",
     "gemini-",
     "opencode-",
@@ -24,3 +29,37 @@ include_prefixes = [
 ]
 min_age_days = 3
 description = "Known AI and developer-tool temp artifacts that have not changed for at least 3 days. Other apps' temporary files are left untouched."
+
+[[signatures]]
+id = "system.intensive.user_app_caches"
+name = "Stale Third-Party Application Cache"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+paths = ["~/Library/Caches"]
+min_age_days = 7
+exclude_prefixes = [
+    "com.apple.",
+    "CloudKit",
+    "FamilyCircle",
+    "GeoServices",
+    "HomeKit",
+    "Safari"
+]
+intensive_only = true
+description = "A third-party application cache whose entire tree has been inactive for at least 7 days. Apple and system cache namespaces are excluded."
+
+[[signatures]]
+id = "system.intensive.application_logs"
+name = "Stale Application Logs"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+paths = ["~/Library/Logs"]
+min_age_days = 14
+exclude_prefixes = [
+    "DiagnosticReports",
+    "CrashReporter"
+]
+intensive_only = true
+description = "Application log groups whose entire tree has been inactive for at least 14 days. Diagnostic and crash reports remain protected."

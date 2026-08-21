@@ -19,6 +19,10 @@ pub struct Signature {
     pub min_age_days: Option<u32>,
     #[serde(default)]
     pub include_prefixes: Vec<String>,
+    #[serde(default)]
+    pub exclude_prefixes: Vec<String>,
+    #[serde(default)]
+    pub intensive_only: bool,
 }
 
 fn default_strategy() -> CleanStrategy {

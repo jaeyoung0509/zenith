@@ -329,6 +329,38 @@
     </Card>
   </div>
 
+  <!-- Cleanup Scan Scope -->
+  <div class="space-y-3">
+    <div>
+      <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Cleanup Scan Scope
+      </h3>
+      <p class="text-[11px] text-muted-foreground mt-1">
+        Choose how broadly Zenith searches for reclaimable cache and log data.
+      </p>
+    </div>
+    <Card class="p-4 bg-card/70">
+      <div class="flex items-start justify-between gap-5 text-xs">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 font-medium text-foreground">
+            <AlertTriangle size={14} class="text-amber-500" />
+            Intensive cleanup
+            <Badge variant="outline">Opt-in</Badge>
+          </div>
+          <div class="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+            Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
+            Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
+          </div>
+        </div>
+        <Switch
+          checked={settings.intensive_cleanup}
+          onchange={() => handleToggle('intensive_cleanup')}
+          ariaLabel="Intensive cleanup"
+        />
+      </div>
+    </Card>
+  </div>
+
   <!-- Cleaning Categories Defaults -->
   <div class="space-y-3">
     <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">

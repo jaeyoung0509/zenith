@@ -56,6 +56,7 @@ pub struct ZenithSettings {
     pub clean_docker: bool,
     pub clean_local_models: bool,
     pub include_rebuild_caches: bool,
+    pub intensive_cleanup: bool,
     pub theme: String,
     pub excluded_signatures: Vec<String>,
     pub awake_rules: Vec<AwakeRule>,
@@ -73,6 +74,7 @@ impl Default for ZenithSettings {
             clean_docker: true,
             clean_local_models: false,
             include_rebuild_caches: false,
+            intensive_cleanup: false,
             theme: "system".to_string(),
             excluded_signatures: Vec::new(),
             quick_panel_sections: QuickPanelSection::DEFAULTS.to_vec(),
@@ -212,5 +214,6 @@ mod tests {
         assert_eq!(parsed.dashboard_tabs.len(), 6);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
+        assert!(!parsed.intensive_cleanup);
     }
 }

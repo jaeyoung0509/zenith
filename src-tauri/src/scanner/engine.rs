@@ -13,6 +13,7 @@ impl ScanEngine {
         registry: &SignatureRegistry,
         categories_filter: Option<&[Category]>,
         excluded_signatures: &[String],
+        intensive_cleanup: bool,
         mut on_event: F,
     ) -> ScanResult
     where
@@ -51,7 +52,7 @@ impl ScanEngine {
             let mut cat_manual = 0u64;
 
             // 1. Scan filesystem signatures for this category
-            let signatures = registry.by_category(category);
+            let signatures = registry.by_category_for_mode(category, intensive_cleanup);
             for sig in signatures {
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
