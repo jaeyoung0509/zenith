@@ -28,6 +28,13 @@ fn main() {
         "get_app_version",
         "get_diagnostics",
         "open_logs_folder",
+        "start_large_file_scan",
+        "cancel_large_file_scan",
+        "prepare_large_file_trash",
+        "get_installed_apps",
+        "inspect_app_uninstall",
+        "prepare_app_uninstall",
+        "execute_trash_plan",
     ];
 
     tauri_build::try_build(

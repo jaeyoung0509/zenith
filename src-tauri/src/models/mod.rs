@@ -12,6 +12,7 @@ pub mod risk;
 pub mod scan;
 pub mod settings;
 pub mod signature;
+pub mod storage_management;
 
 pub use ai_usage::*;
 pub use awake::*;
@@ -27,3 +28,4 @@ pub use risk::*;
 pub use scan::*;
 pub use settings::*;
 pub use signature::*;
+pub use storage_management::*;

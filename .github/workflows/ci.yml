@@ -44,6 +44,9 @@ jobs:
       - name: Verify generated bindings (drift check)
         run: git diff --exit-code -- src/lib/bindings/tauri.ts
 
+      - name: Verify Cargo.lock (drift check)
+        run: git diff --exit-code -- Cargo.lock
+
       - name: Svelte Typecheck
         run: pnpm check
 

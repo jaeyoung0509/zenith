@@ -9,6 +9,7 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import StorageView from './StorageView.svelte';
+  import StorageTools from './StorageTools.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
@@ -16,20 +17,21 @@
   import MemoryView from './MemoryView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
+  import LargeFilesView from './LargeFilesView.svelte';
+  import ApplicationsView from './ApplicationsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import {
-    HardDrive,
-    Container,
-    Boxes,
     Activity,
+    Boxes,
+    ChartNoAxesCombined,
+    Container,
+    HardDrive,
     Moon,
     Settings,
     Shield,
-    ChartNoAxesCombined,
-    Disc3,
   } from 'lucide-svelte';
 
-  type Tab = DashboardTab | 'settings';
+  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -152,7 +154,17 @@
             onNavigateTab={(tab) => selectTab(tab)}
           />
         {:else if currentTab === 'storage'}
-          <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+          <div class="space-y-6">
+            <StorageTools
+              onOpenLargeFiles={() => selectTab('large-files')}
+              onOpenApplications={() => selectTab('applications')}
+            />
+            <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+          </div>
+        {:else if currentTab === 'large-files'}
+          <LargeFilesView onBack={() => selectTab('storage')} />
+        {:else if currentTab === 'applications'}
+          <ApplicationsView onBack={() => selectTab('storage')} />
         {:else if currentTab === 'docker'}
           <DockerView />
         {:else if currentTab === 'models'}

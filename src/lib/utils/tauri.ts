@@ -1,6 +1,8 @@
 import { api, isTauri as isTauriCheck } from '../api';
+import { storageApi } from '../api/storage';
 import type {
   AiUsageSnapshot,
+  AppUninstallInspection,
   AwakeBehavior,
   AwakeRule,
   AwakeState,
@@ -11,6 +13,10 @@ import type {
   DiskMetrics,
   DiskVolume,
   DockerStatus,
+  InstalledApp,
+  LargeFileScanEvent,
+  LargeFileScanRequest,
+  LargeFileScanResult,
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
@@ -18,6 +24,8 @@ import type {
   ScanItem,
   ScanResult,
   SelectedApplication,
+  TrashPlanPreview,
+  TrashResult,
   ZenithSettings,
 } from '../models/types';
 
@@ -146,4 +154,41 @@ export function tauriOpenLogsFolder(): Promise<void> {
 
 export function tauriHideCurrentWindow(): Promise<void> {
   return api.hideCurrentWindow();
+}
+
+export function tauriStartLargeFileScan(
+  request: LargeFileScanRequest,
+  onEvent: (event: LargeFileScanEvent) => void
+): Promise<LargeFileScanResult> {
+  return storageApi.startLargeFileScan(request, onEvent);
+}
+
+export function tauriCancelLargeFileScan(scanId: string): Promise<void> {
+  return storageApi.cancelLargeFileScan(scanId);
+}
+
+export function tauriPrepareLargeFileTrash(
+  scanId: string,
+  selectedItemIds: string[]
+): Promise<TrashPlanPreview> {
+  return storageApi.prepareLargeFileTrash(scanId, selectedItemIds);
+}
+
+export function tauriGetInstalledApps(): Promise<InstalledApp[]> {
+  return storageApi.getInstalledApps();
+}
+
+export function tauriInspectAppUninstall(appId: string): Promise<AppUninstallInspection> {
+  return storageApi.inspectAppUninstall(appId);
+}
+
+export function tauriPrepareAppUninstall(
+  inspectionId: string,
+  selectedRelatedIds: string[]
+): Promise<TrashPlanPreview> {
+  return storageApi.prepareAppUninstall(inspectionId, selectedRelatedIds);
+}
+
+export function tauriExecuteTrashPlan(planId: string): Promise<TrashResult> {
+  return storageApi.executeTrashPlan(planId);
 }
