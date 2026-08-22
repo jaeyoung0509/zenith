@@ -68,10 +68,12 @@
   }
 </script>
 
-<div class="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
+<div class="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none relative">
+  <!-- Window drag region for macOS Overlay title bar -->
+  <div class="titlebar-drag-region absolute top-0 left-0 right-0 h-7 z-30" aria-hidden="true"></div>
   <!-- Sidebar Navigation -->
   <aside
-    class="w-56 shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between p-3 pt-9"
+    class="w-56 shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between p-3 pt-9 relative"
   >
     <div class="space-y-6">
       <!-- Title & Branding -->
@@ -91,7 +93,7 @@
       </div>
 
       <!-- Navigation Links -->
-      <nav class="space-y-1">
+      <nav class="space-y-1 no-drag">
         {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'] as tabId}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
