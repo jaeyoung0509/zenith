@@ -483,6 +483,7 @@ export type ZenithSettings_Deserialize = {
 	quick_panel_sections?: QuickPanelSection[],
 	quick_panel_ai_providers?: string[],
 	dashboard_tabs?: DashboardTab_Deserialize[],
+	sidebar_collapsed?: boolean,
 };
 
 export type ZenithSettings_Serialize = {
@@ -499,6 +500,7 @@ export type ZenithSettings_Serialize = {
 	quick_panel_sections: QuickPanelSection[],
 	quick_panel_ai_providers: string[],
 	dashboard_tabs: DashboardTab_Serialize[],
+	sidebar_collapsed: boolean,
 };
 
 /* Tauri Specta runtime */

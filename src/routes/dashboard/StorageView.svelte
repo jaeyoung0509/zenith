@@ -78,7 +78,7 @@
             Mac Primary Storage
           </span>
           {#if disk}
-            <span class="font-mono text-sm font-semibold text-foreground">
+            <span class="whitespace-nowrap font-mono text-sm font-semibold text-foreground">
               {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({disk.percent_used?.toFixed(1) ?? '—'}%)
             </span>
           {/if}
@@ -100,7 +100,7 @@
         <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
           Selected Reclaimable
         </span>
-        <div class="text-3xl font-bold font-mono text-foreground">
+        <div class="whitespace-nowrap text-3xl font-bold font-mono text-foreground">
           {formatBytes(scanStore.reclaimableBytes)}
         </div>
         <div class="text-[11px] text-muted-foreground">
@@ -132,7 +132,7 @@
                     <span class="px-1 py-0.2 rounded text-[9px] bg-secondary text-muted-foreground border border-border">External</span>
                   {/if}
                 </div>
-                <p class="text-[10px] font-mono text-muted-foreground mt-0.5">
+                <p class="whitespace-nowrap text-[10px] font-mono text-muted-foreground mt-0.5">
                   {formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)} ({volume.percent_used != null ? `${volume.percent_used.toFixed(0)}%` : '—'})
                 </p>
               </div>
@@ -154,17 +154,6 @@
     <!-- Action Toolbar -->
     <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
       <div class="flex flex-wrap items-center gap-1.5">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={scanStore.isScanning || scanStore.isCleaning}
-          onclick={() => scanStore.runScan()}
-          class="gap-1.5 px-2.5"
-        >
-          <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
-          <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Storage'}</span>
-        </Button>
-
         <Button
           variant="ghost"
           size="sm"
@@ -203,12 +192,12 @@
       <div class="flex flex-col sm:flex-row sm:items-center md:flex-col md:items-end gap-2 shrink-0">
         {#if scanStore.selectedCount > 0}
           <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono">
-            <span class="text-emerald-500 font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
+            <span class="whitespace-nowrap text-emerald-500 font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
             {#if rebuildSelectedBytes > 0}
-              <span class="text-amber-500 font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
+              <span class="whitespace-nowrap text-amber-500 font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
             {/if}
             {#if manualSelectedBytes > 0}
-              <span class="text-rose-400 font-medium">! {formatBytes(manualSelectedBytes)} Manual</span>
+              <span class="whitespace-nowrap text-rose-400 font-medium">! {formatBytes(manualSelectedBytes)} Manual</span>
             {/if}
           </div>
         {/if}
