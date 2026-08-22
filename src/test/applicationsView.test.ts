@@ -11,7 +11,7 @@ describe('ApplicationsView responsive layout contract', () => {
     });
 
     expect(rendered.body).toContain(
-      'md:grid-cols-[minmax(220px,0.85fr)_minmax(0,1.15fr)]'
+      'md:grid-cols-[minmax(220px,1fr)_minmax(0,1.1fr)]'
     );
     expect(rendered.body).toContain('max-h-[calc(100vh-245px)]');
     expect(rendered.body).toContain('md:max-h-[calc(100vh-5rem)]');

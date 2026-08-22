@@ -257,7 +257,7 @@
     </Card>
   {/if}
 
-  <div class="grid grid-cols-1 md:grid-cols-[minmax(220px,0.85fr)_minmax(0,1.15fr)] gap-4 items-start">
+  <div class="grid grid-cols-1 md:grid-cols-[minmax(220px,1fr)_minmax(0,1.1fr)] gap-4 items-start">
     <Card class="p-4 space-y-3 md:flex md:max-h-[calc(100vh-5rem)] md:min-h-0 md:flex-col md:overflow-hidden md:sticky md:top-0">
       <div class="flex items-center justify-between gap-2">
         <div>
