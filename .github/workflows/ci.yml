@@ -79,5 +79,8 @@ jobs:
       - name: Rust Cargo Check
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Release package build (no publish)
         run: just release
