@@ -99,6 +99,20 @@ impl SignatureRegistry {
             .collect()
     }
 
+    /// Lists signatures available for the selected scan scope.
+    pub fn by_category_for_mode(
+        &self,
+        category: Category,
+        intensive_cleanup: bool,
+    ) -> Vec<&Signature> {
+        self.signatures
+            .values()
+            .filter(|signature| {
+                signature.category == category && (intensive_cleanup || !signature.intensive_only)
+            })
+            .collect()
+    }
+
     /// Lists signatures by risk tier.
     pub fn by_risk(&self, risk: RiskTier) -> Vec<&Signature> {
         self.signatures
@@ -114,5 +128,23 @@ impl SignatureRegistry {
             .iter()
             .filter_map(|p| SignatureLoader::expand_path(p))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SignatureRegistry;
+    use crate::models::Category;
+
+    #[test]
+    fn intensive_signatures_are_opt_in() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+
+        let standard = registry.by_category_for_mode(Category::System, false);
+        assert!(standard.iter().all(|signature| !signature.intensive_only));
+
+        let intensive = registry.by_category_for_mode(Category::System, true);
+        assert!(intensive.iter().any(|signature| signature.intensive_only));
+        assert!(intensive.len() > standard.len());
     }
 }

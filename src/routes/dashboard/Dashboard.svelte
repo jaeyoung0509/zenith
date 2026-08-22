@@ -9,6 +9,7 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import StorageView from './StorageView.svelte';
+  import StorageTools from './StorageTools.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
@@ -16,20 +17,22 @@
   import MemoryView from './MemoryView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
+  import LargeFilesView from './LargeFilesView.svelte';
+  import ApplicationsView from './ApplicationsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
+  import { tauriStartWindowDrag } from '../../lib/utils/tauri';
   import {
-    HardDrive,
-    Container,
-    Boxes,
     Activity,
+    Boxes,
+    ChartNoAxesCombined,
+    Container,
+    HardDrive,
     Moon,
     Settings,
     Shield,
-    ChartNoAxesCombined,
-    Disc3,
   } from 'lucide-svelte';
 
-  type Tab = DashboardTab | 'settings';
+  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -64,16 +67,33 @@
     currentTab = tab;
     selectedCategory = null;
   }
+
+  function handleWindowDrag(event: MouseEvent) {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('.no-drag')) return;
+    void tauriStartWindowDrag().catch(() => undefined);
+  }
 </script>
 
-<div class="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none">
+<div class="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none relative">
+  <!-- Window drag region for macOS Overlay title bar -->
+  <div
+    class="titlebar-drag-region absolute top-0 left-0 right-0 h-7 z-30"
+    aria-hidden="true"
+    onmousedown={handleWindowDrag}
+  ></div>
   <!-- Sidebar Navigation -->
   <aside
-    class="w-56 shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between p-3 pt-9"
+    class="w-56 shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between p-3 pt-9 relative"
   >
     <div class="space-y-6">
       <!-- Title & Branding -->
-      <div class="px-2.5 flex items-center space-x-2.5">
+      <div
+        class="px-2.5 flex items-center space-x-2.5 titlebar-drag-region"
+        role="presentation"
+        onmousedown={handleWindowDrag}
+      >
         <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
           <defs>
             <linearGradient id="dash-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
@@ -89,7 +109,7 @@
       </div>
 
       <!-- Navigation Links -->
-      <nav class="space-y-1">
+      <nav class="space-y-1 no-drag">
         {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'] as tabId}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
@@ -152,7 +172,17 @@
             onNavigateTab={(tab) => selectTab(tab)}
           />
         {:else if currentTab === 'storage'}
-          <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+          <div class="space-y-6">
+            <StorageTools
+              onOpenLargeFiles={() => selectTab('large-files')}
+              onOpenApplications={() => selectTab('applications')}
+            />
+            <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+          </div>
+        {:else if currentTab === 'large-files'}
+          <LargeFilesView onBack={() => selectTab('storage')} />
+        {:else if currentTab === 'applications'}
+          <ApplicationsView onBack={() => selectTab('storage')} />
         {:else if currentTab === 'docker'}
           <DockerView />
         {:else if currentTab === 'models'}

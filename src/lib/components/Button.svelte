@@ -5,6 +5,7 @@
     variant?: 'primary' | 'secondary' | 'outline' | 'destructive' | 'ghost';
     size?: 'sm' | 'md' | 'lg' | 'icon';
     disabled?: boolean;
+    id?: string;
     class?: string;
     onclick?: (e: MouseEvent) => void;
     ariaLabel?: string;
@@ -16,6 +17,7 @@
     variant = 'primary',
     size = 'md',
     disabled = false,
+    id,
     class: className = '',
     onclick,
     ariaLabel,
@@ -46,6 +48,7 @@
 
 <button
   type="button"
+  {id}
   {disabled}
   {onclick}
   aria-label={ariaLabel}

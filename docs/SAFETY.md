@@ -10,11 +10,15 @@ The frontend may provide:
 - a current `scan_id`;
 - selected opaque item IDs;
 - an opaque one-shot `plan_id` after reviewing a preview;
-- typed identities for dedicated adapters, such as a freshly scanned model ID.
+- typed identities for dedicated adapters, such as a freshly scanned model ID;
+- a Large Files request containing only supported root tokens and a size
+  threshold;
+- an app inventory ID or app-inspection ID returned by the backend.
 
-The frontend may not provide an executable path, cleanup strategy, risk tier,
-filesystem identity, or arbitrary PID. These values are resolved from current
-backend state.
+The frontend may not provide an executable deletion path, cleanup strategy,
+risk tier, filesystem identity, arbitrary PID, arbitrary Large Files root, or
+arbitrary app-leftover path. These values are resolved from current backend
+state.
 
 ## Generic filesystem cleanup
 
@@ -38,6 +42,129 @@ keychains, source-control metadata such as nested `.git`, and standard user
 content directories. Temporary cleanup never targets all of `/tmp`; candidates
 must match known tool prefixes and inactivity rules.
 
+## Intensive cleanup
+
+Intensive cleanup broadens discovery without weakening deletion authority. It
+is disabled by default, persisted as a validated setting, and only enables
+registered signatures marked `intensive_only`.
+
+Broad user cache and log signatures are constrained as follows:
+
+- only direct children of the registered root can become targets;
+- the root itself is never returned as a cleanup item;
+- symlink children and protected Apple/system prefixes are skipped;
+- the newest timestamp anywhere in the candidate tree must exceed the declared
+  minimum inactivity age;
+- incomplete traversal, permission failure, or recursion depth cutoff excludes
+  the candidate;
+- the planner accepts only a direct child of the resolved signature root; and
+- the executor repeats the full-tree inactivity check immediately before
+  deletion and aborts if anything became recent.
+
+The current thresholds are seven days for third-party children under
+`~/Library/Caches` and fourteen days for application-log groups under
+`~/Library/Logs`. Diagnostic and crash-report groups remain protected.
+Intensive mode does not scan user documents, preferences, credentials,
+databases, browser profiles, model weights, arbitrary system cache roots, or
+unknown `/tmp` children.
+
+## Large Files Inspector
+
+Large Files is intentionally not generic cleanup. User content is protected by
+the generic blacklist because automated cleanup must never decide that a
+Document, Desktop file, or Movie is disposable. Large Files instead means “show
+space usage and let the user explicitly choose.”
+
+The backend accepts only these root tokens:
+
+- `downloads`
+- `desktop`
+- `documents`
+- `movies`
+
+Each token is resolved against the current user home directory in Rust. The
+frontend cannot submit `/`, `~/Library`, an external volume, or another arbitrary
+path.
+
+Traversal and execution enforce these rules:
+
+1. Symlinked roots and candidates are rejected, symlinks are never followed,
+   and every path component is checked again before Trash.
+2. A traversal does not cross the device ID of the selected root.
+3. `.app`, Photos-library, Music-library, and iMovie-library packages are not
+   descended as ordinary files.
+4. Paths containing `.git` remain protected even though user-content roots are
+   intentionally allowed for this workflow.
+5. Results are bounded to the 10,000 largest matches. If more files match, the
+   result is marked as truncated and the UI discloses the limit.
+6. Selection is empty by default. There is no Quick Clean integration.
+7. A Trash plan resolves only opaque IDs from the current backend inventory.
+8. Immediately before Trash, the executor verifies the item still lives inside
+   an approved Large Files root, still has the reviewed parent, is still a file,
+   is not a symlink, and has the same filesystem identity.
+
+The specialized Large Files scope does not change `Blacklist` behavior for any
+other cleaner. In particular, `Documents`, `Desktop`, and `Movies` remain
+blacklisted for generic signature-based cleanup.
+
+## App Uninstaller
+
+App Uninstaller also uses its own backend-owned inventory and Trash plan. It does
+not treat app leftovers as generic cache signatures.
+
+Application inventory is limited to direct `.app` children of `/Applications`
+and `~/Applications`. System applications are outside the removable inventory.
+The selected app is resolved by opaque ID and its filesystem identity is stored
+in Rust. A running app is rejected before uninstall inspection, and Zenith
+cannot create an uninstall inspection for itself. The backend retains only the
+current inspection, so selecting another app invalidates the earlier review.
+
+Related-data discovery is precision-first. The current approved roots are:
+
+- `~/Library/Application Support`
+- `~/Library/Caches`
+- `~/Library/Logs`
+- `~/Library/Preferences`
+- `~/Library/Saved Application State`
+- `~/Library/Containers`
+- `~/Library/Group Containers`
+- `~/Library/Application Scripts`
+- `~/Library/HTTPStorages`
+- `~/Library/WebKit`
+
+Exact bundle-identifier matches are high confidence. Exact display-name matches
+are medium confidence and are not selected by default. Group Containers are
+classified as shared rather than high confidence unless stronger ownership
+evidence is available. Substring/fuzzy matches are rejected.
+
+The app bundle is a deliberate exception to the generic `/Applications`
+blacklist, but only inside this dedicated workflow. Immediately before Trash,
+the executor requires it to still be a direct child of `/Applications` or
+`~/Applications`, still end in `.app`, and still match the reviewed filesystem
+identity. It also checks for a newly running app and symlinks in every path
+component. Related Library items continue to pass the generic blacklist in
+addition to the approved Library-root check. If the app bundle cannot be moved,
+the executor skips all related data rather than performing a leftovers-only
+partial uninstall.
+
+App bundle identity intentionally includes directory metadata in addition to
+device and inode. Any observed bundle change after review is treated as stale
+and requires a fresh inspection rather than weakening the fail-closed check.
+
+## Native Trash semantics
+
+Large Files and App Uninstaller move reviewed targets to the macOS Trash through
+the dedicated Trash adapter. They do not call the generic tree deleter, `rm`, or
+`remove_dir_all`.
+
+Trash plans expire after five minutes and are removed from the backend plan map
+before execution, making them one-shot. Every target is revalidated immediately
+before its individual Trash operation. Partial failures are reported per item.
+
+Moving an item to Trash does not guarantee that disk space has already been
+freed. Product copy must say “Moved to Trash” and may describe the moved amount
+as potentially reclaimable after the Trash is emptied.
+
 ## Risk tiers
 
 - `Safe`: disposable cache or log data; may be selected by default.
@@ -60,16 +187,19 @@ confirmed force termination because unsaved work can be lost.
 ## Failure behavior
 
 Safety checks fail closed. A stale scan, missing signature, expired plan,
-identity mismatch, unsupported manual operation, inaccessible path, or failed
-external command produces an error and leaves the target untouched where
-possible. Cleanup events report per-target results instead of converting a
-partial failure into a success.
+identity mismatch, unsupported manual operation, inaccessible path, failed
+external command, stale Large Files inventory, or expired app inspection
+produces an error and leaves the target untouched where possible. Cleanup events
+report per-target results instead of converting a partial failure into a
+success.
 
 ## Regression tests
 
-Changes to a safety boundary require a temporary-fixture regression test. The
-suite covers forged selections, manual-strategy rejection, nested `.git` and
-declared exclusions, path traversal, protected roots, symlinks, TOCTOU identity
-changes, typed model deletion, and Docker total-versus-reclaimable accounting.
-Tests must never point at real user directories.
-
+Changes to a safety boundary require a temporary-fixture or pure-scope regression
+test. The suite covers forged selections, manual-strategy rejection, nested
+`.git` and declared exclusions, path traversal, protected roots, symlinks,
+TOCTOU identity changes, intensive-mode opt-in filtering, protected cache
+prefixes, typed model deletion, Docker total-versus-reclaimable accounting,
+Large Files user-content scope, forged Large Files IDs, application-root scope,
+and app-data scope. Tests must never point destructive operations at real user
+directories.

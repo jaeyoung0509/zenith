@@ -111,11 +111,24 @@ impl DirectoryScanner {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
+            if fs::symlink_metadata(&path)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(true)
+            {
+                continue;
+            }
             if !signature.include_prefixes.is_empty()
                 && !signature
                     .include_prefixes
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
+            {
+                continue;
+            }
+            if signature
+                .exclude_prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
             {
                 continue;
             }
@@ -279,4 +292,46 @@ pub struct TreeStats {
     pub file_count: usize,
     pub newest_mtime: Option<SystemTime>,
     pub complete: bool,
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::DirectoryScanner;
+    use crate::models::{Category, CleanStrategy, RiskTier, Signature};
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn aged_child_scan_excludes_protected_prefixes_and_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let eligible = root.path().join("third.party.cache");
+        let protected = root.path().join("com.apple.protected");
+        let link = root.path().join("linked-cache");
+        std::fs::create_dir(&eligible).unwrap();
+        std::fs::create_dir(&protected).unwrap();
+        std::fs::write(eligible.join("data.bin"), vec![1u8; 4096]).unwrap();
+        std::fs::write(protected.join("data.bin"), vec![1u8; 4096]).unwrap();
+        symlink(&eligible, &link).unwrap();
+
+        let signature = Signature {
+            id: "system.test.intensive".into(),
+            name: "Test intensive caches".into(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteDirectory,
+            paths: vec![root.path().to_string_lossy().into_owned()],
+            exclusions: vec![],
+            description: String::new(),
+            min_age_days: Some(0),
+            include_prefixes: vec![],
+            exclude_prefixes: vec!["com.apple.".into()],
+            intensive_only: true,
+        };
+
+        let items = DirectoryScanner::scan_signature(&signature);
+        let names = items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["third.party.cache"]);
+    }
 }

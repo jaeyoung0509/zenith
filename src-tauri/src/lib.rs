@@ -1,8 +1,10 @@
 pub mod ai_usage;
+pub mod applications;
 pub mod cleaner;
 pub mod commands;
 pub mod diagnostics;
 pub mod docker;
+pub mod large_files;
 pub mod metrics;
 pub mod models;
 pub mod models_inventory;
@@ -11,7 +13,9 @@ pub mod safety;
 pub mod scanner;
 pub mod settings_store;
 pub mod signatures;
+pub mod storage_commands;
 pub mod tooling;
+pub mod trash_manager;
 
 use commands::AppState;
 use power::KeepAwakeManager;
@@ -42,6 +46,17 @@ pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindo
         })?;
 
     WebviewWindowBuilder::from_config(app, &config)?.build()
+}
+
+pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let window = ensure_window(app, "main")?;
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    if let Some(quick) = app.get_webview_window("quick") {
+        let _ = quick.hide();
+    }
+    Ok(())
 }
 
 fn tray_anchor(window: &WebviewWindow, rect: Rect) -> PhysicalPosition<f64> {
@@ -124,12 +139,8 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "quick" {
-                    // Quick panel hides to stay responsive
                     api.prevent_close();
                     let _ = window.hide();
-                } else if window.label() == "main" {
-                    // Main dashboard is destroyed on close to release WKWebView memory back to the OS.
-                    // The tray keeps the application alive.
                 }
             }
         })
@@ -139,10 +150,11 @@ pub fn run() {
                 app.state::<AppState>()
                     .awake_manager
                     .set_rules(loaded.awake_rules.clone());
-                *app.state::<AppState>().settings.lock().unwrap() = loaded;
+                *app.state::<AppState>()
+                    .settings
+                    .lock()
+                    .expect("settings poisoned") = loaded;
             }
-            // Create exactly one macOS menu-bar icon. It is a monochrome
-            // template image so macOS can adapt it to light/dark menu bars.
             let open_dashboard =
                 MenuItem::with_id(app, "open_dashboard", "Open Zenith", true, None::<&str>)?;
             let toggle_quick = MenuItem::with_id(
@@ -165,10 +177,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open_dashboard" => {
-                        if let Ok(window) = ensure_window(app, "main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        let _ = show_main_window(app);
                     }
                     "toggle_quick" => {
                         if let Ok(window) = ensure_window(app, "quick") {
@@ -208,7 +217,6 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Optional background thread for Keep Awake watcher (~5s interval, only checks when rules exist)
             let watcher_ref = awake_manager.clone();
             std::thread::spawn(move || loop {
                 watcher_ref.wait_for_next_evaluation();
@@ -218,14 +226,22 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(specta_builder().invoke_handler())
-        .run(tauri::generate_context!())
-        .expect("error while running zenith application");
+        .build(tauri::generate_context!())
+        .expect("error while building zenith application")
+        .run(|app, event| match event {
+            tauri::RunEvent::Ready => {
+                let _ = show_main_window(app);
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                let _ = show_main_window(app);
+            }
+            _ => {}
+        });
 }
 
 pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
-        // Zenith's IPC u64 values are bounded well below JS MAX_SAFE_INTEGER.
-        // Revisit before introducing arbitrary external 64-bit identifiers/counters.
         .dangerously_cast_bigints_to_number()
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
@@ -256,6 +272,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::toggle_quick_panel,
             commands::get_diagnostics,
             commands::open_logs_folder,
+            storage_commands::start_large_file_scan,
+            storage_commands::cancel_large_file_scan,
+            storage_commands::prepare_large_file_trash,
+            storage_commands::get_installed_apps,
+            storage_commands::inspect_app_uninstall,
+            storage_commands::prepare_app_uninstall,
+            storage_commands::execute_trash_plan,
         ])
 }
 

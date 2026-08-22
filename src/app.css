@@ -65,9 +65,9 @@
   background: hsl(var(--muted-foreground) / 0.5);
 }
 
-/* Drag region for macOS titlebar overlay */
+/* Native dragging is started from the Svelte mouse handler via Tauri. */
 .titlebar-drag-region {
-  -webkit-app-region: drag;
+  cursor: default;
 }
 
 .no-drag {
@@ -153,4 +153,3 @@
     scroll-behavior: auto !important;
   }
 }
-

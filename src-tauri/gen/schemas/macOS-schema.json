@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the cancel_large_file_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-large-file-scan",
+          "markdownDescription": "Enables the cancel_large_file_scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the connect_openrouter_oauth command without any pre-configured scope.",
           "type": "string",
           "const": "allow-connect-openrouter-oauth",
@@ -205,6 +211,12 @@
           "type": "string",
           "const": "allow-execute-clean",
           "markdownDescription": "Enables the execute_clean command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the execute_trash_plan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-execute-trash-plan",
+          "markdownDescription": "Enables the execute_trash_plan command without any pre-configured scope."
         },
         {
           "description": "Enables the get_ai_usage command without any pre-configured scope.",
@@ -249,6 +261,12 @@
           "markdownDescription": "Enables the get_docker_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_installed_apps command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-installed-apps",
+          "markdownDescription": "Enables the get_installed_apps command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_last_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-last-scan",
@@ -273,6 +291,12 @@
           "markdownDescription": "Enables the get_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the inspect_app_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-inspect-app-uninstall",
+          "markdownDescription": "Enables the inspect_app_uninstall command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_dashboard_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-dashboard-window",
@@ -295,6 +319,18 @@
           "type": "string",
           "const": "allow-pick-keep-awake-application",
           "markdownDescription": "Enables the pick_keep_awake_application command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prepare_app_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-app-uninstall",
+          "markdownDescription": "Enables the prepare_app_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prepare_large_file_trash command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-large-file-trash",
+          "markdownDescription": "Enables the prepare_large_file_trash command without any pre-configured scope."
         },
         {
           "description": "Enables the prune_docker_target command without any pre-configured scope.",
@@ -327,6 +363,12 @@
           "markdownDescription": "Enables the set_manual_awake command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_large_file_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-large-file-scan",
+          "markdownDescription": "Enables the start_large_file_scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-scan",
@@ -343,6 +385,12 @@
           "type": "string",
           "const": "allow-toggle-quick-panel",
           "markdownDescription": "Enables the toggle_quick_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_large_file_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-large-file-scan",
+          "markdownDescription": "Denies the cancel_large_file_scan command without any pre-configured scope."
         },
         {
           "description": "Denies the connect_openrouter_oauth command without any pre-configured scope.",
@@ -373,6 +421,12 @@
           "type": "string",
           "const": "deny-execute-clean",
           "markdownDescription": "Denies the execute_clean command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the execute_trash_plan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-execute-trash-plan",
+          "markdownDescription": "Denies the execute_trash_plan command without any pre-configured scope."
         },
         {
           "description": "Denies the get_ai_usage command without any pre-configured scope.",
@@ -417,6 +471,12 @@
           "markdownDescription": "Denies the get_docker_status command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_installed_apps command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-installed-apps",
+          "markdownDescription": "Denies the get_installed_apps command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_last_scan command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-last-scan",
@@ -441,6 +501,12 @@
           "markdownDescription": "Denies the get_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the inspect_app_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-inspect-app-uninstall",
+          "markdownDescription": "Denies the inspect_app_uninstall command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_dashboard_window command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-dashboard-window",
@@ -463,6 +529,18 @@
           "type": "string",
           "const": "deny-pick-keep-awake-application",
           "markdownDescription": "Denies the pick_keep_awake_application command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the prepare_app_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-app-uninstall",
+          "markdownDescription": "Denies the prepare_app_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the prepare_large_file_trash command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-large-file-trash",
+          "markdownDescription": "Denies the prepare_large_file_trash command without any pre-configured scope."
         },
         {
           "description": "Denies the prune_docker_target command without any pre-configured scope.",
@@ -493,6 +571,12 @@
           "type": "string",
           "const": "deny-set-manual-awake",
           "markdownDescription": "Denies the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_large_file_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-large-file-scan",
+          "markdownDescription": "Denies the start_large_file_scan command without any pre-configured scope."
         },
         {
           "description": "Denies the start_scan command without any pre-configured scope.",

@@ -76,6 +76,8 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         description: "test".into(),
         min_age_days: Some(0),
         include_prefixes: vec!["codex-".into()],
+        exclude_prefixes: vec![],
+        intensive_only: false,
     };
 
     let items = DirectoryScanner::scan_signature(&signature);
@@ -109,6 +111,8 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         description: "test".into(),
         min_age_days: None,
         include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
     };
 
     let mut registry = SignatureRegistry::new();
@@ -122,14 +126,20 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
             .into_owned(),
     ));
 
-    let result = ScanEngine::scan(&registry, Some(&[Category::System]), &[], |_| {});
+    let result = ScanEngine::scan(&registry, Some(&[Category::System]), &[], false, |_| {});
     let items = &result.categories[0].items;
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].id, "large");
     assert_eq!(items[1].id, "small");
 
     let excluded = vec!["large".to_string()];
-    let filtered = ScanEngine::scan(&registry, Some(&[Category::System]), &excluded, |_| {});
+    let filtered = ScanEngine::scan(
+        &registry,
+        Some(&[Category::System]),
+        &excluded,
+        false,
+        |_| {},
+    );
     assert_eq!(filtered.categories[0].items.len(), 1);
     assert_eq!(filtered.categories[0].items[0].id, "small");
 }
@@ -229,6 +239,7 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
         id: "rule.ac".to_string(),
         app_name: "AC App".to_string(),
         executable_pattern: "non_existent_process_abc".to_string(),
+        requires_process_pattern: None,
         behavior: AwakeBehavior::PreventSystemSleep,
         power_condition: PowerCondition::AcPowerOnly,
         enabled: true,
@@ -238,6 +249,7 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
         id: "rule.always".to_string(),
         app_name: "Always App".to_string(),
         executable_pattern: "non_existent_process_def".to_string(),
+        requires_process_pattern: None,
         behavior: AwakeBehavior::KeepDisplayAwake,
         power_condition: PowerCondition::Always,
         enabled: true,

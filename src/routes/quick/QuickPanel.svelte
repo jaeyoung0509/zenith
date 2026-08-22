@@ -8,7 +8,12 @@
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
   import { isQuickPanelDismissShortcut, projectAiProviders } from '../../lib/utils/quickPanel';
-  import { isTauri, tauriHideCurrentWindow, tauriOpenDashboard } from '../../lib/utils/tauri';
+  import {
+    isTauri,
+    tauriHideCurrentWindow,
+    tauriOpenDashboard,
+    tauriStartWindowDrag,
+  } from '../../lib/utils/tauri';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
@@ -166,11 +171,22 @@
     }
     return provider.status_message || provider.auth_label || provider.name;
   }
+
+  function handleWindowDrag(event: MouseEvent) {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('.no-drag')) return;
+    void tauriStartWindowDrag().catch(() => undefined);
+  }
 </script>
 
-<div class="w-full h-full min-h-[480px] max-h-[520px] bg-background/95 backdrop-blur-xl border border-border/80 rounded-2xl flex flex-col justify-between p-4 select-none shadow-2xl text-foreground font-sans overflow-hidden">
-  <!-- Header -->
-  <div class="flex items-center justify-between pb-3 border-b border-border/60">
+<div class="w-full h-full min-h-[480px] max-h-[520px] bg-background/95 backdrop-blur-xl border border-border/80 rounded-2xl flex flex-col justify-between p-4 select-none shadow-2xl text-foreground font-sans overflow-hidden relative">
+  <!-- Header — draggable, buttons are no-drag -->
+  <div
+    class="flex items-center justify-between pb-3 border-b border-border/60 relative titlebar-drag-region"
+    role="presentation"
+    onmousedown={handleWindowDrag}
+  >
     <div class="flex items-center space-x-2">
       <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
         <defs>
@@ -185,7 +201,7 @@
       </svg>
       <span class="text-sm font-semibold tracking-tight">Zenith</span>
     </div>
-    <div class="flex items-center space-x-1">
+    <div class="flex items-center space-x-1 no-drag">
       {#if awakeState.is_active}
         <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-medium border border-amber-500/20">
           <span class="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse-soft"></span>

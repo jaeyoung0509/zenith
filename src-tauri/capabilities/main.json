@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-hide",
+    "core:window:allow-start-dragging",
     "allow-get-ai-usage",
     "allow-connect-openrouter-oauth",
     "allow-start-scan",
@@ -33,6 +34,13 @@
     "allow-toggle-quick-panel",
     "allow-get-app-version",
     "allow-get-diagnostics",
-    "allow-open-logs-folder"
+    "allow-open-logs-folder",
+    "allow-start-large-file-scan",
+    "allow-cancel-large-file-scan",
+    "allow-prepare-large-file-trash",
+    "allow-get-installed-apps",
+    "allow-inspect-app-uninstall",
+    "allow-prepare-app-uninstall",
+    "allow-execute-trash-plan"
   ]
 }

@@ -89,22 +89,34 @@ paths = [
     "~/.gemini/cache"
 ]
 exclusions = [
+    "~/.gemini/antigravity-cli/cache/onboarding.json",
+    "~/.gemini/antigravity-cli/cache/default_project_id.txt",
+    "onboarding.json",
+    "default_project_id.txt",
+    "~/.gemini/antigravity-cli/settings.json",
+    "~/.gemini/antigravity-cli/keybindings.json",
+    "~/.gemini/antigravity-cli/installation_id",
+    "~/.gemini/antigravity-cli/jetski_state.pbtxt",
+    "~/.gemini/oauth_creds.json",
+    "~/.gemini/google_accounts.json",
+    "~/.gemini/state.json",
+    "~/.gemini/mcp-oauth-tokens-v2.json",
     "~/.gemini/config.json",
-    "~/.gemini/credentials.json",
-    "~/.gemini/antigravity-cli/settings.json"
+    "~/.gemini/credentials.json"
 ]
 description = "Temporary session files and cached search/API tokens."
 
 [[signatures]]
 id = "ai.gemini.logs"
-name = "Gemini CLI Logs"
+name = "Gemini CLI & Antigravity Logs"
 category = "ai"
 risk = "safe"
 strategy = "delete_contents"
 paths = [
-    "~/.gemini/antigravity-cli/logs"
+    "~/.gemini/antigravity-cli/logs",
+    "~/.gemini/antigravity-cli/log"
 ]
-description = "Historical CLI operation logs."
+description = "Historical CLI operation and session logs."
 
 [[signatures]]
 id = "ai.codex.cache"

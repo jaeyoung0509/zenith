@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.1.5"
+version = "0.1.7"
 description = "Zenith - macOS AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
@@ -32,6 +32,8 @@ url = "2.5"
 specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
 regex = "1.10"
+plist = "1.7"
+trash = "5.2"
 
 [dev-dependencies]
 tempfile = "3.13"

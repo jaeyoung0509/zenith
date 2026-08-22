@@ -12,6 +12,7 @@ describe('serializeSettingsSnapshot', () => {
     clean_docker: true,
     clean_local_models: false,
     include_rebuild_caches: false,
+    intensive_cleanup: false,
     theme: 'dark',
     excluded_signatures: ['sig1', 'sig2'],
     quick_panel_sections: ['cleanup', 'storage', 'memory'],
@@ -121,6 +122,7 @@ describe('SettingsStore persistence and lifecycle', () => {
       clean_docker: true,
       clean_local_models: false,
       include_rebuild_caches: false,
+      intensive_cleanup: false,
       theme: 'system',
       excluded_signatures: [],
       quick_panel_sections: ['storage', 'cleanup'],
@@ -149,6 +151,11 @@ describe('SettingsStore persistence and lifecycle', () => {
 
     store.applyTheme('system');
     expect(root.classList.contains('dark')).toBe(true);
+  });
+
+  it('keeps intensive cleanup opt-in when loading legacy settings', async () => {
+    await store.load();
+    expect(store.settings.intensive_cleanup).toBe(false);
   });
 
   it('responds to system theme changes via matchMedia listener', () => {
@@ -319,6 +326,7 @@ describe('quick panel AI provider toggling and order preservation', () => {
       clean_docker: true,
       clean_local_models: false,
       include_rebuild_caches: false,
+      intensive_cleanup: false,
       theme: 'system',
       excluded_signatures: [],
       quick_panel_sections: ['storage', 'cleanup'],

@@ -34,34 +34,33 @@ class AwakeStore {
     const current = settingsStore.settings.awake_rules;
     const updated = current.map((r) =>
       r.id === ruleId ? { ...r, enabled: !r.enabled } : r
-    );
+    ) as typeof current;
     await settingsStore.save({ awake_rules: updated });
     await this.refresh();
   }
 
   async addRule(rule: AwakeRule) {
-    const updated = [...settingsStore.settings.awake_rules, rule];
+    const updated = [...settingsStore.settings.awake_rules, rule] as typeof settingsStore.settings.awake_rules;
     await settingsStore.save({ awake_rules: updated });
     await this.refresh();
   }
 
   async deleteRule(ruleId: string) {
     const current = settingsStore.settings.awake_rules;
-    const updated = current.filter((r) => r.id !== ruleId);
+    const updated = current.filter((r) => r.id !== ruleId) as typeof current;
     await settingsStore.save({ awake_rules: updated });
     await this.refresh();
   }
 
   async updateRule(rule: AwakeRule) {
     const current = settingsStore.settings.awake_rules;
-    const updated = current.map((r) => (r.id === rule.id ? rule : r));
+    const updated = current.map((r) => (r.id === rule.id ? rule : r)) as typeof current;
     await settingsStore.save({ awake_rules: updated });
     await this.refresh();
   }
 
   async setManual(durationSecs: number | null, behavior: AwakeBehavior = 'prevent_system_sleep') {
     this.isLoading = true;
-    this.error = null;
     try {
       await tauriSetManualAwake(durationSecs, behavior);
       await this.refresh();

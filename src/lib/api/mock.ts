@@ -230,6 +230,51 @@ export const mockApi = {
       }, 300);
 
       setTimeout(() => {
+        let intensiveCleanup = false;
+        if (typeof localStorage !== 'undefined') {
+          try {
+            const saved = JSON.parse(localStorage.getItem('zenith.settings') ?? '{}');
+            intensiveCleanup = saved.intensive_cleanup === true;
+          } catch {
+            intensiveCleanup = false;
+          }
+        }
+        const intensiveBytes = 1.4 * 1024 * 1024 * 1024;
+        const intensiveItem: ScanItem = {
+          id: 'system.intensive.user_app_caches.mock-app',
+          signature_id: 'system.intensive.user_app_caches',
+          name: 'Stale Third-Party Application Cache (Mock App)',
+          category: 'system',
+          risk: 'safe',
+          path: '~/Library/Caches/com.example.mock-app',
+          size: { logical: intensiveBytes, allocated: intensiveBytes },
+          file_count: 2400,
+          description: 'Third-party cache inactive for at least 7 days',
+          is_selected: true,
+          last_modified: Math.floor(Date.now() / 1000) - 8 * 86400,
+          exists: true,
+        };
+        const intensiveCategory: ScanResult['categories'][number] = {
+          category: 'system',
+          display_name: 'System',
+          items: [intensiveItem],
+          total_bytes: intensiveBytes,
+          safe_bytes: intensiveBytes,
+          rebuild_bytes: 0,
+          manual_bytes: 0,
+        };
+
+        if (intensiveCleanup) {
+          onEvent({ type: 'CategoryStarted', category: 'system' });
+          onEvent({ type: 'ItemFound', item: intensiveItem });
+          onEvent({
+            type: 'CategoryFinished',
+            category: 'system',
+            bytes: intensiveBytes,
+            item_count: 1,
+          });
+        }
+
         const result: ScanResult = {
           scan_id: scanId,
           started_at: Math.floor(Date.now() / 1000) - 1,
@@ -311,9 +356,10 @@ export const mockApi = {
               rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
               manual_bytes: 0,
             },
+            ...(intensiveCleanup ? [intensiveCategory] : []),
           ],
-          total_bytes: 8.3 * 1024 * 1024 * 1024,
-          safe_bytes: 6.3 * 1024 * 1024 * 1024,
+          total_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
+          safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
         };
@@ -624,6 +670,7 @@ export const mockApi = {
       clean_docker: true,
       clean_local_models: false,
       include_rebuild_caches: false,
+      intensive_cleanup: false,
       theme: 'system',
       excluded_signatures: [],
       quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],

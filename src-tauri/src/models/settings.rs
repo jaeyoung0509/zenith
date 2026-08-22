@@ -56,6 +56,7 @@ pub struct ZenithSettings {
     pub clean_docker: bool,
     pub clean_local_models: bool,
     pub include_rebuild_caches: bool,
+    pub intensive_cleanup: bool,
     pub theme: String,
     pub excluded_signatures: Vec<String>,
     pub awake_rules: Vec<AwakeRule>,
@@ -73,8 +74,83 @@ impl Default for ZenithSettings {
             clean_docker: true,
             clean_local_models: false,
             include_rebuild_caches: false,
+            intensive_cleanup: false,
             theme: "system".to_string(),
             excluded_signatures: Vec::new(),
+            awake_rules: vec![
+                AwakeRule {
+                    id: "rule.codex".to_string(),
+                    app_name: "Codex".to_string(),
+                    executable_pattern: "codex".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.claude".to_string(),
+                    app_name: "Claude Code / Claude Desktop".to_string(),
+                    executable_pattern: "claude".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.warp".to_string(),
+                    app_name: "Warp".to_string(),
+                    executable_pattern: "warp".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.opencode".to_string(),
+                    app_name: "Opencode".to_string(),
+                    executable_pattern: "opencode".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.omp".to_string(),
+                    app_name: "OMP (Opencode)".to_string(),
+                    executable_pattern: "omp".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.warp-codex".to_string(),
+                    app_name: "Warp + Codex/OMP (compound)".to_string(),
+                    executable_pattern: "warp".to_string(),
+                    requires_process_pattern: Some("codex|opencode|omp|claude".to_string()),
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.docker".to_string(),
+                    app_name: "Docker Desktop".to_string(),
+                    executable_pattern: "com.docker.backend".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+                AwakeRule {
+                    id: "rule.terminal".to_string(),
+                    app_name: "Terminal / iTerm2 / Ghostty".to_string(),
+                    executable_pattern: "Terminal|iTerm2|ghostty".to_string(),
+                    requires_process_pattern: None,
+                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+                    power_condition: crate::models::PowerCondition::AcPowerOnly,
+                    enabled: false,
+                },
+            ],
             quick_panel_sections: QuickPanelSection::DEFAULTS.to_vec(),
             quick_panel_ai_providers: vec![
                 "codex".to_string(),
@@ -84,40 +160,6 @@ impl Default for ZenithSettings {
                 "antigravity".to_string(),
             ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
-            awake_rules: vec![
-                AwakeRule {
-                    id: "rule.codex".to_string(),
-                    app_name: "Codex".to_string(),
-                    executable_pattern: "codex".to_string(),
-                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
-                    power_condition: crate::models::PowerCondition::AcPowerOnly,
-                    enabled: false,
-                },
-                AwakeRule {
-                    id: "rule.claude".to_string(),
-                    app_name: "Claude Code / Claude Desktop".to_string(),
-                    executable_pattern: "claude".to_string(),
-                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
-                    power_condition: crate::models::PowerCondition::AcPowerOnly,
-                    enabled: false,
-                },
-                AwakeRule {
-                    id: "rule.docker".to_string(),
-                    app_name: "Docker Desktop".to_string(),
-                    executable_pattern: "com.docker.backend".to_string(),
-                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
-                    power_condition: crate::models::PowerCondition::AcPowerOnly,
-                    enabled: false,
-                },
-                AwakeRule {
-                    id: "rule.terminal".to_string(),
-                    app_name: "Terminal / iTerm2 / Ghostty".to_string(),
-                    executable_pattern: "Terminal|iTerm2|ghostty".to_string(),
-                    behavior: crate::models::AwakeBehavior::PreventSystemSleep,
-                    power_condition: crate::models::PowerCondition::AcPowerOnly,
-                    enabled: false,
-                },
-            ],
         }
     }
 }
@@ -212,5 +254,30 @@ mod tests {
         assert_eq!(parsed.dashboard_tabs.len(), 6);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
+        assert!(!parsed.intensive_cleanup);
+    }
+
+    #[test]
+    fn sanitize_preserves_default_awake_rules_and_restores_empty_tabs() {
+        let defaults = ZenithSettings::default();
+        let sanitized = defaults.clone().sanitize();
+        assert_eq!(sanitized.awake_rules.len(), 8);
+        assert!(sanitized
+            .awake_rules
+            .iter()
+            .any(|r| r.id == "rule.warp-codex" && r.requires_process_pattern.is_some()));
+    }
+
+    #[test]
+    fn sanitize_restores_empty_tabs_and_sections_to_defaults() {
+        let mut settings = ZenithSettings::default();
+        settings.dashboard_tabs.clear();
+        settings.quick_panel_sections.clear();
+        let sanitized = settings.sanitize();
+        assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
+        assert_eq!(
+            sanitized.quick_panel_sections,
+            vec![QuickPanelSection::Storage]
+        );
     }
 }

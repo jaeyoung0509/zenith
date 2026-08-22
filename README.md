@@ -17,6 +17,9 @@ remain outside the cleanup boundary.
   OpenCode, Cargo, Go, Node.js, Python, Xcode, Docker, and related tools.
 - Explicit `Safe`, `Rebuild`, and `Manual` cleanup tiers. Only safe items are
   selected automatically.
+- Optional Intensive cleanup for stale third-party application caches and logs.
+  It is disabled by default and keeps Apple/system namespaces, recent data,
+  settings, credentials, and user files outside the cleanup boundary.
 - Disk and local-model views with size, location, and modification details.
 - Memory pressure, compression, swap, and per-application usage. Installed user
   apps can be quit normally or force quit after confirmation; system processes,
@@ -70,6 +73,9 @@ be executed.
   identity metadata to reduce time-of-check/time-of-use risk.
 - Temporary-file cleanup is restricted to known tool prefixes and inactivity
   thresholds; Zenith never scans or deletes all of `/tmp`.
+- Intensive cleanup considers only stale direct children of approved user cache
+  and log roots. Symlinks and protected Apple/system namespaces are skipped,
+  and inactivity is checked again immediately before deletion.
 - Local model weights and rebuildable caches require explicit selection.
 
 Signature definitions live in [`signatures/`](signatures). The safety tests are
@@ -155,6 +161,25 @@ exclusions = [
   "~/.mytool/credentials.json",
 ]
 description = "Compiled artifacts and temporary indices."
+```
+
+Signatures used only by the opt-in broader scan must declare
+`intensive_only = true`. Broad roots must also declare a minimum age and prefix
+protections so the scanner emits reviewable direct children instead of the root
+itself:
+
+```toml
+[[signatures]]
+id = "system.intensive.example_cache"
+name = "Stale Example Cache"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+paths = ["~/Library/Caches"]
+min_age_days = 7
+exclude_prefixes = ["com.apple."]
+intensive_only = true
+description = "Third-party cache trees inactive for at least seven days."
 ```
 
 See [`AGENTS.md`](AGENTS.md) for implementation constraints and
