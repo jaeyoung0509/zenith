@@ -46,27 +46,36 @@ pub async fn get_ai_usage(
 ) -> Result<AiUsageSnapshot, String> {
     const CACHE_TTL_SECS: u64 = 60;
     if !force.unwrap_or(false) {
-        if let Some(snapshot) = state.ai_usage_cache.lock().unwrap().as_ref() {
+        if let Some(snapshot) = state
+            .ai_usage_cache
+            .lock()
+            .expect("ai_usage_cache poisoned")
+            .as_ref()
+        {
             if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
                 return Ok(snapshot.clone());
             }
         }
     }
 
-    let openrouter_key = state.openrouter_key.lock().unwrap().clone();
+    let openrouter_key = state
+        .openrouter_key
+        .lock()
+        .expect("openrouter_key poisoned")
+        .clone();
     let cache = state.ai_usage_cache.clone();
     let refresh_lock = state.ai_usage_refresh_lock.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _refresh_guard = refresh_lock.lock().unwrap();
+        let _refresh_guard = refresh_lock.lock().expect("ai_usage_refresh_lock poisoned");
         if !force.unwrap_or(false) {
-            if let Some(snapshot) = cache.lock().unwrap().as_ref() {
+            if let Some(snapshot) = cache.lock().expect("ai_usage_cache poisoned").as_ref() {
                 if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
                     return snapshot.clone();
                 }
             }
         }
         let snapshot = AiUsageCollector::collect(openrouter_key);
-        *cache.lock().unwrap() = Some(snapshot.clone());
+        *cache.lock().expect("ai_usage_cache poisoned") = Some(snapshot.clone());
         snapshot
     })
     .await
@@ -80,8 +89,11 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
     let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
         .await
         .map_err(|error| error.to_string())??;
-    *openrouter_key.lock().unwrap() = Some(key);
-    *state.ai_usage_cache.lock().unwrap() = None;
+    *openrouter_key.lock().expect("openrouter_key poisoned") = Some(key);
+    *state
+        .ai_usage_cache
+        .lock()
+        .expect("ai_usage_cache poisoned") = None;
     Ok(())
 }
 
@@ -96,7 +108,7 @@ pub async fn start_scan(
     let last_scan_store = state.last_scan.clone();
     let operation_lock = state.operation_lock.clone();
     let (excluded_signatures, intensive_cleanup) = {
-        let settings = state.settings.lock().unwrap();
+        let settings = state.settings.lock().expect("settings poisoned");
         (
             settings.excluded_signatures.clone(),
             settings.intensive_cleanup,
@@ -104,7 +116,7 @@ pub async fn start_scan(
     };
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _operation_guard = operation_lock.lock().unwrap();
+        let _operation_guard = operation_lock.lock().expect("operation_lock poisoned");
         let cat_ref = categories.as_deref();
         let result = ScanEngine::scan(
             &registry,
@@ -115,7 +127,7 @@ pub async fn start_scan(
                 let _ = on_event.send(event);
             },
         );
-        *last_scan_store.lock().unwrap() = Some(result.clone());
+        *last_scan_store.lock().expect("last_scan poisoned") = Some(result.clone());
         result
     })
     .await
@@ -127,7 +139,7 @@ pub async fn start_scan(
 #[tauri::command]
 #[specta::specta]
 pub fn get_last_scan(state: State<'_, AppState>) -> Option<ScanResult> {
-    state.last_scan.lock().unwrap().clone()
+    state.last_scan.lock().expect("mutex poisoned").clone()
 }
 
 #[tauri::command]
@@ -141,7 +153,7 @@ pub fn create_delete_plan(
     let scan = state
         .last_scan
         .lock()
-        .unwrap()
+        .expect("last_scan poisoned")
         .clone()
         .filter(|scan| scan.scan_id == scan_id)
         .ok_or_else(|| "The scan is no longer current. Scan again before cleaning.".to_string())?;
@@ -151,7 +163,7 @@ pub fn create_delete_plan(
             .map_err(|e| e.to_string())?;
     let preview = plan.preview(PLAN_TTL_SECS);
     let now = unix_timestamp();
-    let mut plans = state.delete_plans.lock().unwrap();
+    let mut plans = state.delete_plans.lock().expect("delete_plans poisoned");
     plans.retain(|_, stored| now.saturating_sub(stored.created_at) < PLAN_TTL_SECS);
     if plans.len() >= 64 {
         if let Some(oldest_id) = plans
@@ -178,10 +190,10 @@ pub async fn execute_clean(
     let plans = state.delete_plans.clone();
     let last_scan = state.last_scan.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
-        let _operation_guard = operation_lock.lock().unwrap();
+        let _operation_guard = operation_lock.lock().expect("operation_lock poisoned");
         let plan = plans
             .lock()
-            .unwrap()
+            .expect("delete_plans poisoned")
             .remove(&plan_id)
             .ok_or_else(|| "Delete plan not found or already used".to_string())?;
         if unix_timestamp().saturating_sub(plan.created_at) >= PLAN_TTL_SECS {
@@ -189,7 +201,7 @@ pub async fn execute_clean(
         }
         let scan_is_current = last_scan
             .lock()
-            .unwrap()
+            .expect("last_scan poisoned")
             .as_ref()
             .is_some_and(|scan| scan.scan_id == plan.scan_id);
         if !scan_is_current {
@@ -314,7 +326,7 @@ pub fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String> {
-    let s = state.settings.lock().unwrap();
+    let s = state.settings.lock().expect("settings poisoned");
     Ok(s.clone())
 }
 
@@ -332,7 +344,7 @@ pub fn save_settings(
         .map_err(|error| error.to_string())?;
     settings_store::save(&config_dir, &settings)?;
     state.awake_manager.set_rules(settings.awake_rules.clone());
-    let mut s = state.settings.lock().unwrap();
+    let mut s = state.settings.lock().expect("settings poisoned");
     *s = settings;
     Ok(())
 }
@@ -393,7 +405,7 @@ pub fn get_diagnostics(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<DiagnosticsSnapshot, String> {
-    let settings = state.settings.lock().unwrap().clone();
+    let settings = state.settings.lock().expect("settings poisoned").clone();
     let config_dir = app_handle
         .path()
         .app_config_dir()

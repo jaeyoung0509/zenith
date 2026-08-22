@@ -35,7 +35,7 @@ impl MemorySampler {
             swap_used_bytes,
             top_processes,
         ) = {
-            let mut guard = self.system.lock().unwrap();
+            let mut guard = self.system.lock().expect("system poisoned");
             let sys = guard.get_or_insert_with(System::new_all);
             sys.refresh_memory();
 
@@ -145,7 +145,10 @@ impl MemorySampler {
         let now = Instant::now();
 
         {
-            let cache = self.compressed_cache.lock().unwrap();
+            let cache = self
+                .compressed_cache
+                .lock()
+                .expect("compressed_cache poisoned");
             if let Some((cached_at, value)) = *cache {
                 if now.duration_since(cached_at) < CACHE_TTL {
                     return value;
@@ -155,7 +158,10 @@ impl MemorySampler {
 
         // Run subprocess outside the mutex
         let value = MemoryInspector::get_compressed_memory_macos().unwrap_or(0);
-        *self.compressed_cache.lock().unwrap() = Some((now, value));
+        *self
+            .compressed_cache
+            .lock()
+            .expect("compressed_cache poisoned") = Some((now, value));
         value
     }
 }
@@ -394,11 +400,11 @@ mod tests {
     fn memory_sampler_initializes_system_lazily() {
         let sampler = MemorySampler::new();
         // Before sampling, the inner System must be None
-        assert!(sampler.system.lock().unwrap().is_none());
+        assert!(sampler.system.lock().expect("mutex poisoned").is_none());
 
         // After sampling, the inner System is populated
         let metrics = sampler.sample();
-        assert!(sampler.system.lock().unwrap().is_some());
+        assert!(sampler.system.lock().expect("mutex poisoned").is_some());
         assert!(metrics.total_bytes > 0);
     }
 }

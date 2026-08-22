@@ -491,4 +491,58 @@ mod tests {
         assert_eq!(result.skipped_count, 2);
         assert!(result.items[1].message.contains("app bundle was not moved"));
     }
+
+    #[test]
+    fn trash_plan_ttl_boundary_and_expiry() {
+        let now = unix_timestamp();
+        let valid = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: now - (PLAN_TTL_SECS - 1),
+            inventory_id: "test".to_string(),
+            targets: vec![],
+        };
+        let expired = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: now - (PLAN_TTL_SECS + 1),
+            inventory_id: "test".to_string(),
+            targets: vec![],
+        };
+        let at_boundary = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: now - PLAN_TTL_SECS,
+            inventory_id: "test".to_string(),
+            targets: vec![],
+        };
+        assert!(!valid.is_expired());
+        assert!(expired.is_expired());
+        // At exactly TTL should be considered expired (fail-closed, >=)
+        assert!(at_boundary.is_expired());
+    }
+
+    #[test]
+    fn store_plan_caps_at_64_and_evicts_oldest() {
+        use crate::storage_commands::{
+            clear_trash_plans_for_test, store_plan, trash_plans_len_for_test, TRASH_PLANS,
+        };
+        clear_trash_plans_for_test();
+        let now = unix_timestamp();
+        for i in 0..65 {
+            let plan = TrashPlan {
+                id: Uuid::new_v4(),
+                created_at: now + i,
+                inventory_id: format!("inv-{i}"),
+                targets: vec![],
+            };
+            store_plan(plan);
+        }
+        assert_eq!(trash_plans_len_for_test(), 64);
+        let plans = TRASH_PLANS.lock().expect("TRASH_PLANS poisoned");
+        assert!(
+            !plans.values().any(|p| p.inventory_id == "inv-0"),
+            "oldest plan should have been evicted"
+        );
+        assert!(plans.values().any(|p| p.inventory_id == "inv-64"));
+        drop(plans);
+        clear_trash_plans_for_test();
+    }
 }

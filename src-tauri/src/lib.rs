@@ -139,7 +139,10 @@ pub fn run() {
                 app.state::<AppState>()
                     .awake_manager
                     .set_rules(loaded.awake_rules.clone());
-                *app.state::<AppState>().settings.lock().unwrap() = loaded;
+                *app.state::<AppState>()
+                    .settings
+                    .lock()
+                    .expect("settings poisoned") = loaded;
             }
             let open_dashboard =
                 MenuItem::with_id(app, "open_dashboard", "Open Zenith", true, None::<&str>)?;

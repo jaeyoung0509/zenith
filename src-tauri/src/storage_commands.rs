@@ -18,12 +18,22 @@ static LARGE_FILE_CANCEL: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
 static APP_INVENTORY: LazyLock<Mutex<Option<AppInventory>>> = LazyLock::new(|| Mutex::new(None));
 static APP_INSPECTION: LazyLock<Mutex<Option<AppInspectionRecord>>> =
     LazyLock::new(|| Mutex::new(None));
-static TRASH_PLANS: LazyLock<Mutex<HashMap<uuid::Uuid, TrashPlan>>> =
+pub(crate) static TRASH_PLANS: LazyLock<Mutex<HashMap<uuid::Uuid, TrashPlan>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static STORAGE_OPERATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
 const PLAN_TTL_SECS: u64 = 5 * 60;
+
+#[cfg(test)]
+pub(crate) fn clear_trash_plans_for_test() {
+    TRASH_PLANS.lock().expect("TRASH_PLANS poisoned").clear();
+}
+
+#[cfg(test)]
+pub(crate) fn trash_plans_len_for_test() -> usize {
+    TRASH_PLANS.lock().expect("TRASH_PLANS poisoned").len()
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -34,13 +44,15 @@ pub async fn start_large_file_scan(
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_worker = cancel.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = STORAGE_OPERATION_LOCK.lock().unwrap();
+        let _guard = STORAGE_OPERATION_LOCK
+            .lock()
+            .expect("STORAGE_OPERATION_LOCK poisoned");
         let mut emitted_result: Option<LargeFileScanResult> = None;
         let inventory = LargeFileScanner::scan(&request, cancel_for_worker, |event| {
             if let LargeFileScanEvent::Started { scan_id } = &event {
                 LARGE_FILE_CANCEL
                     .lock()
-                    .unwrap()
+                    .expect("LARGE_FILE_CANCEL poisoned")
                     .insert(scan_id.clone(), cancel.clone());
             }
             if let LargeFileScanEvent::Finished { result } = &event {
@@ -48,7 +60,10 @@ pub async fn start_large_file_scan(
             }
             let _ = on_event.send(event);
         })?;
-        LARGE_FILE_CANCEL.lock().unwrap().remove(&inventory.scan_id);
+        LARGE_FILE_CANCEL
+            .lock()
+            .expect("LARGE_FILE_CANCEL poisoned")
+            .remove(&inventory.scan_id);
         let result = emitted_result.unwrap_or_else(|| {
             let mut items = inventory
                 .records
@@ -71,7 +86,9 @@ pub async fn start_large_file_scan(
                 truncated: inventory.truncated,
             }
         });
-        *LARGE_FILE_INVENTORY.lock().unwrap() = Some(inventory);
+        *LARGE_FILE_INVENTORY
+            .lock()
+            .expect("LARGE_FILE_INVENTORY poisoned") = Some(inventory);
         Ok::<_, String>(result)
     })
     .await
@@ -84,7 +101,7 @@ pub async fn start_large_file_scan(
 pub fn cancel_large_file_scan(scan_id: String) -> Result<(), String> {
     let cancel = LARGE_FILE_CANCEL
         .lock()
-        .unwrap()
+        .expect("LARGE_FILE_CANCEL poisoned")
         .get(&scan_id)
         .cloned()
         .ok_or_else(|| "Large-file scan is no longer running".to_string())?;
@@ -100,7 +117,7 @@ pub fn prepare_large_file_trash(
 ) -> Result<TrashPlanPreview, String> {
     let inventory = LARGE_FILE_INVENTORY
         .lock()
-        .unwrap()
+        .expect("LARGE_FILE_INVENTORY poisoned")
         .clone()
         .filter(|inventory| inventory.scan_id == scan_id)
         .filter(|inventory| {
@@ -117,7 +134,9 @@ pub fn prepare_large_file_trash(
 #[specta::specta]
 pub async fn get_installed_apps() -> Result<Vec<InstalledApp>, String> {
     let inventory = tauri::async_runtime::spawn_blocking(|| {
-        let _guard = STORAGE_OPERATION_LOCK.lock().unwrap();
+        let _guard = STORAGE_OPERATION_LOCK
+            .lock()
+            .expect("STORAGE_OPERATION_LOCK poisoned");
         ApplicationScanner::scan()
     })
     .await
@@ -132,7 +151,7 @@ pub async fn get_installed_apps() -> Result<Vec<InstalledApp>, String> {
             .to_ascii_lowercase()
             .cmp(&right.name.to_ascii_lowercase())
     });
-    *APP_INVENTORY.lock().unwrap() = Some(inventory);
+    *APP_INVENTORY.lock().expect("APP_INVENTORY poisoned") = Some(inventory);
     Ok(apps)
 }
 
@@ -141,20 +160,22 @@ pub async fn get_installed_apps() -> Result<Vec<InstalledApp>, String> {
 pub async fn inspect_app_uninstall(app_id: String) -> Result<AppUninstallInspection, String> {
     let inventory = APP_INVENTORY
         .lock()
-        .unwrap()
+        .expect("APP_INVENTORY poisoned")
         .clone()
         .filter(|inventory| {
             unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS
         })
         .ok_or_else(|| "Application inventory expired. Refresh applications.".to_string())?;
     let inspection = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = STORAGE_OPERATION_LOCK.lock().unwrap();
+        let _guard = STORAGE_OPERATION_LOCK
+            .lock()
+            .expect("STORAGE_OPERATION_LOCK poisoned");
         ApplicationScanner::inspect(&inventory, &app_id)
     })
     .await
     .map_err(|_| "App inspection worker panicked".to_string())??;
     let result = inspection.inspection.clone();
-    *APP_INSPECTION.lock().unwrap() = Some(inspection);
+    *APP_INSPECTION.lock().expect("APP_INSPECTION poisoned") = Some(inspection);
     Ok(result)
 }
 
@@ -166,7 +187,7 @@ pub fn prepare_app_uninstall(
 ) -> Result<TrashPlanPreview, String> {
     let inspection = APP_INSPECTION
         .lock()
-        .unwrap()
+        .expect("APP_INSPECTION poisoned")
         .clone()
         .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
         .filter(|inspection| {
@@ -184,23 +205,25 @@ pub fn prepare_app_uninstall(
 pub async fn execute_trash_plan(plan_id: uuid::Uuid) -> Result<TrashResult, String> {
     let plan = TRASH_PLANS
         .lock()
-        .unwrap()
+        .expect("TRASH_PLANS poisoned")
         .remove(&plan_id)
         .ok_or_else(|| "Trash plan not found or already used".to_string())?;
     if plan.is_expired() {
         return Err("Trash plan expired. Review the items again.".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = STORAGE_OPERATION_LOCK.lock().unwrap();
+        let _guard = STORAGE_OPERATION_LOCK
+            .lock()
+            .expect("STORAGE_OPERATION_LOCK poisoned");
         TrashExecutor::execute(plan)
     })
     .await
     .map_err(|_| "Trash execution worker panicked".to_string())
 }
 
-fn store_plan(plan: TrashPlan) {
+pub(crate) fn store_plan(plan: TrashPlan) {
     let now = unix_timestamp();
-    let mut plans = TRASH_PLANS.lock().unwrap();
+    let mut plans = TRASH_PLANS.lock().expect("TRASH_PLANS poisoned");
     plans.retain(|_, plan| now.saturating_sub(plan.created_at) < PLAN_TTL_SECS);
     if plans.len() >= 64 {
         if let Some(oldest) = plans
