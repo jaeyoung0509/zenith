@@ -229,6 +229,9 @@
             <StorageTools
               onOpenLargeFiles={() => selectTab('large-files')}
               onOpenApplications={() => selectTab('applications')}
+              onScanStorage={() => scanStore.runScan()}
+              isScanning={scanStore.isScanning}
+              isCleaning={scanStore.isCleaning}
             />
             <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
           </div>

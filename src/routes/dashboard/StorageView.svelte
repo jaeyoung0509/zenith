@@ -155,17 +155,6 @@
     <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
       <div class="flex flex-wrap items-center gap-1.5">
         <Button
-          variant="outline"
-          size="sm"
-          disabled={scanStore.isScanning || scanStore.isCleaning}
-          onclick={() => scanStore.runScan()}
-          class="gap-1.5 px-2.5"
-        >
-          <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
-          <span>{scanStore.isScanning ? 'Scanning...' : 'Scan Storage'}</span>
-        </Button>
-
-        <Button
           variant="ghost"
           size="sm"
           disabled={scanStore.isCleaning}

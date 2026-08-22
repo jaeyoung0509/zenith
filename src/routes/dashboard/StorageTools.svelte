@@ -1,20 +1,44 @@
 <script lang="ts">
-  import { AppWindow, ChevronRight, FileSearch } from 'lucide-svelte';
+  import Button from '../../lib/components/Button.svelte';
+  import { AppWindow, ChevronRight, FileSearch, RotateCw } from 'lucide-svelte';
 
   interface Props {
     onOpenLargeFiles: () => void;
     onOpenApplications: () => void;
+    onScanStorage?: () => void;
+    isScanning?: boolean;
+    isCleaning?: boolean;
   }
 
-  let { onOpenLargeFiles, onOpenApplications }: Props = $props();
+  let {
+    onOpenLargeFiles,
+    onOpenApplications,
+    onScanStorage,
+    isScanning = false,
+    isCleaning = false,
+  }: Props = $props();
 </script>
 
 <div class="space-y-3">
-  <div>
-    <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Tools</h2>
-    <p class="text-[11px] text-muted-foreground mt-0.5">
-      User-reviewed workflows stay separate from automatic cache cleanup.
-    </p>
+  <div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+      <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Tools</h2>
+      <p class="text-[11px] text-muted-foreground mt-0.5">
+        User-reviewed workflows stay separate from automatic cache cleanup.
+      </p>
+    </div>
+    {#if onScanStorage}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={isScanning || isCleaning}
+        onclick={onScanStorage}
+        class="shrink-0 gap-1.5"
+      >
+        <RotateCw size={13} class={isScanning ? 'animate-gentle-spin' : ''} />
+        <span>{isScanning ? 'Scanning...' : 'Scan Storage'}</span>
+      </Button>
+    {/if}
   </div>
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
