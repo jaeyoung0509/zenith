@@ -1,6 +1,4 @@
 <script lang="ts">
-  import Button from '../../lib/components/Button.svelte';
-  import Card from '../../lib/components/Card.svelte';
   import { AppWindow, ChevronRight, FileSearch } from 'lucide-svelte';
 
   interface Props {
@@ -20,38 +18,48 @@
   </div>
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-    <Card class="p-4 bg-card/60 border-border/70">
-      <div class="flex items-center gap-3">
-        <div class="h-9 w-9 rounded-lg bg-secondary/70 border border-border/60 flex items-center justify-center shrink-0">
+    <button
+      type="button"
+      onclick={onOpenLargeFiles}
+      aria-label="Open Large Files"
+      class="group w-full rounded-xl border border-border/70 bg-card/60 p-4 text-left text-card-foreground shadow-sm backdrop-blur-sm transition-colors hover:border-border hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <span class="flex items-center gap-3">
+        <span class="h-9 w-9 rounded-lg bg-secondary/70 border border-border/60 flex items-center justify-center shrink-0">
           <FileSearch size={17} class="text-muted-foreground" />
-        </div>
-        <div class="min-w-0 flex-1">
-          <div class="text-xs font-semibold">Large Files</div>
-          <p class="text-[10px] text-muted-foreground mt-0.5">
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-xs font-semibold">Large Files</span>
+          <span class="block text-[10px] text-muted-foreground mt-0.5">
             Find files taking significant disk space
-          </p>
-        </div>
-        <Button variant="ghost" size="icon" onclick={onOpenLargeFiles} ariaLabel="Open Large Files">
+          </span>
+        </span>
+        <span aria-hidden="true" class="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5">
           <ChevronRight size={15} />
-        </Button>
-      </div>
-    </Card>
+        </span>
+      </span>
+    </button>
 
-    <Card class="p-4 bg-card/60 border-border/70">
-      <div class="flex items-center gap-3">
-        <div class="h-9 w-9 rounded-lg bg-secondary/70 border border-border/60 flex items-center justify-center shrink-0">
+    <button
+      type="button"
+      onclick={onOpenApplications}
+      aria-label="Open Applications"
+      class="group w-full rounded-xl border border-border/70 bg-card/60 p-4 text-left text-card-foreground shadow-sm backdrop-blur-sm transition-colors hover:border-border hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <span class="flex items-center gap-3">
+        <span class="h-9 w-9 rounded-lg bg-secondary/70 border border-border/60 flex items-center justify-center shrink-0">
           <AppWindow size={17} class="text-muted-foreground" />
-        </div>
-        <div class="min-w-0 flex-1">
-          <div class="text-xs font-semibold">Applications</div>
-          <p class="text-[10px] text-muted-foreground mt-0.5">
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-xs font-semibold">Applications</span>
+          <span class="block text-[10px] text-muted-foreground mt-0.5">
             Remove apps and review related files
-          </p>
-        </div>
-        <Button variant="ghost" size="icon" onclick={onOpenApplications} ariaLabel="Open Applications">
+          </span>
+        </span>
+        <span aria-hidden="true" class="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5">
           <ChevronRight size={15} />
-        </Button>
-      </div>
-    </Card>
+        </span>
+      </span>
+    </button>
   </div>
 </div>

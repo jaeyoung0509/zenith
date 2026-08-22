@@ -257,8 +257,8 @@
     </Card>
   {/if}
 
-  <div class="grid grid-cols-1 xl:grid-cols-[minmax(300px,0.85fr)_minmax(440px,1.35fr)] gap-4 items-start">
-    <Card class="p-4 space-y-3 xl:sticky xl:top-0">
+  <div class="grid grid-cols-1 md:grid-cols-[minmax(220px,1fr)_minmax(0,1.1fr)] gap-4 items-start">
+    <Card class="p-4 space-y-3 md:flex md:max-h-[calc(100vh-5rem)] md:min-h-0 md:flex-col md:overflow-hidden md:sticky md:top-0">
       <div class="flex items-center justify-between gap-2">
         <div>
           <h2 class="text-sm font-semibold">Installed apps</h2>
@@ -279,7 +279,7 @@
         />
       </div>
 
-      <div class="space-y-1 max-h-[calc(100vh-245px)] overflow-y-auto pr-1">
+      <div class="space-y-1 max-h-[calc(100vh-245px)] overflow-y-auto pr-1 md:min-h-0 md:max-h-none md:flex-1">
         {#if isLoading}
           <div class="py-10 text-center text-xs text-muted-foreground">Loading applications…</div>
         {:else if filteredApps.length === 0}
@@ -316,11 +316,11 @@
       </div>
     </Card>
 
-    <div class="space-y-4">
+    <div class="space-y-4 min-w-0 md:max-h-[calc(100vh-5rem)] md:overflow-y-auto md:pr-1">
       {#if inspection}
         <Card class="p-5 space-y-4">
           <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-            <div>
+            <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
                 <h2 class="text-base font-semibold">{inspection.app.name}</h2>
                 {#if inspection.app.version}
@@ -360,6 +360,63 @@
               {#if inspection.incomplete && inspection.warnings.length === 0}
                 <p>Some protected or unreadable locations could not be inspected.</p>
               {/if}
+            </div>
+          {/if}
+
+          {#if plan}
+            <div class={`rounded-xl border p-4 space-y-3 ${isExpired ? 'border-red-500/40 bg-red-500/5' : isExpiringSoon ? 'border-amber-500/50 bg-amber-500/10' : 'border-amber-500/30 bg-amber-500/5'}`}>
+              <div class="flex flex-col gap-3">
+                <div>
+                  <div class="text-sm font-semibold flex items-center gap-2">
+                    Uninstall review ready
+                    <span class={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${isExpired ? 'bg-red-500/15 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-amber-500/15 text-amber-500 border-amber-500/30' : 'bg-secondary text-muted-foreground border-border'}`}>
+                      {formatCountdown(remainingSecs)}
+                    </span>
+                  </div>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    App bundle plus reviewed data: {plan.item_count} items · {formatBytes(plan.allocated_size)}
+                  </p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
+                  <Button variant="destructive" size="md" onclick={executeUninstall} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — review again' : ''}>
+                    <Trash2 size={14} />
+                    {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move App to Trash'}
+                  </Button>
+                </div>
+              </div>
+              {#if isExpired}
+                <div role="alert" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex flex-col gap-2">
+                  <span>Plan expired — refresh and re-inspect to create a new 5 min review window.</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <Button id="applications-expiry-action" variant="ghost" size="sm" onclick={() => void recoverExpiredUninstallPlan()}>Refresh and re-inspect</Button>
+                    <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
+                  </div>
+                </div>
+              {:else}
+                <p class="text-[11px] text-muted-foreground">
+                  One-shot, expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({formatCountdown(remainingSecs)}). Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
+                </p>
+              {/if}
+            </div>
+          {:else}
+            <div class="rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-3">
+              <div>
+                <div class="text-xs font-medium">Ready to review this uninstall?</div>
+                <p class="text-[11px] text-muted-foreground mt-1">
+                  {formatBytes(selectedBytes)} selected for review. You can adjust related Library data below before creating the one-shot Trash plan.
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                size="md"
+                onclick={reviewUninstall}
+                disabled={isPreparing || isExecuting}
+                class="gap-1.5 w-full"
+              >
+                <ShieldCheck size={14} />
+                {isPreparing ? 'Preparing…' : 'Review Uninstall'}
+              </Button>
             </div>
           {/if}
 
@@ -413,61 +470,6 @@
             {/if}
           </div>
         </Card>
-
-        {#if plan}
-          <Card class={`p-5 space-y-3 ${isExpired ? 'border-red-500/40 bg-red-500/5' : isExpiringSoon ? 'border-amber-500/50 bg-amber-500/10' : 'border-amber-500/30 bg-amber-500/5'}`}>
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div class="text-sm font-semibold flex items-center gap-2">
-                  Uninstall review ready
-                  <span class={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${isExpired ? 'bg-red-500/15 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-amber-500/15 text-amber-500 border-amber-500/30' : 'bg-secondary text-muted-foreground border-border'}`}>
-                    {formatCountdown(remainingSecs)}
-                  </span>
-                </div>
-                <p class="text-xs text-muted-foreground mt-1">
-                  App bundle plus reviewed data: {plan.item_count} items · {formatBytes(plan.allocated_size)}
-                </p>
-              </div>
-              <div class="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
-                <Button variant="destructive" size="md" onclick={executeUninstall} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — review again' : ''}>
-                  <Trash2 size={14} />
-                  {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move App to Trash'}
-                </Button>
-              </div>
-            </div>
-            {#if isExpired}
-              <div role="alert" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
-                <span>Plan expired — refresh and re-inspect to create a new 5 min review window.</span>
-                <div class="flex gap-1.5">
-                  <Button id="applications-expiry-action" variant="ghost" size="sm" onclick={() => void recoverExpiredUninstallPlan()}>Refresh and re-inspect</Button>
-                  <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
-                </div>
-              </div>
-            {:else}
-              <p class="text-[11px] text-muted-foreground">
-                One-shot, expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({formatCountdown(remainingSecs)}). Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
-              </p>
-            {/if}
-          </Card>
-        {:else}
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
-            <div>
-              <div class="text-xs font-medium">Reviewed Trash size</div>
-              <div class="text-lg font-semibold font-mono mt-0.5">{formatBytes(selectedBytes)}</div>
-            </div>
-            <Button
-              variant="primary"
-              size="md"
-              onclick={reviewUninstall}
-              disabled={isPreparing || isExecuting}
-              class="gap-1.5 min-w-[150px]"
-            >
-              <ShieldCheck size={14} />
-              {isPreparing ? 'Preparing…' : 'Review Uninstall'}
-            </Button>
-          </div>
-        {/if}
       {:else}
         <Card class="py-20 text-center">
           <AppWindow size={28} class="mx-auto text-muted-foreground/50" />
