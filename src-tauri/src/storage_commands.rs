@@ -25,6 +25,10 @@ static STORAGE_OPERATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
 const PLAN_TTL_SECS: u64 = 5 * 60;
 
+fn is_fresh_at(created_at: u64, ttl_secs: u64, now: u64) -> bool {
+    now.saturating_sub(created_at) < ttl_secs
+}
+
 #[cfg(test)]
 pub(crate) fn clear_trash_plans_for_test() {
     TRASH_PLANS.lock().expect("TRASH_PLANS poisoned").clear();
@@ -120,9 +124,7 @@ pub fn prepare_large_file_trash(
         .expect("LARGE_FILE_INVENTORY poisoned")
         .clone()
         .filter(|inventory| inventory.scan_id == scan_id)
-        .filter(|inventory| {
-            unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS
-        })
+        .filter(|inventory| is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp()))
         .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
     let plan = TrashPlanner::from_large_files(&inventory, &selected_item_ids)?;
     let preview = plan.preview();
@@ -162,9 +164,7 @@ pub async fn inspect_app_uninstall(app_id: String) -> Result<AppUninstallInspect
         .lock()
         .expect("APP_INVENTORY poisoned")
         .clone()
-        .filter(|inventory| {
-            unix_timestamp().saturating_sub(inventory.created_at) < INVENTORY_TTL_SECS
-        })
+        .filter(|inventory| is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp()))
         .ok_or_else(|| "Application inventory expired. Refresh applications.".to_string())?;
     let inspection = tauri::async_runtime::spawn_blocking(move || {
         let _guard = STORAGE_OPERATION_LOCK
@@ -191,7 +191,7 @@ pub fn prepare_app_uninstall(
         .clone()
         .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
         .filter(|inspection| {
-            unix_timestamp().saturating_sub(inspection.created_at) < INVENTORY_TTL_SECS
+            is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
         })
         .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
     let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
@@ -224,7 +224,7 @@ pub async fn execute_trash_plan(plan_id: uuid::Uuid) -> Result<TrashResult, Stri
 pub(crate) fn store_plan(plan: TrashPlan) {
     let now = unix_timestamp();
     let mut plans = TRASH_PLANS.lock().expect("TRASH_PLANS poisoned");
-    plans.retain(|_, plan| now.saturating_sub(plan.created_at) < PLAN_TTL_SECS);
+    plans.retain(|_, plan| is_fresh_at(plan.created_at, PLAN_TTL_SECS, now));
     if plans.len() >= 64 {
         if let Some(oldest) = plans
             .iter()
@@ -242,4 +242,34 @@ fn unix_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_fresh_at, INVENTORY_TTL_SECS, PLAN_TTL_SECS};
+
+    #[test]
+    fn inventory_and_plan_ttl_boundaries_fail_closed() {
+        let now = 1_000;
+
+        assert!(is_fresh_at(
+            now - (INVENTORY_TTL_SECS - 1),
+            INVENTORY_TTL_SECS,
+            now
+        ));
+        assert!(!is_fresh_at(
+            now - INVENTORY_TTL_SECS,
+            INVENTORY_TTL_SECS,
+            now
+        ));
+        assert!(!is_fresh_at(
+            now - (INVENTORY_TTL_SECS + 1),
+            INVENTORY_TTL_SECS,
+            now
+        ));
+
+        assert!(is_fresh_at(now - (PLAN_TTL_SECS - 1), PLAN_TTL_SECS, now));
+        assert!(!is_fresh_at(now - PLAN_TTL_SECS, PLAN_TTL_SECS, now));
+        assert!(!is_fresh_at(now - (PLAN_TTL_SECS + 1), PLAN_TTL_SECS, now));
+    }
 }

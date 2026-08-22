@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type {
     AppRelatedConfidence,
     AppUninstallInspection,
@@ -56,6 +56,17 @@
   let remainingSecs = $derived(plan ? ttlRemaining(plan.expires_at, now) : 0);
   let isExpiringSoon = $derived(remainingSecs > 0 && remainingSecs <= 60);
   let isExpired = $derived(plan ? remainingSecs === 0 : false);
+  let expiryActionFocused = $state(false);
+
+  $effect(() => {
+    if (!isExpired) {
+      expiryActionFocused = false;
+      return;
+    }
+    if (expiryActionFocused) return;
+    expiryActionFocused = true;
+    void tick().then(() => document.getElementById('applications-expiry-action')?.focus());
+  });
 
   let filteredApps = $derived(
     apps.filter((app) => {
@@ -157,6 +168,20 @@
     } finally {
       isPreparing = false;
     }
+  }
+
+  async function recoverExpiredUninstallPlan() {
+    const appId = inspection?.app.id;
+    plan = null;
+    if (!appId) return;
+
+    await loadApps();
+    const refreshedApp = apps.find((app) => app.id === appId);
+    if (!refreshedApp) {
+      error = 'The application is no longer available. Refresh applications and choose it again.';
+      return;
+    }
+    await inspectApp(refreshedApp);
   }
 
   async function executeUninstall() {
@@ -412,10 +437,10 @@
               </div>
             </div>
             {#if isExpired}
-              <div class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
-                <span>Plan expired — review again to refresh the 5 min window.</span>
+              <div role="alert" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
+                <span>Plan expired — refresh and re-inspect to create a new 5 min review window.</span>
                 <div class="flex gap-1.5">
-                  <Button variant="ghost" size="sm" onclick={() => { plan = null; void reviewUninstall(); }}>Review again</Button>
+                  <Button id="applications-expiry-action" variant="ghost" size="sm" onclick={() => void recoverExpiredUninstallPlan()}>Refresh and re-inspect</Button>
                   <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
                 </div>
               </div>

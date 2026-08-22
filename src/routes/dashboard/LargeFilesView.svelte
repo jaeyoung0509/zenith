@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type {
     LargeFileItem,
     LargeFileScanEvent,
@@ -69,6 +69,17 @@
   );
   let isExpiringSoon = $derived(remainingSecs > 0 && remainingSecs <= 60);
   let isExpired = $derived(plan ? remainingSecs === 0 : false);
+  let expiryActionFocused = $state(false);
+
+  $effect(() => {
+    if (!isExpired) {
+      expiryActionFocused = false;
+      return;
+    }
+    if (expiryActionFocused) return;
+    expiryActionFocused = true;
+    void tick().then(() => document.getElementById('large-files-expiry-action')?.focus());
+  });
 
   onMount(() => {
     const timer = setInterval(() => (now = Date.now()), 1000);
@@ -353,10 +364,10 @@
         </div>
       </div>
       {#if isExpired}
-        <div class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
+        <div role="alert" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
           <span>Plan expired. Inventory is valid for 15 min — scan again to refresh.</span>
           <div class="flex gap-1.5">
-            <Button variant="ghost" size="sm" onclick={() => { plan = null; void scanFiles(); }}>Scan again</Button>
+            <Button id="large-files-expiry-action" variant="ghost" size="sm" onclick={() => { plan = null; void scanFiles(); }}>Scan again</Button>
             <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
           </div>
         </div>
