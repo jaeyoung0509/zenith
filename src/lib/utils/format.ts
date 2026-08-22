@@ -60,3 +60,15 @@ export function formatResetDate(timestampSeconds?: number): string {
     minute: '2-digit',
   }).format(new Date(timestampSeconds * 1000));
 }
+
+export function formatCountdown(secs: number): string {
+  if (secs <= 0) return 'expired';
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m > 0) return `${m}:${String(s).padStart(2, '0')} remaining`;
+  return `${s}s remaining`;
+}
+
+export function ttlRemaining(expiresAt: number, nowMs: number = Date.now()): number {
+  return Math.max(0, expiresAt - Math.floor(nowMs / 1000));
+}

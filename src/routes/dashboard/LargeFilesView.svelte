@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type {
     LargeFileItem,
     LargeFileScanEvent,
@@ -8,7 +9,7 @@
   } from '../../lib/models/types';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
-  import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import { formatBytes, formatCountdown, formatTimeAgo, ttlRemaining } from '../../lib/utils/format';
   import {
     LARGE_FILE_DEFAULT_THRESHOLD_BYTES,
     LARGE_FILE_ROOTS,
@@ -59,15 +60,24 @@
   let entriesScanned = $state(0);
   let matchesFound = $state(0);
   let error = $state<string | null>(null);
-
   let selectedBytes = $derived(selectedLargeFileBytes(items, selectedIds));
   let thresholdBytes = $derived(clampLargeFileThreshold(thresholdMb * MIB));
+  let now = $state(Date.now());
 
+  let remainingSecs = $derived(
+    plan ? ttlRemaining(plan.expires_at, now) : 0
+  );
+  let isExpiringSoon = $derived(remainingSecs > 0 && remainingSecs <= 60);
+  let isExpired = $derived(plan ? remainingSecs === 0 : false);
+
+  onMount(() => {
+    const timer = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
   function resetReview() {
     plan = null;
     trashResult = null;
   }
-
   function toggleRoot(root: string) {
     selectedRoots = selectedRoots.includes(root)
       ? selectedRoots.filter((candidate) => candidate !== root)
@@ -321,25 +331,36 @@
   {/if}
 
   {#if plan}
-    <Card class="p-5 border-amber-500/30 bg-amber-500/5 space-y-3">
+    <Card class={`p-5 space-y-3 ${isExpired ? 'border-red-500/40 bg-red-500/5' : isExpiringSoon ? 'border-amber-500/50 bg-amber-500/10' : 'border-amber-500/30 bg-amber-500/5'}`}>
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <div class="text-sm font-semibold">Trash review ready</div>
+          <div class="text-sm font-semibold flex items-center gap-2">
+            Trash review ready
+            <span class={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${isExpired ? 'bg-red-500/15 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-amber-500/15 text-amber-500 border-amber-500/30' : 'bg-secondary text-muted-foreground border-border'}`}>
+              {formatCountdown(remainingSecs)}
+            </span>
+          </div>
           <p class="text-xs text-muted-foreground mt-1">
             {plan.item_count} selected item{plan.item_count === 1 ? '' : 's'} · {formatBytes(plan.allocated_size)} allocated
           </p>
         </div>
         <div class="flex items-center gap-2">
           <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
-          <Button variant="destructive" size="md" onclick={executeTrash} disabled={isExecuting} class="gap-1.5">
+          <Button variant="destructive" size="md" onclick={executeTrash} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — prepare again' : ''}>
             <Trash2 size={14} />
-            {isExecuting ? 'Moving…' : 'Move to Trash'}
-          </Button>
+      {#if isExpired}
+        <div class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
+          <span>Plan expired. Inventory is valid for 15 min — scan again to refresh.</span>
+          <div class="flex gap-1.5">
+            <Button variant="ghost" size="sm" onclick={() => { plan = null; void scanFiles(); }} autofocus>Scan again</Button>
+            <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
+          </div>
         </div>
-      </div>
-      <p class="text-[11px] text-muted-foreground">
-        The plan is one-shot and expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Zenith revalidates file identity and scope before each move.
-      </p>
+      {:else}
+        <p class="text-[11px] text-muted-foreground">
+          One-shot, expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({formatCountdown(remainingSecs)}). Zenith revalidates file identity and scope before each move.
+        </p>
+      {/if}
     </Card>
   {/if}
 
