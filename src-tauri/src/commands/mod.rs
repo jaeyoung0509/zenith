@@ -368,14 +368,7 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
-    if let Ok(window) = crate::ensure_window(&app_handle, "main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-    // Hide quick panel if open
-    if let Some(quick) = app_handle.get_webview_window("quick") {
-        let _ = quick.hide();
-    }
+    crate::show_main_window(&app_handle).map_err(|error| error.to_string())?;
     Ok(())
 }
 

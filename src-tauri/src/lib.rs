@@ -48,6 +48,17 @@ pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindo
     WebviewWindowBuilder::from_config(app, &config)?.build()
 }
 
+pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
+    let window = ensure_window(app, "main")?;
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    if let Some(quick) = app.get_webview_window("quick") {
+        let _ = quick.hide();
+    }
+    Ok(())
+}
+
 fn tray_anchor(window: &WebviewWindow, rect: Rect) -> PhysicalPosition<f64> {
     let scale = window.scale_factor().unwrap_or(1.0);
     let position: PhysicalPosition<f64> = rect.position.to_physical(scale);
@@ -166,10 +177,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open_dashboard" => {
-                        if let Ok(window) = ensure_window(app, "main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        let _ = show_main_window(app);
                     }
                     "toggle_quick" => {
                         if let Ok(window) = ensure_window(app, "quick") {
@@ -218,8 +226,18 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(specta_builder().invoke_handler())
-        .run(tauri::generate_context!())
-        .expect("error while running zenith application");
+        .build(tauri::generate_context!())
+        .expect("error while building zenith application")
+        .run(|app, event| match event {
+            tauri::RunEvent::Ready => {
+                let _ = show_main_window(app);
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                let _ = show_main_window(app);
+            }
+            _ => {}
+        });
 }
 
 pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
