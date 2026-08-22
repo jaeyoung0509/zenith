@@ -1,5 +1,6 @@
 import { api, isTauri as isTauriCheck } from '../api';
 import { storageApi } from '../api/storage';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   AiUsageSnapshot,
   AppUninstallInspection,
@@ -154,6 +155,11 @@ export function tauriOpenLogsFolder(): Promise<void> {
 
 export function tauriHideCurrentWindow(): Promise<void> {
   return api.hideCurrentWindow();
+}
+
+export async function tauriStartWindowDrag(): Promise<void> {
+  if (!isTauri) return;
+  await getCurrentWindow().startDragging();
 }
 
 export function tauriStartLargeFileScan(

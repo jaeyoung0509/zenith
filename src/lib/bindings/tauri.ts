@@ -34,7 +34,7 @@ export const commands = {
 	getLocalModels: () => typedError<LocalModelItem[], string>(__TAURI_INVOKE("get_local_models")),
 	deleteLocalModel: (modelId: string) => typedError<number, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
 	getAwakeState: () => typedError<AwakeState, string>(__TAURI_INVOKE("get_awake_state")),
-	setAwakeRules: (rules: AwakeRule[]) => typedError<null, string>(__TAURI_INVOKE("set_awake_rules", { rules })),
+	setAwakeRules: (rules: AwakeRule_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_awake_rules", { rules })),
 	setManualAwake: (durationSecs: number | null, behavior: AwakeBehavior) => typedError<null, string>(__TAURI_INVOKE("set_manual_awake", { durationSecs, behavior })),
 	disableManualAwake: () => typedError<null, string>(__TAURI_INVOKE("disable_manual_awake")),
 	getSettings: () => typedError<ZenithSettings_Serialize, string>(__TAURI_INVOKE("get_settings")),
@@ -101,14 +101,7 @@ export type AppUninstallInspection = {
 
 export type AwakeBehavior = "prevent_system_sleep" | "keep_display_awake";
 
-export type AwakeRule = {
-	id: string,
-	app_name: string,
-	executable_pattern: string,
-	behavior: AwakeBehavior,
-	power_condition?: PowerCondition,
-	enabled: boolean,
-};
+export type AwakeRule = AwakeRule_Serialize | AwakeRule_Deserialize;
 
 export type AwakeRuleEvaluation = {
 	rule_id: string,
@@ -118,6 +111,26 @@ export type AwakeRuleEvaluation = {
 };
 
 export type AwakeRuleStatus = "active" | "waiting_process" | "waiting_power" | "disabled";
+
+export type AwakeRule_Deserialize = {
+	id: string,
+	app_name: string,
+	executable_pattern: string,
+	requires_process_pattern?: string | null,
+	behavior: AwakeBehavior,
+	power_condition?: PowerCondition,
+	enabled: boolean,
+};
+
+export type AwakeRule_Serialize = {
+	id: string,
+	app_name: string,
+	executable_pattern: string,
+	requires_process_pattern?: string | null,
+	behavior: AwakeBehavior,
+	power_condition: PowerCondition,
+	enabled: boolean,
+};
 
 export type AwakeState = {
 	is_active: boolean,
@@ -466,7 +479,7 @@ export type ZenithSettings_Deserialize = {
 	intensive_cleanup?: boolean,
 	theme?: string,
 	excluded_signatures?: string[],
-	awake_rules?: AwakeRule[],
+	awake_rules?: AwakeRule_Deserialize[],
 	quick_panel_sections?: QuickPanelSection[],
 	quick_panel_ai_providers?: string[],
 	dashboard_tabs?: DashboardTab_Deserialize[],
@@ -482,7 +495,7 @@ export type ZenithSettings_Serialize = {
 	intensive_cleanup: boolean,
 	theme: string,
 	excluded_signatures: string[],
-	awake_rules: AwakeRule[],
+	awake_rules: AwakeRule_Serialize[],
 	quick_panel_sections: QuickPanelSection[],
 	quick_panel_ai_providers: string[],
 	dashboard_tabs: DashboardTab_Serialize[],

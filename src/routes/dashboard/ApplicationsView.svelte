@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type {
     AppRelatedConfidence,
     AppUninstallInspection,
@@ -9,7 +9,7 @@
   } from '../../lib/models/types';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
-  import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import { formatBytes, formatCountdown, formatTimeAgo, ttlRemaining } from '../../lib/utils/format';
   import {
     defaultRelatedIds,
     selectedAppTrashBytes,
@@ -51,6 +51,22 @@
   let plan = $state<TrashPlanPreview | null>(null);
   let trashResult = $state<TrashResult | null>(null);
   let error = $state<string | null>(null);
+
+  let now = $state(Date.now());
+  let remainingSecs = $derived(plan ? ttlRemaining(plan.expires_at, now) : 0);
+  let isExpiringSoon = $derived(remainingSecs > 0 && remainingSecs <= 60);
+  let isExpired = $derived(plan ? remainingSecs === 0 : false);
+  let expiryActionFocused = $state(false);
+
+  $effect(() => {
+    if (!isExpired) {
+      expiryActionFocused = false;
+      return;
+    }
+    if (expiryActionFocused) return;
+    expiryActionFocused = true;
+    void tick().then(() => document.getElementById('applications-expiry-action')?.focus());
+  });
 
   let filteredApps = $derived(
     apps.filter((app) => {
@@ -154,6 +170,20 @@
     }
   }
 
+  async function recoverExpiredUninstallPlan() {
+    const appId = inspection?.app.id;
+    plan = null;
+    if (!appId) return;
+
+    await loadApps();
+    const refreshedApp = apps.find((app) => app.id === appId);
+    if (!refreshedApp) {
+      error = 'The application is no longer available. Refresh applications and choose it again.';
+      return;
+    }
+    await inspectApp(refreshedApp);
+  }
+
   async function executeUninstall() {
     if (!plan || !inspection) return;
     isExecuting = true;
@@ -177,6 +207,8 @@
 
   onMount(() => {
     void loadApps();
+    const timer = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(timer);
   });
 </script>
 
@@ -383,25 +415,40 @@
         </Card>
 
         {#if plan}
-          <Card class="p-5 border-amber-500/30 bg-amber-500/5 space-y-3">
+          <Card class={`p-5 space-y-3 ${isExpired ? 'border-red-500/40 bg-red-500/5' : isExpiringSoon ? 'border-amber-500/50 bg-amber-500/10' : 'border-amber-500/30 bg-amber-500/5'}`}>
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <div class="text-sm font-semibold">Uninstall review ready</div>
+                <div class="text-sm font-semibold flex items-center gap-2">
+                  Uninstall review ready
+                  <span class={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${isExpired ? 'bg-red-500/15 text-red-400 border-red-500/30' : isExpiringSoon ? 'bg-amber-500/15 text-amber-500 border-amber-500/30' : 'bg-secondary text-muted-foreground border-border'}`}>
+                    {formatCountdown(remainingSecs)}
+                  </span>
+                </div>
                 <p class="text-xs text-muted-foreground mt-1">
                   App bundle plus reviewed data: {plan.item_count} items · {formatBytes(plan.allocated_size)}
                 </p>
               </div>
               <div class="flex items-center gap-2">
                 <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
-                <Button variant="destructive" size="md" onclick={executeUninstall} disabled={isExecuting} class="gap-1.5">
+                <Button variant="destructive" size="md" onclick={executeUninstall} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — review again' : ''}>
                   <Trash2 size={14} />
-                  {isExecuting ? 'Moving…' : 'Move App to Trash'}
+                  {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move App to Trash'}
                 </Button>
               </div>
             </div>
-            <p class="text-[11px] text-muted-foreground">
-              This review expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
-            </p>
+            {#if isExpired}
+              <div role="alert" class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
+                <span>Plan expired — refresh and re-inspect to create a new 5 min review window.</span>
+                <div class="flex gap-1.5">
+                  <Button id="applications-expiry-action" variant="ghost" size="sm" onclick={() => void recoverExpiredUninstallPlan()}>Refresh and re-inspect</Button>
+                  <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
+                </div>
+              </div>
+            {:else}
+              <p class="text-[11px] text-muted-foreground">
+                One-shot, expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({formatCountdown(remainingSecs)}). Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
+              </p>
+            {/if}
           </Card>
         {:else}
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">

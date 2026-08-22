@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-hide",
+    "core:window:allow-start-dragging",
     "allow-get-ai-usage",
     "allow-connect-openrouter-oauth",
     "allow-start-scan",

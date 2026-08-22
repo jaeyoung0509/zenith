@@ -52,9 +52,7 @@ Rust process state rather than in a browser singleton.
 - `src-tauri/src/metrics` and `src-tauri/src/power`: macOS system integration.
 - `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry
   points.
-- `src/lib/utils/tauri.ts`: frontend command wrappers.
-- `src/lib/api/storage.ts`: native and browser-preview API for the dedicated
-  storage-management workflows.
+- `src/lib/utils/tauri.ts`: frontend command wrappers — the single `invoke` boundary for all Tauri commands. The dedicated storage-management workflows (Large Files and App Uninstaller) are the sanctioned exception: their native and browser-preview split lives in `src/lib/api/storage.ts` and reuses the shared `isTauri()` from `src/lib/api/index.ts` to decide at runtime. New generic commands belong in `utils/tauri.ts`; new storage commands belong in `api/storage.ts`.
 - `src/lib/stores`: Svelte state and lifecycle orchestration.
 - `src/routes/dashboard` and `src/routes/quick`: the two window surfaces.
 - `signatures`: reviewed cleanup definitions embedded in the Rust binary.

@@ -1,4 +1,5 @@
 import { Channel } from '@tauri-apps/api/core';
+import { isTauri } from './index';
 import { commands } from '../bindings/tauri';
 import type {
   AppUninstallInspection,
@@ -10,7 +11,6 @@ import type {
   TrashPlanPreview,
   TrashResult,
 } from '../models/types';
-
 type CommandResult<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
 
 async function unwrap<T, E>(promise: Promise<CommandResult<T, E>>): Promise<T> {
@@ -332,12 +332,7 @@ const mockStorageApi: StorageManagementApi = {
     };
   },
 };
-
-function isTauriRuntime(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
-
-export const storageApi: StorageManagementApi = isTauriRuntime()
+export const storageApi: StorageManagementApi = isTauri()
   ? nativeStorageApi
   : mockStorageApi;
 
