@@ -78,3 +78,6 @@ jobs:
 
       - name: Rust Cargo Check
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Release package build (no publish)
+        run: just release
