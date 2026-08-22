@@ -348,11 +348,15 @@
           <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
           <Button variant="destructive" size="md" onclick={executeTrash} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — prepare again' : ''}>
             <Trash2 size={14} />
+            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move to Trash'}
+          </Button>
+        </div>
+      </div>
       {#if isExpired}
         <div class="p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center justify-between gap-2">
           <span>Plan expired. Inventory is valid for 15 min — scan again to refresh.</span>
           <div class="flex gap-1.5">
-            <Button variant="ghost" size="sm" onclick={() => { plan = null; void scanFiles(); }} autofocus>Scan again</Button>
+            <Button variant="ghost" size="sm" onclick={() => { plan = null; void scanFiles(); }}>Scan again</Button>
             <Button variant="ghost" size="sm" onclick={() => (plan = null)} class="text-red-400 hover:text-red-300">Dismiss</Button>
           </div>
         </div>
