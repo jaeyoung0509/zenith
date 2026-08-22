@@ -18,6 +18,7 @@ describe('serializeSettingsSnapshot', () => {
     quick_panel_sections: ['cleanup', 'storage', 'memory'],
     quick_panel_ai_providers: ['codex', 'claude'],
     dashboard_tabs: ['storage', 'memory', 'docker'],
+    sidebar_collapsed: false,
     awake_rules: [
       {
         id: 'rule.codex',
@@ -128,6 +129,7 @@ describe('SettingsStore persistence and lifecycle', () => {
       quick_panel_sections: ['storage', 'cleanup'],
       quick_panel_ai_providers: ['codex', 'claude'],
       dashboard_tabs: ['storage', 'memory'],
+      sidebar_collapsed: false,
       awake_rules: [],
     });
 
@@ -156,6 +158,17 @@ describe('SettingsStore persistence and lifecycle', () => {
   it('keeps intensive cleanup opt-in when loading legacy settings', async () => {
     await store.load();
     expect(store.settings.intensive_cleanup).toBe(false);
+    expect(store.settings.sidebar_collapsed).toBe(false);
+  });
+
+  it('persists the sidebar collapse preference with the rest of the settings', async () => {
+    await store.load();
+    await store.save({ sidebar_collapsed: true });
+
+    expect(store.settings.sidebar_collapsed).toBe(true);
+    expect(mockSaveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sidebar_collapsed: true })
+    );
   });
 
   it('responds to system theme changes via matchMedia listener', () => {
@@ -332,6 +345,7 @@ describe('quick panel AI provider toggling and order preservation', () => {
       quick_panel_sections: ['storage', 'cleanup'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       dashboard_tabs: ['storage', 'memory'],
+      sidebar_collapsed: false,
       awake_rules: [],
     });
 

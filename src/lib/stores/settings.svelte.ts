@@ -17,6 +17,7 @@ export class SettingsStore {
     quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
     dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
+    sidebar_collapsed: false,
     awake_rules: [
       {
         id: 'rule.codex',
@@ -94,6 +95,7 @@ export class SettingsStore {
         quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
         quick_panel_ai_providers: fetched.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
         dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
+        sidebar_collapsed: fetched.sidebar_collapsed ?? false,
       };
       this.settings = normalized;
       this.persistedSettings = serializeSettingsSnapshot(normalized);

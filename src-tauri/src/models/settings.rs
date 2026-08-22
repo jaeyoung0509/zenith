@@ -63,6 +63,7 @@ pub struct ZenithSettings {
     pub quick_panel_sections: Vec<QuickPanelSection>,
     pub quick_panel_ai_providers: Vec<String>,
     pub dashboard_tabs: Vec<DashboardTab>,
+    pub sidebar_collapsed: bool,
 }
 
 impl Default for ZenithSettings {
@@ -160,6 +161,7 @@ impl Default for ZenithSettings {
                 "antigravity".to_string(),
             ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
+            sidebar_collapsed: false,
         }
     }
 }
@@ -255,6 +257,7 @@ mod tests {
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
         assert!(!parsed.intensive_cleanup);
+        assert!(!parsed.sidebar_collapsed);
     }
 
     #[test]

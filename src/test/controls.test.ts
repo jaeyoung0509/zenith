@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import Switch from '../lib/components/Switch.svelte';
 import Checkbox from '../lib/components/Checkbox.svelte';
+import CategoryCard from '../lib/components/CategoryCard.svelte';
 
 describe('Switch component SSR / visual contracts', () => {
   it('renders input with required aria-label and default emerald styling', () => {
@@ -68,5 +69,27 @@ describe('Checkbox component SSR / visual contracts', () => {
     expect(rendered.body).toContain('cursor-not-allowed');
     expect(rendered.body).not.toContain('bg-emerald-500');
     expect(rendered.body).not.toContain('<svg');
+  });
+});
+
+describe('metric and action consistency contracts', () => {
+  it('reserves a stable no-wrap column for category byte metrics', () => {
+    const rendered = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer',
+          items: [],
+          total_bytes: 198.8 * 1024 * 1024,
+          safe_bytes: 0,
+          rebuild_bytes: 198.8 * 1024 * 1024,
+          manual_bytes: 0,
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('w-[7rem]');
+    expect(rendered.body).toContain('whitespace-nowrap');
+    expect(rendered.body).toContain('Rebuild: 198.8 MB');
   });
 });

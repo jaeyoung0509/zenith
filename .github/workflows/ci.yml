@@ -10,7 +10,7 @@ jobs:
     name: Full CI Pipeline (macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -18,23 +18,34 @@ jobs:
           components: rustfmt, clippy
 
       - name: Rust Cache
+        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: 'src-tauri -> src-tauri/target'
+          # Cargo runs from the repository workspace, so target is the root
+          # target directory. The previous value created a nested
+          # src-tauri/src-tauri/target cache that Cargo never used.
+          workspaces: '. -> target'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        id: node-cache
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Report dependency cache status
+        run: |
+          echo "Rust cache hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          echo "pnpm cache hit: ${{ steps.node-cache.outputs.cache-hit }}"
 
       - name: Install Frontend Dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Generate Tauri bindings
         run: |

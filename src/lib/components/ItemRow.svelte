@@ -78,7 +78,7 @@
   </div>
 
   <div class="flex items-center gap-2 shrink-0">
-    <span class="text-xs font-mono font-semibold text-foreground">
+    <span class="min-w-[5rem] whitespace-nowrap text-right text-xs font-mono font-semibold text-foreground">
       {formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
 

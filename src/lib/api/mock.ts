@@ -676,6 +676,7 @@ export const mockApi = {
       quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
+      sidebar_collapsed: false,
       awake_rules: [
         {
           id: 'rule.codex',

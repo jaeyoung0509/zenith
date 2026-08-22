@@ -37,12 +37,18 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
 
 ## Layout
 
-- Main window baseline: 960 × 660 px with a 224 px left sidebar.
+- Main window baseline: 960 × 660 px with a 224 px expanded sidebar. The sidebar
+  can collapse to an icon rail; the toggle remains visible, labelled, and
+  keyboard accessible in both states. Persist that preference with validated
+  settings so a relaunch does not unexpectedly change the user's layout.
 - Quick panel baseline: 360 × 520 px. It must stay useful above other windows,
   with a close button at the upper right and no hidden essential controls.
 - Main content uses a 24–32 px outer inset, 16–24 px section gaps, and 12–16 px
   internal card padding. Preserve the compact density visible in the current
   Storage and AI Usage screens.
+- Keep the main content fluid when the sidebar changes width. Navigation labels
+  may hide in the collapsed rail, but icons need a tooltip and an accessible
+  name; do not remove the active, focus, or safety states.
 - The macOS traffic-light area and titlebar drag region must remain unobstructed.
   Interactive elements inside a drag region require the `no-drag` class.
 
@@ -52,6 +58,14 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
   visually dominant primary action; supporting actions stay secondary or ghost.
 - Rows use icon, title, secondary metadata, metric, and disclosure/action in that
   order. Align metrics vertically and keep labels short enough to scan.
+- Comparable values (bytes, percentages, counts, and prices) use a stable
+  right-aligned column with monospace numerals and `white-space: nowrap`.
+  Action buttons also stay on one line; descriptive copy may wrap or truncate
+  inside a `min-width: 0` content column instead of pushing metrics around.
+- Status indicators must be data-backed and self-explanatory. A Storage badge
+  means reclaimable data is available; expose the amount in the expanded rail
+  and an accessible label/tooltip in the collapsed rail. Do not add decorative
+  dots to tabs that have no pending state.
 - Every action needs hover, keyboard focus, disabled, loading, success, and error
   behavior where applicable. Icon-only actions require labels and tooltips.
 - Loading should preserve the surrounding layout. Empty states explain what is
@@ -121,8 +135,11 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
 ## Visual QA checklist
 
 - Compare both the main window and quick panel at their baseline sizes.
-- Check long labels, zero values, offline providers, loading, failure, and large
-  numbers. Verify text contrast and that nothing clips behind the titlebar.
+- Check expanded and collapsed sidebars, long labels, zero values, offline
+  providers, loading, failure, and large numbers. Verify that byte metrics and
+  action labels do not wrap inconsistently, that long descriptive copy truncates
+  gracefully, and that nothing clips behind the titlebar.
 - Confirm the app, Dock, title, and tray icons use the intended variants and do
   not appear twice.
-- Test keyboard focus and screen-reader names for every clickable control.
+- Test keyboard focus, tooltips, and screen-reader names for every clickable
+  control, including the sidebar toggle and Storage status affordance.
