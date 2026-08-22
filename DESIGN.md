@@ -62,10 +62,14 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
   right-aligned column with monospace numerals and `white-space: nowrap`.
   Action buttons also stay on one line; descriptive copy may wrap or truncate
   inside a `min-width: 0` content column instead of pushing metrics around.
-- Status indicators must be data-backed and self-explanatory. A Storage badge
+- Status indicators must be data-backed and self-explanatory. A Storage indicator
   means reclaimable data is available; expose the amount in the expanded rail
-  and an accessible label/tooltip in the collapsed rail. Do not add decorative
-  dots to tabs that have no pending state.
+  as a quiet inline dot-plus-monospace value and an accessible label/tooltip in
+  the collapsed rail. Do not use a high-contrast pill or add decorative dots to
+  tabs that have no pending state.
+- Sidebar collapse is a low-emphasis chevron control: it gains a soft surface
+  and border only on hover/focus, while the icon remains directional and the
+  accessible label describes the resulting action (Expand or Collapse).
 - Every action needs hover, keyboard focus, disabled, loading, success, and error
   behavior where applicable. Icon-only actions require labels and tooltips.
 - Loading should preserve the surrounding layout. Empty states explain what is

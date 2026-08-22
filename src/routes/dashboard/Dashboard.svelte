@@ -28,10 +28,10 @@
     Boxes,
     ChartNoAxesCombined,
     Container,
+    ChevronsLeft,
+    ChevronsRight,
     HardDrive,
     Moon,
-    PanelLeftClose,
-    PanelLeftOpen,
     Settings,
     Shield,
   } from 'lucide-svelte';
@@ -123,15 +123,15 @@
         <Button
           variant="ghost"
           size="icon"
-          class="no-drag h-8 w-8 shrink-0 text-muted-foreground"
+          class="no-drag h-7 w-7 shrink-0 rounded-md border border-transparent bg-secondary/30 text-muted-foreground hover:border-border/70 hover:bg-secondary/80 hover:text-foreground"
           ariaLabel={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onclick={toggleSidebar}
         >
           {#if sidebarCollapsed}
-            <PanelLeftOpen size={15} />
+            <ChevronsRight size={14} strokeWidth={1.8} />
           {:else}
-            <PanelLeftClose size={15} />
+            <ChevronsLeft size={14} strokeWidth={1.8} />
           {/if}
         </Button>
       </div>
@@ -161,12 +161,13 @@
                 <span
                   class="{sidebarCollapsed
                     ? 'absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-500'
-                    : 'ml-auto rounded border border-emerald-500/25 bg-emerald-500/10 px-1 py-0.5 text-[9px] font-mono font-medium text-emerald-400'}"
+                    : 'ml-auto inline-flex items-center gap-1.5 whitespace-nowrap text-[10px] font-mono font-medium tracking-tight text-emerald-400/85'}"
                   title="Reclaimable storage available"
                 >
                   {#if sidebarCollapsed}
                     <span class="sr-only">{formatBytes(scanStore.reclaimableBytes)} reclaimable</span>
                   {:else}
+                    <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-emerald-400/90"></span>
                     {formatBytes(scanStore.reclaimableBytes)}
                   {/if}
                 </span>
