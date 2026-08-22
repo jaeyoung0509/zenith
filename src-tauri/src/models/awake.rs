@@ -70,6 +70,8 @@ pub struct AwakeRule {
     pub id: String,
     pub app_name: String,
     pub executable_pattern: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_process_pattern: Option<String>,
     pub behavior: AwakeBehavior,
     #[serde(default)]
     pub power_condition: PowerCondition,
@@ -121,5 +123,6 @@ mod tests {
 
         let rule: AwakeRule = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(rule.power_condition, PowerCondition::Always);
+        assert_eq!(rule.requires_process_pattern, None);
     }
 }

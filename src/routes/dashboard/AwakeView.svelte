@@ -57,12 +57,12 @@
   let showAddModal = $state(false);
   let newAppName = $state('');
   let newExecutable = $state('');
+  let newRequiresPattern = $state('');
   let newBehavior = $state<AwakeBehavior>('prevent_system_sleep');
   let newPowerCondition = $state<PowerCondition>('ac_power_only');
   let selectedAppPath = $state('');
   let isPickingApp = $state(false);
   let pickerError = $state<string | null>(null);
-
   function handleSetTimer(mins: number | null) {
     if (mins === null) {
       awakeStore.setManual(null, manualBehavior);
@@ -77,13 +77,13 @@
       id: `rule.${Date.now()}`,
       app_name: newAppName.trim(),
       executable_pattern: newExecutable.trim(),
+      requires_process_pattern: newRequiresPattern.trim() || null,
       behavior: newBehavior,
       power_condition: newPowerCondition,
       enabled: true,
     });
     resetModal();
   }
-
   async function pickApplication() {
     if (isPickingApp) return;
     isPickingApp = true;
@@ -101,10 +101,10 @@
       isPickingApp = false;
     }
   }
-
   function resetModal() {
     newAppName = '';
     newExecutable = '';
+    newRequiresPattern = '';
     newBehavior = 'prevent_system_sleep';
     newPowerCondition = 'ac_power_only';
     selectedAppPath = '';
@@ -509,7 +509,19 @@
               placeholder="e.g. codex|ffmpeg|blender (separate with |)"
               class="w-full h-8 px-3 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-mono"
             />
-            <p class="text-[10px] text-muted-foreground">Matches any running process whose executable name contains these words.</p>
+            <p class="text-[10px] text-muted-foreground">Matches any running process whose executable name, path, or command line contains these words.</p>
+          </div>
+
+          <div class="space-y-1">
+            <label for="requiresPattern" class="text-muted-foreground font-medium">Also require process (optional)</label>
+            <input
+              id="requiresPattern"
+              type="text"
+              bind:value={newRequiresPattern}
+              placeholder="e.g. warp  — requires both patterns to match (AND)"
+              class="w-full h-8 px-3 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-mono"
+            />
+            <p class="text-[10px] text-muted-foreground">If set, both the main pattern AND this pattern must be running. Example: Warp + Codex/OMP compound.</p>
           </div>
 
           <!-- Power Condition Selection -->
