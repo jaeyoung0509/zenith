@@ -17,9 +17,9 @@
     default: 'bg-primary text-primary-foreground',
     secondary: 'bg-secondary text-secondary-foreground',
     outline: 'border border-border text-foreground',
-    success: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20',
-    warning: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20',
-    danger: 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/20',
+    success: 'bg-success/15 text-success border border-success/20',
+    warning: 'bg-warning/15 text-warning border border-warning/20',
+    danger: 'bg-destructive/15 text-destructive border border-destructive/20',
   };
 </script>
 

@@ -54,7 +54,7 @@ describe('Dashboard sidebar affordances', () => {
     expect(rendered.body).toContain('aria-label="Collapse sidebar"');
     expect(rendered.body).toContain('title="Collapse sidebar"');
     expect(rendered.body).toContain('rounded-md border border-transparent');
-    expect(rendered.body).toContain('text-emerald-400/85');
+    expect(rendered.body).toContain('text-success/85');
     expect(rendered.body).toContain('14 MB');
   });
 });
