@@ -8,6 +8,7 @@ use crate::models::{
     MemoryMetrics, PlanPreview, ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
+use crate::operation_gate::StorageOperationGate;
 use crate::power::{ApplicationPicker, KeepAwakeManager};
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
@@ -27,7 +28,7 @@ pub struct AppState {
     pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
     pub ai_usage_refresh_lock: Arc<Mutex<()>>,
     pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
-    pub operation_lock: Arc<Mutex<()>>,
+    pub storage_operation_gate: StorageOperationGate,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
 }
 
@@ -106,7 +107,7 @@ pub async fn start_scan(
 ) -> Result<ScanResult, String> {
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
-    let operation_lock = state.operation_lock.clone();
+    let operation_gate = state.storage_operation_gate.clone();
     let (excluded_signatures, intensive_cleanup) = {
         let settings = state.settings.lock().expect("settings poisoned");
         (
@@ -116,19 +117,20 @@ pub async fn start_scan(
     };
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _operation_guard = operation_lock.lock().expect("operation_lock poisoned");
-        let cat_ref = categories.as_deref();
-        let result = ScanEngine::scan(
-            &registry,
-            cat_ref,
-            &excluded_signatures,
-            intensive_cleanup,
-            |event| {
-                let _ = on_event.send(event);
-            },
-        );
-        *last_scan_store.lock().expect("last_scan poisoned") = Some(result.clone());
-        result
+        operation_gate.run(|| {
+            let cat_ref = categories.as_deref();
+            let result = ScanEngine::scan(
+                &registry,
+                cat_ref,
+                &excluded_signatures,
+                intensive_cleanup,
+                |event| {
+                    let _ = on_event.send(event);
+                },
+            );
+            *last_scan_store.lock().expect("last_scan poisoned") = Some(result.clone());
+            result
+        })
     })
     .await
     .map_err(|_| "Scan worker thread panicked".to_string())?;
@@ -186,32 +188,33 @@ pub async fn execute_clean(
     state: State<'_, AppState>,
 ) -> Result<CleanResult, String> {
     const PLAN_TTL_SECS: u64 = 300;
-    let operation_lock = state.operation_lock.clone();
+    let operation_gate = state.storage_operation_gate.clone();
     let plans = state.delete_plans.clone();
     let last_scan = state.last_scan.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
-        let _operation_guard = operation_lock.lock().expect("operation_lock poisoned");
-        let plan = plans
-            .lock()
-            .expect("delete_plans poisoned")
-            .remove(&plan_id)
-            .ok_or_else(|| "Delete plan not found or already used".to_string())?;
-        if unix_timestamp().saturating_sub(plan.created_at) >= PLAN_TTL_SECS {
-            return Err("Delete plan expired. Scan again before cleaning.".to_string());
-        }
-        let scan_is_current = last_scan
-            .lock()
-            .expect("last_scan poisoned")
-            .as_ref()
-            .is_some_and(|scan| scan.scan_id == plan.scan_id);
-        if !scan_is_current {
-            return Err(
-                "The scan changed after this plan was created. Review a new plan.".to_string(),
-            );
-        }
-        Ok(CleanExecutor::execute(plan, |event| {
-            let _ = on_event.send(event);
-        }))
+        operation_gate.run(|| {
+            let plan = plans
+                .lock()
+                .expect("delete_plans poisoned")
+                .remove(&plan_id)
+                .ok_or_else(|| "Delete plan not found or already used".to_string())?;
+            if unix_timestamp().saturating_sub(plan.created_at) >= PLAN_TTL_SECS {
+                return Err("Delete plan expired. Scan again before cleaning.".to_string());
+            }
+            let scan_is_current = last_scan
+                .lock()
+                .expect("last_scan poisoned")
+                .as_ref()
+                .is_some_and(|scan| scan.scan_id == plan.scan_id);
+            if !scan_is_current {
+                return Err(
+                    "The scan changed after this plan was created. Review a new plan.".to_string(),
+                );
+            }
+            Ok(CleanExecutor::execute(plan, |event| {
+                let _ = on_event.send(event);
+            }))
+        })
     })
     .await
     .map_err(|_| "Clean execution thread panicked".to_string())??;

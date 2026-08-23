@@ -8,6 +8,7 @@ pub mod large_files;
 pub mod metrics;
 pub mod models;
 pub mod models_inventory;
+pub mod operation_gate;
 pub mod power;
 pub mod safety;
 pub mod scanner;
@@ -118,7 +119,7 @@ pub fn run() {
     let ai_usage_cache = Arc::new(Mutex::new(None));
     let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
     let delete_plans = Arc::new(Mutex::new(HashMap::new()));
-    let operation_lock = Arc::new(Mutex::new(()));
+    let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
 
     let app_state = AppState {
@@ -130,7 +131,7 @@ pub fn run() {
         ai_usage_cache,
         ai_usage_refresh_lock,
         delete_plans,
-        operation_lock,
+        storage_operation_gate,
         memory_sampler,
     };
 
