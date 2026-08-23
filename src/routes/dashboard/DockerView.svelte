@@ -38,8 +38,11 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    await withMinimumDuration(dockerStore.refresh(), 600);
-    isRefreshing = false;
+    try {
+      await withMinimumDuration(dockerStore.refresh(), 600);
+    } finally {
+      isRefreshing = false;
+    }
   }
 </script>
 
@@ -80,9 +83,9 @@
   </div>
 
   {#if dockerStore.error}
-    <div class="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-500 flex items-center justify-between">
+    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive flex items-center justify-between">
       <span>{dockerStore.error}</span>
-      <Button variant="ghost" size="sm" onclick={() => (dockerStore.error = null)} class="text-xs h-6 px-2 text-rose-400">Dismiss</Button>
+      <Button variant="ghost" size="sm" onclick={() => (dockerStore.error = null)} class="text-xs h-6 px-2 text-destructive">Dismiss</Button>
     </div>
   {/if}
 
@@ -115,7 +118,7 @@
             <div class="text-xl font-bold font-mono text-foreground">
               {formatBytes(overview.build_cache.reclaimable_bytes)}
             </div>
-            <p class="text-[11px] text-muted-foreground mt-0.5">Unused BuildKit layers</p>
+            <p class="text-meta text-muted-foreground mt-0.5">Unused BuildKit layers</p>
           </div>
         </div>
         <Button
@@ -140,7 +143,7 @@
         <div>
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <Container size={15} class="text-emerald-400" />
+              <Container size={15} class="text-success" />
               <span>Dangling</span>
             </div>
             <Badge variant="success">Safe</Badge>
@@ -149,7 +152,7 @@
             <div class="text-xl font-bold font-mono text-foreground">
               {danglingBytes > 0 ? formatBytes(danglingBytes) : (danglingImages.length > 0 ? `${danglingImages.length} images` : '0 B')}
             </div>
-            <p class="text-[11px] text-muted-foreground mt-0.5">Untagged layers</p>
+            <p class="text-meta text-muted-foreground mt-0.5">Untagged layers</p>
           </div>
         </div>
         <Button
@@ -174,7 +177,7 @@
         <div>
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <Container size={15} class="text-amber-400" />
+              <Container size={15} class="text-warning" />
               <span>Unused Images</span>
             </div>
             <Badge variant="warning">Rebuild</Badge>
@@ -183,7 +186,7 @@
             <div class="text-xl font-bold font-mono text-foreground">
               {formatBytes(overview.images.reclaimable_bytes)}
             </div>
-            <p class="text-[11px] text-muted-foreground mt-0.5">Unreferenced images</p>
+            <p class="text-meta text-muted-foreground mt-0.5">Unreferenced images</p>
           </div>
         </div>
         <Button
@@ -208,7 +211,7 @@
         <div>
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <Server size={15} class="text-amber-400" />
+              <Server size={15} class="text-warning" />
               <span>Containers</span>
             </div>
             <Badge variant="warning">Rebuild</Badge>
@@ -217,7 +220,7 @@
             <div class="text-xl font-bold font-mono text-foreground">
               {formatBytes(overview.containers.reclaimable_bytes)}
             </div>
-            <p class="text-[11px] text-muted-foreground mt-0.5">Exited container data</p>
+            <p class="text-meta text-muted-foreground mt-0.5">Exited container data</p>
           </div>
         </div>
         <Button
@@ -242,7 +245,7 @@
         <div>
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <HardDrive size={15} class="text-rose-400" />
+              <HardDrive size={15} class="text-destructive" />
               <span>Volumes</span>
             </div>
             <Badge variant="danger">Manual</Badge>
@@ -251,7 +254,7 @@
             <div class="text-xl font-bold font-mono text-foreground">
               {formatBytes(overview.volumes.reclaimable_bytes)}
             </div>
-            <p class="text-[11px] text-muted-foreground mt-0.5">of {formatBytes(overview.volumes.total_bytes)} total</p>
+            <p class="text-meta text-muted-foreground mt-0.5">of {formatBytes(overview.volumes.total_bytes)} total</p>
           </div>
         </div>
         <Button
@@ -259,7 +262,7 @@
           size="sm"
           disabled={dockerStore.isPruning || overview.volumes.reclaimable_bytes === 0}
           onclick={() => (confirmVolumePrune = true)}
-          class="w-full text-xs gap-1.5 text-rose-400 hover:text-rose-400 min-h-[30px]"
+          class="w-full text-xs gap-1.5 text-destructive hover:text-destructive min-h-[30px]"
         >
           {#if dockerStore.isPruning}
             <DeletingDots size="xs" />
@@ -284,10 +287,10 @@
               <div class="space-y-0.5">
                 <div class="flex items-center gap-2 font-medium text-foreground">
                   <span>{container.name}</span>
-                  <span class="text-muted-foreground font-mono text-[10px]">({container.image})</span>
+                  <span class="text-muted-foreground font-mono text-caption">({container.image})</span>
                 </div>
-                <div class="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span class={container.is_running ? 'text-emerald-500 font-medium' : 'text-muted-foreground'}>
+                <div class="flex items-center gap-2 text-meta text-muted-foreground">
+                  <span class={container.is_running ? 'text-success font-medium' : 'text-muted-foreground'}>
                     ● {container.state}
                   </span>
                 </div>
@@ -306,7 +309,7 @@
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="volume-prune-title">
       <Card class="w-full max-w-sm space-y-4 border-border bg-card p-5 shadow-2xl">
         <div class="flex items-start gap-3">
-          <div class="mt-0.5 text-rose-500"><AlertCircle size={20} /></div>
+          <div class="mt-0.5 text-destructive"><AlertCircle size={20} /></div>
           <div>
             <h3 id="volume-prune-title" class="text-sm font-semibold">Prune unused Docker volumes?</h3>
             <p class="mt-1 text-xs leading-relaxed text-muted-foreground">

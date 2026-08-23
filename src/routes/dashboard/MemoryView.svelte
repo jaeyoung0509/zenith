@@ -74,8 +74,11 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    await withMinimumDuration(memoryStore.refreshMemory(), 600);
-    isRefreshing = false;
+    try {
+      await withMinimumDuration(memoryStore.refreshMemory(), 600);
+    } finally {
+      isRefreshing = false;
+    }
   }
 
   async function terminatePending(force: boolean) {
@@ -96,14 +99,14 @@
   <!-- Header -->
   <div class="flex items-center justify-between pb-3 border-b border-border/60">
     <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+      <div class="h-9 w-9 rounded-lg bg-success/10 text-success flex items-center justify-center">
         <Activity size={20} />
       </div>
       <div>
         <div class="flex items-center gap-2">
           <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
           {#if memory}
-            <div class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
+            <div class="px-2.5 py-0.5 rounded-full text-caption font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
               <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-destructive animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}"></span>
               <span>Pressure: {memory.pressure.toUpperCase()}</span>
             </div>
@@ -150,7 +153,7 @@
           height="h-2"
           color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
         />
-        <div class="flex justify-between text-[10px] text-muted-foreground font-mono">
+        <div class="flex justify-between text-caption text-muted-foreground font-mono">
           <span>Available: {formatBytes(memory.available_bytes)}</span>
           <span>Free: {formatBytes(memory.free_bytes)}</span>
         </div>
@@ -165,7 +168,7 @@
         <div class="text-2xl font-bold font-mono text-foreground">
           {formatBytes(memory.compressed_bytes)}
         </div>
-        <p class="text-[11px] text-muted-foreground mt-1">
+        <p class="text-meta text-muted-foreground mt-1">
           macOS in-RAM memory compression avoiding disk swap slowdowns.
         </p>
       </Card>
@@ -189,7 +192,7 @@
             color="bg-blue-500"
           />
         {/if}
-        <p class="text-[11px] text-muted-foreground mt-1">
+        <p class="text-meta text-muted-foreground mt-1">
           Secondary disk paging memory usage.
         </p>
       </Card>
@@ -202,7 +205,7 @@
           <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Top Resource Consuming Processes
           </h3>
-          <span class="text-[10px] text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
+          <span class="text-caption text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
             2.5s live
           </span>
         </div>
@@ -235,7 +238,7 @@
             <div class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
               <div class="flex items-center gap-3 min-w-0 pr-2">
                 <div
-                  class="font-mono text-[11px] text-muted-foreground w-12 shrink-0"
+                  class="font-mono text-meta text-muted-foreground w-12 shrink-0"
                   title={proc.pids && proc.pids.length > 1 ? `PIDs: ${proc.pids.join(', ')}` : undefined}
                 >
                   PID {proc.pid}
@@ -243,7 +246,7 @@
                 <div class="min-w-0 truncate">
                   <span class="font-medium text-foreground">{proc.name}</span>
                   {#if proc.process_count > 1}
-                    <span class="text-muted-foreground ml-1.5 text-[11px]">
+                    <span class="text-muted-foreground ml-1.5 text-meta">
                       ({proc.process_count} instances)
                     </span>
                   {/if}
@@ -305,7 +308,7 @@
           </div>
         </div>
 
-        <div class="rounded-lg border border-border/70 bg-secondary/40 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+        <div class="rounded-lg border border-border/70 bg-secondary/40 px-3 py-2.5 text-meta leading-relaxed text-muted-foreground">
           Try normal Quit first. Force Quit stops every matching process immediately and should only be used when the app does not respond.
         </div>
 

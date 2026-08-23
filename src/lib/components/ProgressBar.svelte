@@ -26,7 +26,7 @@
 
 <div class="w-full space-y-1.5 {className}">
   {#if showPercent}
-    <div class="flex justify-between text-[11px] text-muted-foreground font-mono">
+    <div class="flex justify-between text-meta text-muted-foreground font-mono">
       <span>Progress</span>
       <span>{Math.round(percent)}%</span>
     </div>

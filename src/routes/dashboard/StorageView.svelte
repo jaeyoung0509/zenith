@@ -85,7 +85,7 @@
         </div>
         {#if disk}
           <ProgressBar value={disk.percent_used ?? 0} height="h-2.5" />
-          <div class="flex justify-between text-[11px] text-muted-foreground font-mono">
+          <div class="flex justify-between text-meta text-muted-foreground font-mono">
             <span>Free: {formatBytes(disk.free_bytes)}</span>
             <span>Used: {formatBytes(disk.used_bytes)}</span>
           </div>
@@ -103,7 +103,7 @@
         <div class="whitespace-nowrap text-3xl font-bold font-mono text-foreground">
           {formatBytes(scanStore.reclaimableBytes)}
         </div>
-        <div class="text-[11px] text-muted-foreground">
+        <div class="text-meta text-muted-foreground">
           {#if scan}
             <span>Last scan {formatTimeAgo(scan.finished_at)}</span>
           {:else}
@@ -117,7 +117,7 @@
     {#if volumes.length > 1}
       <div class="pt-3 border-t border-border/40 space-y-2">
         <div class="flex items-center justify-between">
-          <span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Mounted Volumes</span>
+          <span class="text-meta font-medium text-muted-foreground uppercase tracking-wider">Mounted Volumes</span>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {#each volumes as volume (volume.mount_point)}
@@ -126,13 +126,13 @@
                 <div class="flex items-center gap-1.5">
                   <span class="font-medium truncate">{volume.name || volume.mount_point}</span>
                   {#if volume.is_primary}
-                    <span class="px-1 py-0.2 rounded text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Primary</span>
+                    <span class="px-1 py-0.2 rounded text-micro bg-success/10 text-success border border-success/20">Primary</span>
                   {/if}
                   {#if volume.is_removable}
-                    <span class="px-1 py-0.2 rounded text-[9px] bg-secondary text-muted-foreground border border-border">External</span>
+                    <span class="px-1 py-0.2 rounded text-micro bg-secondary text-muted-foreground border border-border">External</span>
                   {/if}
                 </div>
-                <p class="whitespace-nowrap text-[10px] font-mono text-muted-foreground mt-0.5">
+                <p class="whitespace-nowrap text-caption font-mono text-muted-foreground mt-0.5">
                   {formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)} ({volume.percent_used != null ? `${volume.percent_used.toFixed(0)}%` : '—'})
                 </p>
               </div>
@@ -161,7 +161,7 @@
           onclick={() => scanStore.selectAllSafe()}
           class="text-xs px-2.5"
         >
-          <CheckSquare size={13} class="mr-1 text-emerald-500" />
+          <CheckSquare size={13} class="mr-1 text-success" />
           <span>Select Safe Only</span>
         </Button>
 
@@ -191,13 +191,13 @@
 
       <div class="flex flex-col sm:flex-row sm:items-center md:flex-col md:items-end gap-2 shrink-0">
         {#if scanStore.selectedCount > 0}
-          <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono">
-            <span class="whitespace-nowrap text-emerald-500 font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
+          <div class="flex flex-wrap items-center gap-2 text-meta font-mono">
+            <span class="whitespace-nowrap text-success font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
             {#if rebuildSelectedBytes > 0}
-              <span class="whitespace-nowrap text-amber-500 font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
+              <span class="whitespace-nowrap text-warning font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
             {/if}
             {#if manualSelectedBytes > 0}
-              <span class="whitespace-nowrap text-rose-400 font-medium">! {formatBytes(manualSelectedBytes)} Manual</span>
+              <span class="whitespace-nowrap text-destructive font-medium">! {formatBytes(manualSelectedBytes)} Manual</span>
             {/if}
           </div>
         {/if}
@@ -253,7 +253,7 @@
         Storage Categories
       </h2>
       <div class="flex items-center gap-1 text-xs text-muted-foreground">
-        <ShieldCheck size={14} class="text-emerald-500" />
+        <ShieldCheck size={14} class="text-success" />
         <span>Protected by Safety Engine</span>
       </div>
     </div>

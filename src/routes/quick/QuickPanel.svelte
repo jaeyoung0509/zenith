@@ -203,8 +203,8 @@
     </div>
     <div class="flex items-center space-x-1 no-drag">
       {#if awakeState.is_active}
-        <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-medium border border-amber-500/20">
-          <span class="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse-soft"></span>
+        <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-caption font-medium border border-warning/20">
+          <span class="h-1.5 w-1.5 rounded-full bg-warning animate-pulse-soft"></span>
           <span>Awake</span>
         </div>
       {/if}
@@ -220,7 +220,7 @@
         <!-- Action Hero Card -->
         <div class="p-3.5 bg-secondary/60 border border-border/70 rounded-xl flex items-center justify-between shadow-xs">
           <div>
-            <div class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            <div class="text-caption font-semibold text-muted-foreground uppercase tracking-wider">
               {cleanupState === 'ready' || cleanupState === 'refreshing' ? 'Ready to Clean' : 'System Status'}
             </div>
             <div class="text-2xl font-bold font-mono text-foreground mt-0.5">
@@ -232,17 +232,17 @@
                 <span>{formatBytes(quickCleanableBytes)}</span>
               {/if}
             </div>
-            <div class="text-[10px] font-medium mt-0.5 flex items-center gap-1">
+            <div class="text-caption font-medium mt-0.5 flex items-center gap-1">
               {#if cleanupState === 'unknown'}
                 <span class="text-muted-foreground">Run a scan to check safe caches</span>
               {:else if cleanupState === 'scanning'}
                 <span class="text-muted-foreground">Checking development caches</span>
               {:else if cleanupState === 'refreshing'}
-                <span class="text-amber-500">Refreshing scan…</span>
+                <span class="text-warning">Refreshing scan…</span>
               {:else if cleanupState === 'ready'}
-                <span class="text-emerald-500">Safe cleanup available</span>
+                <span class="text-success">Safe cleanup available</span>
               {:else}
-                <span class="text-emerald-500">Development caches clean</span>
+                <span class="text-success">Development caches clean</span>
               {/if}
             </div>
           </div>
@@ -277,7 +277,7 @@
           <div class="flex justify-between text-xs font-medium">
             <div class="flex items-center gap-1 text-muted-foreground">
               <span>Memory</span>
-              <span class="text-[10px] font-mono px-1 rounded bg-secondary text-foreground capitalize">
+              <span class="text-caption font-mono px-1 rounded bg-secondary text-foreground capitalize">
                 {memory.pressure}
               </span>
             </div>
@@ -286,14 +286,14 @@
           <ProgressBar
             value={(memory.used_bytes / memory.total_bytes) * 100}
             height="h-2"
-            color={memory.pressure === 'critical' ? 'bg-rose-500' : memory.pressure === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}
+            color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
           />
         </div>
       {:else if section === 'ai_usage'}
         <!-- AI Usage Quick List -->
         <div class="space-y-1.5 rounded-xl border border-border/60 bg-card/40 p-2.5">
           <div class="flex items-center justify-between px-1 pb-1">
-            <div class="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div class="flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-muted-foreground">
               <Sparkles size={12} class="text-violet-400" /> AI Usage
             </div>
             <button
@@ -307,9 +307,9 @@
             </button>
           </div>
           {#if settings.quick_panel_ai_providers.length === 0}
-            <div class="py-2 text-center text-[10px] text-muted-foreground">Configure in Settings.</div>
+            <div class="py-2 text-center text-caption text-muted-foreground">Configure in Settings.</div>
           {:else if usageStore.isLoading && !usageStore.snapshot}
-            <div class="py-2 text-center text-[10px] text-muted-foreground">Reading accounts…</div>
+            <div class="py-2 text-center text-caption text-muted-foreground">Reading accounts…</div>
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}
               <div
@@ -317,14 +317,14 @@
                 title={providerTitle(provider)}
               >
                 <div class="flex min-w-0 items-center gap-2">
-                  <Bot size={13} class={provider.connected ? 'text-emerald-400' : 'text-muted-foreground'} />
+                  <Bot size={13} class={provider.connected ? 'text-success' : 'text-muted-foreground'} />
                   <span class="truncate font-medium">{provider.name}</span>
                 </div>
-                <span class="ml-2 shrink-0 font-mono text-[10px] text-muted-foreground">{providerValue(provider)}</span>
+                <span class="ml-2 shrink-0 font-mono text-caption text-muted-foreground">{providerValue(provider)}</span>
               </div>
             {/each}
           {:else}
-            <div class="py-2 text-center text-[10px] text-muted-foreground">Configure in Settings.</div>
+            <div class="py-2 text-center text-caption text-muted-foreground">Configure in Settings.</div>
           {/if}
         </div>
       {:else if section === 'categories'}
@@ -336,7 +336,7 @@
                   {#if cat.category === 'ai'}<Sparkles size={14} class="text-purple-400" />
                   {:else if cat.category === 'developer'}<Code2 size={14} class="text-blue-400" />
                   {:else if cat.category === 'container'}<Container size={14} class="text-cyan-400" />
-                  {:else}<Boxes size={14} class="text-amber-400" />{/if}
+                  {:else}<Boxes size={14} class="text-warning" />{/if}
                   <span class="text-foreground font-medium">{cat.display_name}</span>
                 </div>
                 <span class="font-mono text-muted-foreground">{formatBytes(cat.total_bytes)}</span>
@@ -355,7 +355,7 @@
 
   <!-- Footer -->
   <div class="shrink-0 pt-3 border-t border-border/60 flex items-center justify-between gap-2">
-    <div class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+    <div class="flex items-center gap-1.5 text-meta text-muted-foreground">
       <span>Last scan {formatTimeAgo(scan?.finished_at)}</span>
       <button
         type="button"
@@ -368,7 +368,7 @@
       </button>
     </div>
     <div class="flex items-center gap-2">
-      <span class="text-[10px] font-mono text-muted-foreground/60 select-none">{formatVersion(APP_VERSION)}</span>
+      <span class="text-caption font-mono text-muted-foreground/60 select-none">{formatVersion(APP_VERSION)}</span>
       <Button
         variant="secondary"
         size="sm"

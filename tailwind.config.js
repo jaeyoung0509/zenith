@@ -61,6 +61,11 @@ export default {
           'monospace',
         ],
       },
+      fontSize: {
+        micro: ['0.5625rem', { lineHeight: '0.75rem' }],
+        caption: ['0.625rem', { lineHeight: '0.875rem' }],
+        meta: ['0.6875rem', { lineHeight: '1rem' }],
+      },
     },
   },
   plugins: [],

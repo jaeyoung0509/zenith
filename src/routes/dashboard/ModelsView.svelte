@@ -61,8 +61,11 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    await withMinimumDuration(localModelsStore.refresh(), 600);
-    isRefreshing = false;
+    try {
+      await withMinimumDuration(localModelsStore.refresh(), 600);
+    } finally {
+      isRefreshing = false;
+    }
   }
 </script>
 
@@ -70,7 +73,7 @@
   <!-- Header Card -->
   <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-border/60">
     <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center">
+      <div class="h-9 w-9 rounded-lg bg-warning/10 text-warning flex items-center justify-center">
         <Boxes size={20} />
       </div>
       <div>
@@ -99,9 +102,9 @@
   </div>
 
   {#if localModelsStore.error}
-    <div class="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3 text-xs text-rose-500 flex items-center justify-between">
+    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive flex items-center justify-between">
       <span>{localModelsStore.error}</span>
-      <Button variant="ghost" size="sm" onclick={() => (localModelsStore.error = null)} class="text-xs h-6 px-2 text-rose-400">Dismiss</Button>
+      <Button variant="ghost" size="sm" onclick={() => (localModelsStore.error = null)} class="text-xs h-6 px-2 text-destructive">Dismiss</Button>
     </div>
   {/if}
 
@@ -138,13 +141,13 @@
                 {sourceBadges[model.source]?.label || model.source}
               </Badge>
               {#if model.format}
-                <span class="text-[10px] text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
+                <span class="text-caption text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
                   {model.format}
                 </span>
               {/if}
             </div>
 
-            <div class="flex items-center gap-2 text-[11px] text-muted-foreground font-mono">
+            <div class="flex items-center gap-2 text-meta text-muted-foreground font-mono">
               <span class="truncate max-w-[320px]">{model.path}</span>
               {#if model.last_modified}
                 <span>• modified {formatTimeAgo(model.last_modified)}</span>
@@ -171,7 +174,7 @@
             <Button
               variant="outline"
               size="sm"
-              class="h-7 px-2 text-xs text-rose-500 hover:text-rose-500 hover:border-rose-500/30 gap-1"
+              class="h-7 px-2 text-xs text-destructive hover:text-destructive hover:border-destructive/30 gap-1"
               onclick={() => confirmDelete(model)}
             >
               <Trash2 size={12} />
@@ -193,7 +196,7 @@
   {#if modelToDelete}
     <div class="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
       <Card class="w-full max-w-sm bg-card border-border shadow-2xl p-5 space-y-4">
-        <div class="flex items-center gap-2.5 text-amber-500">
+        <div class="flex items-center gap-2.5 text-warning">
           <AlertTriangle size={20} />
           <h3 class="text-sm font-semibold text-foreground">Delete Model Weights?</h3>
         </div>

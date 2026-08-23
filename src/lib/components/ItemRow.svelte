@@ -39,7 +39,7 @@
         type="button"
         onclick={handleReveal}
         title="Manual item: requires dedicated adapter or review"
-        class="mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium border border-rose-500/30 text-rose-400 bg-rose-500/10 flex items-center gap-0.5 shrink-0 hover:bg-rose-500/20 transition-colors cursor-pointer"
+        class="mt-0.5 px-1.5 py-0.5 rounded text-caption font-medium border border-destructive/30 text-destructive bg-destructive/10 flex items-center gap-0.5 shrink-0 hover:bg-destructive/20 transition-colors cursor-pointer"
       >
         <span>Manual</span>
         <ArrowUpRight size={10} />
@@ -61,11 +61,11 @@
         <RiskBadge risk={item.risk} />
       </div>
 
-      <p class="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+      <p class="text-meta text-muted-foreground mt-0.5 line-clamp-1">
         {item.description || item.path}
       </p>
 
-      <div class="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground font-mono">
+      <div class="flex items-center gap-2 mt-1 text-caption text-muted-foreground font-mono">
         <span class="truncate max-w-[280px]">{item.path}</span>
         {#if item.file_count > 0}
           <span>• {item.file_count} files</span>

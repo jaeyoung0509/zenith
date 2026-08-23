@@ -34,6 +34,9 @@ The canonical color tokens live in `src/app.css`. In dark mode:
 Use the system sans-serif stack for labels and prose. Use monospace numerals for
 bytes, percentages, token counts, prices, process IDs, and reset times. Body text
 is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
+Compact supporting copy uses the named Tailwind steps `text-micro` (9 px),
+`text-caption` (10 px), and `text-meta` (11 px); do not reintroduce arbitrary
+pixel utilities for those sizes.
 
 ## Layout
 

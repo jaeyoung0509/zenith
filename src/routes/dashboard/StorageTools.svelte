@@ -23,7 +23,7 @@
   <div class="flex items-start justify-between gap-3">
     <div class="min-w-0">
       <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Tools</h2>
-      <p class="text-[11px] text-muted-foreground mt-0.5">
+      <p class="text-meta text-muted-foreground mt-0.5">
         User-reviewed workflows stay separate from automatic cache cleanup.
       </p>
     </div>
@@ -54,7 +54,7 @@
         </span>
         <span class="min-w-0 flex-1">
           <span class="block text-xs font-semibold">Large Files</span>
-          <span class="block text-[10px] text-muted-foreground mt-0.5">
+          <span class="block text-caption text-muted-foreground mt-0.5">
             Find files taking significant disk space
           </span>
         </span>
@@ -76,7 +76,7 @@
         </span>
         <span class="min-w-0 flex-1">
           <span class="block text-xs font-semibold">Applications</span>
-          <span class="block text-[10px] text-muted-foreground mt-0.5">
+          <span class="block text-caption text-muted-foreground mt-0.5">
             Remove apps and review related files
           </span>
         </span>

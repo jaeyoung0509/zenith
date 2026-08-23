@@ -134,7 +134,7 @@
   </div>
 
   {#if settingsStore.error}
-    <div class="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-500">
+    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">
       {settingsStore.error}
     </div>
   {/if}
@@ -148,7 +148,7 @@
       <div class="flex items-center justify-between text-xs">
         <div>
           <div class="flex items-center gap-2 font-medium text-foreground">Launch Zenith at login <Badge variant="outline">Planned</Badge></div>
-          <div class="text-[11px] text-muted-foreground">Autostart is not enabled in this build.</div>
+          <div class="text-meta text-muted-foreground">Autostart is not enabled in this build.</div>
         </div>
         <Switch
           checked={settings.launch_at_login}
@@ -165,7 +165,7 @@
       <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
         Dashboard Navigation Menu
       </h3>
-      <p class="text-[11px] text-muted-foreground mt-1">
+      <p class="text-meta text-muted-foreground mt-1">
         Customize the tabs displayed in the left sidebar. Drag or use the arrow buttons to reorder.
       </p>
     </div>
@@ -214,7 +214,7 @@
           />
           <div class="min-w-0 flex-1 select-none">
             <div class="text-xs font-medium text-foreground">{tabOption.label}</div>
-            <div class="text-[10px] text-muted-foreground">{tabOption.description}</div>
+            <div class="text-caption text-muted-foreground">{tabOption.description}</div>
           </div>
           {#if enabled}
             <ReorderControls
@@ -235,7 +235,7 @@
       <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
         Menu Bar Quick Panel
       </h3>
-      <p class="text-[11px] text-muted-foreground mt-1">
+      <p class="text-meta text-muted-foreground mt-1">
         Choose what appears below the menu bar icon. Drag or use the arrow buttons to set priority.
       </p>
     </div>
@@ -285,7 +285,7 @@
             />
             <div class="min-w-0 flex-1 select-none">
               <div class="text-xs font-medium text-foreground">{option.label}</div>
-              <div class="text-[10px] text-muted-foreground">{option.description}</div>
+              <div class="text-caption text-muted-foreground">{option.description}</div>
             </div>
             {#if enabled}
               <ReorderControls
@@ -303,7 +303,7 @@
         <div class="flex items-center gap-2 text-xs font-medium text-foreground">
           <Sparkles size={14} /> AI Provider Priority
         </div>
-        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in this order. Drag or use the arrow buttons to reorder.</p>
+        <p class="text-caption text-muted-foreground">Only enabled providers are displayed in this order. Drag or use the arrow buttons to reorder.</p>
         {#each orderedProviders() as provider (provider.id)}
           {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
           {@const enabledIndex = settings.quick_panel_ai_providers.indexOf(provider.id)}
@@ -363,7 +363,7 @@
       <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
         Cleanup Scan Scope
       </h3>
-      <p class="text-[11px] text-muted-foreground mt-1">
+      <p class="text-meta text-muted-foreground mt-1">
         Choose how broadly Zenith searches for reclaimable cache and log data.
       </p>
     </div>
@@ -371,11 +371,11 @@
       <div class="flex items-start justify-between gap-5 text-xs">
         <div class="min-w-0">
           <div class="flex items-center gap-2 font-medium text-foreground">
-            <AlertTriangle size={14} class="text-amber-500" />
+            <AlertTriangle size={14} class="text-warning" />
             Intensive cleanup
             <Badge variant="outline">Opt-in</Badge>
           </div>
-          <div class="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+          <div class="text-meta text-muted-foreground mt-1 leading-relaxed">
             Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
             Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
           </div>
@@ -399,7 +399,7 @@
       <div class="flex items-center justify-between text-xs pt-3 first:pt-0">
         <div>
           <div class="font-medium text-foreground">AI Assistant Caches & Logs</div>
-          <div class="text-[11px] text-muted-foreground">Claude Code, Cursor, Gemini CLI, Codex, Aider.</div>
+          <div class="text-meta text-muted-foreground">Claude Code, Cursor, Gemini CLI, Codex, Aider.</div>
         </div>
         <Switch
           checked={settings.clean_ai_tools}
@@ -412,7 +412,7 @@
       <div class="flex items-center justify-between text-xs pt-3">
         <div>
           <div class="font-medium text-foreground">Developer Compilers & Package Managers</div>
-          <div class="text-[11px] text-muted-foreground">Go build, Cargo cache, npm, pnpm, uv, Xcode DerivedData.</div>
+          <div class="text-meta text-muted-foreground">Go build, Cargo cache, npm, pnpm, uv, Xcode DerivedData.</div>
         </div>
         <Switch
           checked={settings.clean_developer_tools}
@@ -425,7 +425,7 @@
       <div class="flex items-center justify-between text-xs pt-3">
         <div>
           <div class="font-medium text-foreground">Docker Dangling Images & BuildKit Cache</div>
-          <div class="text-[11px] text-muted-foreground">Clean safe Docker cache layers via official Docker CLI.</div>
+          <div class="text-meta text-muted-foreground">Clean safe Docker cache layers via official Docker CLI.</div>
         </div>
         <Switch
           checked={settings.clean_docker}
@@ -438,7 +438,7 @@
       <div class="flex items-center justify-between text-xs pt-3">
         <div>
           <div class="font-medium text-foreground">Local Models (Ollama / HuggingFace)</div>
-          <div class="text-[11px] text-muted-foreground">Always off by default to protect stateful weights.</div>
+          <div class="text-meta text-muted-foreground">Always off by default to protect stateful weights.</div>
         </div>
         <Switch
           checked={settings.clean_local_models}
@@ -503,13 +503,13 @@
     <Card class="p-4 bg-card/70 space-y-4">
       <div class="space-y-1">
         <div class="text-xs font-medium text-foreground">Local System & Error Logs</div>
-        <p class="text-[11px] text-muted-foreground leading-relaxed">
-          Zenith keeps zero telemetry and never transmits analytics or secrets. Error and subprocess failure logs are stored locally on your machine at <code class="font-mono text-[10px] bg-secondary/80 px-1 py-0.5 rounded">~/Library/Logs/Zenith</code>.
+        <p class="text-meta text-muted-foreground leading-relaxed">
+          Zenith keeps zero telemetry and never transmits analytics or secrets. Error and subprocess failure logs are stored locally on your machine at <code class="font-mono text-caption bg-secondary/80 px-1 py-0.5 rounded">~/Library/Logs/Zenith</code>.
         </p>
       </div>
 
       {#if diagnosticsData?.settings_corrupt_recovered}
-        <div class="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+        <div class="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle size={14} class="shrink-0" />
           <span>A damaged configuration file was detected, safely backed up, and reset to defaults.</span>
         </div>
@@ -527,17 +527,17 @@
       </div>
 
       {#if diagnosticsData}
-        <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-[11px] font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto">
+        <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto">
           <div><span class="text-foreground font-semibold">Zenith:</span> {diagnosticsData.app_version} ({diagnosticsData.arch})</div>
           <div><span class="text-foreground font-semibold">OS:</span> {diagnosticsData.os_version}</div>
           <div><span class="text-foreground font-semibold">Log:</span> {diagnosticsData.log_path}</div>
           {#if diagnosticsData.recent_errors.length > 0}
-            <div class="pt-2 text-red-400 font-semibold">Recent Errors ({diagnosticsData.recent_errors.length}):</div>
+            <div class="pt-2 text-destructive font-semibold">Recent Errors ({diagnosticsData.recent_errors.length}):</div>
             {#each diagnosticsData.recent_errors as err}
-              <div class="text-red-400/80 truncate">{err}</div>
+              <div class="text-destructive/80 truncate">{err}</div>
             {/each}
           {:else}
-            <div class="pt-1 text-emerald-500/80">No recent errors logged.</div>
+            <div class="pt-1 text-success/80">No recent errors logged.</div>
           {/if}
         </div>
       {/if}
@@ -557,7 +557,7 @@
       <p class="text-muted-foreground leading-relaxed">
         Zenith is an ultra-lightweight open-source utility designed to safely manage AI caches, developer build artifacts, Docker storage, local LLMs, memory pressure, and keep-awake power assertions.
       </p>
-      <div class="pt-2 text-[11px] text-muted-foreground font-mono">
+      <div class="pt-2 text-meta text-muted-foreground font-mono">
         Built with Tauri 2 + Svelte 5 + Rust. Zero analytics, zero cloud, 100% local.
       </div>
     </Card>

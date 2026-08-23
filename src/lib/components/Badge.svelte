@@ -24,7 +24,7 @@
 </script>
 
 <span
-  class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium tracking-tight {variantStyles[
+  class="inline-flex items-center px-2 py-0.5 rounded-full text-caption font-medium tracking-tight {variantStyles[
     variant
   ]} {className}"
 >
