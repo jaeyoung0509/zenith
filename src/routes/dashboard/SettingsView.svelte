@@ -8,6 +8,7 @@
   import Button from '../../lib/components/Button.svelte';
   import Switch from '../../lib/components/Switch.svelte';
   import Checkbox from '../../lib/components/Checkbox.svelte';
+  import ReorderControls from '../../lib/components/ReorderControls.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { Settings, Sparkles, Moon, Sun, Monitor, PanelTop, LayoutList, GripVertical, FolderOpen, FileText, AlertTriangle } from 'lucide-svelte';
 
@@ -165,7 +166,7 @@
         Dashboard Navigation Menu
       </h3>
       <p class="text-[11px] text-muted-foreground mt-1">
-        Customize the tabs displayed in the left sidebar and drag to reorder.
+        Customize the tabs displayed in the left sidebar. Drag or use the arrow buttons to reorder.
       </p>
     </div>
     <Card class="p-4 bg-card/70 space-y-3">
@@ -174,6 +175,7 @@
       </div>
       {#each orderedDashboardTabs() as tabOption (tabOption.id)}
         {@const enabled = (settings.dashboard_tabs ?? []).includes(tabOption.id)}
+        {@const enabledIndex = (settings.dashboard_tabs ?? []).indexOf(tabOption.id)}
         <div
           role="listitem"
           draggable={enabled}
@@ -201,7 +203,7 @@
             draggedTab = null;
             dragOverTab = null;
           }}
-          class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverTab === tabOption.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedTab === tabOption.id ? 'opacity-40' : ''}"
+          class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-[background-color,border-color,opacity,transform] {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverTab === tabOption.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedTab === tabOption.id ? 'opacity-40' : ''}"
         >
           <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
           <Checkbox
@@ -214,6 +216,14 @@
             <div class="text-xs font-medium text-foreground">{tabOption.label}</div>
             <div class="text-[10px] text-muted-foreground">{tabOption.description}</div>
           </div>
+          {#if enabled}
+            <ReorderControls
+              label={tabOption.label}
+              index={enabledIndex}
+              count={(settings.dashboard_tabs ?? []).length}
+              onMove={(direction) => settingsStore.moveDashboardTab(tabOption.id, direction)}
+            />
+          {/if}
         </div>
       {/each}
     </Card>
@@ -226,7 +236,7 @@
         Menu Bar Quick Panel
       </h3>
       <p class="text-[11px] text-muted-foreground mt-1">
-        Choose what appears below the menu bar icon and drag to set display priority.
+        Choose what appears below the menu bar icon. Drag or use the arrow buttons to set priority.
       </p>
     </div>
     <Card class="p-4 bg-card/70 space-y-5">
@@ -236,6 +246,7 @@
         </div>
         {#each orderedSections() as option (option.id)}
           {@const enabled = settings.quick_panel_sections.includes(option.id)}
+          {@const enabledIndex = settings.quick_panel_sections.indexOf(option.id)}
           <div
             role="listitem"
             draggable={enabled}
@@ -263,7 +274,7 @@
               draggedSection = null;
               dragOverSection = null;
             }}
-            class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverSection === option.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedSection === option.id ? 'opacity-40' : ''}"
+            class="flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-[background-color,border-color,opacity,transform] {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverSection === option.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedSection === option.id ? 'opacity-40' : ''}"
           >
             <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
             <Checkbox
@@ -276,6 +287,14 @@
               <div class="text-xs font-medium text-foreground">{option.label}</div>
               <div class="text-[10px] text-muted-foreground">{option.description}</div>
             </div>
+            {#if enabled}
+              <ReorderControls
+                label={option.label}
+                index={enabledIndex}
+                count={settings.quick_panel_sections.length}
+                onMove={(direction) => settingsStore.moveQuickPanelSection(option.id, direction)}
+              />
+            {/if}
           </div>
         {/each}
       </div>
@@ -284,9 +303,10 @@
         <div class="flex items-center gap-2 text-xs font-medium text-foreground">
           <Sparkles size={14} /> AI Provider Priority
         </div>
-        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in the quick panel, in this order. Drag to reorder.</p>
+        <p class="text-[10px] text-muted-foreground">Only enabled providers are displayed in this order. Drag or use the arrow buttons to reorder.</p>
         {#each orderedProviders() as provider (provider.id)}
           {@const enabled = settings.quick_panel_ai_providers.includes(provider.id)}
+          {@const enabledIndex = settings.quick_panel_ai_providers.indexOf(provider.id)}
           <div
             role="listitem"
             draggable={enabled}
@@ -314,7 +334,7 @@
               draggedProvider = null;
               dragOverProvider = null;
             }}
-            class="flex items-center gap-3 rounded-lg border px-3 py-2 transition-all {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverProvider === provider.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedProvider === provider.id ? 'opacity-40' : ''}"
+            class="flex items-center gap-3 rounded-lg border px-3 py-2 transition-[background-color,border-color,opacity,transform] {enabled ? 'cursor-grab active:cursor-grabbing bg-card' : 'opacity-60 bg-muted/20'} {dragOverProvider === provider.id ? 'border-primary bg-primary/5 scale-[1.01]' : 'border-border/60'} {draggedProvider === provider.id ? 'opacity-40' : ''}"
           >
             <GripVertical size={14} class="text-muted-foreground/60 shrink-0 select-none {enabled ? 'hover:text-foreground' : 'opacity-20'}" />
             <Checkbox
@@ -323,6 +343,14 @@
               ariaLabel={`Show ${provider.label} usage`}
             />
             <span class="flex-1 text-xs font-medium text-foreground select-none">{provider.label}</span>
+            {#if enabled}
+              <ReorderControls
+                label={provider.label}
+                index={enabledIndex}
+                count={settings.quick_panel_ai_providers.length}
+                onMove={(direction) => settingsStore.moveQuickPanelProvider(provider.id, direction)}
+              />
+            {/if}
           </div>
         {/each}
       </div>
@@ -431,7 +459,7 @@
         <button
           type="button"
           onclick={() => handleTheme('system')}
-          class="flex flex-col items-center justify-center p-3 rounded-lg border text-xs gap-2 transition-all {settings.theme ===
+          class="flex flex-col items-center justify-center p-3 rounded-lg border text-xs gap-2 transition-[background-color,color,border-color] {settings.theme ===
           'system'
             ? 'border-primary bg-secondary/80 text-foreground font-semibold'
             : 'border-border text-muted-foreground hover:text-foreground'}"
@@ -443,7 +471,7 @@
         <button
           type="button"
           onclick={() => handleTheme('dark')}
-          class="flex flex-col items-center justify-center p-3 rounded-lg border text-xs gap-2 transition-all {settings.theme ===
+          class="flex flex-col items-center justify-center p-3 rounded-lg border text-xs gap-2 transition-[background-color,color,border-color] {settings.theme ===
           'dark'
             ? 'border-primary bg-secondary/80 text-foreground font-semibold'
             : 'border-border text-muted-foreground hover:text-foreground'}"
@@ -455,7 +483,7 @@
         <button
           type="button"
           onclick={() => handleTheme('light')}
-          class="flex flex-col items-center justify-center p-3 rounded-lg border text-xs gap-2 transition-all {settings.theme ===
+          class="flex flex-col items-center justify-center p-3 rounded-lg border text-xs gap-2 transition-[background-color,color,border-color] {settings.theme ===
           'light'
             ? 'border-primary bg-secondary/80 text-foreground font-semibold'
             : 'border-border text-muted-foreground hover:text-foreground'}"

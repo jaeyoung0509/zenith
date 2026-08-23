@@ -180,10 +180,10 @@
   }
 </script>
 
-<div class="w-full h-full min-h-[480px] max-h-[520px] bg-background/95 backdrop-blur-xl border border-border/80 rounded-2xl flex flex-col justify-between p-4 select-none shadow-2xl text-foreground font-sans overflow-hidden relative">
+<div class="w-full h-full min-h-[480px] max-h-[520px] bg-background border border-border/80 rounded-2xl flex flex-col justify-between p-4 select-none shadow-2xl text-foreground font-sans overflow-hidden relative">
   <!-- Header — draggable, buttons are no-drag -->
   <div
-    class="flex items-center justify-between pb-3 border-b border-border/60 relative titlebar-drag-region"
+    class="flex shrink-0 items-center justify-between pb-3 border-b border-border/60 relative titlebar-drag-region"
     role="presentation"
     onmousedown={handleWindowDrag}
   >
@@ -214,7 +214,7 @@
   </div>
 
   <!-- Body Content -->
-  <div class="flex-1 overflow-y-auto py-3 space-y-3 pr-0.5">
+  <div class="min-h-0 flex-1 overflow-y-auto py-3 space-y-3 pr-1">
     {#each settings.quick_panel_sections as section}
       {#if section === 'cleanup'}
         <!-- Action Hero Card -->
@@ -354,7 +354,7 @@
   </div>
 
   <!-- Footer -->
-  <div class="pt-3 border-t border-border/60 flex items-center justify-between gap-2">
+  <div class="shrink-0 pt-3 border-t border-border/60 flex items-center justify-between gap-2">
     <div class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
       <span>Last scan {formatTimeAgo(scan?.finished_at)}</span>
       <button

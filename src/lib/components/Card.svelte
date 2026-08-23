@@ -10,7 +10,7 @@
 </script>
 
 <div
-  class="bg-card text-card-foreground rounded-xl border border-border/80 p-4 shadow-sm backdrop-blur-sm {className}"
+  class="bg-card text-card-foreground rounded-xl border border-border/80 p-4 shadow-sm {className}"
 >
   {#if children}
     {@render children()}

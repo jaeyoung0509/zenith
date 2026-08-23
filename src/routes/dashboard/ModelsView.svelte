@@ -166,6 +166,8 @@
               size="icon"
               class="h-7 w-7 text-muted-foreground"
               onclick={() => tauriRevealInFinder(model.path)}
+              ariaLabel={`Reveal ${model.name} in Finder`}
+              title="Reveal in Finder"
             >
               <FolderOpen size={13} />
             </Button>
