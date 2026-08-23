@@ -20,6 +20,7 @@ pub struct ListenerLease {
     pub server_name: String,
     pub created_at: Instant,
     pub can_release: bool,
+    pub force_authorized: bool,
 }
 
 impl ListenerLease {
@@ -52,6 +53,7 @@ pub struct CreateLeaseParams {
     pub exe_path: Option<PathBuf>,
     pub server_name: String,
     pub can_release: bool,
+    pub force_authorized: bool,
     pub now: Instant,
 }
 
@@ -82,6 +84,7 @@ impl DevelopmentPortStore {
             server_name: params.server_name,
             created_at: params.now,
             can_release: params.can_release,
+            force_authorized: params.force_authorized,
         };
 
         // Evict oldest if capacity exceeded
@@ -163,6 +166,7 @@ mod tests {
             exe_path: None,
             server_name: "Vite".to_string(),
             can_release: true,
+            force_authorized: false,
             now: t0,
         });
 
@@ -194,6 +198,7 @@ mod tests {
             exe_path: None,
             server_name: "Server1".to_string(),
             can_release: true,
+            force_authorized: false,
             now,
         });
         let id2 = store.create_lease(CreateLeaseParams {
@@ -206,6 +211,7 @@ mod tests {
             exe_path: None,
             server_name: "Server2".to_string(),
             can_release: true,
+            force_authorized: false,
             now,
         });
         let id3 = store.create_lease(CreateLeaseParams {
@@ -218,6 +224,7 @@ mod tests {
             exe_path: None,
             server_name: "Server3".to_string(),
             can_release: true,
+            force_authorized: false,
             now,
         });
 
@@ -235,6 +242,7 @@ mod tests {
             exe_path: None,
             server_name: "Server4".to_string(),
             can_release: true,
+            force_authorized: false,
             now,
         });
 
@@ -260,6 +268,7 @@ mod tests {
             exe_path: None,
             server_name: "Vite".to_string(),
             can_release: true,
+            force_authorized: false,
             now,
         });
 

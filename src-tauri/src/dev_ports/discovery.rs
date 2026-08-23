@@ -135,26 +135,14 @@ fn classify_address(host: &str) -> (String, ListenerExposure) {
     }
 }
 
-/// Deduplicates duplicate socket descriptors for the same (pid, port, protocol),
-/// giving preference to more specific bind addresses (e.g. Loopback/Network over AllInterfaces).
+/// Deduplicates repeated socket descriptors for the same exact endpoint while
+/// preserving distinct bind addresses owned by the same process.
 fn deduplicate_listeners(records: Vec<RawListenerRecord>) -> Vec<RawListenerRecord> {
-    let mut map: HashMap<(u32, u16), RawListenerRecord> = HashMap::new();
+    let mut map: HashMap<(u32, u16, String), RawListenerRecord> = HashMap::new();
 
     for record in records {
-        let key = (record.pid, record.port);
-        match map.get(&key) {
-            None => {
-                map.insert(key, record);
-            }
-            Some(existing) => {
-                // If the new one is Loopback or Network and existing is AllInterfaces, replace it
-                if existing.exposure == ListenerExposure::AllInterfaces
-                    && record.exposure != ListenerExposure::AllInterfaces
-                {
-                    map.insert(key, record);
-                }
-            }
-        }
+        let key = (record.pid, record.port, record.bind_address.clone());
+        map.entry(key).or_insert(record);
     }
 
     let mut result: Vec<RawListenerRecord> = map.into_values().collect();
@@ -250,15 +238,19 @@ mod tests {
 
     #[test]
     fn deduplicate_duplicate_records_without_merging_different_owners() {
-        // Same PID (100) on port 5173 listed twice (fd 10 and fd 11)
+        // Same exact endpoint is listed twice, while a wildcard bind owned by
+        // the same PID and a network bind owned by another PID stay distinct.
         // Different PID (200) also on port 5173 (e.g. SO_REUSEPORT or dual-stack)
-        let fixture = b"p100\0cnode\0u501\0f10\0n*:5173\0\nf11\0n127.0.0.1:5173\0\np200\0cother\0u501\0f5\0n192.168.1.5:5173\0";
+        let fixture = b"p100\0cnode\0u501\0f10\0n127.0.0.1:5173\0\nf11\0n127.0.0.1:5173\0\nf12\0n*:5173\0\np200\0cother\0u501\0f5\0n192.168.1.5:5173\0";
         let records = parse_lsof_output(fixture);
 
-        assert_eq!(records.len(), 2);
-        let pid100 = records.iter().find(|r| r.pid == 100).unwrap();
-        assert_eq!(pid100.port, 5173);
-        assert_eq!(pid100.bind_address, "127.0.0.1"); // preferred over wildcard
+        assert_eq!(records.len(), 3);
+        let pid100: Vec<_> = records.iter().filter(|record| record.pid == 100).collect();
+        assert_eq!(pid100.len(), 2);
+        assert!(pid100
+            .iter()
+            .any(|record| record.bind_address == "127.0.0.1"));
+        assert!(pid100.iter().any(|record| record.bind_address == "0.0.0.0"));
 
         let pid200 = records.iter().find(|r| r.pid == 200).unwrap();
         assert_eq!(pid200.port, 5173);

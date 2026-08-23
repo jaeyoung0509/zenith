@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DevelopmentPortsStore,
   filterDevelopmentListeners,
+  replaceDevelopmentListenerLease,
 } from '../lib/stores/developmentPorts.svelte';
 import { formatProcessAge } from '../lib/utils/format';
 import { mockApi } from '../lib/api/mock';
@@ -94,6 +95,19 @@ describe('filterDevelopmentListeners utility', () => {
 
   it('returns empty array when no listeners match query', () => {
     expect(filterDevelopmentListeners(sampleListeners, 'nonexistent-app-9999')).toEqual([]);
+  });
+
+  it('replaces only the consumed endpoint lease when ports are shared', () => {
+    const samePort = { ...sampleListeners[1], id: 'lease-same-port', port: 5173 };
+    const replacement = { ...sampleListeners[0], id: 'force-authorized-lease' };
+
+    expect(
+      replaceDevelopmentListenerLease(
+        [sampleListeners[0], samePort],
+        sampleListeners[0].id,
+        replacement
+      )
+    ).toEqual([replacement, samePort]);
   });
 });
 

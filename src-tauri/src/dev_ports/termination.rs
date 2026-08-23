@@ -87,10 +87,14 @@ impl DevPortSystem for RealDevPortSystem {
 
     fn get_process_info(&self, pid: u32) -> Option<ProcessSnapshot> {
         let mut guard = self.sys.lock().expect("sysinfo lock poisoned");
-        let sys = guard.get_or_insert_with(sysinfo::System::new_all);
+        let sys = guard.get_or_insert_with(sysinfo::System::new);
 
         let sys_pid = sysinfo::Pid::from_u32(pid);
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[sys_pid]),
+            true,
+            sysinfo::ProcessRefreshKind::everything(),
+        );
 
         let process = sys.process(sys_pid)?;
 
@@ -169,10 +173,13 @@ pub fn list_listeners(
     let own_pid = system.own_pid();
 
     let mut listeners = Vec::new();
-    let mut store_guard = store.lock().expect("store lock poisoned");
-    store_guard.prune_stale(now);
 
     for record in raw_records {
+        // The feature is intentionally scoped to listeners whose ownership was
+        // positively identified as the current user by lsof.
+        if record.uid != Some(current_uid) {
+            continue;
+        }
         let proc_info = system.get_process_info(record.pid);
 
         let (
@@ -234,18 +241,22 @@ pub fn list_listeners(
             )
         };
 
-        let lease_id = store_guard.create_lease(CreateLeaseParams {
-            pid: record.pid,
-            port: record.port,
-            protocol: record.protocol,
-            bind_address: record.bind_address.clone(),
-            uid,
-            started_at,
-            exe_path,
-            server_name: server_name.clone(),
-            can_release,
-            now,
-        });
+        let lease_id = store
+            .lock()
+            .expect("store lock poisoned")
+            .create_lease(CreateLeaseParams {
+                pid: record.pid,
+                port: record.port,
+                protocol: record.protocol,
+                bind_address: record.bind_address.clone(),
+                uid,
+                started_at,
+                exe_path,
+                server_name: server_name.clone(),
+                can_release,
+                force_authorized: false,
+                now,
+            });
 
         listeners.push(DevelopmentListener {
             id: lease_id,
@@ -294,30 +305,37 @@ pub fn release_listener(
     if !lease.can_release {
         return Err("This listener is protected and cannot be released.".to_string());
     }
+    if mode == ReleaseMode::Force && !lease.force_authorized {
+        return Err(
+            "Force release requires a fresh failed graceful-release confirmation.".to_string(),
+        );
+    }
 
     // 3. TOCTOU revalidation: verify current listeners from system
     let current_listeners = system.discover_listeners()?;
-    let current_listener = current_listeners
-        .iter()
-        .find(|l| l.port == lease.port && l.protocol == lease.protocol);
+    let current_listener = current_listeners.iter().find(|listener| {
+        listener.pid == lease.pid
+            && listener.port == lease.port
+            && listener.protocol == lease.protocol
+            && listener.bind_address == lease.bind_address
+    });
 
     let Some(found_listener) = current_listener else {
-        // Port is already free!
+        let outcome = if current_listeners
+            .iter()
+            .any(|listener| listener.port == lease.port && listener.protocol == lease.protocol)
+        {
+            ReleaseOutcome::OwnershipChanged
+        } else {
+            ReleaseOutcome::Released
+        };
         return Ok(ReleaseDevelopmentListenerResult {
             port: lease.port,
-            outcome: ReleaseOutcome::Released,
+            outcome,
             listener: None,
         });
     };
-
-    if found_listener.pid != lease.pid {
-        // Port ownership changed to another PID
-        return Ok(ReleaseDevelopmentListenerResult {
-            port: lease.port,
-            outcome: ReleaseOutcome::OwnershipChanged,
-            listener: None,
-        });
-    }
+    debug_assert_eq!(found_listener.pid, lease.pid);
 
     // 4. Inspect current process identity
     let current_proc = system.get_process_info(lease.pid).ok_or_else(|| {
@@ -385,14 +403,25 @@ pub fn release_listener(
         system.sleep(poll_interval);
 
         let listeners = system.discover_listeners()?;
-        let still_open = listeners
-            .iter()
-            .any(|l| l.port == lease.port && l.protocol == lease.protocol);
+        let same_listener_still_open = listeners.iter().any(|listener| {
+            listener.pid == lease.pid
+                && listener.port == lease.port
+                && listener.protocol == lease.protocol
+                && listener.bind_address == lease.bind_address
+        });
 
-        if !still_open {
+        if !same_listener_still_open {
+            let outcome = if listeners
+                .iter()
+                .any(|listener| listener.port == lease.port && listener.protocol == lease.protocol)
+            {
+                ReleaseOutcome::OwnershipChanged
+            } else {
+                ReleaseOutcome::Released
+            };
             return Ok(ReleaseDevelopmentListenerResult {
                 port: lease.port,
-                outcome: ReleaseOutcome::Released,
+                outcome,
                 listener: None,
             });
         }
@@ -400,14 +429,25 @@ pub fn release_listener(
 
     // 7. Post-grace inspection
     let post_listeners = system.discover_listeners()?;
-    let post_listener = post_listeners
-        .iter()
-        .find(|l| l.port == lease.port && l.protocol == lease.protocol);
+    let post_listener = post_listeners.iter().find(|listener| {
+        listener.pid == lease.pid
+            && listener.port == lease.port
+            && listener.protocol == lease.protocol
+            && listener.bind_address == lease.bind_address
+    });
 
     let Some(found_post) = post_listener else {
+        let outcome = if post_listeners
+            .iter()
+            .any(|listener| listener.port == lease.port && listener.protocol == lease.protocol)
+        {
+            ReleaseOutcome::OwnershipChanged
+        } else {
+            ReleaseOutcome::Released
+        };
         return Ok(ReleaseDevelopmentListenerResult {
             port: lease.port,
-            outcome: ReleaseOutcome::Released,
+            outcome,
             listener: None,
         });
     };
@@ -431,6 +471,7 @@ pub fn release_listener(
                     exe_path: lease.exe_path.clone(),
                     server_name: lease.server_name.clone(),
                     can_release: true,
+                    force_authorized: true,
                     now: fresh_now,
                 });
 
@@ -594,6 +635,36 @@ mod tests {
     }
 
     #[test]
+    fn force_release_cannot_skip_the_graceful_attempt() {
+        let fake = FakeDevPortSystem::new();
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            uid: Some(501),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("/opt/homebrew/bin/node")),
+            cwd: Some(PathBuf::from("/Users/apple/Myproject/clean1")),
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+
+        let error = release_listener(&store, &fake, &listener.id, ReleaseMode::Force)
+            .expect_err("a listing lease must never authorize SIGKILL");
+
+        assert!(error.contains("failed graceful-release"));
+        assert!(fake.signaled_pids.lock().unwrap().is_empty());
+        assert!(store
+            .lock()
+            .unwrap()
+            .peek_lease(&listener.id, fake.now())
+            .is_none());
+    }
+
+    #[test]
     fn release_process_that_ignores_sigterm_returns_still_listening_with_fresh_lease() {
         let fake = FakeDevPortSystem::new();
         fake.auto_exit_on_signal.store(false, Ordering::SeqCst);
@@ -710,6 +781,46 @@ mod tests {
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shared_port_release_targets_only_the_leased_bind_endpoint() {
+        let fake = FakeDevPortSystem::new();
+        fake.add_listener(11111, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_listener(
+            22222,
+            5173,
+            "node",
+            "0.0.0.0",
+            ListenerExposure::AllInterfaces,
+        );
+        for pid in [11111, 22222] {
+            fake.add_process(ProcessSnapshot {
+                pid,
+                uid: Some(501),
+                start_time: 1700000000 + u64::from(pid),
+                raw_command: "node".to_string(),
+                process_name: "node".to_string(),
+                exe_path: Some(PathBuf::from("/opt/homebrew/bin/node")),
+                cwd: Some(PathBuf::from("/Users/apple/app")),
+                argv: vec!["node".to_string(), "vite.js".to_string()],
+            });
+        }
+
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let listeners = list_listeners(&store, &fake).unwrap();
+        let loopback = listeners
+            .iter()
+            .find(|listener| listener.pid == 11111)
+            .unwrap();
+
+        let result = release_listener(&store, &fake, &loopback.id, ReleaseMode::Graceful).unwrap();
+
+        assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
+        assert_eq!(
+            fake.signaled_pids.lock().unwrap().as_slice(),
+            &[(11111, libc::SIGTERM)]
+        );
     }
 
     #[test]

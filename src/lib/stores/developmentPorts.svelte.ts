@@ -62,8 +62,10 @@ export class DevelopmentPortsStore {
       } else if (result.outcome === 'still_listening') {
         if (result.listener) {
           const fresh = result.listener;
-          this.listeners = this.listeners.map((l) =>
-            l.port === result.port ? fresh : l
+          this.listeners = replaceDevelopmentListenerLease(
+            this.listeners,
+            listener.id,
+            fresh
           );
         }
       } else if (result.outcome === 'ownership_changed') {
@@ -102,6 +104,16 @@ export class DevelopmentPortsStore {
       this.pollInterval = null;
     }
   }
+}
+
+export function replaceDevelopmentListenerLease(
+  listeners: DevelopmentListener[],
+  consumedId: string,
+  replacement: DevelopmentListener
+): DevelopmentListener[] {
+  return listeners.map((listener) =>
+    listener.id === consumedId ? replacement : listener
+  );
 }
 
 export function filterDevelopmentListeners(

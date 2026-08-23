@@ -75,6 +75,22 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
         }
     }
 
+    // Releasing requires stable fields that can be compared immediately before
+    // signaling. Missing identity data must never be treated as an allowlisted
+    // development server.
+    if input.uid.is_none()
+        || input.started_at.is_none_or(|started_at| started_at == 0)
+        || input.exe_path.is_none()
+    {
+        return ClassificationResult {
+            server_name: clean_process_display_name(input.process_name, input.raw_command),
+            project_name,
+            working_directory,
+            can_release: false,
+            blocked_reason: Some("Process identity is unavailable".to_string()),
+        };
+    }
+
     // 4. Protected process / system / terminal / database / container checks
     if is_protected_process(input.process_name, input.raw_command, input.exe_path) {
         return ClassificationResult {
@@ -265,7 +281,7 @@ fn match_positive_dev_server_signature(
     let argv_joined = argv.join(" ").to_ascii_lowercase();
 
     // 1. Vite & SvelteKit
-    if argv_joined.contains("vite")
+    if argv_mentions_tool(argv, "vite")
         || name_lower == "vite"
         || cmd_lower == "vite"
         || exe_name == "vite"
@@ -286,8 +302,8 @@ fn match_positive_dev_server_signature(
     }
 
     // 3. Astro
-    if argv_joined.contains("astro dev")
-        || argv_joined.contains("astro")
+    if argv_has_token_pair(argv, "astro", "dev")
+        || argv_mentions_tool(argv, "astro")
         || name_lower == "astro"
         || cmd_lower == "astro"
     {
@@ -295,9 +311,9 @@ fn match_positive_dev_server_signature(
     }
 
     // 4. Nuxt
-    if argv_joined.contains("nuxi")
-        || argv_joined.contains("nuxt dev")
-        || argv_joined.contains("nuxt")
+    if argv_mentions_tool(argv, "nuxi")
+        || argv_has_token_pair(argv, "nuxt", "dev")
+        || argv_mentions_tool(argv, "nuxt")
         || name_lower == "nuxt"
     {
         return Some("Nuxt".to_string());
@@ -317,7 +333,7 @@ fn match_positive_dev_server_signature(
     }
 
     // 7. Parcel
-    if argv_joined.contains("parcel")
+    if argv_mentions_tool(argv, "parcel")
         || name_lower == "parcel"
         || cmd_lower == "parcel"
         || exe_name == "parcel"
@@ -356,17 +372,16 @@ fn match_positive_dev_server_signature(
 
     // 12. Bun & Deno dev servers
     if (name_lower == "bun" || cmd_lower == "bun" || exe_name == "bun")
-        && (argv_joined.contains("dev")
+        && (argv_has_exact_token(argv, "dev")
             || argv_joined.contains("--watch")
             || argv_joined.contains("--hot")
-            || argv_joined.contains("serve"))
+            || argv_has_exact_token(argv, "serve"))
     {
         return Some("Bun Dev Server".to_string());
     }
     if (name_lower == "deno" || cmd_lower == "deno" || exe_name == "deno")
         && (argv_joined.contains("task dev")
-            || argv_joined.contains("run")
-            || argv_joined.contains("serve")
+            || argv_has_exact_token(argv, "serve")
             || argv_joined.contains("--watch"))
     {
         return Some("Deno Dev Server".to_string());
@@ -425,6 +440,31 @@ fn match_positive_dev_server_signature(
     }
 
     None
+}
+
+fn argv_has_exact_token(argv: &[String], expected: &str) -> bool {
+    argv.iter()
+        .any(|argument| argument.eq_ignore_ascii_case(expected))
+}
+
+fn argv_has_token_pair(argv: &[String], first: &str, second: &str) -> bool {
+    argv.windows(2)
+        .any(|pair| pair[0].eq_ignore_ascii_case(first) && pair[1].eq_ignore_ascii_case(second))
+}
+
+fn argv_mentions_tool(argv: &[String], tool: &str) -> bool {
+    argv.iter().any(|argument| {
+        argument
+            .split(['/', '\\'])
+            .any(|component| matches_tool_component(component, tool))
+    })
+}
+
+fn matches_tool_component(component: &str, tool: &str) -> bool {
+    component.eq_ignore_ascii_case(tool)
+        || ["js", "mjs", "cjs"]
+            .iter()
+            .any(|extension| component.eq_ignore_ascii_case(&format!("{tool}.{extension}")))
 }
 
 /// Sanitizes the working directory and project name without returning secret arguments.
@@ -624,6 +664,66 @@ mod tests {
             result.blocked_reason.as_deref(),
             Some("Not recognized as a development server")
         );
+    }
+
+    #[test]
+    fn reject_tool_name_substrings_in_unrelated_project_paths() {
+        for script in [
+            "/Users/apple/invite-service/server.js",
+            "/Users/apple/catastrophe-api/server.js",
+        ] {
+            let argv = vec!["node".to_string(), script.to_string()];
+            let input = ProcessClassificationInput {
+                pid: 32000,
+                uid: Some(501),
+                current_user_uid: 501,
+                zenith_pid: 1000,
+                port: 5000,
+                raw_command: "node",
+                process_name: "node",
+                exe_path: Some(Path::new("/opt/homebrew/bin/node")),
+                cwd: Some(Path::new("/Users/apple/project")),
+                argv: &argv,
+                started_at: Some(1700000000),
+            };
+
+            assert!(!classify_listener(&input).can_release, "script: {script}");
+        }
+    }
+
+    #[test]
+    fn reject_listener_without_stable_process_identity() {
+        let argv = vec!["node".to_string(), "vite.js".to_string()];
+        for (uid, started_at, exe_path) in [
+            (
+                None,
+                Some(1700000000),
+                Some(Path::new("/opt/homebrew/bin/node")),
+            ),
+            (Some(501), None, Some(Path::new("/opt/homebrew/bin/node"))),
+            (Some(501), Some(1700000000), None),
+        ] {
+            let input = ProcessClassificationInput {
+                pid: 32892,
+                uid,
+                current_user_uid: 501,
+                zenith_pid: 1000,
+                port: 5173,
+                raw_command: "node",
+                process_name: "node",
+                exe_path,
+                cwd: Some(Path::new("/Users/apple/project")),
+                argv: &argv,
+                started_at,
+            };
+
+            let result = classify_listener(&input);
+            assert!(!result.can_release);
+            assert_eq!(
+                result.blocked_reason.as_deref(),
+                Some("Process identity is unavailable")
+            );
+        }
     }
 
     #[test]

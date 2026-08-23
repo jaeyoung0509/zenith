@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { DevelopmentListener, ProcessMemory } from '../../lib/models/types';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import {
@@ -61,6 +61,7 @@
   let isRefreshingPorts = $state(false);
   let pendingReleaseListener = $state<DevelopmentListener | null>(null);
   let pendingForceListener = $state<DevelopmentListener | null>(null);
+  let releaseReturnFocusId = $state<string | null>(null);
 
   let filteredProcesses = $derived(
     filterProcesses(memory?.top_processes ?? [], searchQuery)
@@ -123,12 +124,14 @@
     if (!pendingReleaseListener) return;
     const listener = pendingReleaseListener;
     pendingReleaseListener = null;
+    await restoreReleaseFocus();
 
     try {
       const result = await developmentPortsStore.release(listener, 'graceful');
       if (result.outcome === 'still_listening' && result.listener) {
         // Show the secondary force confirmation dialog
         pendingForceListener = result.listener;
+        await focusPortDialog('force-release-cancel');
       }
     } catch {
       // Error is set in store
@@ -139,6 +142,7 @@
     if (!pendingForceListener) return;
     const listener = pendingForceListener;
     pendingForceListener = null;
+    await restoreReleaseFocus();
 
     try {
       await developmentPortsStore.release(listener, 'force');
@@ -147,11 +151,38 @@
     }
   }
 
+  function releaseButtonId(listener: DevelopmentListener) {
+    const address = listener.bind_address.replace(/[^a-zA-Z0-9]/g, '-');
+    return `release-port-${listener.pid}-${listener.port}-${address}`;
+  }
+
+  function openReleaseDialog(listener: DevelopmentListener) {
+    releaseReturnFocusId = releaseButtonId(listener);
+    pendingReleaseListener = listener;
+    pendingForceListener = null;
+    void focusPortDialog('release-cancel');
+  }
+
+  async function focusPortDialog(id: string) {
+    await tick();
+    document.getElementById(id)?.focus();
+  }
+
+  async function restoreReleaseFocus() {
+    await tick();
+    if (releaseReturnFocusId) document.getElementById(releaseReturnFocusId)?.focus();
+  }
+
+  function closePortDialogs() {
+    pendingReleaseListener = null;
+    pendingForceListener = null;
+    void restoreReleaseFocus();
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       if (pendingProcess) pendingProcess = null;
-      if (pendingReleaseListener) pendingReleaseListener = null;
-      if (pendingForceListener) pendingForceListener = null;
+      if (pendingReleaseListener || pendingForceListener) closePortDialogs();
     }
   }
 
@@ -496,14 +527,12 @@
                 <div class="w-20 text-right shrink-0">
                   {#if portItem.can_release}
                     <Button
+                      id={releaseButtonId(portItem)}
                       variant="outline"
                       size="sm"
                       class="gap-1 text-xs opacity-80 group-hover:opacity-100 hover:border-destructive/40 hover:text-destructive"
                       disabled={developmentPortsStore.releasingId !== null}
-                      onclick={() => {
-                        pendingReleaseListener = portItem;
-                        pendingForceListener = null;
-                      }}
+                      onclick={() => openReleaseDialog(portItem)}
                       title="Request graceful release of port {portItem.port}"
                     >
                       <LogOut size={12} />
@@ -600,7 +629,7 @@
         </div>
 
         <div class="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="sm" onclick={() => (pendingReleaseListener = null)}>
+          <Button id="release-cancel" variant="ghost" size="sm" onclick={closePortDialogs}>
             Cancel
           </Button>
           <Button
@@ -639,7 +668,7 @@
         </div>
 
         <div class="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="sm" onclick={() => (pendingForceListener = null)}>
+          <Button id="force-release-cancel" variant="ghost" size="sm" onclick={closePortDialogs}>
             Cancel
           </Button>
           <Button

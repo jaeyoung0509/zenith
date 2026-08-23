@@ -27,6 +27,10 @@ macOS menu bar
         +-- dedicated storage management
             large-file inventory, app inventory,
             one-shot Trash plans
+
+        +-- development-port management
+            listener discovery + classification,
+            one-shot leases, exact-process signaling
 ```
 
 The windows have separate frontend runtimes and stores. Shared authority and
@@ -50,6 +54,9 @@ Rust process state rather than in a browser singleton.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
   for resources that must not be treated as arbitrary files.
 - `src-tauri/src/metrics` and `src-tauri/src/power`: macOS system integration.
+- `src-tauri/src/dev_ports`: bounded TCP-listener discovery, conservative
+  development-server classification, opaque lease storage, TOCTOU validation,
+  and exact-process graceful/force signaling.
 - `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry
   points.
 - `src/lib/utils/tauri.ts`: frontend command wrappers — the single `invoke` boundary for all Tauri commands. The dedicated storage-management workflows (Large Files and App Uninstaller) are the sanctioned exception: their native and browser-preview split lives in `src/lib/api/storage.ts` and reuses the shared `isTauri()` from `src/lib/api/index.ts` to decide at runtime. New generic commands belong in `utils/tauri.ts`; new storage commands belong in `api/storage.ts`.
@@ -201,6 +208,11 @@ The quick window is persistent but inactive while hidden:
 Store constructors do not start I/O. A route or an explicit activation event
 owns refresh and cleanup of recurring work.
 
+Development-port discovery runs independently from the 2.5-second memory
+sampler. The Memory route refreshes listeners at a slower interval only while
+visible, prevents overlapping discovery calls, and moves all blocking `lsof`,
+process-snapshot, wait, and signal work onto the blocking runtime.
+
 ## Settings
 
 Preferences are validated in Rust and stored at the Tauri application config
@@ -222,7 +234,9 @@ Tauri capabilities are split by window:
   safe plan creation/execution.
 - `capabilities/main.json` additionally grants model deletion, Docker pruning,
   process termination, settings writes, power controls, Large Files inspection,
-  app inspection, and dedicated Trash-plan execution.
+  app inspection, dedicated Trash-plan execution, and development-listener
+  inspection/release. Development-port permissions are intentionally absent
+  from the quick panel.
 
 The global Tauri JavaScript object is disabled and a Content Security Policy is
 applied in development and production. Adding a command requires all three:

@@ -4,7 +4,7 @@
 
 <h1 align="center">Zenith</h1>
 
-<p align="center">A macOS utility for developer storage, memory, AI usage, and sleep control.</p>
+<p align="center">A macOS utility for developer storage, processes, local services, AI usage, and sleep control.</p>
 
 Zenith helps identify reclaimable caches created by AI tools, compilers, package
 managers, containers, and local model runtimes. Cleanup candidates are classified
@@ -20,10 +20,16 @@ remain outside the cleanup boundary.
 - Optional Intensive cleanup for stale third-party application caches and logs.
   It is disabled by default and keeps Apple/system namespaces, recent data,
   settings, credentials, and user files outside the cleanup boundary.
+- A bounded Large Files inspector for approved user-content folders and an
+  installed-application inspector with reviewed, recoverable moves to Trash.
 - Disk and local-model views with size, location, and modification details.
 - Memory pressure, compression, swap, and per-application usage. Installed user
   apps can be quit normally or force quit after confirmation; system processes,
   terminals, and Zenith remain protected.
+- A Development Servers inspector that identifies current-user TCP listeners
+  such as Vite and Next.js, shows their project and network exposure, and can
+  release one exact verified listener without terminating unrelated Node.js or
+  runtime processes.
 - AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
 - A configurable menu-bar panel. Storage, cleanup, AI usage, categories, and
@@ -77,6 +83,29 @@ be executed.
   and log roots. Symlinks and protected Apple/system namespaces are skipped,
   and inactivity is checked again immediately before deletion.
 - Local model weights and rebuildable caches require explicit selection.
+- Large Files and App Uninstaller retain backend-owned inventories and use
+  short-lived, one-shot Trash plans. The WebView submits opaque IDs rather than
+  filesystem paths or deletion strategies.
+
+## Process and development-port safety
+
+Zenith never exposes an arbitrary PID-kill command. Application Quit actions
+resolve a fresh allowlisted app group in Rust, while Development Servers uses a
+separate endpoint-level workflow:
+
+- Only current-user TCP listeners on non-privileged ports are considered.
+- Runtime names such as `node` or `python` are insufficient by themselves; a
+  conservative development-server signature and stable process identity are
+  required.
+- The UI receives a short-lived opaque listener ID, not termination authority
+  over a PID, path, process group, or signal.
+- Immediately before signaling, Rust rechecks the PID, port, bind address, UID,
+  process start time, executable identity, classification, and protected rules.
+- Normal release sends `SIGTERM` to the one verified listener. `SIGKILL` is
+  available only after that listener remains alive and the backend issues a new
+  force-authorized one-shot ID for a second confirmation.
+- PID reuse, port handoff, expired IDs, missing identity data, system services,
+  terminals, databases, container daemons, and Zenith itself fail closed.
 
 Signature definitions live in [`signatures/`](signatures). The safety tests are
 in [`src-tauri/tests/`](src-tauri/tests).
@@ -86,7 +115,10 @@ in [`src-tauri/tests/`](src-tauri/tests).
 - Tauri 2 and Rust for the desktop shell, system integration, and cleanup core
 - Svelte 5, TypeScript, Vite, and Tailwind CSS for the interface
 - macOS IOKit for Keep Awake assertions
-- `sysinfo` and native macOS tools for memory and disk metrics
+- `sysinfo` and bounded native macOS tooling for memory, disk, process, and TCP
+  listener inspection
+- Rayon directory-level work stealing with a hardware-aware worker cap for
+  signature-scoped size measurement
 
 The two Tauri windows are a persistent menu-bar quick panel and the main
 dashboard. Both use typed IPC commands backed by Rust modules for scanning,
@@ -132,7 +164,8 @@ the configured application and Dock identity.
 Run the same checks expected before a change is submitted:
 
 ```bash
-cargo check
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 cargo test
 pnpm check
 pnpm test -- --run
