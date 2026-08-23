@@ -143,6 +143,12 @@ describe('mockApi development port operations', () => {
     expect(pg).toBeDefined();
     expect(pg?.can_release).toBe(false);
     expect(pg?.blocked_reason).toContain('Protected');
+
+    const agentBrowser = listeners.find((l) => l.server_name === 'agent-browser');
+    expect(agentBrowser?.can_release).toBe(true);
+
+    const chromeTesting = listeners.find((l) => l.server_name === 'Chrome for Testing');
+    expect(chromeTesting?.can_release).toBe(true);
   });
 
   it('graceful release of Vite returns released', async () => {

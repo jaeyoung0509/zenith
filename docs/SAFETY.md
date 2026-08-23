@@ -206,6 +206,12 @@ new force-authorized lease created only when the same process remains after the
 grace period and a second user confirmation. If another process acquires the
 port, Zenith reports an ownership change and never signals the replacement.
 
+Local testing infrastructure is allowlisted with narrower executable checks.
+`agent-browser` must resolve inside its official package binary directory.
+Google Chrome for Testing must resolve to the exact testing app executable and
+include both remote-debugging and isolated-profile arguments. Standard Chrome,
+browser helper processes, crash reporters, and renamed lookalikes do not match.
+
 ## Failure behavior
 
 Safety checks fail closed. A stale scan, missing signature, expired plan,

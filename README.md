@@ -27,9 +27,9 @@ remain outside the cleanup boundary.
   apps can be quit normally or force quit after confirmation; system processes,
   terminals, and Zenith remain protected.
 - A dedicated Development Servers tab that identifies current-user TCP listeners
-  such as Vite and Next.js, shows their project and network exposure, and can
-  release one exact verified listener without terminating unrelated Node.js or
-  runtime processes.
+  such as Vite, Next.js, agent-browser, and Chrome for Testing, shows their
+  project and network exposure, and can release one exact verified listener
+  without terminating unrelated browsers, Node.js, or runtime processes.
 - AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
 - A configurable menu-bar panel. Storage, cleanup, AI usage, categories, and
@@ -97,6 +97,9 @@ separate endpoint-level workflow:
 - Runtime names such as `node` or `python` are insufficient by themselves; a
   conservative development-server signature and stable process identity are
   required.
+- Testing-tool listeners require exact official executable paths. Chrome for
+  Testing additionally requires remote-debugging and isolated-profile arguments;
+  standard Google Chrome and renamed lookalike binaries remain ineligible.
 - The UI receives a short-lived opaque listener ID, not termination authority
   over a PID, path, process group, or signal.
 - Immediately before signaling, Rust rechecks the PID, port, bind address, UID,

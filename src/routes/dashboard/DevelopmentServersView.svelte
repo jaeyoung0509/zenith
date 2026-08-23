@@ -140,7 +140,7 @@
           </span>
         </div>
         <p class="mt-0.5 text-xs text-muted-foreground">
-          Inspect local server ports and safely release one verified listener at a time.
+          Inspect local development and testing ports, then release one verified listener at a time.
         </p>
       </div>
     </div>
@@ -261,8 +261,8 @@
     </div>
   {:else}
     <div class="space-y-1 rounded-xl border border-border/80 bg-card/70 p-8 text-center text-xs text-muted-foreground">
-      <p class="font-medium text-foreground">No user-owned development servers are listening.</p>
-      <p class="text-meta">When you start tools like Vite, Next.js, or Astro, active listening ports will appear here.</p>
+      <p class="font-medium text-foreground">No supported development or testing tools are listening.</p>
+      <p class="text-meta">Vite, Next.js, agent-browser, and other verified local listeners will appear here.</p>
     </div>
   {/if}
 

@@ -138,6 +138,9 @@ pixel utilities for those sizes.
 - Use a dedicated sidebar tab rather than mixing listeners into the Memory
   inspector. Rows lead with port/protocol, then sanitized server and project
   context, bind exposure, process age, and the secondary Release action.
+- Recognized disposable testing infrastructure such as agent-browser and Chrome
+  for Testing follows the same row and confirmation treatment as development
+  servers; do not imply that ordinary browser sessions are releasable.
 - Use neutral styling for loopback, an informational treatment for a specific
   network interface, and the semantic warning token for all-interface binds.
   Protected or unrecognized listeners remain visible with the backend-provided
