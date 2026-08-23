@@ -75,7 +75,7 @@
         </div>
       {:else}
         <div
-          class="h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center text-[9px] text-muted-foreground"
+          class="h-4 w-4 rounded border border-border/40 bg-secondary/30 flex items-center justify-center text-micro text-muted-foreground"
           title="Manual category: stateful resources are managed in dedicated adapter"
         >
           -
@@ -99,17 +99,17 @@
             {categoryResult.items.length} items
           </span>
           {#if categoryResult.safe_bytes > 0}
-            <span class="shrink-0 whitespace-nowrap text-[11px] text-emerald-500 font-mono">
+            <span class="shrink-0 whitespace-nowrap text-meta text-success font-mono">
               Safe: {formatBytes(categoryResult.safe_bytes)}
             </span>
           {/if}
           {#if categoryResult.rebuild_bytes > 0}
-            <span class="shrink-0 whitespace-nowrap text-[11px] text-amber-500 font-mono">
+            <span class="shrink-0 whitespace-nowrap text-meta text-warning font-mono">
               • Rebuild: {formatBytes(categoryResult.rebuild_bytes)}
             </span>
           {/if}
           {#if categoryResult.manual_bytes > 0}
-            <span class="shrink-0 whitespace-nowrap text-[11px] text-rose-500 font-mono">
+            <span class="shrink-0 whitespace-nowrap text-meta text-destructive font-mono">
               • Manual: {formatBytes(categoryResult.manual_bytes)}
             </span>
           {/if}
@@ -123,7 +123,7 @@
           {formatBytes(categoryResult.total_bytes)}
         </span>
         {#if selectedBytes > 0 && selectedBytes !== categoryResult.total_bytes}
-          <div class="whitespace-nowrap text-[10px] text-muted-foreground font-mono">
+          <div class="whitespace-nowrap text-caption text-muted-foreground font-mono">
             Selected: {formatBytes(selectedBytes)}
           </div>
         {/if}

@@ -41,7 +41,7 @@
     <Card class="w-full bg-card shadow-2xl border-border">
     <div class="flex items-center justify-between pb-3 border-b border-border/80">
       <div class="flex items-center gap-2">
-        <div class="h-8 w-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+        <div class="h-8 w-8 rounded-full bg-success/20 text-success flex items-center justify-center">
           <CheckCircle2 size={18} />
         </div>
         <div>
@@ -62,7 +62,7 @@
         <div class="text-xs text-muted-foreground mt-0.5">
           Disk Space Reclaimed
           {#if result.actual_disk_free_delta}
-            <span class="text-emerald-500 ml-1">
+            <span class="text-success ml-1">
               (Free space delta: +{formatBytes(Math.max(0, result.actual_disk_free_delta))})
             </span>
           {/if}
@@ -72,7 +72,7 @@
       <!-- Failed Items -->
       {#if failedItems.length > 0}
         <div class="space-y-1.5">
-          <div class="flex items-center gap-1.5 text-xs font-medium text-rose-500">
+          <div class="flex items-center gap-1.5 text-xs font-medium text-destructive">
             <AlertCircle size={14} />
             <span>{failedItems.length} item(s) failed</span>
           </div>
@@ -80,7 +80,7 @@
             {#each failedItems as item}
               <div class="p-2 rounded bg-destructive/10 border border-destructive/20 text-xs">
                 <div class="font-medium text-foreground">{item.name}</div>
-                <div class="text-[11px] text-muted-foreground mt-0.5">
+                <div class="text-meta text-muted-foreground mt-0.5">
                   {item.error_message || 'Could not clean item'}
                 </div>
               </div>
@@ -92,18 +92,18 @@
       <!-- Partial Items -->
       {#if partialItems.length > 0}
         <div class="space-y-1.5">
-          <div class="flex items-center gap-1.5 text-xs font-medium text-amber-500">
+          <div class="flex items-center gap-1.5 text-xs font-medium text-warning">
             <AlertTriangle size={14} />
             <span>{partialItems.length} item(s) partially cleaned</span>
           </div>
           <div class="max-h-28 overflow-y-auto space-y-1.5 pr-1">
             {#each partialItems as item}
-              <div class="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-xs">
+              <div class="p-2 rounded bg-warning/10 border border-warning/20 text-xs">
                 <div class="flex items-center justify-between">
                   <span class="font-medium text-foreground">{item.name}</span>
-                  <span class="font-mono text-amber-400 text-[11px]">+{formatBytes(item.bytes_reclaimed)}</span>
+                  <span class="font-mono text-warning text-meta">+{formatBytes(item.bytes_reclaimed)}</span>
                 </div>
-                <div class="text-[11px] text-amber-300/80 mt-0.5">
+                <div class="text-meta text-warning/80 mt-0.5">
                   {item.error_message || 'Some files were locked or in use'}
                 </div>
               </div>

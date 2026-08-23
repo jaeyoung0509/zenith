@@ -160,14 +160,14 @@
               {#if tabId === 'storage' && scanStore.reclaimableBytes > 0}
                 <span
                   class="{sidebarCollapsed
-                    ? 'absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-500'
-                    : 'ml-auto inline-flex items-center gap-1.5 whitespace-nowrap text-[10px] font-mono font-medium tracking-tight text-emerald-400/85'}"
+                    ? 'absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-success'
+                    : 'ml-auto inline-flex items-center gap-1.5 whitespace-nowrap text-caption font-mono font-medium tracking-tight text-success/85'}"
                   title="Reclaimable storage available"
                 >
                   {#if sidebarCollapsed}
                     <span class="sr-only">{formatBytes(scanStore.reclaimableBytes)} reclaimable</span>
                   {:else}
-                    <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-emerald-400/90"></span>
+                    <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-success/90"></span>
                     {formatBytes(scanStore.reclaimableBytes)}
                   {/if}
                 </span>
@@ -198,16 +198,16 @@
     <!-- Safety Badge & Version at bottom -->
     <div class="space-y-2 {sidebarCollapsed ? 'items-center' : ''}">
       <div
-        class="{sidebarCollapsed ? 'justify-center px-0' : 'px-2.5'} py-2 rounded-lg bg-card/60 border border-border/60 text-[11px] text-muted-foreground flex items-center gap-2"
+        class="{sidebarCollapsed ? 'justify-center px-0' : 'px-2.5'} py-2 rounded-lg bg-card/60 border border-border/60 text-meta text-muted-foreground flex items-center gap-2"
         title="Path, symlink and filesystem identity are verified immediately before deletion (TOCTOU protection)."
       >
-        <Shield size={13} class="text-emerald-500 shrink-0" />
+        <Shield size={13} class="text-success shrink-0" />
         {#if !sidebarCollapsed}
           <span class="truncate">Protected cleanup</span>
         {/if}
       </div>
       {#if !sidebarCollapsed}
-        <div class="px-2.5 flex items-center justify-between text-[10px] text-muted-foreground/60 font-mono select-none">
+        <div class="px-2.5 flex items-center justify-between text-caption text-muted-foreground/60 font-mono select-none">
           <span>Zenith</span>
           <span>{formatVersion(APP_VERSION)}</span>
         </div>

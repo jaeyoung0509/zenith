@@ -70,23 +70,23 @@
   </div>
 
   {#if error}
-    <div class="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-red-400">{error}</div>
+    <div class="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive">{error}</div>
   {:else if primary}
     <Card class="p-5">
       <div class="flex items-start justify-between gap-6">
         <div>
-          <p class="text-[10px] uppercase tracking-wider text-muted-foreground">Primary storage</p>
+          <p class="text-caption uppercase tracking-wider text-muted-foreground">Primary storage</p>
           <p class="mt-1 text-sm font-semibold">{primary.name || 'Macintosh HD'}</p>
-          <p class="mt-0.5 text-[10px] font-mono text-muted-foreground">{primary.mount_point} · {primary.file_system} · {primary.disk_type}</p>
+          <p class="mt-0.5 text-caption font-mono text-muted-foreground">{primary.mount_point} · {primary.file_system} · {primary.disk_type}</p>
         </div>
         <div class="text-right">
           <p class="font-mono text-2xl font-semibold">{formatBytes(primary.available_bytes)}</p>
-          <p class="text-[10px] text-muted-foreground">available of {formatBytes(primary.total_bytes)}</p>
+          <p class="text-caption text-muted-foreground">available of {formatBytes(primary.total_bytes)}</p>
         </div>
       </div>
       <div class="mt-5 space-y-2">
         <ProgressBar value={primary.percent_used ?? 0} height="h-2" />
-        <div class="flex justify-between text-[10px] font-mono text-muted-foreground">
+        <div class="flex justify-between text-caption font-mono text-muted-foreground">
           <span>{formatBytes(primary.used_bytes)} used</span>
           <span>{primary.percent_used != null ? `${primary.percent_used.toFixed(1)}%` : '—'}</span>
         </div>
@@ -106,17 +106,17 @@
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
                   <p class="truncate text-xs font-medium">{volume.name || volume.mount_point}</p>
-                  {#if volume.is_primary}<span class="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-400">Primary</span>{/if}
-                  {#if volume.is_removable}<span class="rounded-full border border-border px-1.5 py-0.5 text-[9px] text-muted-foreground">External</span>{/if}
+                  {#if volume.is_primary}<span class="rounded-full border border-success/25 bg-success/10 px-1.5 py-0.5 text-micro text-success">Primary</span>{/if}
+                  {#if volume.is_removable}<span class="rounded-full border border-border px-1.5 py-0.5 text-micro text-muted-foreground">External</span>{/if}
                 </div>
-                <p class="mt-1 truncate text-[9px] font-mono text-muted-foreground">{volume.mount_point}</p>
+                <p class="mt-1 truncate text-micro font-mono text-muted-foreground">{volume.mount_point}</p>
               </div>
               <Button variant="ghost" size="icon" class="h-7 w-7" ariaLabel="Reveal volume in Finder" title="Reveal in Finder" onclick={() => tauriRevealInFinder(volume.mount_point)}>
                 <FolderOpen size={13} />
               </Button>
             </div>
             <div class="mt-4 space-y-1.5">
-              <div class="flex justify-between text-[10px]">
+              <div class="flex justify-between text-caption">
                 <span class="font-mono">{formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)}</span>
                 <span class="text-muted-foreground">{volume.percent_used != null ? `${volume.percent_used.toFixed(1)}%` : '—'}</span>
               </div>
@@ -132,7 +132,7 @@
     <div class="flex items-end justify-between">
       <div>
         <h3 class="text-sm font-semibold">Cleanup Opportunities</h3>
-        <p class="mt-0.5 text-[10px] text-muted-foreground">Largest detected categories first</p>
+        <p class="mt-0.5 text-caption text-muted-foreground">Largest detected categories first</p>
       </div>
       <span class="font-mono text-xs text-muted-foreground">{formatBytes(scanStore.lastScan?.total_bytes ?? 0)} detected</span>
     </div>
@@ -141,7 +141,7 @@
         <button type="button" onclick={() => onReviewCategory(category)} class="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-secondary/40 transition-colors">
           <div>
             <p class="text-xs font-medium">{category.display_name}</p>
-            <p class="mt-0.5 text-[10px] text-muted-foreground">{formatBytes(category.safe_bytes)} safe · {formatBytes(category.rebuild_bytes)} rebuild</p>
+            <p class="mt-0.5 text-caption text-muted-foreground">{formatBytes(category.safe_bytes)} safe · {formatBytes(category.rebuild_bytes)} rebuild</p>
           </div>
           <span class="font-mono text-xs font-semibold">{formatBytes(category.total_bytes)}</span>
         </button>

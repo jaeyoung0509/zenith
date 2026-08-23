@@ -14,8 +14,8 @@ describe('Switch component SSR / visual contracts', () => {
     });
 
     expect(rendered.body).toContain('aria-label="Enable AI Assistant Caches"');
-    expect(rendered.body).toContain('peer-checked:bg-emerald-500');
-    expect(rendered.body).toContain('peer-focus-visible:ring-emerald-500/40');
+    expect(rendered.body).toContain('peer-checked:bg-success');
+    expect(rendered.body).toContain('peer-focus-visible:ring-success/40');
     expect(rendered.body).toContain('translate-x-4');
   });
 
@@ -46,9 +46,9 @@ describe('Checkbox component SSR / visual contracts', () => {
     });
 
     expect(rendered.body).toContain('aria-label="Select Storage"');
-    expect(rendered.body).toContain('bg-emerald-500');
-    expect(rendered.body).toContain('border-emerald-500');
-    expect(rendered.body).toContain('peer-focus-visible:ring-emerald-500/40');
+    expect(rendered.body).toContain('bg-success');
+    expect(rendered.body).toContain('border-success');
+    expect(rendered.body).toContain('peer-focus-visible:ring-success/40');
     // Verify lucide Check SVG is rendered
     expect(rendered.body).toContain('<svg');
     expect(rendered.body).toContain('stroke-white');
@@ -67,7 +67,7 @@ describe('Checkbox component SSR / visual contracts', () => {
     expect(rendered.body).toContain('disabled');
     expect(rendered.body).toContain('opacity-50');
     expect(rendered.body).toContain('cursor-not-allowed');
-    expect(rendered.body).not.toContain('bg-emerald-500');
+    expect(rendered.body).not.toContain('bg-success');
     expect(rendered.body).not.toContain('<svg');
   });
 });
