@@ -5093,6 +5093,7 @@ dependencies = [
  "base64 0.22.1",
  "libc",
  "plist",
+ "rayon",
  "regex",
  "reqwest 0.12.28",
  "serde",

@@ -2,10 +2,62 @@ use crate::docker::DockerAdapter;
 use crate::models::{Category, CategoryResult, RiskTier, ScanEvent, ScanItem, ScanResult};
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
+use rayon::{ThreadPool, ThreadPoolBuilder};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 use uuid::Uuid;
 
 pub struct ScanEngine;
+
+fn bounded_worker_count(available: usize, performance_cores: Option<usize>) -> usize {
+    performance_cores
+        .filter(|count| *count > 0)
+        .unwrap_or(available)
+        .min(available)
+        .clamp(1, 4)
+}
+
+#[cfg(target_os = "macos")]
+fn performance_core_count() -> Option<usize> {
+    let mut count: libc::c_uint = 0;
+    let mut size = std::mem::size_of_val(&count);
+    // SAFETY: both output pointers reference initialized, correctly sized
+    // storage and the sysctl name is statically NUL-terminated.
+    let status = unsafe {
+        libc::sysctlbyname(
+            c"hw.perflevel0.physicalcpu".as_ptr(),
+            (&mut count as *mut libc::c_uint).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (status == 0 && count > 0).then_some(count as usize)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn performance_core_count() -> Option<usize> {
+    None
+}
+
+fn directory_scan_pool() -> Option<&'static ThreadPool> {
+    static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let available = std::thread::available_parallelism()
+            .map(|available| available.get())
+            .unwrap_or(1);
+        let workers = bounded_worker_count(available, performance_core_count());
+        if workers < 2 {
+            return None;
+        }
+        ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .thread_name(|index| format!("zenith-scan-{index}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
 
 impl ScanEngine {
     /// Executes a full or filtered scan across all categories, emitting streaming events.
@@ -41,6 +93,7 @@ impl ScanEngine {
         let mut safe_bytes = 0u64;
         let mut rebuild_bytes = 0u64;
         let mut manual_bytes = 0u64;
+        let directory_pool = directory_scan_pool();
 
         for &category in target_categories {
             on_event(ScanEvent::CategoryStarted { category });
@@ -57,7 +110,7 @@ impl ScanEngine {
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
                 }
-                let items = DirectoryScanner::scan_signature(sig);
+                let items = DirectoryScanner::scan_signature_with_pool(sig, directory_pool);
                 for item in items {
                     let bytes = item.size.reclaimable();
                     if !item.exists || bytes == 0 {
@@ -146,5 +199,20 @@ impl ScanEngine {
         });
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_worker_count;
+
+    #[test]
+    fn scan_workers_follow_performance_core_cap() {
+        assert_eq!(bounded_worker_count(8, Some(4)), 4);
+        assert_eq!(bounded_worker_count(6, Some(3)), 3);
+        assert_eq!(bounded_worker_count(4, Some(2)), 2);
+        assert_eq!(bounded_worker_count(2, None), 2);
+        assert_eq!(bounded_worker_count(1, None), 1);
+        assert_eq!(bounded_worker_count(2, Some(8)), 2);
     }
 }
