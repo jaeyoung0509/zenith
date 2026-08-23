@@ -34,6 +34,18 @@ export function formatDuration(seconds: number): string {
   return `${hours}h ${remainingMins}m`;
 }
 
+export function formatProcessAge(startedAt?: number | null): string {
+  if (!startedAt) return '—';
+  const now = Math.floor(Date.now() / 1000);
+  const diff = Math.max(0, now - startedAt);
+  if (diff < 60) return `${diff}s`;
+  const mins = Math.floor(diff / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
+}
+
 export function formatTimeUntil(timestampSeconds?: number): string {
   if (!timestampSeconds) return '';
   const now = Math.floor(Date.now() / 1000);

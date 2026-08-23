@@ -45,6 +45,8 @@ export const commands = {
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
 	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
+	listDevelopmentListeners: () => typedError<DevelopmentListener[], string>(__TAURI_INVOKE("list_development_listeners")),
+	releaseDevelopmentListener: (id: string, mode: ReleaseMode) => typedError<ReleaseDevelopmentListenerResult, string>(__TAURI_INVOKE("release_development_listener", { id, mode })),
 	startLargeFileScan: (request: LargeFileScanRequest, onEvent: Channel<LargeFileScanEvent>) => typedError<LargeFileScanResult, string>(__TAURI_INVOKE("start_large_file_scan", { request, onEvent })),
 	cancelLargeFileScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_large_file_scan", { scanId })),
 	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
@@ -190,6 +192,21 @@ export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" 
 
 export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "usage" | "awake";
 
+export type DevelopmentListener = {
+	id: string,
+	port: number,
+	protocol: ListenerProtocol,
+	bind_address: string,
+	exposure: ListenerExposure,
+	pid: number,
+	server_name: string,
+	project_name: string | null,
+	working_directory: string | null,
+	started_at: number | null,
+	can_release: boolean,
+	blocked_reason: string | null,
+};
+
 export type DiagnosticsSnapshot = {
 	app_version: string,
 	os_version: string,
@@ -322,6 +339,10 @@ export type LargeFileScanResult = {
 	truncated: boolean,
 };
 
+export type ListenerExposure = "loopback" | "network" | "all_interfaces";
+
+export type ListenerProtocol = "tcp";
+
 export type LocalModelItem = {
 	id: string,
 	name: string,
@@ -380,6 +401,16 @@ export type ProcessMemory = {
 };
 
 export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory";
+
+export type ReleaseDevelopmentListenerResult = {
+	port: number,
+	outcome: ReleaseOutcome,
+	listener: DevelopmentListener | null,
+};
+
+export type ReleaseMode = "graceful" | "force";
+
+export type ReleaseOutcome = "released" | "still_listening" | "ownership_changed";
 
 export type RiskSummary = {
 	safe_count: number,

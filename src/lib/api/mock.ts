@@ -7,6 +7,7 @@ import type {
   CleanEvent,
   CleanItemResult,
   CleanResult,
+  DevelopmentListener,
   DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
@@ -14,6 +15,8 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  ReleaseDevelopmentListenerResult,
+  ReleaseMode,
   ScanEvent,
   ScanItem,
   ScanResult,
@@ -743,7 +746,104 @@ export const mockApi = {
     // No-op in browser mock
   },
 
+  async listDevelopmentListeners(): Promise<DevelopmentListener[]> {
+    return [...mockListeners];
+  },
+
+  async releaseDevelopmentListener(
+    id: string,
+    mode: ReleaseMode
+  ): Promise<ReleaseDevelopmentListenerResult> {
+    const target = mockListeners.find((l) => l.id === id);
+    if (!target) {
+      throw new Error('Listener snapshot expired; refresh and try again.');
+    }
+    if (!target.can_release) {
+      throw new Error('This listener is protected and cannot be released.');
+    }
+
+    if (target.port === 3000 && mode === 'graceful') {
+      const freshLeaseId = `mock-lease-next-3000-force-${Date.now()}`;
+      const freshListener: DevelopmentListener = {
+        ...target,
+        id: freshLeaseId,
+      };
+      mockListeners = mockListeners.map((l) => (l.id === id ? freshListener : l));
+      return {
+        port: target.port,
+        outcome: 'still_listening',
+        listener: freshListener,
+      };
+    }
+
+    mockListeners = mockListeners.filter((l) => l.id !== id);
+    return {
+      port: target.port,
+      outcome: 'released',
+      listener: null,
+    };
+  },
+
   async hideCurrentWindow(): Promise<void> {
     // No-op in browser mock
   },
 } satisfies ZenithApi;
+
+let mockListeners: DevelopmentListener[] = [
+  {
+    id: 'mock-lease-vite-5173',
+    port: 5173,
+    protocol: 'tcp',
+    bind_address: '127.0.0.1',
+    exposure: 'loopback',
+    pid: 32892,
+    server_name: 'Vite',
+    project_name: 'clean1',
+    working_directory: '~/Myproject/clean1',
+    started_at: Math.floor(Date.now() / 1000) - 17040,
+    can_release: true,
+    blocked_reason: null,
+  },
+  {
+    id: 'mock-lease-next-3000',
+    port: 3000,
+    protocol: 'tcp',
+    bind_address: '0.0.0.0',
+    exposure: 'all_interfaces',
+    pid: 40001,
+    server_name: 'Next.js',
+    project_name: 'web-dashboard',
+    working_directory: '~/work/web-dashboard',
+    started_at: Math.floor(Date.now() / 1000) - 1080,
+    can_release: true,
+    blocked_reason: null,
+  },
+  {
+    id: 'mock-lease-pg-5432',
+    port: 5432,
+    protocol: 'tcp',
+    bind_address: '127.0.0.1',
+    exposure: 'loopback',
+    pid: 5432,
+    server_name: 'postgres',
+    project_name: null,
+    working_directory: null,
+    started_at: Math.floor(Date.now() / 1000) - 86400,
+    can_release: false,
+    blocked_reason: 'Protected system, terminal, database, or container process',
+  },
+  {
+    id: 'mock-lease-custom-8080',
+    port: 8080,
+    protocol: 'tcp',
+    bind_address: '192.168.1.100',
+    exposure: 'network',
+    pid: 7777,
+    server_name: 'worker-service',
+    project_name: 'backend-services',
+    working_directory: '~/backend-services',
+    started_at: Math.floor(Date.now() / 1000) - 7200,
+    can_release: false,
+    blocked_reason: 'Not recognized as a development server',
+  },
+];

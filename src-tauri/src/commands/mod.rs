@@ -4,8 +4,9 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    DeletePlan, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus, LocalModelItem,
-    MemoryMetrics, PlanPreview, ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
+    DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus,
+    LocalModelItem, MemoryMetrics, PlanPreview, ReleaseDevelopmentListenerResult, ReleaseMode,
+    ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
     pub storage_operation_gate: StorageOperationGate,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
+    pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -413,6 +415,39 @@ pub fn get_diagnostics(
 #[specta::specta]
 pub fn open_logs_folder() -> Result<(), String> {
     crate::diagnostics::open_logs_folder()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn list_development_listeners(
+    state: State<'_, AppState>,
+) -> Result<Vec<DevelopmentListener>, String> {
+    let store = state.dev_port_store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::dev_ports::list_listeners(&store, &crate::dev_ports::RealDevPortSystem::default())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn release_development_listener(
+    id: String,
+    mode: ReleaseMode,
+    state: State<'_, AppState>,
+) -> Result<ReleaseDevelopmentListenerResult, String> {
+    let store = state.dev_port_store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::dev_ports::release_listener(
+            &store,
+            &crate::dev_ports::RealDevPortSystem::default(),
+            &id,
+            mode,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]

@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { ProcessMemory } from '../../lib/models/types';
+  import type { DevelopmentListener, ProcessMemory } from '../../lib/models/types';
   import { memoryStore } from '../../lib/stores/memory.svelte';
-  import { formatBytes } from '../../lib/utils/format';
+  import {
+    developmentPortsStore,
+    filterDevelopmentListeners,
+  } from '../../lib/stores/developmentPorts.svelte';
+  import { formatBytes, formatProcessAge } from '../../lib/utils/format';
   import { withMinimumDuration } from '../../lib/utils/async';
   import { filterProcesses } from '../../lib/utils/memory';
   import Button from '../../lib/components/Button.svelte';
@@ -15,19 +19,25 @@
     Layers,
     Cpu,
     Database,
-    Zap,
     LogOut,
     TriangleAlert,
     Search,
     X,
+    Server,
+    Globe,
+    Radio,
+    ShieldAlert,
+    ShieldCheck,
   } from 'lucide-svelte';
 
   onMount(() => {
     function updatePolling() {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         memoryStore.startPolling(2500);
+        developmentPortsStore.startPolling(15000);
       } else {
         memoryStore.stopPolling();
+        developmentPortsStore.stopPolling();
       }
     }
 
@@ -37,6 +47,7 @@
     return () => {
       document.removeEventListener('visibilitychange', updatePolling);
       memoryStore.stopPolling();
+      developmentPortsStore.stopPolling();
     };
   });
 
@@ -45,8 +56,18 @@
   let isRefreshing = $state(false);
   let searchQuery = $state('');
 
+  // Development Ports State
+  let devPortSearch = $state('');
+  let isRefreshingPorts = $state(false);
+  let pendingReleaseListener = $state<DevelopmentListener | null>(null);
+  let pendingForceListener = $state<DevelopmentListener | null>(null);
+
   let filteredProcesses = $derived(
     filterProcesses(memory?.top_processes ?? [], searchQuery)
+  );
+
+  let filteredDevPorts = $derived(
+    filterDevelopmentListeners(developmentPortsStore.listeners, devPortSearch)
   );
 
   let topReclaimableApp = $derived(
@@ -81,11 +102,57 @@
     }
   }
 
+  async function handleRefreshPorts() {
+    if (isRefreshingPorts) return;
+    isRefreshingPorts = true;
+    try {
+      await withMinimumDuration(developmentPortsStore.refresh(), 500);
+    } finally {
+      isRefreshingPorts = false;
+    }
+  }
+
   async function terminatePending(force: boolean) {
     if (!pendingProcess) return;
     const name = pendingProcess.name;
     pendingProcess = null;
     await memoryStore.terminateProcessGroup(name, force);
+  }
+
+  async function handleReleaseNormally() {
+    if (!pendingReleaseListener) return;
+    const listener = pendingReleaseListener;
+    pendingReleaseListener = null;
+
+    try {
+      const result = await developmentPortsStore.release(listener, 'graceful');
+      if (result.outcome === 'still_listening' && result.listener) {
+        // Show the secondary force confirmation dialog
+        pendingForceListener = result.listener;
+      }
+    } catch {
+      // Error is set in store
+    }
+  }
+
+  async function handleForceRelease() {
+    if (!pendingForceListener) return;
+    const listener = pendingForceListener;
+    pendingForceListener = null;
+
+    try {
+      await developmentPortsStore.release(listener, 'force');
+    } catch {
+      // Error is set in store
+    }
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      if (pendingProcess) pendingProcess = null;
+      if (pendingReleaseListener) pendingReleaseListener = null;
+      if (pendingForceListener) pendingForceListener = null;
+    }
   }
 
   const pressureColors = {
@@ -94,6 +161,8 @@
     critical: 'text-destructive bg-destructive/10 border-destructive/20',
   };
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="space-y-6">
   <!-- Header -->
@@ -286,6 +355,188 @@
         </div>
       {/if}
     </div>
+
+    <!-- Development Servers Section -->
+    <div class="space-y-3 pt-4 border-t border-border/60">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <div class="h-6 w-6 rounded-md bg-blue-500/10 text-blue-400 flex items-center justify-center">
+            <Server size={14} />
+          </div>
+          <div>
+            <h3 class="text-xs font-semibold text-foreground uppercase tracking-wider">
+              Development Servers
+            </h3>
+          </div>
+          <span class="text-caption text-muted-foreground font-mono bg-secondary/80 px-1.5 py-0.5 rounded">
+            TCP Listeners
+          </span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <div class="relative w-full sm:w-56">
+            <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              bind:value={devPortSearch}
+              placeholder="Search port, server, project…"
+              aria-label="Search development server ports"
+              class="w-full h-8 pl-8 pr-7 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            {#if devPortSearch}
+              <button
+                type="button"
+                onclick={() => (devPortSearch = '')}
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear port search"
+              >
+                <X size={13} />
+              </button>
+            {/if}
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isRefreshingPorts || developmentPortsStore.isLoading}
+            onclick={handleRefreshPorts}
+            class="gap-1.5 text-xs shrink-0"
+            title="Refresh development server listeners"
+          >
+            <RotateCw size={12} class={isRefreshingPorts || developmentPortsStore.isLoading ? 'animate-gentle-spin' : ''} />
+            <span>Refresh</span>
+          </Button>
+        </div>
+      </div>
+
+      {#if developmentPortsStore.error}
+        <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-xs text-destructive flex items-center justify-between">
+          <span>{developmentPortsStore.error}</span>
+          <button
+            type="button"
+            onclick={() => developmentPortsStore.clearError()}
+            class="text-destructive/70 hover:text-destructive text-meta ml-2"
+            aria-label="Dismiss error"
+          >
+            Dismiss
+          </button>
+        </div>
+      {:else if developmentPortsStore.lastAction}
+        <div class="rounded-xl border border-success/20 bg-success/5 px-4 py-2.5 text-xs text-success flex items-center justify-between">
+          <span>{developmentPortsStore.lastAction}</span>
+          <button
+            type="button"
+            onclick={() => developmentPortsStore.clearLastAction()}
+            class="text-success/70 hover:text-success text-meta ml-2"
+            aria-label="Dismiss message"
+          >
+            Dismiss
+          </button>
+        </div>
+      {/if}
+
+      {#if filteredDevPorts.length > 0}
+        <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
+          {#each filteredDevPorts as portItem (portItem.id)}
+            <div class="group flex flex-col sm:flex-row sm:items-center justify-between p-3 gap-2.5 text-xs hover:bg-secondary/30 transition-colors">
+              <div class="flex items-center gap-3 min-w-0">
+                <!-- Port & Protocol Badge -->
+                <div class="w-20 shrink-0 font-mono font-bold text-sm text-foreground">
+                  {portItem.port}<span class="text-caption font-normal text-muted-foreground ml-0.5">/TCP</span>
+                </div>
+
+                <!-- Server Label & Project Context -->
+                <div class="min-w-0 space-y-0.5">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-semibold text-foreground">{portItem.server_name}</span>
+                    {#if portItem.project_name}
+                      <span class="text-muted-foreground text-caption font-medium bg-secondary px-1.5 py-0.5 rounded">
+                        {portItem.project_name}
+                      </span>
+                    {/if}
+                    <span class="font-mono text-meta text-muted-foreground">
+                      PID {portItem.pid}
+                    </span>
+                  </div>
+                  {#if portItem.working_directory}
+                    <p class="text-meta text-muted-foreground truncate font-mono" title={portItem.working_directory}>
+                      {portItem.working_directory}
+                    </p>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-1 sm:pt-0">
+                <!-- Bind Address & Exposure -->
+                <div class="flex items-center gap-1.5 font-mono text-meta">
+                  <span class="text-muted-foreground">{portItem.bind_address}</span>
+                  {#if portItem.exposure === 'all_interfaces'}
+                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta font-medium bg-warning/10 text-warning border border-warning/20" title="Exposed to all local and external network interfaces">
+                      <TriangleAlert size={10} />
+                      All interfaces
+                    </span>
+                  {:else if portItem.exposure === 'network'}
+                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                      <Globe size={10} />
+                      Network
+                    </span>
+                  {:else}
+                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta font-medium bg-secondary text-muted-foreground">
+                      Loopback
+                    </span>
+                  {/if}
+                </div>
+
+                <!-- Process Age -->
+                <span class="font-mono text-meta text-muted-foreground w-14 text-right shrink-0">
+                  {formatProcessAge(portItem.started_at)}
+                </span>
+
+                <!-- Action Button or Blocked State -->
+                <div class="w-20 text-right shrink-0">
+                  {#if portItem.can_release}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="gap-1 text-xs opacity-80 group-hover:opacity-100 hover:border-destructive/40 hover:text-destructive"
+                      disabled={developmentPortsStore.releasingId !== null}
+                      onclick={() => {
+                        pendingReleaseListener = portItem;
+                        pendingForceListener = null;
+                      }}
+                      title="Request graceful release of port {portItem.port}"
+                    >
+                      <LogOut size={12} />
+                      Release
+                    </Button>
+                  {:else}
+                    <span
+                      class="inline-flex items-center gap-1 text-meta font-medium text-muted-foreground/70 bg-secondary/40 px-2 py-1 rounded cursor-help"
+                      title={portItem.blocked_reason || 'Protected process cannot be released'}
+                    >
+                      <ShieldCheck size={11} class="opacity-70" />
+                      Protected
+                    </span>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else if devPortSearch.trim()}
+        <div class="p-8 text-center border border-border/80 rounded-xl bg-card/70 space-y-2">
+          <p class="text-xs text-muted-foreground">No development servers matching "{devPortSearch}"</p>
+          <Button variant="ghost" size="sm" onclick={() => (devPortSearch = '')} class="text-xs">
+            Clear Search
+          </Button>
+        </div>
+      {:else}
+        <div class="p-8 text-center border border-border/80 rounded-xl bg-card/70 text-xs text-muted-foreground space-y-1">
+          <p class="font-medium text-foreground">No user-owned development servers are listening.</p>
+          <p class="text-meta text-muted-foreground">When you start tools like Vite, Next.js, or Astro, active listening ports will appear here.</p>
+        </div>
+      {/if}
+    </div>
   {:else}
     <div class="py-16 text-center text-xs text-muted-foreground space-y-2">
       <RotateCw size={20} class="animate-gentle-spin mx-auto opacity-50" />
@@ -293,6 +544,7 @@
     </div>
   {/if}
 
+  <!-- Quit Process Group Modal -->
   {#if pendingProcess}
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="terminate-title">
       <Card class="w-full max-w-md space-y-4 border-border bg-card p-5 shadow-2xl">
@@ -316,6 +568,88 @@
           <Button variant="ghost" size="sm" onclick={() => (pendingProcess = null)}>Cancel</Button>
           <Button variant="outline" size="sm" onclick={() => terminatePending(false)}>Quit Normally</Button>
           <Button variant="destructive" size="sm" onclick={() => terminatePending(true)}>Force Quit</Button>
+        </div>
+      </Card>
+    </div>
+  {/if}
+
+  <!-- Graceful Release Port Modal -->
+  {#if pendingReleaseListener}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="release-title">
+      <Card class="w-full max-w-md space-y-4 border-border bg-card p-5 shadow-2xl">
+        <div class="flex items-start gap-3">
+          <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
+            <Radio size={17} />
+          </div>
+          <div>
+            <h3 id="release-title" class="text-sm font-semibold">
+              Release {pendingReleaseListener.server_name} on {pendingReleaseListener.bind_address}:{pendingReleaseListener.port}?
+            </h3>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              This will request graceful termination (SIGTERM) for PID {pendingReleaseListener.pid}
+              {#if pendingReleaseListener.project_name}
+                belonging to project <span class="font-semibold text-foreground">{pendingReleaseListener.project_name}</span>
+              {/if}
+              .
+            </p>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-border/70 bg-secondary/40 px-3 py-2.5 text-meta leading-relaxed text-muted-foreground">
+          Active browser tabs, hot module reload sessions, or in-flight HTTP requests to this server will stop. Zenith will check if the port is freed.
+        </div>
+
+        <div class="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" size="sm" onclick={() => (pendingReleaseListener = null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={developmentPortsStore.releasingId !== null}
+            onclick={handleReleaseNormally}
+          >
+            Release Normally
+          </Button>
+        </div>
+      </Card>
+    </div>
+  {/if}
+
+  <!-- Force Release Port Modal (Triggered when process ignored SIGTERM) -->
+  {#if pendingForceListener}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="force-release-title">
+      <Card class="w-full max-w-md space-y-4 border-destructive/40 bg-card p-5 shadow-2xl">
+        <div class="flex items-start gap-3">
+          <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+            <TriangleAlert size={17} />
+          </div>
+          <div>
+            <h3 id="force-release-title" class="text-sm font-semibold text-destructive">
+              Force Release Port {pendingForceListener.port}?
+            </h3>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              <span class="font-semibold text-foreground">{pendingForceListener.server_name}</span> (PID {pendingForceListener.pid}) did not exit after the graceful stop request.
+            </p>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-meta leading-relaxed text-destructive/90">
+          Force release sends SIGKILL immediately. Unsaved work or open database transactions in this server process may not shut down cleanly.
+        </div>
+
+        <div class="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" size="sm" onclick={() => (pendingForceListener = null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={developmentPortsStore.releasingId !== null}
+            onclick={handleForceRelease}
+          >
+            Force Release
+          </Button>
         </div>
       </Card>
     </div>
