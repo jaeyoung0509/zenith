@@ -119,6 +119,7 @@ describe('quick clean eligibility and predicate consistency', () => {
       quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'] as any,
       quick_panel_ai_providers: [],
       dashboard_tabs: ['storage'] as any,
+      dashboard_tabs_revision: 1,
       sidebar_collapsed: false,
       awake_rules: [],
     };

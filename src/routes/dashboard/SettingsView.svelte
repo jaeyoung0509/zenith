@@ -17,6 +17,7 @@
     { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
     { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
     { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
+    { id: 'development_servers', label: 'Development Servers', description: 'Inspect and safely release verified local TCP listeners.' },
     { id: 'usage', label: 'AI Usage', description: 'OAuth coding agent limits and local token insights.' },
     { id: 'awake', label: 'Keep Awake', description: 'Prevent system and display sleep rules.' },
   ];

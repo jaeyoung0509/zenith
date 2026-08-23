@@ -15,7 +15,6 @@
     Layers,
     Cpu,
     Database,
-    Zap,
     LogOut,
     TriangleAlert,
     Search,
@@ -88,12 +87,20 @@
     await memoryStore.terminateProcessGroup(name, force);
   }
 
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      if (pendingProcess) pendingProcess = null;
+    }
+  }
+
   const pressureColors = {
     normal: 'text-success bg-success/10 border-success/20',
     warning: 'text-warning bg-warning/10 border-warning/20',
     critical: 'text-destructive bg-destructive/10 border-destructive/20',
   };
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="space-y-6">
   <!-- Header -->
@@ -286,6 +293,7 @@
         </div>
       {/if}
     </div>
+
   {:else}
     <div class="py-16 text-center text-xs text-muted-foreground space-y-2">
       <RotateCw size={20} class="animate-gentle-spin mx-auto opacity-50" />
@@ -293,6 +301,7 @@
     </div>
   {/if}
 
+  <!-- Quit Process Group Modal -->
   {#if pendingProcess}
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="terminate-title">
       <Card class="w-full max-w-md space-y-4 border-border bg-card p-5 shadow-2xl">
@@ -320,4 +329,5 @@
       </Card>
     </div>
   {/if}
+
 </div>

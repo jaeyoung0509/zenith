@@ -28,6 +28,8 @@ fn main() {
         "get_app_version",
         "get_diagnostics",
         "open_logs_folder",
+        "list_development_listeners",
+        "release_development_listener",
         "start_large_file_scan",
         "cancel_large_file_scan",
         "prepare_large_file_trash",

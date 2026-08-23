@@ -35,6 +35,8 @@
     "allow-get-app-version",
     "allow-get-diagnostics",
     "allow-open-logs-folder",
+    "allow-list-development-listeners",
+    "allow-release-development-listener",
     "allow-start-large-file-scan",
     "allow-cancel-large-file-scan",
     "allow-prepare-large-file-trash",

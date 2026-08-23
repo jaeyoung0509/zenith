@@ -131,6 +131,21 @@ pixel utilities for those sizes.
   process count, estimated memory, and unsaved-work warning.
 - Offer normal Quit before the red Force Quit action. Explain that displayed
   memory is an estimate and macOS may retain released pages as reusable cache.
+- Keep this view focused on memory-ranked application groups.
+
+### Development Servers
+
+- Use a dedicated sidebar tab rather than mixing listeners into the Memory
+  inspector. Rows lead with port/protocol, then sanitized server and project
+  context, bind exposure, process age, and the secondary Release action.
+- Use neutral styling for loopback, an informational treatment for a specific
+  network interface, and the semantic warning token for all-interface binds.
+  Protected or unrecognized listeners remain visible with the backend-provided
+  reason but have no destructive action.
+- Graceful release is the only action in the first dialog. Show the destructive
+  Force Release dialog only after the backend confirms the same listener
+  ignored SIGTERM. Dialog focus enters on open and returns to the originating
+  row action on cancel or completion.
 
 ### Keep Awake
 

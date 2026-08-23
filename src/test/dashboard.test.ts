@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import Dashboard from '../routes/dashboard/Dashboard.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
@@ -56,5 +57,17 @@ describe('Dashboard sidebar affordances', () => {
     expect(rendered.body).toContain('rounded-md border border-transparent');
     expect(rendered.body).toContain('text-success/85');
     expect(rendered.body).toContain('14 MB');
+  });
+
+  it('exposes Development Servers as its own dashboard route', () => {
+    const rendered = render(Dashboard);
+    const memorySource = readFileSync(
+      new URL('../routes/dashboard/MemoryView.svelte', import.meta.url),
+      'utf8'
+    );
+
+    expect(rendered.body).toContain('Dev Servers');
+    expect(memorySource).not.toContain('developmentPortsStore');
+    expect(memorySource).not.toContain('Development Servers Section');
   });
 });
