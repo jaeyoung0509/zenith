@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { dockerStore } from '../../lib/stores/docker.svelte';
   import { formatBytes } from '../../lib/utils/format';
+  import { withMinimumDuration } from '../../lib/utils/async';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
@@ -37,12 +38,7 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    const start = Date.now();
-    await dockerStore.refresh();
-    const elapsed = Date.now() - start;
-    if (elapsed < 600) {
-      await new Promise((r) => setTimeout(r, 600 - elapsed));
-    }
+    await withMinimumDuration(dockerStore.refresh(), 600);
     isRefreshing = false;
   }
 </script>

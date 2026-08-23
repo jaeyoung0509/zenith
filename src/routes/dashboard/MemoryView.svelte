@@ -3,6 +3,7 @@
   import type { ProcessMemory } from '../../lib/models/types';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { formatBytes } from '../../lib/utils/format';
+  import { withMinimumDuration } from '../../lib/utils/async';
   import { filterProcesses } from '../../lib/utils/memory';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -73,12 +74,7 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    const start = Date.now();
-    await memoryStore.refreshMemory();
-    const elapsed = Date.now() - start;
-    if (elapsed < 600) {
-      await new Promise((r) => setTimeout(r, 600 - elapsed));
-    }
+    await withMinimumDuration(memoryStore.refreshMemory(), 600);
     isRefreshing = false;
   }
 
@@ -90,9 +86,9 @@
   }
 
   const pressureColors = {
-    normal: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
-    warning: 'text-amber-500 bg-amber-500/10 border-amber-500/20',
-    critical: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
+    normal: 'text-success bg-success/10 border-success/20',
+    warning: 'text-warning bg-warning/10 border-warning/20',
+    critical: 'text-destructive bg-destructive/10 border-destructive/20',
   };
 </script>
 
@@ -108,7 +104,7 @@
           <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
           {#if memory}
             <div class="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
-              <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-rose-500 animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}"></span>
+              <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-destructive animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}"></span>
               <span>Pressure: {memory.pressure.toUpperCase()}</span>
             </div>
           {/if}
@@ -132,9 +128,9 @@
   </div>
 
   {#if memoryStore.error}
-    <div class="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs text-red-500">{memoryStore.error}</div>
+    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">{memoryStore.error}</div>
   {:else if memoryStore.lastAction}
-    <div class="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-600 dark:text-emerald-400">{memoryStore.lastAction} macOS may retain some memory as reusable cache.</div>
+    <div class="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-success">{memoryStore.lastAction} macOS may retain some memory as reusable cache.</div>
   {/if}
 
   {#if memory}
@@ -152,7 +148,7 @@
         <ProgressBar
           value={(memory.used_bytes / memory.total_bytes) * 100}
           height="h-2"
-          color={memory.pressure === 'critical' ? 'bg-rose-500' : memory.pressure === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}
+          color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
         />
         <div class="flex justify-between text-[10px] text-muted-foreground font-mono">
           <span>Available: {formatBytes(memory.available_bytes)}</span>
@@ -298,7 +294,7 @@
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="terminate-title">
       <Card class="w-full max-w-md space-y-4 border-border bg-card p-5 shadow-2xl">
         <div class="flex items-start gap-3">
-          <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-500">
+          <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
             <TriangleAlert size={17} />
           </div>
           <div>

@@ -98,11 +98,11 @@
   function confidenceClass(confidence: AppRelatedConfidence): string {
     switch (confidence) {
       case 'high':
-        return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+        return 'bg-success/10 text-success border-success/20';
       case 'medium':
-        return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
+        return 'bg-warning/10 text-warning border-warning/20';
       case 'shared':
-        return 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+        return 'bg-destructive/10 text-destructive border-destructive/20';
     }
   }
 
@@ -207,6 +207,10 @@
 
   onMount(() => {
     void loadApps();
+  });
+
+  $effect(() => {
+    if (!plan) return;
     const timer = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(timer);
   });
@@ -221,7 +225,7 @@
       <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h1 class="text-xl font-semibold tracking-tight">Applications</h1>
         <div class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-          <ShieldCheck size={14} class="text-emerald-500" />
+          <ShieldCheck size={14} class="text-success" />
           <span>Moves to Trash, never permanently deletes</span>
         </div>
       </div>
@@ -239,9 +243,9 @@
   {/if}
 
   {#if trashResult}
-    <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
+    <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-warning/30 bg-warning/5' : 'border-success/30 bg-success/5'}`}>
       <div class="flex items-center justify-between gap-3 text-xs">
-        <span class={`font-medium flex items-center gap-2 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-amber-500' : 'text-emerald-500'}`}>
+        <span class={`font-medium flex items-center gap-2 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-warning' : 'text-success'}`}>
           {#if trashResult.failed_count + trashResult.skipped_count > 0}
             <AlertCircle size={15} />
           {:else}
@@ -447,7 +451,7 @@
                         checked={selectedRelatedIds.includes(item.id)}
                         onchange={() => toggleRelated(item.id)}
                         disabled={isExecuting}
-                        class="mt-0.5 accent-emerald-500"
+                        class="mt-0.5 accent-success"
                       />
                       <div class="min-w-0 flex-1">
                         <div class="flex flex-wrap items-center gap-2">

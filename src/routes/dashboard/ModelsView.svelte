@@ -3,6 +3,7 @@
   import type { LocalModelItem } from '../../lib/models/types';
   import { localModelsStore } from '../../lib/stores/models.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import { withMinimumDuration } from '../../lib/utils/async';
   import { tauriRevealInFinder } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -60,12 +61,7 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    const start = Date.now();
-    await localModelsStore.refresh();
-    const elapsed = Date.now() - start;
-    if (elapsed < 600) {
-      await new Promise((r) => setTimeout(r, 600 - elapsed));
-    }
+    await withMinimumDuration(localModelsStore.refresh(), 600);
     isRefreshing = false;
   }
 </script>

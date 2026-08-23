@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { tick } from 'svelte';
   import type {
     LargeFileItem,
     LargeFileScanEvent,
@@ -48,6 +48,9 @@
   let selectedRoots = $state<string[]>(LARGE_FILE_ROOTS.map((root) => root.id));
   let thresholdMb = $state(LARGE_FILE_DEFAULT_THRESHOLD_BYTES / MIB);
   let items = $state<LargeFileItem[]>([]);
+  // Streaming scans can report thousands of matches; a Set keeps duplicate
+  // suppression O(1) per event instead of rescanning the whole array.
+  let seenItemIds = new Set<string>();
   let selectedIds = $state<string[]>([]);
   let scanResult = $state<LargeFileScanResult | null>(null);
   let plan = $state<TrashPlanPreview | null>(null);
@@ -81,7 +84,8 @@
     void tick().then(() => document.getElementById('large-files-expiry-action')?.focus());
   });
 
-  onMount(() => {
+  $effect(() => {
+    if (!plan) return;
     const timer = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(timer);
   });
@@ -126,10 +130,11 @@
         matchesFound = event.matches_found;
         break;
       case 'item_found':
-        if (!items.some((item) => item.id === event.item.id)) {
-          items = [...items, event.item];
+        if (!seenItemIds.has(event.item.id)) {
+          seenItemIds.add(event.item.id);
+          items.push(event.item);
+          matchesFound = items.length;
         }
-        matchesFound = items.length;
         break;
       case 'root_finished':
         activeRoot = event.root;
@@ -159,6 +164,7 @@
     scanResult = null;
     selectedIds = [];
     items = [];
+    seenItemIds.clear();
     activeScanId = null;
     activeRoot = '';
     entriesScanned = 0;

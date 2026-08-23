@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
+  import { withMinimumDuration } from '../../lib/utils/async';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
@@ -25,12 +26,7 @@
   async function handleRefresh() {
     if (isRefreshing) return;
     isRefreshing = true;
-    const start = Date.now();
-    await usageStore.refresh(true);
-    const elapsed = Date.now() - start;
-    if (elapsed < 600) {
-      await new Promise((r) => setTimeout(r, 600 - elapsed));
-    }
+    await withMinimumDuration(usageStore.refresh(true), 600);
     isRefreshing = false;
   }
 </script>
