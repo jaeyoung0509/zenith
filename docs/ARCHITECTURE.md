@@ -209,9 +209,11 @@ Store constructors do not start I/O. A route or an explicit activation event
 owns refresh and cleanup of recurring work.
 
 Development-port discovery runs independently from the 2.5-second memory
-sampler. The Memory route refreshes listeners at a slower interval only while
-visible, prevents overlapping discovery calls, and moves all blocking `lsof`,
-process-snapshot, wait, and signal work onto the blocking runtime.
+sampler. The standalone Development Servers route refreshes listeners at a
+slower interval only while visible, prevents overlapping discovery calls, and
+moves all blocking `lsof`, process-snapshot, wait, and signal work onto the
+blocking runtime. Existing dashboard settings receive the new tab once after
+Memory; later visibility and ordering choices remain user-controlled.
 
 ## Settings
 

@@ -678,7 +678,8 @@ export const mockApi = {
       excluded_signatures: [],
       quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'usage', 'awake'],
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'],
+      dashboard_tabs_revision: 1,
       sidebar_collapsed: false,
       awake_rules: [
         {
@@ -732,7 +733,7 @@ export const mockApi = {
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
       enabled_features: [
-        'dashboard_tabs: Storage, Docker, LocalModel, Memory, AiUsage, Awake',
+        'dashboard_tabs: Storage, Docker, LocalModel, Memory, DevelopmentServers, AiUsage, Awake',
         'quick_panel_sections: Storage, Cleanup, AiUsage, Categories, Memory',
         'clean_categories: ai=true, dev=true, docker=false, models=false',
         'awake_rules: total=2, active=0',

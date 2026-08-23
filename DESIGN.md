@@ -131,8 +131,12 @@ pixel utilities for those sizes.
   process count, estimated memory, and unsaved-work warning.
 - Offer normal Quit before the red Force Quit action. Explain that displayed
   memory is an estimate and macOS may retain released pages as reusable cache.
-- Keep Development Servers visually separate from memory-ranked application
-  groups. Rows lead with port/protocol, then sanitized server and project
+- Keep this view focused on memory-ranked application groups.
+
+### Development Servers
+
+- Use a dedicated sidebar tab rather than mixing listeners into the Memory
+  inspector. Rows lead with port/protocol, then sanitized server and project
   context, bind exposure, process age, and the secondary Release action.
 - Use neutral styling for loopback, an informational treatment for a specific
   network interface, and the semantic warning token for all-interface binds.

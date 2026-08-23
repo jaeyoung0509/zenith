@@ -26,7 +26,7 @@ remain outside the cleanup boundary.
 - Memory pressure, compression, swap, and per-application usage. Installed user
   apps can be quit normally or force quit after confirmation; system processes,
   terminals, and Zenith remain protected.
-- A Development Servers inspector that identifies current-user TCP listeners
+- A dedicated Development Servers tab that identifies current-user TCP listeners
   such as Vite and Next.js, shows their project and network exposure, and can
   release one exact verified listener without terminating unrelated Node.js or
   runtime processes.

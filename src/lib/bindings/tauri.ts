@@ -188,9 +188,9 @@ export type CleanStatus = "success" | "partial" | "failed";
 
 export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 
-export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "usage" | "awake";
+export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
 
-export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "usage" | "awake";
+export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
 
 export type DevelopmentListener = {
 	id: string,
@@ -514,6 +514,7 @@ export type ZenithSettings_Deserialize = {
 	quick_panel_sections?: QuickPanelSection[],
 	quick_panel_ai_providers?: string[],
 	dashboard_tabs?: DashboardTab_Deserialize[],
+	dashboard_tabs_revision?: number,
 	sidebar_collapsed?: boolean,
 };
 
@@ -531,6 +532,7 @@ export type ZenithSettings_Serialize = {
 	quick_panel_sections: QuickPanelSection[],
 	quick_panel_ai_providers: string[],
 	dashboard_tabs: DashboardTab_Serialize[],
+	dashboard_tabs_revision: number,
 	sidebar_collapsed: boolean,
 };
 
