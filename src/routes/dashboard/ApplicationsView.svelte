@@ -213,21 +213,21 @@
 </script>
 
 <div class="space-y-5">
-  <div class="flex items-start justify-between gap-4">
-    <div class="flex items-start gap-3">
-      <Button variant="ghost" size="icon" onclick={onBack} ariaLabel="Back to Storage">
-        <ArrowLeft size={16} />
-      </Button>
-      <div>
+  <div class="flex items-start gap-3">
+    <Button variant="ghost" size="icon" onclick={onBack} ariaLabel="Back to Storage">
+      <ArrowLeft size={16} />
+    </Button>
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h1 class="text-xl font-semibold tracking-tight">Applications</h1>
-        <p class="mt-1 text-xs text-muted-foreground">
-          Review an app bundle and only the related Library data Zenith can identify with constrained rules.
-        </p>
+        <div class="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+          <ShieldCheck size={14} class="text-emerald-500" />
+          <span>Moves to Trash, never permanently deletes</span>
+        </div>
       </div>
-    </div>
-    <div class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-      <ShieldCheck size={14} class="text-emerald-500" />
-      <span>Moves to Trash, never permanent delete</span>
+      <p class="mt-1 text-xs text-muted-foreground">
+        Review an app bundle and only the related Library data Zenith can identify with constrained rules.
+      </p>
     </div>
   </div>
 

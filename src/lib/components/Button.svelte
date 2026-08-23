@@ -53,7 +53,7 @@
   {onclick}
   aria-label={ariaLabel}
   {title}
-  class="inline-flex items-center justify-center whitespace-nowrap font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 select-none {variantStyles[
+  class="inline-flex items-center justify-center whitespace-nowrap font-medium transition-[background-color,color,border-color,transform,opacity] duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 select-none {variantStyles[
     variant
   ]} {sizeStyles[size]} {className}"
 >

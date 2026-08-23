@@ -5,6 +5,10 @@ on:
   pull_request:
     branches: [main, develop]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     name: Full CI Pipeline (macOS)
@@ -82,5 +86,7 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
 
-      - name: Release package build (no publish)
-        run: just release
+      # The tagged/manual Release workflow owns optimized DMG packaging.
+      # CI only needs to prove that the current frontend is embedded in a macOS app bundle.
+      - name: Build debug app bundle (embedded frontend check)
+        run: just build-fast
