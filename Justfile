@@ -41,7 +41,7 @@ run-fast:
 
 # Clean existing binaries and build fresh release packages (.app & .dmg)
 distribute: stop clean-bin
-    pnpm tauri build
+    ./scripts/tauri_release_build.sh
     @echo ""
     @echo "📦 Fresh release packages built successfully:"
     @echo "  - App Bundle: target/release/bundle/macos/Zenith.app"
@@ -58,7 +58,7 @@ release-and-run: release
 
 # Clean existing binaries and build fresh standalone release macOS App bundle
 release-app: stop clean-bin
-    pnpm tauri build --bundles app
+    ./scripts/tauri_release_build.sh --bundles app
     @echo ""
     @echo "✅ Standalone release App built at: target/release/bundle/macos/Zenith.app"
     @echo "👉 Run directly with: just run-bin"
