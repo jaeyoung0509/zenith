@@ -5088,11 +5088,12 @@ dependencies = [
 
 [[package]]
 name = "zenith-core"
-version = "0.1.7"
+version = "0.1.12"
 dependencies = [
  "base64 0.22.1",
  "libc",
  "plist",
+ "rayon",
  "regex",
  "reqwest 0.12.28",
  "serde",

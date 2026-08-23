@@ -150,8 +150,8 @@
           {#if awakeState.is_active}
             <Badge variant="warning" class="gap-1.5 font-medium">
               <span class="relative flex h-1.5 w-1.5">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning"></span>
               </span>
               <span>Active</span>
             </Badge>
@@ -168,10 +168,10 @@
     <!-- Power Source Badge -->
     <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/70 bg-card/60 text-xs">
       {#if awakeState.power_source === 'ac'}
-        <Zap size={14} class="text-emerald-400" />
+        <Zap size={14} class="text-success" />
         <span class="font-medium text-foreground">Plugged In (AC)</span>
       {:else if awakeState.power_source === 'battery'}
-        <Battery size={14} class="text-amber-400" />
+        <Battery size={14} class="text-warning" />
         <span class="font-medium text-foreground">Battery Power</span>
       {:else}
         <Shield size={14} class="text-muted-foreground" />
@@ -182,21 +182,21 @@
 
   <!-- Last Error Alert (if native assertion failed) -->
   {#if awakeState.last_error}
-    <div class="flex items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-400">
+    <div class="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-xs text-destructive">
       <AlertCircle size={16} class="shrink-0 mt-0.5" />
       <div class="space-y-1">
         <div class="font-semibold">Native Power Assertion Error</div>
-        <div class="text-[11px] leading-relaxed opacity-90">{awakeState.last_error}</div>
+        <div class="text-meta leading-relaxed opacity-90">{awakeState.last_error}</div>
       </div>
     </div>
   {/if}
 
   <!-- Active Status Banner -->
-  <Card class="p-5 {awakeState.is_active ? 'bg-amber-500/10 border-amber-500/30 shadow-sm' : 'bg-card/60'} transition-colors duration-200">
+  <Card class="p-5 {awakeState.is_active ? 'bg-warning/10 border-warning/30 shadow-sm' : 'bg-card/60'} transition-colors duration-200">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div class="space-y-1.5">
         <div class="flex items-center gap-2">
-          <Power size={16} class={awakeState.is_active ? 'text-amber-500 animate-pulse-soft' : 'text-muted-foreground'} />
+          <Power size={16} class={awakeState.is_active ? 'text-warning animate-pulse-soft' : 'text-muted-foreground'} />
           <h3 class="text-sm font-semibold text-foreground">
             {#if awakeState.is_active}
               {#if awakeState.manual_expires_at != null || awakeState.trigger_source?.includes('Manual')}
@@ -235,7 +235,7 @@
             Stop Manual Session
           </Button>
         {:else if activeRule}
-          <Button variant="outline" size="sm" class="text-xs border-amber-500/40 hover:bg-amber-500/20" onclick={() => awakeStore.toggleRule(activeRule.id)}>
+          <Button variant="outline" size="sm" class="text-xs border-warning/40 hover:bg-warning/20" onclick={() => awakeStore.toggleRule(activeRule.id)}>
             Disable {activeRule.app_name} Rule
           </Button>
         {:else}
@@ -254,7 +254,7 @@
         <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Quick Manual Duration (Caffeinate)
         </h3>
-        <p class="text-[11px] text-muted-foreground mt-0.5">
+        <p class="text-meta text-muted-foreground mt-0.5">
           Temporarily keep your Mac awake regardless of background rules.
         </p>
       </div>
@@ -264,7 +264,7 @@
         <button
           type="button"
           onclick={() => (manualBehavior = 'prevent_system_sleep')}
-          class="px-2.5 py-1 rounded text-[11px] font-medium transition-all {manualBehavior === 'prevent_system_sleep' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="px-2.5 py-1 rounded text-meta font-medium transition-all {manualBehavior === 'prevent_system_sleep' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           title="Work continues while you're away; display may turn off"
         >
           Keep Mac Awake
@@ -272,7 +272,7 @@
         <button
           type="button"
           onclick={() => (manualBehavior = 'keep_display_awake')}
-          class="px-2.5 py-1 rounded text-[11px] font-medium transition-all {manualBehavior === 'keep_display_awake' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="px-2.5 py-1 rounded text-meta font-medium transition-all {manualBehavior === 'keep_display_awake' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           title="Keeps both Mac and display awake while idle"
         >
           Keep Mac + Display Awake
@@ -317,7 +317,7 @@
         onclick={() => handleSetTimer(null)}
         class="flex-col h-auto py-3 text-xs gap-1"
       >
-        <Sun size={16} class="text-amber-500" />
+        <Sun size={16} class="text-warning" />
         <span class="font-medium text-foreground">Indefinite</span>
       </Button>
     </div>
@@ -332,7 +332,7 @@
         </div>
         <div class="space-y-1 flex-1">
           <div class="text-xs font-semibold text-foreground">Enable Recommended Keep Awake Rules?</div>
-          <p class="text-[11px] text-muted-foreground leading-relaxed">
+          <p class="text-meta text-muted-foreground leading-relaxed">
             Zenith can automatically keep your Mac awake while you are actively working with development tools (Codex, Claude Code, Docker) and plugged into AC power. Rules stay disabled by default until you explicitly opt in.
           </p>
           <div class="pt-2">
@@ -352,7 +352,7 @@
         <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Process-Triggered Rules
         </h3>
-        <p class="text-[11px] text-muted-foreground mt-0.5">
+        <p class="text-meta text-muted-foreground mt-0.5">
           Automatically prevent sleep while selected CLI processes or applications are running.
         </p>
       </div>
@@ -394,31 +394,31 @@
                 <span class="font-medium text-foreground truncate">{rule.app_name}</span>
                 {#if evaluation}
                   {#if awakeState.active_rule_id === rule.id}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
+                    <span class="px-2 py-0.5 rounded-full text-caption font-semibold border border-success/30 bg-success/10 text-success">
                       Active Trigger
                     </span>
                   {:else if evaluation.status === 'active'}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-emerald-500/20 bg-emerald-500/5 text-emerald-400/80" title="Process is running and eligible; ready to maintain sleep assertion if active trigger stops.">
+                    <span class="px-2 py-0.5 rounded-full text-caption font-medium border border-success/20 bg-success/5 text-success/80" title="Process is running and eligible; ready to maintain sleep assertion if active trigger stops.">
                       Running (Standby)
                     </span>
                   {:else if evaluation.status === 'waiting_power'}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-amber-500/30 bg-amber-500/10 text-amber-400" title="Process is running, but rule requires AC Power while Mac is on battery.">
+                    <span class="px-2 py-0.5 rounded-full text-caption font-medium border border-warning/30 bg-warning/10 text-warning" title="Process is running, but rule requires AC Power while Mac is on battery.">
                       Waiting for AC power
                     </span>
                   {:else if evaluation.status === 'waiting_process'}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-border bg-secondary/50 text-muted-foreground">
+                    <span class="px-2 py-0.5 rounded-full text-caption font-medium border border-border bg-secondary/50 text-muted-foreground">
                       Waiting for process
                     </span>
                   {:else}
-                    <span class="px-2 py-0.5 rounded-full text-[10px] font-medium border border-border/50 text-muted-foreground/60">
+                    <span class="px-2 py-0.5 rounded-full text-caption font-medium border border-border/50 text-muted-foreground/60">
                       Disabled
                     </span>
                   {/if}
                 {/if}
               </div>
 
-              <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
-                <span class="font-mono text-[10px] bg-secondary/60 px-1.5 py-0.5 rounded border border-border/40">
+              <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-meta text-muted-foreground">
+                <span class="font-mono text-caption bg-secondary/60 px-1.5 py-0.5 rounded border border-border/40">
                   {rule.executable_pattern}
                 </span>
                 <span>•</span>
@@ -432,7 +432,7 @@
               <button
                 type="button"
                 onclick={() => awakeStore.deleteRule(rule.id)}
-                class="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                class="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                 title="Delete rule"
                 aria-label={`Delete ${rule.app_name} rule`}
               >
@@ -471,7 +471,7 @@
           </div>
           <div class="min-w-0 flex-1">
             <p class="text-xs font-medium text-foreground">{isPickingApp ? 'Opening Applications…' : 'Choose from Applications'}</p>
-            <p class="mt-0.5 truncate text-[10px] text-muted-foreground">
+            <p class="mt-0.5 truncate text-caption text-muted-foreground">
               {selectedAppPath || 'Select an installed macOS app to auto-fill its executable pattern.'}
             </p>
           </div>
@@ -479,10 +479,10 @@
         </button>
 
         {#if pickerError}
-          <p class="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-500">{pickerError}</p>
+          <p class="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-meta text-destructive">{pickerError}</p>
         {/if}
 
-        <div class="flex items-center gap-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <div class="flex items-center gap-3 text-caption uppercase tracking-wider text-muted-foreground">
           <span class="h-px flex-1 bg-border"></span>
           <span>or enter manual configuration</span>
           <span class="h-px flex-1 bg-border"></span>
@@ -509,7 +509,7 @@
               placeholder="e.g. codex|ffmpeg|blender (separate with |)"
               class="w-full h-8 px-3 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-mono"
             />
-            <p class="text-[10px] text-muted-foreground">Matches any running process whose executable name, path, or command line contains these words.</p>
+            <p class="text-caption text-muted-foreground">Matches any running process whose executable name, path, or command line contains these words.</p>
           </div>
 
           <div class="space-y-1">
@@ -521,7 +521,7 @@
               placeholder="e.g. warp  — requires both patterns to match (AND)"
               class="w-full h-8 px-3 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring font-mono"
             />
-            <p class="text-[10px] text-muted-foreground">If set, both the main pattern AND this pattern must be running. Example: Warp + Codex/OMP compound.</p>
+            <p class="text-caption text-muted-foreground">If set, both the main pattern AND this pattern must be running. Example: Warp + Codex/OMP compound.</p>
           </div>
 
           <!-- Power Condition Selection -->
@@ -534,10 +534,10 @@
                 class="p-2.5 rounded-lg border text-left transition-all {newPowerCondition === 'ac_power_only' ? 'border-primary bg-primary/5 text-foreground' : 'border-border/70 text-muted-foreground hover:bg-secondary/40'}"
               >
                 <div class="font-medium flex items-center gap-1.5">
-                  <Zap size={13} class="text-emerald-400" />
+                  <Zap size={13} class="text-success" />
                   <span>Plugged In (AC) Only</span>
                 </div>
-                <div class="text-[10px] text-muted-foreground mt-0.5">Recommended. Saves battery life when unplugged.</div>
+                <div class="text-caption text-muted-foreground mt-0.5">Recommended. Saves battery life when unplugged.</div>
               </button>
 
               <button
@@ -546,10 +546,10 @@
                 class="p-2.5 rounded-lg border text-left transition-all {newPowerCondition === 'always' ? 'border-primary bg-primary/5 text-foreground' : 'border-border/70 text-muted-foreground hover:bg-secondary/40'}"
               >
                 <div class="font-medium flex items-center gap-1.5">
-                  <Battery size={13} class="text-amber-400" />
+                  <Battery size={13} class="text-warning" />
                   <span>Always (AC or Battery)</span>
                 </div>
-                <div class="text-[10px] text-muted-foreground mt-0.5">Prevents sleep even when running on battery.</div>
+                <div class="text-caption text-muted-foreground mt-0.5">Prevents sleep even when running on battery.</div>
               </button>
             </div>
           </div>
@@ -567,7 +567,7 @@
                   <Moon size={13} class="text-indigo-400" />
                   <span>Keep Mac Awake</span>
                 </div>
-                <div class="text-[10px] text-muted-foreground mt-0.5">Work continues while you're away. The display may turn off.</div>
+                <div class="text-caption text-muted-foreground mt-0.5">Work continues while you're away. The display may turn off.</div>
               </button>
 
               <button
@@ -579,7 +579,7 @@
                   <Monitor size={13} class="text-blue-400" />
                   <span>Keep Mac + Display Awake</span>
                 </div>
-                <div class="text-[10px] text-muted-foreground mt-0.5">Work continues and the display stays on while idle.</div>
+                <div class="text-caption text-muted-foreground mt-0.5">Work continues and the display stays on while idle.</div>
               </button>
             </div>
           </div>

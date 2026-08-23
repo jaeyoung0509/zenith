@@ -1,6 +1,7 @@
 use crate::models::{FileSize, ScanItem, Signature};
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
+use rayon::ThreadPool;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -13,6 +14,13 @@ pub struct DirectoryScanner;
 impl DirectoryScanner {
     /// Scans all configured paths for a given signature and returns discovered ScanItems.
     pub fn scan_signature(signature: &Signature) -> Vec<ScanItem> {
+        Self::scan_signature_with_pool(signature, None)
+    }
+
+    pub(crate) fn scan_signature_with_pool(
+        signature: &Signature,
+        pool: Option<&ThreadPool>,
+    ) -> Vec<ScanItem> {
         let mut items = Vec::new();
 
         // If signature has no explicit file paths (e.g. Docker commands), return early or handle in Docker adapter
@@ -39,7 +47,7 @@ impl DirectoryScanner {
             }
 
             let (size, file_count) = if exists {
-                SizeCalculator::measure_path(&path_buf, &signature.exclusions)
+                SizeCalculator::measure_path_with_pool(&path_buf, &signature.exclusions, pool)
             } else {
                 (FileSize::default(), 0)
             };

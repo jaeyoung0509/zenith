@@ -26,7 +26,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: 'src-tauri -> src-tauri/target'
+          workspaces: '. -> target'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
@@ -40,7 +40,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Verify release tag matches versions
         if: startsWith(github.ref, 'refs/tags/v')

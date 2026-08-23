@@ -34,15 +34,24 @@ The canonical color tokens live in `src/app.css`. In dark mode:
 Use the system sans-serif stack for labels and prose. Use monospace numerals for
 bytes, percentages, token counts, prices, process IDs, and reset times. Body text
 is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
+Compact supporting copy uses the named Tailwind steps `text-micro` (9 px),
+`text-caption` (10 px), and `text-meta` (11 px); do not reintroduce arbitrary
+pixel utilities for those sizes.
 
 ## Layout
 
-- Main window baseline: 960 × 660 px with a 224 px left sidebar.
+- Main window baseline: 960 × 660 px with a 224 px expanded sidebar. The sidebar
+  can collapse to an icon rail; the toggle remains visible, labelled, and
+  keyboard accessible in both states. Persist that preference with validated
+  settings so a relaunch does not unexpectedly change the user's layout.
 - Quick panel baseline: 360 × 520 px. It must stay useful above other windows,
   with a close button at the upper right and no hidden essential controls.
 - Main content uses a 24–32 px outer inset, 16–24 px section gaps, and 12–16 px
   internal card padding. Preserve the compact density visible in the current
   Storage and AI Usage screens.
+- Keep the main content fluid when the sidebar changes width. Navigation labels
+  may hide in the collapsed rail, but icons need a tooltip and an accessible
+  name; do not remove the active, focus, or safety states.
 - The macOS traffic-light area and titlebar drag region must remain unobstructed.
   Interactive elements inside a drag region require the `no-drag` class.
 
@@ -52,6 +61,18 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
   visually dominant primary action; supporting actions stay secondary or ghost.
 - Rows use icon, title, secondary metadata, metric, and disclosure/action in that
   order. Align metrics vertically and keep labels short enough to scan.
+- Comparable values (bytes, percentages, counts, and prices) use a stable
+  right-aligned column with monospace numerals and `white-space: nowrap`.
+  Action buttons also stay on one line; descriptive copy may wrap or truncate
+  inside a `min-width: 0` content column instead of pushing metrics around.
+- Status indicators must be data-backed and self-explanatory. A Storage indicator
+  means reclaimable data is available; expose the amount in the expanded rail
+  as a quiet inline dot-plus-monospace value and an accessible label/tooltip in
+  the collapsed rail. Do not use a high-contrast pill or add decorative dots to
+  tabs that have no pending state.
+- Sidebar collapse is a low-emphasis chevron control: it gains a soft surface
+  and border only on hover/focus, while the icon remains directional and the
+  accessible label describes the resulting action (Expand or Collapse).
 - Every action needs hover, keyboard focus, disabled, loading, success, and error
   behavior where applicable. Icon-only actions require labels and tooltips.
 - Loading should preserve the surrounding layout. Empty states explain what is
@@ -110,6 +131,21 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
   process count, estimated memory, and unsaved-work warning.
 - Offer normal Quit before the red Force Quit action. Explain that displayed
   memory is an estimate and macOS may retain released pages as reusable cache.
+- Keep this view focused on memory-ranked application groups.
+
+### Development Servers
+
+- Use a dedicated sidebar tab rather than mixing listeners into the Memory
+  inspector. Rows lead with port/protocol, then sanitized server and project
+  context, bind exposure, process age, and the secondary Release action.
+- Use neutral styling for loopback, an informational treatment for a specific
+  network interface, and the semantic warning token for all-interface binds.
+  Protected or unrecognized listeners remain visible with the backend-provided
+  reason but have no destructive action.
+- Graceful release is the only action in the first dialog. Show the destructive
+  Force Release dialog only after the backend confirms the same listener
+  ignored SIGTERM. Dialog focus enters on open and returns to the originating
+  row action on cancel or completion.
 
 ### Keep Awake
 
@@ -121,8 +157,11 @@ is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
 ## Visual QA checklist
 
 - Compare both the main window and quick panel at their baseline sizes.
-- Check long labels, zero values, offline providers, loading, failure, and large
-  numbers. Verify text contrast and that nothing clips behind the titlebar.
+- Check expanded and collapsed sidebars, long labels, zero values, offline
+  providers, loading, failure, and large numbers. Verify that byte metrics and
+  action labels do not wrap inconsistently, that long descriptive copy truncates
+  gracefully, and that nothing clips behind the titlebar.
 - Confirm the app, Dock, title, and tray icons use the intended variants and do
   not appear twice.
-- Test keyboard focus and screen-reader names for every clickable control.
+- Test keyboard focus, tooltips, and screen-reader names for every clickable
+  control, including the sidebar toggle and Storage status affordance.

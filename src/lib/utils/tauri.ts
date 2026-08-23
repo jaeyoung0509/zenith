@@ -10,6 +10,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  DevelopmentListener,
   DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
@@ -21,6 +22,8 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  ReleaseDevelopmentListenerResult,
+  ReleaseMode,
   ScanEvent,
   ScanItem,
   ScanResult,
@@ -68,6 +71,17 @@ export function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
 
 export function tauriTerminateProcessGroup(name: string, force: boolean): Promise<number> {
   return api.terminateProcessGroup(name, force);
+}
+
+export function tauriListDevelopmentListeners(): Promise<DevelopmentListener[]> {
+  return api.listDevelopmentListeners();
+}
+
+export function tauriReleaseDevelopmentListener(
+  id: string,
+  mode: ReleaseMode
+): Promise<ReleaseDevelopmentListenerResult> {
+  return api.releaseDevelopmentListener(id, mode);
 }
 
 export function tauriPickKeepAwakeApplication(): Promise<SelectedApplication | null> {

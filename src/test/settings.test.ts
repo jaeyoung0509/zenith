@@ -18,6 +18,8 @@ describe('serializeSettingsSnapshot', () => {
     quick_panel_sections: ['cleanup', 'storage', 'memory'],
     quick_panel_ai_providers: ['codex', 'claude'],
     dashboard_tabs: ['storage', 'memory', 'docker'],
+    dashboard_tabs_revision: 1,
+    sidebar_collapsed: false,
     awake_rules: [
       {
         id: 'rule.codex',
@@ -128,6 +130,7 @@ describe('SettingsStore persistence and lifecycle', () => {
       quick_panel_sections: ['storage', 'cleanup'],
       quick_panel_ai_providers: ['codex', 'claude'],
       dashboard_tabs: ['storage', 'memory'],
+      sidebar_collapsed: false,
       awake_rules: [],
     });
 
@@ -156,6 +159,17 @@ describe('SettingsStore persistence and lifecycle', () => {
   it('keeps intensive cleanup opt-in when loading legacy settings', async () => {
     await store.load();
     expect(store.settings.intensive_cleanup).toBe(false);
+    expect(store.settings.sidebar_collapsed).toBe(false);
+  });
+
+  it('persists the sidebar collapse preference with the rest of the settings', async () => {
+    await store.load();
+    await store.save({ sidebar_collapsed: true });
+
+    expect(store.settings.sidebar_collapsed).toBe(true);
+    expect(mockSaveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sidebar_collapsed: true })
+    );
   });
 
   it('responds to system theme changes via matchMedia listener', () => {
@@ -263,7 +277,7 @@ describe('SettingsStore persistence and lifecycle', () => {
 });
 
 describe('dashboard tab reordering and customization', () => {
-  const defaultTabs: DashboardTab[] = ['storage', 'docker', 'models', 'memory', 'usage', 'awake'];
+  const defaultTabs: DashboardTab[] = ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'];
 
   it('moves dashboard tabs up and down correctly', () => {
     const movedUp = moveOrdered(defaultTabs, 'docker', -1);
@@ -277,7 +291,7 @@ describe('dashboard tab reordering and customization', () => {
 
   it('reorders dashboard tabs via drag and drop', () => {
     const reordered = reorderOrdered(defaultTabs, 'memory', 'storage');
-    expect(reordered).toEqual(['memory', 'storage', 'docker', 'models', 'usage', 'awake']);
+    expect(reordered).toEqual(['memory', 'storage', 'docker', 'models', 'development_servers', 'usage', 'awake']);
   });
 
   it('clamps tab movement at array boundaries', () => {
@@ -332,6 +346,7 @@ describe('quick panel AI provider toggling and order preservation', () => {
       quick_panel_sections: ['storage', 'cleanup'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       dashboard_tabs: ['storage', 'memory'],
+      sidebar_collapsed: false,
       awake_rules: [],
     });
 

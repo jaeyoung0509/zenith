@@ -8,6 +8,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  DevelopmentListener,
   DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
@@ -15,6 +16,8 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  ReleaseDevelopmentListenerResult,
+  ReleaseMode,
   ScanEvent,
   ScanItem,
   ScanResult,
@@ -170,6 +173,17 @@ export const nativeApi = {
 
   async openLogsFolder(): Promise<void> {
     await unwrap(commands.openLogsFolder());
+  },
+
+  async listDevelopmentListeners(): Promise<DevelopmentListener[]> {
+    return await unwrap(commands.listDevelopmentListeners());
+  },
+
+  async releaseDevelopmentListener(
+    id: string,
+    mode: ReleaseMode
+  ): Promise<ReleaseDevelopmentListenerResult> {
+    return await unwrap(commands.releaseDevelopmentListener(id, mode));
   },
 
   async hideCurrentWindow(): Promise<void> {

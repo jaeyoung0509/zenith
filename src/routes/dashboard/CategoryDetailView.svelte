@@ -106,7 +106,7 @@
           <Square size={13} />
           <span>Deselect Filtered</span>
         {:else}
-          <CheckSquare size={13} class="text-emerald-500" />
+          <CheckSquare size={13} class="text-success" />
           <span>Select Filtered</span>
         {/if}
       </Button>
@@ -131,16 +131,16 @@
 
   <!-- Adapter Quick Link Banners for Stateful Categories -->
   {#if categoryResult.category === 'model'}
-    <div class="flex items-center justify-between p-3.5 rounded-xl border border-amber-500/25 bg-amber-500/10 text-amber-300 text-xs">
+    <div class="flex items-center justify-between p-3.5 rounded-xl border border-warning/25 bg-warning/10 text-warning text-xs">
       <div class="flex items-center gap-2.5">
-        <Boxes size={16} class="text-amber-400 shrink-0" />
+        <Boxes size={16} class="text-warning shrink-0" />
         <span>Local models are stateful assets. Manage, inspect, or delete them safely in the Local Models manager.</span>
       </div>
       {#if onNavigateTab}
         <Button
           variant="outline"
           size="sm"
-          class="border-amber-500/40 text-amber-300 hover:bg-amber-500/20 text-xs shrink-0"
+          class="border-warning/40 text-warning hover:bg-warning/20 text-xs shrink-0"
           onclick={() => onNavigateTab('models')}
         >
           <span>Open Local Models →</span>
@@ -236,7 +236,7 @@
         onclick={() => (selectedRiskFilter = 'safe')}
         class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
         'safe'
-          ? 'bg-background text-emerald-500 shadow-sm'
+          ? 'bg-background text-success shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
         Safe ({categoryResult.items.filter((i) => i.risk === 'safe').length})
@@ -246,7 +246,7 @@
         onclick={() => (selectedRiskFilter = 'rebuild')}
         class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
         'rebuild'
-          ? 'bg-background text-amber-500 shadow-sm'
+          ? 'bg-background text-warning shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
         Rebuild ({categoryResult.items.filter((i) => i.risk === 'rebuild').length})
@@ -256,7 +256,7 @@
         onclick={() => (selectedRiskFilter = 'manual')}
         class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
         'manual'
-          ? 'bg-background text-rose-500 shadow-sm'
+          ? 'bg-background text-destructive shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
         Manual ({categoryResult.items.filter((i) => i.risk === 'manual').length})
@@ -266,10 +266,10 @@
   </div>
 
   {#if selectedRiskFilter === 'all' || selectedRiskFilter === 'rebuild'}
-    <div class="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-      <Info size={15} class="mt-0.5 shrink-0 text-amber-400" />
-      <p class="text-[11px] leading-relaxed text-muted-foreground">
-        <span class="font-medium text-amber-400">Rebuild</span> items are safe to remove, but dependencies or indexes will be downloaded or rebuilt the next time you use that tool. They stay unselected until you choose them.
+    <div class="flex items-start gap-2.5 rounded-xl border border-warning/20 bg-warning/5 px-4 py-3">
+      <Info size={15} class="mt-0.5 shrink-0 text-warning" />
+      <p class="text-meta leading-relaxed text-muted-foreground">
+        <span class="font-medium text-warning">Rebuild</span> items are safe to remove, but dependencies or indexes will be downloaded or rebuilt the next time you use that tool. They stay unselected until you choose them.
       </p>
     </div>
   {/if}

@@ -184,6 +184,28 @@ group. It does not accept a PID from the WebView. System processes, terminals,
 and Zenith are protected. Normal application termination is offered before a
 confirmed force termination because unsaved work can be lost.
 
+Development Servers is a separate, narrower endpoint workflow. Discovery calls
+`/usr/sbin/lsof` directly with fixed arguments and a timeout, parses its
+machine-oriented output, and enriches current-user TCP listeners from a process
+snapshot. Full command lines, environment values, and raw discovery output are
+not returned or logged.
+
+The frontend receives display metadata and a random, one-shot lease ID. Private
+lease data includes the PID, protocol, port, bind address, UID, process start
+time, executable identity, classification, and observation time. Leases expire
+after 30 seconds, are capped in memory, and are consumed before any mutation is
+attempted.
+
+Before signaling, Rust requires the exact endpoint and stable process identity
+to match a fresh snapshot and reruns the development-server classifier and
+protected-process rules. Unknown ownership, missing identity fields, runtime
+name alone, PID reuse, port handoff, privileged ports, and protected processes
+fail closed. A normal release sends `SIGTERM` only to the exact listener PID.
+Force release cannot be requested with an ordinary listing lease: it requires a
+new force-authorized lease created only when the same process remains after the
+grace period and a second user confirmation. If another process acquires the
+port, Zenith reports an ownership change and never signals the replacement.
+
 ## Failure behavior
 
 Safety checks fail closed. A stale scan, missing signature, expired plan,
@@ -201,5 +223,7 @@ test. The suite covers forged selections, manual-strategy rejection, nested
 TOCTOU identity changes, intensive-mode opt-in filtering, protected cache
 prefixes, typed model deletion, Docker total-versus-reclaimable accounting,
 Large Files user-content scope, forged Large Files IDs, application-root scope,
-and app-data scope. Tests must never point destructive operations at real user
-directories.
+app-data scope, development-server classification, lease expiry/one-shot
+behavior, force authorization, PID reuse, and port ownership changes. Tests
+must never point destructive operations at real user processes or directories;
+the development-port integration test owns and cleans up its ephemeral child.

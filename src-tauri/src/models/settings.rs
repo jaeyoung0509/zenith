@@ -32,16 +32,18 @@ pub enum DashboardTab {
     Docker,
     Models,
     Memory,
+    DevelopmentServers,
     Usage,
     Awake,
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Storage,
         Self::Docker,
         Self::Models,
         Self::Memory,
+        Self::DevelopmentServers,
         Self::Usage,
         Self::Awake,
     ];
@@ -63,6 +65,9 @@ pub struct ZenithSettings {
     pub quick_panel_sections: Vec<QuickPanelSection>,
     pub quick_panel_ai_providers: Vec<String>,
     pub dashboard_tabs: Vec<DashboardTab>,
+    #[serde(default = "legacy_dashboard_tabs_revision")]
+    pub dashboard_tabs_revision: u8,
+    pub sidebar_collapsed: bool,
 }
 
 impl Default for ZenithSettings {
@@ -160,6 +165,8 @@ impl Default for ZenithSettings {
                 "antigravity".to_string(),
             ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
+            dashboard_tabs_revision: 1,
+            sidebar_collapsed: false,
         }
     }
 }
@@ -186,6 +193,24 @@ impl ZenithSettings {
             self.dashboard_tabs.push(DashboardTab::Storage);
         }
 
+        // Existing settings predate the standalone Development Servers tab.
+        // Add it once after Memory, then preserve future user hide/reorder choices.
+        if self.dashboard_tabs_revision < 1 {
+            if !self
+                .dashboard_tabs
+                .contains(&DashboardTab::DevelopmentServers)
+            {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Memory)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::DevelopmentServers);
+            }
+            self.dashboard_tabs_revision = 1;
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
@@ -194,6 +219,10 @@ impl ZenithSettings {
         });
         self
     }
+}
+
+fn legacy_dashboard_tabs_revision() -> u8 {
+    0
 }
 
 #[cfg(test)]
@@ -251,10 +280,43 @@ mod tests {
 
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.quick_panel_sections.len(), 4);
-        assert_eq!(parsed.dashboard_tabs.len(), 6);
+        assert_eq!(parsed.dashboard_tabs.len(), 7);
+        assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
         assert!(!parsed.intensive_cleanup);
+        assert!(!parsed.sidebar_collapsed);
+    }
+
+    #[test]
+    fn sanitize_adds_development_servers_once_for_existing_settings() {
+        let raw = r#"{
+            "dashboard_tabs": ["storage", "memory", "usage"],
+            "theme": "system"
+        }"#;
+
+        let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
+        let migrated = parsed.sanitize();
+        assert_eq!(
+            migrated.dashboard_tabs,
+            vec![
+                DashboardTab::Storage,
+                DashboardTab::Memory,
+                DashboardTab::DevelopmentServers,
+                DashboardTab::Usage,
+            ]
+        );
+        assert_eq!(migrated.dashboard_tabs_revision, 1);
+
+        let hidden_again = ZenithSettings {
+            dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Memory],
+            ..migrated
+        }
+        .sanitize();
+        assert_eq!(
+            hidden_again.dashboard_tabs,
+            vec![DashboardTab::Storage, DashboardTab::Memory]
+        );
     }
 
     #[test]

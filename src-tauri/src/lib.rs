@@ -2,12 +2,14 @@ pub mod ai_usage;
 pub mod applications;
 pub mod cleaner;
 pub mod commands;
+pub mod dev_ports;
 pub mod diagnostics;
 pub mod docker;
 pub mod large_files;
 pub mod metrics;
 pub mod models;
 pub mod models_inventory;
+pub mod operation_gate;
 pub mod power;
 pub mod safety;
 pub mod scanner;
@@ -118,8 +120,9 @@ pub fn run() {
     let ai_usage_cache = Arc::new(Mutex::new(None));
     let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
     let delete_plans = Arc::new(Mutex::new(HashMap::new()));
-    let operation_lock = Arc::new(Mutex::new(()));
+    let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
+    let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
 
     let app_state = AppState {
         registry,
@@ -130,8 +133,9 @@ pub fn run() {
         ai_usage_cache,
         ai_usage_refresh_lock,
         delete_plans,
-        operation_lock,
+        storage_operation_gate,
         memory_sampler,
+        dev_port_store,
     };
 
     tauri::Builder::default()
@@ -272,6 +276,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::toggle_quick_panel,
             commands::get_diagnostics,
             commands::open_logs_folder,
+            commands::list_development_listeners,
+            commands::release_development_listener,
             storage_commands::start_large_file_scan,
             storage_commands::cancel_large_file_scan,
             storage_commands::prepare_large_file_trash,
