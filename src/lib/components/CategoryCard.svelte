@@ -46,6 +46,12 @@
     }, 0);
   });
 
+  let showSelectedBytes = $derived(
+    selectedBytes > 0 &&
+      selectedBytes !== categoryResult.total_bytes &&
+      selectedBytes !== categoryResult.safe_bytes
+  );
+
   function handleToggleCheckbox(checked: boolean) {
     if (cleanableItems.length === 0) return;
     scanStore.toggleCategory(categoryResult.category, checked);
@@ -122,7 +128,7 @@
         <span class="block whitespace-nowrap text-sm font-semibold font-mono text-foreground">
           {formatBytes(categoryResult.total_bytes)}
         </span>
-        {#if selectedBytes > 0 && selectedBytes !== categoryResult.total_bytes}
+        {#if showSelectedBytes}
           <div class="whitespace-nowrap text-caption text-muted-foreground font-mono">
             Selected: {formatBytes(selectedBytes)}
           </div>

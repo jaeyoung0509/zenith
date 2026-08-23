@@ -55,7 +55,7 @@ Rust process state rather than in a browser singleton.
   for resources that must not be treated as arbitrary files.
 - `src-tauri/src/metrics` and `src-tauri/src/power`: macOS system integration.
 - `src-tauri/src/dev_ports`: bounded TCP-listener discovery, conservative
-  development-server classification, opaque lease storage, TOCTOU validation,
+  development/testing-tool classification, opaque lease storage, TOCTOU validation,
   and exact-process graceful/force signaling.
 - `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry
   points.
@@ -209,7 +209,8 @@ Store constructors do not start I/O. A route or an explicit activation event
 owns refresh and cleanup of recurring work.
 
 Development-port discovery runs independently from the 2.5-second memory
-sampler. The standalone Development Servers route refreshes listeners at a
+sampler. The standalone Development Servers route refreshes development and
+verified local testing-tool listeners at a
 slower interval only while visible, prevents overlapping discovery calls, and
 moves all blocking `lsof`, process-snapshot, wait, and signal work onto the
 blocking runtime. Existing dashboard settings receive the new tab once after
