@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod models;
 pub mod models_inventory;
 pub mod operation_gate;
+pub mod orbstack;
 pub mod power;
 pub mod safety;
 pub mod scanner;

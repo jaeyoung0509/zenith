@@ -79,6 +79,9 @@ be executed.
   identity metadata to reduce time-of-check/time-of-use risk.
 - Temporary-file cleanup is restricted to known tool prefixes and inactivity
   thresholds; Zenith never scans or deletes all of `/tmp`.
+- OrbStack's reviewed VM disk is reported as manually managed container storage
+  using allocated bytes; Zenith never deletes or compacts it through generic
+  cleanup.
 - Intensive cleanup considers only stale direct children of approved user cache
   and log roots. Symlinks and protected Apple/system namespaces are skipped,
   and inactivity is checked again immediately before deletion.

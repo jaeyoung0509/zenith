@@ -128,6 +128,7 @@
         <span class="block whitespace-nowrap text-sm font-semibold font-mono text-foreground">
           {formatBytes(categoryResult.total_bytes)}
         </span>
+        <span class="block whitespace-nowrap text-micro text-muted-foreground">Detected</span>
         {#if showSelectedBytes}
           <div class="whitespace-nowrap text-caption text-muted-foreground font-mono">
             Selected: {formatBytes(selectedBytes)}

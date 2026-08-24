@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'svelte/server';
 import StorageView from '../routes/dashboard/StorageView.svelte';
+import CategoryDetailView from '../routes/dashboard/CategoryDetailView.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
 import type { CategoryResult } from '../lib/models/types';
 
@@ -123,5 +124,58 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).not.toMatch(/Review &amp; Clean\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
     // Ensure summary pill renders rebuildable count separately
     expect(rendered.body).toContain('↻ 500 MB Rebuildable');
+  });
+});
+
+describe('detected versus reclaimable storage copy', () => {
+  it('labels manual container storage as detected and leaves it unselected', () => {
+    const bytes = 6 * 1024 * 1024 * 1024;
+    const category: CategoryResult = {
+      category: 'container',
+      display_name: 'Docker & Containers',
+      items: [
+        {
+          id: 'container.orbstack.storage',
+          signature_id: 'adapter.orbstack.storage',
+          name: 'OrbStack VM Storage',
+          category: 'container',
+          risk: 'manual',
+          path: '/Users/test/Library/Group Containers/HUAQ24HBR6.dev.orbstack/data/data.img.raw',
+          size: { logical: 240 * 1024 * 1024 * 1024, allocated: bytes },
+          file_count: 1,
+          description: 'Active container and Linux VM data.',
+          is_selected: false,
+          last_modified: null,
+          exists: true,
+        },
+      ],
+      total_bytes: bytes,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: bytes,
+    };
+
+    scanStore.lastScan = {
+      scan_id: 'scan-orbstack',
+      started_at: Date.now() - 1000,
+      finished_at: Date.now(),
+      categories: [category],
+      total_bytes: bytes,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: bytes,
+    };
+    scanStore.syncSelectionFromScan(scanStore.lastScan);
+
+    const rendered = render(CategoryDetailView, {
+      props: { categoryResult: category, onBack: vi.fn(), onNavigateTab: vi.fn() },
+    });
+
+    expect(rendered.body).toContain('1 detected location');
+    expect(rendered.body).toContain('6 GB detected');
+    expect(rendered.body).not.toContain('reclaimable locations');
+    expect(rendered.body).toContain('Zenith reports their storage without deleting it');
+    expect(scanStore.selectedMap['container.orbstack.storage']).toBe(false);
+    expect(scanStore.reclaimableBytes).toBe(0);
   });
 });

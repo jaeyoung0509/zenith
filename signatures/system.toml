@@ -8,6 +8,7 @@ risk = "safe"
 strategy = "delete_directory"
 paths = ["$TMPDIR"]
 include_prefixes = [
+    "agent-browser-chrome-",
     "antigravity-",
     "claude-",
     "claude_",
@@ -22,9 +23,15 @@ include_prefixes = [
     "discord-",
     "esbuild-",
     "gemini-",
+    "metro-cache",
+    "metro-file-map-",
+    "node-compile-cache",
     "opencode-",
     "opencode_",
+    "openai-docs-cache",
+    "pytest-of-",
     "tauri-",
+    "v8-compile-cache-",
     "vite-"
 ]
 min_age_days = 3

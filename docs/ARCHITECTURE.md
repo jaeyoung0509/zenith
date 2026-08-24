@@ -106,6 +106,13 @@ Generic cleanup supports only signature-scoped `Safe` and explicitly selected
 For example, Ollama deletion resolves a freshly scanned model ID and calls
 `ollama rm <model-name>`; it never deletes the manifest path supplied by a UI.
 
+Read-only domain adapters may also add `Manual` observations to a scan without
+granting deletion authority. The OrbStack adapter resolves only the reviewed
+group-container VM disk path and reports its allocated blocks, not the sparse
+file's logical capacity. It never enumerates other group containers, never
+auto-selects the item, and the generic planner rejects the observation before
+signature resolution.
+
 ### Standard and intensive scan scopes
 
 Cleanup scope is a backend decision. `start_scan` snapshots the persisted
@@ -127,7 +134,8 @@ The initial intensive scope covers stale third-party children of
 `~/Library/Caches` and stale application-log groups under `~/Library/Logs`.
 Apple/system cache namespaces and diagnostic/crash reports are excluded.
 Temporary cleanup remains a separate known-prefix allowlist and never becomes
-an unrestricted `/tmp` scan.
+an unrestricted `/tmp` scan. Reviewed developer-tool prefixes still use the
+same whole-tree inactivity threshold as every other temporary candidate.
 
 See [SAFETY.md](SAFETY.md) for the full deletion contract.
 
