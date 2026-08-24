@@ -12,7 +12,7 @@ The frontend may provide:
 - an opaque one-shot `plan_id` after reviewing a preview;
 - typed identities for dedicated adapters, such as a freshly scanned model ID;
 - a Large Files request containing only supported root tokens and a size
-  threshold;
+  threshold plus a backend-validated file filter;
 - an app inventory ID or app-inspection ID returned by the backend.
 
 The frontend may not provide an executable deletion path, cleanup strategy,
@@ -108,6 +108,14 @@ Traversal and execution enforce these rules:
 8. Immediately before Trash, the executor verifies the item still lives inside
    an approved Large Files root, still has the reviewed parent, is still a file,
    is not a symlink, and has the same filesystem identity.
+
+The optional `installers` filter is narrower than the normal Large Files scan:
+it accepts only `.dmg`, `.pkg`, `.mpkg`, `.xip`, and `.iso` files and lowers the
+minimum size to 10 MB. The default `all` filter retains the 100 MB floor. The
+filter is resolved in Rust, installer results are never auto-selected, and the
+frontend cannot provide an arbitrary extension or root. Both modes use the same
+bounded inventory and native Trash plan; moving an installer to Trash is not
+reported as reclaimed space until the user empties Trash.
 
 The specialized Large Files scope does not change `Blacklist` behavior for any
 other cleaner. In particular, `Documents`, `Desktop`, and `Movies` remain

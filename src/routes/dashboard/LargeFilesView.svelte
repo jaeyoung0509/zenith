@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import type {
     LargeFileItem,
+    LargeFileFilter,
     LargeFileScanEvent,
     LargeFileScanResult,
     TrashPlanPreview,
@@ -13,6 +14,7 @@
   import { getVirtualWindow } from '../../lib/utils/virtualList';
   import {
     LARGE_FILE_DEFAULT_THRESHOLD_BYTES,
+    INSTALLER_FILE_MIN_BYTES,
     LARGE_FILE_ROOTS,
     clampLargeFileThreshold,
     largeFileKindLabel,
@@ -46,6 +48,7 @@
   const MIB = 1024 * 1024;
 
   let selectedRoots = $state<string[]>(LARGE_FILE_ROOTS.map((root) => root.id));
+  let scanFilter = $state<LargeFileFilter>('all');
   let thresholdMb = $state(LARGE_FILE_DEFAULT_THRESHOLD_BYTES / MIB);
   let items = $state<LargeFileItem[]>([]);
   // Streaming scans can report thousands of matches; a Set keeps duplicate
@@ -66,7 +69,7 @@
   let error = $state<string | null>(null);
   let selectedBytes = $state(0);
   let selectedIdSet = $derived(new Set(selectedIds));
-  let thresholdBytes = $derived(clampLargeFileThreshold(thresholdMb * MIB));
+  let thresholdBytes = $derived(clampLargeFileThreshold(thresholdMb * MIB, scanFilter));
   let now = $state(Date.now());
   const RESULT_ROW_HEIGHT = 72;
   let resultsScrollTop = $state(0);
@@ -106,6 +109,24 @@
     selectedRoots = selectedRoots.includes(root)
       ? selectedRoots.filter((candidate) => candidate !== root)
       : [...selectedRoots, root];
+  }
+
+  function changeScanFilter(value: LargeFileFilter) {
+    scanFilter = value;
+    thresholdMb = value === 'installers'
+      ? INSTALLER_FILE_MIN_BYTES / MIB
+      : LARGE_FILE_DEFAULT_THRESHOLD_BYTES / MIB;
+    resetReview();
+    error = null;
+    scanResult = null;
+    items = [];
+    selectedIds = [];
+    selectedBytes = 0;
+    seenItemIds.clear();
+    itemBytesById.clear();
+    resultsScrollTop = 0;
+    entriesScanned = 0;
+    matchesFound = 0;
   }
 
   function toggleItem(id: string) {
@@ -192,7 +213,7 @@
 
     try {
       const result = await tauriStartLargeFileScan(
-        { roots: selectedRoots, min_size_bytes: thresholdBytes },
+        { roots: selectedRoots, min_size_bytes: thresholdBytes, filter: scanFilter },
         handleScanEvent
       );
       scanResult = result;
@@ -272,7 +293,9 @@
         </div>
       </div>
       <p class="mt-1 text-xs text-muted-foreground">
-        Inspect large personal files. Nothing is selected automatically and deletion always goes through Trash.
+        {scanFilter === 'installers'
+          ? 'Review disk images and installer packages in approved personal folders. Nothing is selected automatically and items move through Trash.'
+          : 'Inspect large personal files. Nothing is selected automatically and deletion always goes through Trash.'}
       </p>
     </div>
   </div>
@@ -298,6 +321,17 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
+          <label for="large-file-filter" class="text-xs font-medium">File type</label>
+          <select
+            id="large-file-filter"
+            value={scanFilter}
+            onchange={(event) => changeScanFilter((event.currentTarget as HTMLSelectElement).value as LargeFileFilter)}
+            disabled={isScanning}
+            class="h-8 rounded-lg border border-border bg-background px-2.5 text-xs"
+          >
+            <option value="all">All large files</option>
+            <option value="installers">Installers &amp; disk images</option>
+          </select>
           <label for="large-file-threshold" class="text-xs font-medium">Minimum size</label>
           <select
             id="large-file-threshold"
@@ -305,14 +339,21 @@
             disabled={isScanning}
             class="h-8 rounded-lg border border-border bg-background px-2.5 text-xs"
           >
-            <option value={100}>100 MB</option>
-            <option value={500}>500 MB</option>
+            {#if scanFilter === 'installers'}
+              <option value={10}>10 MB</option>
+              <option value={50}>50 MB</option>
+              <option value={100}>100 MB</option>
+              <option value={500}>500 MB</option>
+            {:else}
+              <option value={100}>100 MB</option>
+              <option value={500}>500 MB</option>
+            {/if}
             <option value={1024}>1 GB</option>
             <option value={2048}>2 GB</option>
             <option value={5120}>5 GB</option>
           </select>
           <span class="text-meta text-muted-foreground">
-            Backend safety floor: 100 MB
+            Backend safety floor: {scanFilter === 'installers' ? '10 MB for approved extensions' : '100 MB'}
           </span>
         </div>
       </div>

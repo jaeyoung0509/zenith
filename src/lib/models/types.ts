@@ -33,6 +33,7 @@ export type {
   DockerVolumeItem,
   FileSize,
   InstalledApp,
+  LargeFileFilter,
   LargeFileItem,
   LargeFileKind,
   LargeFileScanEvent,
