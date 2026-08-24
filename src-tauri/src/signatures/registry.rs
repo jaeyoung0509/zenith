@@ -147,4 +147,29 @@ mod tests {
         assert!(intensive.iter().any(|signature| signature.intensive_only));
         assert!(intensive.len() > standard.len());
     }
+
+    #[test]
+    fn developer_temp_prefixes_keep_the_three_day_age_gate() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let signature = registry.get("system.developer_temp").unwrap();
+
+        for prefix in [
+            "agent-browser-chrome-",
+            "metro-cache",
+            "metro-file-map-",
+            "node-compile-cache",
+            "openai-docs-cache",
+            "pytest-of-",
+            "v8-compile-cache-",
+        ] {
+            assert!(
+                signature
+                    .include_prefixes
+                    .iter()
+                    .any(|entry| entry == prefix),
+                "missing reviewed prefix: {prefix}"
+            );
+        }
+        assert_eq!(signature.min_age_days, Some(3));
+    }
 }

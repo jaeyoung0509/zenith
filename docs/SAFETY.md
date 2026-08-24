@@ -42,6 +42,12 @@ keychains, source-control metadata such as nested `.git`, and standard user
 content directories. Temporary cleanup never targets all of `/tmp`; candidates
 must match known tool prefixes and inactivity rules.
 
+OrbStack storage is observation-only. Zenith reads allocated block metadata
+from the single reviewed `data.img.raw` path so users can account for managed
+container storage, but it does not scan arbitrary group containers or create a
+generic cleanup target for the VM disk. Manual adapter observations are rejected
+by the planner even if a frontend attempts to select one.
+
 ## Intensive cleanup
 
 Intensive cleanup broadens discovery without weakening deletion authority. It

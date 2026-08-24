@@ -89,7 +89,7 @@
           {categoryResult.display_name}
         </h2>
         <p class="text-xs text-muted-foreground">
-          {filteredItems.length} reclaimable locations • {formatBytes(categoryResult.total_bytes)} total
+          {filteredItems.length} detected {filteredItems.length === 1 ? 'location' : 'locations'} • {formatBytes(categoryResult.total_bytes)} detected
         </p>
       </div>
     </div>
@@ -151,7 +151,7 @@
     <div class="flex items-center justify-between p-3.5 rounded-xl border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 text-xs">
       <div class="flex items-center gap-2.5">
         <Container size={16} class="text-cyan-400 shrink-0" />
-        <span>Docker containers and volumes are stateful resources. Inspect and manage them in the Containers manager.</span>
+        <span>Docker and OrbStack data are stateful resources. Zenith reports their storage without deleting it; use the owning container manager for changes.</span>
       </div>
       {#if onNavigateTab}
         <Button
