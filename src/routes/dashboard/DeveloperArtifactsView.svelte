@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import type {
     DeveloperArtifact,
+    DeveloperArtifactStatus,
     DeveloperArtifactScanEvent,
     DeveloperArtifactScanResult,
     DeveloperWorkspace,
@@ -10,6 +11,7 @@
   } from '../../lib/models/types';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
+  import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import { formatBytes, formatCountdown, formatTimeAgo, ttlRemaining } from '../../lib/utils/format';
   import {
     tauriCancelDeveloperArtifactScan,
@@ -60,9 +62,13 @@
   let error = $state<string | null>(null);
   let now = $state(Date.now());
   let expiryActionFocused = $state(false);
+  let partialCleanupConfirmed = $state(false);
   let selectedIdSet = $derived(new Set(selectedIds));
   let selectedItems = $derived(items.filter((item) => selectedIdSet.has(item.id)));
   let selectedBytes = $derived(selectedItems.reduce((total, item) => total + item.allocated_bytes, 0));
+  let hasMeasurementIncompleteSelected = $derived(
+    selectedItems.some((item) => item.status === 'measurement_incomplete')
+  );
   let sortedItems = $derived(
     [...items].sort((left, right) => {
       if (sortBy === 'activity') {
@@ -148,6 +154,24 @@
     plan = null;
     trashResult = null;
     expiryActionFocused = false;
+    partialCleanupConfirmed = false;
+  }
+
+  function canManuallyClean(item: DeveloperArtifact): boolean {
+    return item.status === 'complete' || item.status === 'measurement_incomplete';
+  }
+
+  function statusLabel(status: DeveloperArtifactStatus): string {
+    switch (status) {
+      case 'measurement_incomplete':
+        return 'Review with warning';
+      case 'safety_blocked':
+        return 'Blocked · safety check';
+      case 'scan_cancelled':
+        return 'Blocked · scan incomplete';
+      default:
+        return '';
+    }
   }
 
   async function addWorkspace() {
@@ -269,7 +293,7 @@
   }
 
   function toggleItem(item: DeveloperArtifact) {
-    if (!item.complete || isScanning || isExecuting) return;
+    if (!canManuallyClean(item) || isScanning || isExecuting) return;
     selectedIds = selectedIdSet.has(item.id)
       ? selectedIds.filter((id) => id !== item.id)
       : [...selectedIds, item.id];
@@ -277,7 +301,7 @@
   }
 
   function selectAll() {
-    selectedIds = items.filter((item) => item.complete).map((item) => item.id);
+    selectedIds = items.filter((item) => item.status === 'complete').map((item) => item.id);
     resetReview();
   }
 
@@ -301,6 +325,10 @@
 
   async function executeCleanup() {
     if (!plan) return;
+    if (hasMeasurementIncompleteSelected && !partialCleanupConfirmed) {
+      error = 'Confirm the partial-measurement warning before moving these artifacts to Trash.';
+      return;
+    }
     isExecuting = true;
     error = null;
     try {
@@ -351,7 +379,7 @@
           </Button>
         {/if}
         <Button variant="primary" size="md" onclick={scanThisMac} disabled={isScanning} class="gap-1.5">
-          <HardDrive size={14} class={isScanning ? 'animate-gentle-spin' : ''} />
+          {#if isScanning}<DeletingDots size="sm" />{:else}<HardDrive size={14} />{/if}
           {isScanning ? 'Scanning this Mac…' : 'Scan this Mac'}
         </Button>
         <Button variant="outline" size="md" onclick={addWorkspace} disabled={isScanning} class="gap-1.5">
@@ -359,7 +387,7 @@
           Add folder
         </Button>
         <Button variant="outline" size="md" onclick={scanArtifacts} disabled={isScanning || selectedWorkspaceIds.length === 0} class="gap-1.5">
-          <RefreshCw size={14} class={isScanning ? 'animate-gentle-spin' : ''} />
+          {#if isScanning}<DeletingDots size="sm" />{:else}<RefreshCw size={14} />{/if}
           Scan selected
         </Button>
       </div>
@@ -434,9 +462,9 @@
           <p class="mt-1 text-xs text-muted-foreground">{plan.item_count} selected artifact{plan.item_count === 1 ? '' : 's'} · {formatBytes(plan.allocated_size)} allocated</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
-          <Button variant="destructive" size="md" onclick={executeCleanup} disabled={isExecuting || isExpired} class="gap-1.5">
-            <Trash2 size={14} />
+          <Button variant="ghost" size="sm" onclick={() => { plan = null; partialCleanupConfirmed = false; }}>Cancel</Button>
+          <Button variant="destructive" size="md" onclick={executeCleanup} disabled={isExecuting || isExpired || (hasMeasurementIncompleteSelected && !partialCleanupConfirmed)} class="gap-1.5">
+            {#if isExecuting}<DeletingDots size="sm" />{:else}<Trash2 size={14} />{/if}
             {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move generated folders to Trash'}
           </Button>
         </div>
@@ -459,6 +487,16 @@
         </div>
       {:else}
         <p class="text-meta text-muted-foreground">One-shot plan. Zenith rechecks workspace identity, markers, exact artifact type, symlinks, and filesystem identity before each move.</p>
+        {#if hasMeasurementIncompleteSelected}
+          <div class="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            <p class="font-medium">Some selected measurements are partial.</p>
+            <p class="text-warning/90">The generated-folder scope and project evidence were verified, but one or more entries could not be measured. The displayed size and file count may be lower than the actual contents. Nested links are not followed.</p>
+            <label class="flex items-start gap-2 text-warning">
+              <input type="checkbox" bind:checked={partialCleanupConfirmed} class="mt-0.5 accent-warning" />
+              <span>I understand the measurements may be partial and want to move the verified generated folder(s) to Trash.</span>
+            </label>
+          </div>
+        {/if}
       {/if}
     </Card>
   {/if}
@@ -486,7 +524,7 @@
         <Button variant="ghost" size="sm" onclick={selectAll} disabled={isScanning || isExecuting}><CheckSquare size={13} /> Select rebuildable</Button>
         <Button variant="ghost" size="sm" onclick={deselectAll} disabled={isScanning || isExecuting}><Square size={13} /> Clear</Button>
         <Button variant="primary" size="md" onclick={reviewCleanup} disabled={isScanning || isPreparing || isExecuting || selectedIds.length === 0} class="gap-1.5">
-          <Trash2 size={14} />
+          {#if isPreparing}<DeletingDots size="sm" />{:else}<Trash2 size={14} />{/if}
           {isPreparing ? 'Reviewing…' : `Review ${formatBytes(selectedBytes)}`}
         </Button>
       {/if}
@@ -498,22 +536,22 @@
   {:else}
     <div class="space-y-2">
       {#each sortedItems as item (item.id)}
-        <Card class={`p-4 ${item.complete ? '' : 'border-warning/40 bg-warning/5'}`}>
+        <Card class={`p-4 ${item.status === 'complete' ? '' : item.status === 'measurement_incomplete' ? 'border-warning/40 bg-warning/5' : 'border-destructive/30 bg-destructive/5'}`}>
           <div class="flex items-start gap-3">
             <input
               type="checkbox"
               checked={selectedIdSet.has(item.id)}
               onchange={() => toggleItem(item)}
-              disabled={!item.complete || isScanning || isExecuting}
-              aria-label={`Select ${item.project_name} ${kindLabel(item)}`}
+              disabled={!canManuallyClean(item) || isScanning || isExecuting}
+              aria-label={`Select ${item.project_name} ${kindLabel(item)}${item.status === 'measurement_incomplete' ? ' with partial measurement warning' : ''}`}
               class="mt-1 accent-success"
             />
             <div class="min-w-0 flex-1 space-y-1.5">
               <div class="flex flex-wrap items-center gap-2">
                 <span class="text-xs font-semibold">{item.project_name}</span>
                 <span class="rounded bg-secondary px-1.5 py-0.5 text-caption text-muted-foreground">{ecosystemLabel(item)} · {kindLabel(item)}</span>
-                {#if !item.complete}
-                  <span class="rounded border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-caption text-warning">Incomplete · blocked</span>
+                {#if item.status !== 'complete'}
+                  <span class={`rounded border px-1.5 py-0.5 text-caption ${item.status === 'measurement_incomplete' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-destructive/30 bg-destructive/10 text-destructive'}`}>{statusLabel(item.status)}</span>
                 {/if}
               </div>
               <div class="truncate font-mono text-caption text-muted-foreground" title={item.path}>{item.path}</div>
@@ -526,7 +564,7 @@
               <div class="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
                 <span>Cleanup scope: <span class="font-mono text-foreground">{cleanupScopeLabel(item)}</span> only · source stays</span>
                 <span>Evidence: {item.evidence.join(' · ')}</span>
-                {#if !item.complete && item.incomplete_reason}<span class="text-warning">{item.incomplete_reason}</span>{/if}
+                {#if item.incomplete_reason}<span class={item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}>{item.incomplete_reason}</span>{/if}
               </div>
             </div>
             <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => tauriRevealInFinder(item.path)} ariaLabel={`Reveal ${item.path}`} title="Reveal in Finder">

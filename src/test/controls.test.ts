@@ -3,6 +3,7 @@ import { render } from 'svelte/server';
 import Switch from '../lib/components/Switch.svelte';
 import Checkbox from '../lib/components/Checkbox.svelte';
 import CategoryCard from '../lib/components/CategoryCard.svelte';
+import DeletingDots from '../lib/components/DeletingDots.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
 
 afterEach(() => {
@@ -74,6 +75,17 @@ describe('Checkbox component SSR / visual contracts', () => {
     expect(rendered.body).toContain('cursor-not-allowed');
     expect(rendered.body).not.toContain('bg-success');
     expect(rendered.body).not.toContain('<svg');
+  });
+});
+
+describe('DeletingDots component SSR / visual contracts', () => {
+  it('uses generated dimensions and staggered animations at button size', () => {
+    const rendered = render(DeletingDots, { props: { size: 'sm' } });
+
+    expect(rendered.body).toContain('w-[5px] h-[5px]');
+    expect(rendered.body).toContain('animate-bounce-dot-1');
+    expect(rendered.body).toContain('animate-bounce-dot-2');
+    expect(rendered.body).toContain('animate-bounce-dot-3');
   });
 });
 

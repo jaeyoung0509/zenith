@@ -26,6 +26,7 @@ export type {
   DeveloperArtifactKind,
   DeveloperArtifactScanEvent,
   DeveloperArtifactScanResult,
+  DeveloperArtifactStatus,
   DeveloperEcosystem,
   DeveloperWorkspace,
   DiagnosticsSnapshot,

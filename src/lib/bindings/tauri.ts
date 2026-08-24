@@ -214,7 +214,7 @@ export type DeveloperArtifact = {
 	newest_mtime: number | null,
 	rebuild_hint: string | null,
 	evidence: string[],
-	complete: boolean,
+	status: DeveloperArtifactStatus,
 	incomplete_reason: string | null,
 	selected_by_default: boolean,
 };
@@ -232,6 +232,23 @@ export type DeveloperArtifactScanResult = {
 	cancelled: boolean,
 	truncated: boolean,
 };
+
+export type DeveloperArtifactStatus = 
+/**  Every measured entry and project marker was verified. */
+"complete" | 
+/**
+ *  The generated-folder scope and project evidence are verified, but one
+ *  or more descendants could not be measured. Manual cleanup is allowed
+ *  after an explicit warning and execution-time revalidation.
+ */
+"measurement_incomplete" | 
+/**
+ *  A safety boundary (for example a symlink, filesystem boundary, or
+ *  project marker identity) could not be verified. Cleanup is forbidden.
+ */
+"safety_blocked" | 
+/**  The scan was cancelled before this artifact could be fully validated. */
+"scan_cancelled";
 
 export type DeveloperEcosystem = "rust" | "node" | "python" | "go" | "java" | "kotlin" | "php" | "ruby" | "dotnet" | "cpp" | "swift" | "dart" | "elixir" | "terraform";
 

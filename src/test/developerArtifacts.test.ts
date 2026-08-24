@@ -16,16 +16,34 @@ describe('developer artifact review workflow', () => {
     expect(result.items.some((item) => item.ecosystem === 'rust')).toBe(true);
   });
 
-  it('does not allow incomplete candidates into a cleanup plan', async () => {
+  it('allows measurement-incomplete candidates only through explicit selection', async () => {
     const result = await mockStorageApi.startDeveloperArtifactScan(
       ['workspace-myproject', 'workspace-work'],
       () => undefined
     );
-    const incomplete = result.items.find((item) => !item.complete);
+    const incomplete = result.items.find((item) => item.status === 'measurement_incomplete');
     expect(incomplete).toBeDefined();
     await expect(
       mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [incomplete!.id])
-    ).rejects.toThrow('Incomplete artifacts');
+    ).resolves.toMatchObject({ item_count: 1 });
+  });
+
+  it('keeps safety-blocked candidates out of cleanup plans', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(['workspace-work'], () => undefined);
+    const blocked = result.items.find((item) => item.status === 'safety_blocked');
+    expect(blocked).toBeDefined();
+    await expect(
+      mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [blocked!.id])
+    ).rejects.toThrow('safety checks');
+  });
+
+  it('rejects forged artifact IDs even when a valid ID is also selected', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(['workspace-myproject'], () => undefined);
+    const valid = result.items.find((item) => item.status === 'complete');
+    expect(valid).toBeDefined();
+    await expect(
+      mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [valid!.id, 'forged-artifact'])
+    ).rejects.toThrow('inventory changed');
   });
 
   it('scans the whole user scope without manually adding project folders', async () => {
@@ -50,5 +68,6 @@ describe('developer artifact review workflow', () => {
     expect(rendered.body).toContain('Project source, manifests, lockfiles, and project roots are never cleanup targets');
     expect(rendered.body).toContain('Java/Kotlin');
     expect(rendered.body).toContain('Terraform');
+    expect(rendered.body).not.toContain('Incomplete · blocked');
   });
 });
