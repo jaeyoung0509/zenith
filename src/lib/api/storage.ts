@@ -74,6 +74,26 @@ const MIB = 1024 * 1024;
 
 const mockLargeFiles: LargeFileItem[] = [
   {
+    id: 'installer-dmg-1',
+    name: 'ExampleTool.dmg',
+    display_parent: '/Users/mock/Downloads',
+    logical_size: 55 * MIB,
+    allocated_size: 55 * MIB,
+    modified_at: Math.floor(Date.now() / 1000) - 86400 * 12,
+    kind: 'disk_image',
+    extension: 'dmg',
+  },
+  {
+    id: 'installer-pkg-1',
+    name: 'ExampleSDK.pkg',
+    display_parent: '/Users/mock/Downloads',
+    logical_size: 120 * MIB,
+    allocated_size: 120 * MIB,
+    modified_at: Math.floor(Date.now() / 1000) - 86400 * 22,
+    kind: 'installer',
+    extension: 'pkg',
+  },
+  {
     id: 'large-video-1',
     name: 'screen-recording.mov',
     display_parent: '/Users/mock/Downloads',
@@ -214,6 +234,12 @@ const mockStorageApi: StorageManagementApi = {
     const scanId = `mock-large-scan-${Date.now()}`;
     activeMockScanId = scanId;
     mockScanCancelled = false;
+    const isInstallerFilter = request.filter === 'installers';
+    const threshold = Math.max(request.min_size_bytes, isInstallerFilter ? 10 * MIB : 100 * MIB);
+    const matchingMockFiles = mockLargeFiles
+      .filter((item) => item.logical_size >= threshold)
+      .filter((item) => !isInstallerFilter || ['dmg', 'pkg', 'mpkg', 'xip', 'iso'].includes(item.extension ?? ''))
+      .map((item) => isInstallerFilter ? { ...item, kind: 'installer' as const } : item);
     onEvent({ type: 'started', scan_id: scanId });
 
     const roots = request.roots.length > 0 ? request.roots : ['downloads', 'desktop', 'documents'];
@@ -224,15 +250,14 @@ const mockStorageApi: StorageManagementApi = {
         type: 'progress',
         root,
         entries_scanned: 1200,
-        matches_found: mockLargeFiles.length,
+        matches_found: matchingMockFiles.length,
       });
       onEvent({ type: 'root_finished', root });
     }
 
-    const threshold = Math.max(request.min_size_bytes, 100 * MIB);
     const items = mockScanCancelled
       ? []
-      : mockLargeFiles.filter((item) => item.logical_size >= threshold);
+      : matchingMockFiles;
     for (const item of items) {
       onEvent({ type: 'item_found', item });
     }

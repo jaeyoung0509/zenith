@@ -310,6 +310,8 @@ export type InstalledApp = {
 	is_system_protected: boolean,
 };
 
+export type LargeFileFilter = "all" | "installers";
+
 export type LargeFileItem = {
 	id: string,
 	name: string,
@@ -321,13 +323,14 @@ export type LargeFileItem = {
 	extension: string | null,
 };
 
-export type LargeFileKind = "video" | "archive" | "disk_image" | "vm_image" | "ai_model" | "database" | "developer_artifact" | "other";
+export type LargeFileKind = "video" | "archive" | "disk_image" | "installer" | "vm_image" | "ai_model" | "database" | "developer_artifact" | "other";
 
 export type LargeFileScanEvent = { type: "started"; scan_id: string } | { type: "root_started"; root: string } | { type: "progress"; root: string; entries_scanned: number; matches_found: number } | { type: "item_found"; item: LargeFileItem } | { type: "root_finished"; root: string } | { type: "finished"; result: LargeFileScanResult } | { type: "cancelled"; scan_id: string };
 
 export type LargeFileScanRequest = {
 	roots: string[],
 	min_size_bytes: number,
+	filter?: LargeFileFilter,
 };
 
 export type LargeFileScanResult = {

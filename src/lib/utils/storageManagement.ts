@@ -1,10 +1,12 @@
 import type {
   AppUninstallInspection,
+  LargeFileFilter,
   LargeFileItem,
   LargeFileKind,
 } from '../models/types';
 
 export const LARGE_FILE_MIN_BYTES = 100 * 1024 * 1024;
+export const INSTALLER_FILE_MIN_BYTES = 10 * 1024 * 1024;
 export const LARGE_FILE_DEFAULT_THRESHOLD_BYTES = 500 * 1024 * 1024;
 
 export const LARGE_FILE_ROOTS = [
@@ -14,9 +16,16 @@ export const LARGE_FILE_ROOTS = [
   { id: 'movies', label: 'Movies' },
 ] as const;
 
-export function clampLargeFileThreshold(bytes: number): number {
-  if (!Number.isFinite(bytes)) return LARGE_FILE_DEFAULT_THRESHOLD_BYTES;
-  return Math.max(LARGE_FILE_MIN_BYTES, Math.floor(bytes));
+export function clampLargeFileThreshold(
+  bytes: number,
+  filter: LargeFileFilter = 'all'
+): number {
+  const fallback = filter === 'installers'
+    ? INSTALLER_FILE_MIN_BYTES
+    : LARGE_FILE_DEFAULT_THRESHOLD_BYTES;
+  if (!Number.isFinite(bytes)) return fallback;
+  const minimum = filter === 'installers' ? INSTALLER_FILE_MIN_BYTES : LARGE_FILE_MIN_BYTES;
+  return Math.max(minimum, Math.floor(bytes));
 }
 
 export function selectedLargeFileBytes(items: LargeFileItem[], selectedIds: string[]): number {
@@ -55,6 +64,8 @@ export function largeFileKindLabel(kind: LargeFileKind): string {
       return 'Archive';
     case 'disk_image':
       return 'Disk Image';
+    case 'installer':
+      return 'Installer';
     case 'vm_image':
       return 'VM Image';
     case 'ai_model':

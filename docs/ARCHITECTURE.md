@@ -179,6 +179,15 @@ containing `.git` remain protected. Symlinked roots are rejected, and every
 component from the trusted root to the reviewed target is rechecked before
 Trash. This exception does not widen generic cleanup authority.
 
+The Large Files request also has a backend-validated filter. `all` keeps the
+ordinary 100 MB minimum, while `installers` limits matches to `.dmg`, `.pkg`,
+`.mpkg`, `.xip`, and `.iso` files and permits a 10 MB minimum. Installer results
+are still user files: they are never auto-selected, never added to Quick Clean,
+and are moved only through the same opaque one-shot Trash plan. The lower
+threshold applies only after the root and extension allowlists have matched, so
+it cannot turn the general Large Files scan into an unrestricted small-file
+crawl.
+
 App inventory scans only direct `.app` children of `/Applications` and
 `~/Applications`. Related data is inspected only below an approved set of
 `~/Library` roots. Exact bundle-identifier matches are high confidence; exact

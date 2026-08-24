@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppUninstallInspection, LargeFileItem } from '../lib/models/types';
 import {
   LARGE_FILE_DEFAULT_THRESHOLD_BYTES,
+  INSTALLER_FILE_MIN_BYTES,
   LARGE_FILE_MIN_BYTES,
   clampLargeFileThreshold,
   defaultRelatedIds,
@@ -15,6 +16,8 @@ const MIB = 1024 * 1024;
 describe('storage management helpers', () => {
   it('enforces the backend large-file minimum threshold', () => {
     expect(clampLargeFileThreshold(10 * MIB)).toBe(LARGE_FILE_MIN_BYTES);
+    expect(clampLargeFileThreshold(5 * MIB, 'installers')).toBe(INSTALLER_FILE_MIN_BYTES);
+    expect(clampLargeFileThreshold(50 * MIB, 'installers')).toBe(50 * MIB);
     expect(clampLargeFileThreshold(750 * MIB)).toBe(750 * MIB);
     expect(clampLargeFileThreshold(Number.NaN)).toBe(LARGE_FILE_DEFAULT_THRESHOLD_BYTES);
   });
@@ -111,6 +114,7 @@ describe('storage management helpers', () => {
   it('uses stable human-readable labels for file categories', () => {
     expect(largeFileKindLabel('ai_model')).toBe('AI Model');
     expect(largeFileKindLabel('developer_artifact')).toBe('Developer Artifact');
+    expect(largeFileKindLabel('installer')).toBe('Installer');
     expect(largeFileKindLabel('other')).toBe('Other');
   });
 });
