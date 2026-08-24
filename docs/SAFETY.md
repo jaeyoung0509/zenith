@@ -123,12 +123,18 @@ blacklisted for generic signature-based cleanup.
 
 ## Developer Artifact Review
 
-Developer Artifact Review is manual inventory, not Quick Clean. The only
-workspace roots it can scan are real directories selected through the native
-folder picker. Rust stores their canonical path and filesystem identity and
-returns an opaque workspace ID; the frontend cannot submit a path, scope, or
-cleanup rule. Roots must be user-owned children of the home directory and may
-not be protected locations.
+Developer Artifact Review is manual inventory, not Quick Clean. `Scan this
+Mac` registers the canonical current-user home as a backend-owned scan scope;
+the frontend receives only its opaque workspace ID and cannot submit a path,
+scope, or cleanup rule. The native picker remains available for narrower
+user-owned folders beneath home.
+
+The whole-home scope prunes protected paths before traversal. It bypasses
+`Library`, credential stores such as `.ssh`, `.gnupg`, `.aws`, `.azure`, and
+`.kube`, user media/content roots protected by the global blacklist, installed
+`.app` bundles, and known top-level package-manager/runtime state directories.
+Symlinks are not followed. These bypassed paths do not become candidates and
+do not consume recursive measurement work.
 
 Discovery uses reviewed ecosystem evidence before a directory becomes a
 candidate. Project markers must be direct children of the exact project root;
@@ -145,8 +151,8 @@ source tree:
 - `bin`/`obj` requires a direct .NET project marker;
 - `.build`, `.dart_tool`, `_build`, `deps`, and `.terraform` require Swift,
   Dart, Elixir, or Terraform markers respectively; and
-- `~/go/pkg/mod` is shown only as a separate shared cache when the user
-  explicitly selects the `go` workspace root.
+- `~/go/pkg/mod` is shown as a separate shared cache when the user selects the
+  `go` workspace root or uses the backend-owned whole-home scope.
 
 Unknown `build`, `dist`, `out`, `cache`, `vendor`, or hidden directories are
 never executable based on their names alone. Discovery skips `.git`, symlinks,

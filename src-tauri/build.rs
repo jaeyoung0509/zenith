@@ -34,6 +34,7 @@ fn main() {
         "cancel_large_file_scan",
         "prepare_large_file_trash",
         "pick_developer_workspace",
+        "register_developer_home_workspace",
         "start_developer_artifact_scan",
         "cancel_developer_artifact_scan",
         "prepare_developer_artifact_cleanup",

@@ -5,7 +5,7 @@ use crate::models::{
 };
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,7 @@ pub struct DeveloperWorkspaceRecord {
     pub path: PathBuf,
     pub identity: FileIdentity,
     pub created_at: u64,
+    pub whole_home: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -412,11 +413,42 @@ pub fn pick_workspace() -> Result<Option<DeveloperWorkspace>, String> {
     Ok(Some(register_workspace_path(&path)?.workspace))
 }
 
+pub fn register_home_workspace() -> Result<DeveloperWorkspace, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
+    let canonical = fs::canonicalize(&home)
+        .map_err(|_| "Could not resolve the user home directory".to_string())?;
+    let metadata = fs::symlink_metadata(&canonical)
+        .map_err(|_| "Could not inspect the user home directory".to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("The user home directory is not a stable directory.".to_string());
+    }
+    #[cfg(unix)]
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err("The user home directory must be owned by the current user.".to_string());
+    }
+    Ok(store_workspace(canonical, "This Mac".to_string(), true)?.workspace)
+}
+
 pub fn register_workspace_path(path: &Path) -> Result<DeveloperWorkspaceRecord, String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     let canonical = validate_workspace_root(path, &home)?;
+    let name = canonical
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Workspace")
+        .to_string();
+    store_workspace(canonical, name, false)
+}
+
+fn store_workspace(
+    canonical: PathBuf,
+    name: String,
+    whole_home: bool,
+) -> Result<DeveloperWorkspaceRecord, String> {
     let identity = FileIdentity::from_path(&canonical)
         .ok_or_else(|| "The selected workspace is not a stable directory.".to_string())?;
 
@@ -434,11 +466,6 @@ pub fn register_workspace_path(path: &Path) -> Result<DeveloperWorkspaceRecord, 
         }
     }
     let id = Uuid::new_v4().to_string();
-    let name = canonical
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Workspace")
-        .to_string();
     let record = DeveloperWorkspaceRecord {
         workspace: DeveloperWorkspace {
             id: id.clone(),
@@ -448,6 +475,7 @@ pub fn register_workspace_path(path: &Path) -> Result<DeveloperWorkspaceRecord, 
         path: canonical,
         identity,
         created_at: unix_timestamp(),
+        whole_home,
     };
     workspaces.insert(id, record.clone());
     Ok(record)
@@ -511,9 +539,9 @@ fn discover_workspace<F>(
 ) where
     F: FnMut(DeveloperArtifactScanEvent),
 {
-    let mut stack = vec![(workspace.path.clone(), 0usize)];
+    let mut pending = VecDeque::from([(workspace.path.clone(), 0usize)]);
     let mut entries_seen = 0u64;
-    while let Some((directory, depth)) = stack.pop() {
+    while let Some((directory, depth)) = pending.pop_front() {
         if cancel.load(Ordering::Relaxed) || entries_seen >= MAX_DISCOVERY_ENTRIES {
             if entries_seen >= MAX_DISCOVERY_ENTRIES {
                 *truncated = true;
@@ -560,6 +588,10 @@ fn discover_workspace<F>(
             if name == ".git" {
                 continue;
             }
+            if should_skip_protected_discovery_path(workspace, &path, &name) {
+                *skipped_entries = skipped_entries.saturating_add(1);
+                continue;
+            }
             if seen_paths.contains(&path) {
                 // A special candidate such as ~/go/pkg/mod may have been
                 // registered before its parent directory is visited.
@@ -589,7 +621,7 @@ fn discover_workspace<F>(
             if should_skip_discovery_directory(&name) {
                 continue;
             }
-            stack.push((path, depth + 1));
+            pending.push_back((path, depth + 1));
         }
     }
 }
@@ -632,11 +664,12 @@ fn global_go_module_candidate(
     seen_paths: &mut HashSet<PathBuf>,
 ) -> Option<Candidate> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let canonical_home = fs::canonicalize(&home).ok()?;
     let expected_root = fs::canonicalize(home.join("go")).ok()?;
-    if workspace.path != expected_root {
+    if workspace.path != expected_root && workspace.path != canonical_home {
         return None;
     }
-    let path = workspace.path.join("pkg/mod");
+    let path = expected_root.join("pkg/mod");
     let metadata = fs::symlink_metadata(&path).ok()?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() || !seen_paths.insert(path.clone()) {
         return None;
@@ -648,10 +681,14 @@ fn global_go_module_candidate(
         ecosystem: DeveloperEcosystem::Go,
         kind: DeveloperArtifactKind::GoModuleCache,
         path,
-        project_root: workspace.path.clone(),
+        project_root: expected_root,
         artifact_relative: PathBuf::from("pkg/mod"),
         marker_paths: Vec::new(),
-        evidence: vec!["Explicitly selected ~/go workspace".to_string()],
+        evidence: vec![if workspace.whole_home {
+            "Built-in Scan this Mac scope".to_string()
+        } else {
+            "Explicitly selected ~/go workspace".to_string()
+        }],
         rebuild_hint: Some("go mod download".to_string()),
     })
 }
@@ -1048,6 +1085,58 @@ fn should_skip_discovery_directory(name: &str) -> bool {
     )
 }
 
+fn should_skip_protected_discovery_path(
+    workspace: &DeveloperWorkspaceRecord,
+    path: &Path,
+    name: &str,
+) -> bool {
+    if name.ends_with(".app") {
+        return true;
+    }
+    if !workspace.whole_home {
+        return false;
+    }
+    if Blacklist::is_blacklisted(path) {
+        return true;
+    }
+    let credential_names = [
+        ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".config", ".Trash",
+    ];
+    if credential_names.contains(&name) {
+        return true;
+    }
+    if path.parent() != Some(workspace.path.as_path()) {
+        return false;
+    }
+    matches!(
+        name,
+        "Library"
+            | "Desktop"
+            | "Documents"
+            | "Pictures"
+            | "Movies"
+            | "Music"
+            | ".cache"
+            | ".local"
+            | ".cargo"
+            | ".rustup"
+            | ".npm"
+            | ".pnpm-store"
+            | ".yarn"
+            | ".bun"
+            | ".gradle"
+            | ".m2"
+            | ".ivy2"
+            | ".nuget"
+            | ".gem"
+            | ".composer"
+            | ".docker"
+            | ".orbstack"
+            | ".vscode"
+            | ".vscode-insiders"
+    )
+}
+
 fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize) -> TreeStats {
     let mut stats = TreeStats::new();
     if cancel.load(Ordering::Relaxed) {
@@ -1242,13 +1331,14 @@ mod tests {
         let identity = FileIdentity::from_path(root).unwrap();
         DeveloperWorkspaceRecord {
             workspace: DeveloperWorkspace {
-                id: "workspace".to_string(),
+                id: Uuid::new_v4().to_string(),
                 name: root.file_name().unwrap().to_string_lossy().into_owned(),
                 display_path: root.to_string_lossy().into_owned(),
             },
             path: root.to_path_buf(),
             identity,
             created_at: unix_timestamp(),
+            whole_home: false,
         }
     }
 
@@ -1336,6 +1426,51 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event, DeveloperArtifactScanEvent::Finished { .. })));
+    }
+
+    #[test]
+    fn whole_home_scan_finds_projects_and_bypasses_protected_trees() {
+        let temp = tempfile::tempdir().unwrap();
+        let safe_project = temp.path().join("work/rust-app");
+        fs::create_dir_all(safe_project.join("target")).unwrap();
+        fs::write(safe_project.join("Cargo.toml"), "[package]\nname='safe'\n").unwrap();
+        fs::write(safe_project.join("target/output.bin"), [1u8]).unwrap();
+
+        for protected in ["Library", ".ssh"] {
+            let project = temp.path().join(protected).join("hidden-project");
+            fs::create_dir_all(project.join("target")).unwrap();
+            fs::write(project.join("Cargo.toml"), "[package]\nname='hidden'\n").unwrap();
+            fs::write(project.join("target/output.bin"), [1u8]).unwrap();
+        }
+        let app = temp
+            .path()
+            .join("Applications/Demo.app/Contents/Resources/app");
+        fs::create_dir_all(app.join("node_modules")).unwrap();
+        fs::write(app.join("package.json"), "{}\n").unwrap();
+        fs::write(app.join("node_modules/package.json"), "{}\n").unwrap();
+
+        let mut workspace = workspace_record(temp.path());
+        workspace.whole_home = true;
+        WORKSPACES
+            .lock()
+            .expect("WORKSPACES poisoned")
+            .insert(workspace.workspace.id.clone(), workspace.clone());
+        let inventory = DeveloperArtifactScanner::scan(
+            std::slice::from_ref(&workspace.workspace.id),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .unwrap();
+        WORKSPACES
+            .lock()
+            .expect("WORKSPACES poisoned")
+            .remove(&workspace.workspace.id);
+
+        assert_eq!(inventory.records.len(), 1);
+        let artifact = &inventory.records.values().next().unwrap().artifact;
+        assert_eq!(artifact.project_name, "rust-app");
+        assert_eq!(artifact.kind, DeveloperArtifactKind::CargoTarget);
+        assert!(inventory.skipped_entries >= 3);
     }
 
     #[test]
@@ -1438,6 +1573,19 @@ mod tests {
             symlink(&workspace, &linked).unwrap();
             assert!(validate_workspace_root(&linked, &home).is_err());
         }
+    }
+
+    #[test]
+    fn backend_owned_home_scope_registers_without_the_folder_picker() {
+        let workspace = register_home_workspace().unwrap();
+        let canonical_home = fs::canonicalize(std::env::var_os("HOME").unwrap()).unwrap();
+        let mut workspaces = WORKSPACES.lock().expect("WORKSPACES poisoned");
+        let record = workspaces.get(&workspace.id).unwrap();
+
+        assert_eq!(record.path, canonical_home);
+        assert!(record.whole_home);
+        assert_eq!(workspace.name, "This Mac");
+        workspaces.remove(&workspace.id);
     }
 
     #[cfg(unix)]

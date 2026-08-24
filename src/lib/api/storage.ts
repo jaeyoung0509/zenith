@@ -33,6 +33,7 @@ export interface StorageManagementApi {
   cancelLargeFileScan(scanId: string): Promise<void>;
   prepareLargeFileTrash(scanId: string, selectedItemIds: string[]): Promise<TrashPlanPreview>;
   pickDeveloperWorkspace(): Promise<DeveloperWorkspace | null>;
+  registerDeveloperHomeWorkspace(): Promise<DeveloperWorkspace>;
   startDeveloperArtifactScan(
     workspaceIds: string[],
     onEvent: (event: DeveloperArtifactScanEvent) => void
@@ -68,6 +69,10 @@ const nativeStorageApi: StorageManagementApi = {
 
   async pickDeveloperWorkspace() {
     return await unwrap(commands.pickDeveloperWorkspace());
+  },
+
+  async registerDeveloperHomeWorkspace() {
+    return await unwrap(commands.registerDeveloperHomeWorkspace());
   },
 
   async startDeveloperArtifactScan(workspaceIds, onEvent) {
@@ -167,6 +172,11 @@ const mockDeveloperWorkspaces: DeveloperWorkspace[] = [
     id: 'workspace-work',
     name: 'work',
     display_path: '/Users/mock/work',
+  },
+  {
+    id: 'workspace-this-mac',
+    name: 'This Mac',
+    display_path: '/Users/mock',
   },
 ];
 
@@ -443,13 +453,18 @@ const mockStorageApi: StorageManagementApi = {
     return { ...mockDeveloperWorkspaces[0] };
   },
 
+  async registerDeveloperHomeWorkspace() {
+    return { ...mockDeveloperWorkspaces[2] };
+  },
+
   async startDeveloperArtifactScan(workspaceIds, onEvent) {
     const scanId = `mock-developer-scan-${Date.now()}`;
     activeMockDeveloperScanId = scanId;
     mockDeveloperScanCancelled = false;
-    const selectedWorkspaces = mockDeveloperWorkspaces.filter((workspace) =>
-      workspaceIds.includes(workspace.id)
-    );
+    const wholeHome = workspaceIds.includes('workspace-this-mac');
+    const selectedWorkspaces = wholeHome
+      ? mockDeveloperWorkspaces.filter((workspace) => workspace.id === 'workspace-this-mac')
+      : mockDeveloperWorkspaces.filter((workspace) => workspaceIds.includes(workspace.id));
     onEvent({
       type: 'started',
       scan_id: scanId,
@@ -459,9 +474,13 @@ const mockStorageApi: StorageManagementApi = {
     for (const workspace of selectedWorkspaces) {
       if (mockDeveloperScanCancelled) break;
       onEvent({ type: 'workspace_started', workspace });
-      for (const artifact of mockDeveloperArtifacts.filter(
-        (item) => item.workspace_id === workspace.id
-      )) {
+      const workspaceArtifacts = wholeHome
+        ? mockDeveloperArtifacts.map((artifact) => ({
+            ...artifact,
+            workspace_id: workspace.id,
+          }))
+        : mockDeveloperArtifacts.filter((item) => item.workspace_id === workspace.id);
+      for (const artifact of workspaceArtifacts) {
         if (mockDeveloperScanCancelled) break;
         onEvent({
           type: 'project_discovered',

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-register-developer-home-workspace"
+description = "Enables the register_developer_home_workspace command without any pre-configured scope."
+commands.allow = ["register_developer_home_workspace"]
+
+[[permission]]
+identifier = "deny-register-developer-home-workspace"
+description = "Denies the register_developer_home_workspace command without any pre-configured scope."
+commands.deny = ["register_developer_home_workspace"]

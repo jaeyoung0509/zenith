@@ -119,6 +119,14 @@ pub async fn pick_developer_workspace() -> Result<Option<DeveloperWorkspace>, St
 
 #[tauri::command]
 #[specta::specta]
+pub async fn register_developer_home_workspace() -> Result<DeveloperWorkspace, String> {
+    tauri::async_runtime::spawn_blocking(crate::developer_artifacts::register_home_workspace)
+        .await
+        .map_err(|_| "Developer home workspace worker panicked".to_string())?
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn start_developer_artifact_scan(
     workspace_ids: Vec<String>,
     on_event: Channel<DeveloperArtifactScanEvent>,

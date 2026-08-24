@@ -436,8 +436,7 @@ fn validate_developer_artifact_target(
             return Err("Skipped because project evidence changed after review.".to_string());
         }
     }
-    if kind == DeveloperArtifactKind::GoModuleCache && target.path != workspace_root.join("pkg/mod")
-    {
+    if kind == DeveloperArtifactKind::GoModuleCache && target.path != project_root.join("pkg/mod") {
         return Err(
             "Skipped because the shared Go module cache is outside its explicit scope.".to_string(),
         );

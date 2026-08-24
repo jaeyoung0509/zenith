@@ -201,6 +201,10 @@ export function tauriPickDeveloperWorkspace(): Promise<DeveloperWorkspace | null
   return storageApi.pickDeveloperWorkspace();
 }
 
+export function tauriRegisterDeveloperHomeWorkspace(): Promise<DeveloperWorkspace> {
+  return storageApi.registerDeveloperHomeWorkspace();
+}
+
 export function tauriStartDeveloperArtifactScan(
   workspaceIds: string[],
   onEvent: (event: DeveloperArtifactScanEvent) => void

@@ -16,6 +16,7 @@
     tauriExecuteTrashPlan,
     tauriPickDeveloperWorkspace,
     tauriPrepareDeveloperArtifactCleanup,
+    tauriRegisterDeveloperHomeWorkspace,
     tauriRevealInFinder,
     tauriStartDeveloperArtifactScan,
   } from '../../lib/utils/tauri';
@@ -24,6 +25,7 @@
     ArrowLeft,
     CheckSquare,
     FolderOpen,
+    HardDrive,
     RefreshCw,
     ShieldCheck,
     Square,
@@ -209,8 +211,8 @@
     }
   }
 
-  async function scanArtifacts() {
-    if (selectedWorkspaceIds.length === 0) {
+  async function runScan(workspaceIds: string[]) {
+    if (workspaceIds.length === 0) {
       error = 'Add at least one workspace before scanning.';
       return;
     }
@@ -226,7 +228,7 @@
     measuredCount = 0;
     skippedEntries = 0;
     try {
-      const result = await tauriStartDeveloperArtifactScan(selectedWorkspaceIds, handleScanEvent);
+      const result = await tauriStartDeveloperArtifactScan(workspaceIds, handleScanEvent);
       scanResult = result;
       items = result.items;
       discoveredCount = result.discovered_count;
@@ -238,6 +240,22 @@
       isScanning = false;
       activeScanId = null;
       activeWorkspace = '';
+    }
+  }
+
+  async function scanArtifacts() {
+    await runScan(selectedWorkspaceIds);
+  }
+
+  async function scanThisMac() {
+    error = null;
+    try {
+      const workspace = await tauriRegisterDeveloperHomeWorkspace();
+      workspaces = [workspace];
+      selectedWorkspaceIds = [workspace.id];
+      await runScan([workspace.id]);
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
     }
   }
 
@@ -322,8 +340,8 @@
   <Card class="p-5 space-y-4">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <div class="text-xs font-medium">Workspace roots</div>
-        <p class="mt-1 text-meta text-muted-foreground">Choose bounded folders with the native picker. Zenith never crawls all of your home folder.</p>
+        <div class="text-xs font-medium">Scan scope</div>
+        <p class="mt-1 text-meta text-muted-foreground">Scan your user-owned Mac files in one pass. System, credential, media, and app-bundle paths are bypassed.</p>
       </div>
       <div class="flex items-center gap-2">
         {#if isScanning && activeScanId}
@@ -332,20 +350,24 @@
             Cancel
           </Button>
         {/if}
+        <Button variant="primary" size="md" onclick={scanThisMac} disabled={isScanning} class="gap-1.5">
+          <HardDrive size={14} class={isScanning ? 'animate-gentle-spin' : ''} />
+          {isScanning ? 'Scanning this Mac…' : 'Scan this Mac'}
+        </Button>
         <Button variant="outline" size="md" onclick={addWorkspace} disabled={isScanning} class="gap-1.5">
           <FolderOpen size={14} />
-          Add workspace
+          Add folder
         </Button>
-        <Button variant="primary" size="md" onclick={scanArtifacts} disabled={isScanning || selectedWorkspaceIds.length === 0} class="gap-1.5">
+        <Button variant="outline" size="md" onclick={scanArtifacts} disabled={isScanning || selectedWorkspaceIds.length === 0} class="gap-1.5">
           <RefreshCw size={14} class={isScanning ? 'animate-gentle-spin' : ''} />
-          {isScanning ? 'Scanning…' : 'Scan artifacts'}
+          Scan selected
         </Button>
       </div>
     </div>
 
     {#if workspaces.length === 0}
       <div class="rounded-lg border border-dashed border-border/80 p-4 text-xs text-muted-foreground">
-        Add a project folder such as <span class="font-mono">~/src</span>, <span class="font-mono">~/work</span>, or <span class="font-mono">~/Myproject</span> to begin.
+        <span class="font-medium text-foreground">Scan this Mac</span> searches your user-owned files automatically. Add a folder only when you want a narrower scan.
       </div>
     {:else}
       <div class="grid gap-2 sm:grid-cols-2">

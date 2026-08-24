@@ -41,6 +41,7 @@
     "allow-cancel-large-file-scan",
     "allow-prepare-large-file-trash",
     "allow-pick-developer-workspace",
+    "allow-register-developer-home-workspace",
     "allow-start-developer-artifact-scan",
     "allow-cancel-developer-artifact-scan",
     "allow-prepare-developer-artifact-cleanup",

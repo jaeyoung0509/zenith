@@ -363,6 +363,12 @@
           "markdownDescription": "Enables the prune_docker_target command without any pre-configured scope."
         },
         {
+          "description": "Enables the register_developer_home_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-register-developer-home-workspace",
+          "markdownDescription": "Enables the register_developer_home_workspace command without any pre-configured scope."
+        },
+        {
           "description": "Enables the release_development_listener command without any pre-configured scope.",
           "type": "string",
           "const": "allow-release-development-listener",
@@ -607,6 +613,12 @@
           "type": "string",
           "const": "deny-prune-docker-target",
           "markdownDescription": "Denies the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_developer_home_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-register-developer-home-workspace",
+          "markdownDescription": "Denies the register_developer_home_workspace command without any pre-configured scope."
         },
         {
           "description": "Denies the release_development_listener command without any pre-configured scope.",

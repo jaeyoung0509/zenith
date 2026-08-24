@@ -212,10 +212,12 @@ Moving to Trash does not mean disk space has already been reclaimed; the UI
 reports the amount moved and describes it as potentially reclaimable after the
 Trash is emptied.
 
-Developer Artifact Review is a third dedicated storage workflow. A native
-folder picker registers a bounded, user-owned workspace and returns only an
-opaque workspace ID to the frontend. Discovery recognizes generated trees only
-when direct project-root evidence proves their purpose: Cargo/Maven targets, Gradle
+Developer Artifact Review is a third dedicated storage workflow. `Scan this
+Mac` registers the canonical current-user home as a backend-owned scope, while
+the native folder picker registers narrower user-owned workspaces. Both return
+only opaque workspace IDs to the frontend. Whole-home discovery prunes system,
+credential, media, package-manager state, and installed app-bundle trees before
+recursion. Discovery recognizes generated trees only when direct project-root evidence proves their purpose: Cargo/Maven targets, Gradle
 outputs, Node modules, Python environments, Composer/Ruby dependencies, Go,
 .NET, CMake, Swift, Flutter, Elixir, and Terraform artifacts. Generic names
 such as `build`, `vendor`, `bin`, or `target` are skipped without that evidence.

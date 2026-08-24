@@ -55,6 +55,7 @@ export const commands = {
 	name: string,
 	display_path: string,
 } | null, string>(__TAURI_INVOKE("pick_developer_workspace")),
+	registerDeveloperHomeWorkspace: () => typedError<DeveloperWorkspace, string>(__TAURI_INVOKE("register_developer_home_workspace")),
 	startDeveloperArtifactScan: (workspaceIds: string[], onEvent: Channel<DeveloperArtifactScanEvent>) => typedError<DeveloperArtifactScanResult, string>(__TAURI_INVOKE("start_developer_artifact_scan", { workspaceIds, onEvent })),
 	cancelDeveloperArtifactScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_developer_artifact_scan", { scanId })),
 	prepareDeveloperArtifactCleanup: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_developer_artifact_cleanup", { scanId, selectedItemIds })),

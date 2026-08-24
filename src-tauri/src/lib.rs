@@ -284,6 +284,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             storage_commands::cancel_large_file_scan,
             storage_commands::prepare_large_file_trash,
             storage_commands::pick_developer_workspace,
+            storage_commands::register_developer_home_workspace,
             storage_commands::start_developer_artifact_scan,
             storage_commands::cancel_developer_artifact_scan,
             storage_commands::prepare_developer_artifact_cleanup,
