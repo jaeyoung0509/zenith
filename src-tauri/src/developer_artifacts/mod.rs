@@ -332,7 +332,6 @@ impl DeveloperArtifactScanner {
         if progress.cancelled {
             for record in records.values_mut() {
                 record.artifact.status = DeveloperArtifactStatus::ScanCancelled;
-                record.artifact.complete = false;
                 record.artifact.incomplete_reason = Some(
                     "The scan was cancelled before this artifact could be fully verified. Scan again before cleanup."
                         .to_string(),
@@ -1175,7 +1174,14 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
     }
     if metadata.file_type().is_symlink() {
         stats.complete = false;
-        stats.safety_blocked = true;
+        // A nested link is not followed and only makes aggregate size/count
+        // partial. The reviewed artifact root itself is still rejected by
+        // FileIdentity before it can become a cleanup record.
+        stats.safety_blocked = depth == 0;
+        merge_mtime(&mut stats.newest_mtime, metadata.modified().ok());
+        stats.logical_bytes = metadata.len();
+        stats.allocated_bytes = allocated_bytes(&metadata);
+        stats.file_count = 1;
         return stats;
     }
     merge_mtime(&mut stats.newest_mtime, metadata.modified().ok());
@@ -1248,16 +1254,13 @@ fn record_from_measurement(
         .collect::<Vec<_>>();
     let status = if stats.cancelled {
         DeveloperArtifactStatus::ScanCancelled
-    } else if stats.safety_blocked {
-        DeveloperArtifactStatus::SafetyBlocked
-    } else if marker_identities.len() != candidate.marker_paths.len() {
+    } else if stats.safety_blocked || marker_identities.len() != candidate.marker_paths.len() {
         DeveloperArtifactStatus::SafetyBlocked
     } else if stats.complete {
         DeveloperArtifactStatus::Complete
     } else {
         DeveloperArtifactStatus::MeasurementIncomplete
     };
-    let complete = matches!(status, DeveloperArtifactStatus::Complete);
     let incomplete_reason = match status {
         DeveloperArtifactStatus::Complete => None,
         DeveloperArtifactStatus::MeasurementIncomplete => Some(
@@ -1292,7 +1295,6 @@ fn record_from_measurement(
         rebuild_hint: candidate.rebuild_hint,
         evidence: candidate.evidence,
         status,
-        complete,
         incomplete_reason,
         selected_by_default: false,
     };
@@ -1620,7 +1622,6 @@ mod tests {
             record.artifact.status,
             DeveloperArtifactStatus::MeasurementIncomplete
         );
-        assert!(!record.artifact.complete);
         assert!(record.artifact.incomplete_reason.is_some());
         assert!(record.artifact.status.allows_manual_cleanup());
     }
@@ -1661,16 +1662,50 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlinked_artifact_content_is_not_followed_and_is_incomplete() {
+    fn nested_symlink_is_not_followed_and_remains_manually_reviewable() {
         use std::os::unix::fs::symlink;
         let temp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let target = project.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
+        fs::write(target.join("output.bin"), [1u8, 2, 3]).unwrap();
         fs::write(outside.path().join("secret"), [1u8]).unwrap();
-        symlink(outside.path(), temp.path().join("linked")).unwrap();
-        let device = FileIdentity::from_path(temp.path()).unwrap().device;
-        let stats = measure_tree(temp.path(), device, &AtomicBool::new(false), 0);
+        symlink(outside.path(), target.join("linked")).unwrap();
+
+        let workspace = workspace_record(temp.path());
+        let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
+        let stats = measure_tree(
+            &candidate.path,
+            workspace.identity.device,
+            &AtomicBool::new(false),
+            0,
+        );
+        assert!(!stats.complete);
+        assert!(!stats.safety_blocked);
+        assert_eq!(stats.file_count, 2);
+
+        let record = record_from_measurement(candidate, stats).unwrap();
+        assert_eq!(
+            record.artifact.status,
+            DeveloperArtifactStatus::MeasurementIncomplete
+        );
+        assert!(record.artifact.status.allows_manual_cleanup());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_boundary_is_typed_as_safety_blocked() {
+        let temp = tempfile::tempdir().unwrap();
+        let actual_device = FileIdentity::from_path(temp.path()).unwrap().device;
+        let stats = measure_tree(
+            temp.path(),
+            actual_device.wrapping_add(1),
+            &AtomicBool::new(false),
+            0,
+        );
         assert!(!stats.complete);
         assert!(stats.safety_blocked);
-        assert_eq!(stats.file_count, 0);
     }
 }

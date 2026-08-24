@@ -215,11 +215,6 @@ export type DeveloperArtifact = {
 	rebuild_hint: string | null,
 	evidence: string[],
 	status: DeveloperArtifactStatus,
-	/**
-	 *  Kept as a compatibility field for older persisted/frontend payloads.
-	 *  New cleanup decisions must use `status`.
-	 */
-	complete: boolean,
 	incomplete_reason: string | null,
 	selected_by_default: boolean,
 };

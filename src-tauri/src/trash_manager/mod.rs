@@ -651,7 +651,6 @@ mod tests {
             rebuild_hint: Some("cargo build".to_string()),
             evidence: vec!["Cargo.toml".to_string()],
             status: crate::models::DeveloperArtifactStatus::Complete,
-            complete: true,
             incomplete_reason: None,
             selected_by_default: false,
         };
@@ -691,7 +690,6 @@ mod tests {
         {
             let partial = partial_inventory.records.get_mut("artifact").unwrap();
             partial.artifact.status = crate::models::DeveloperArtifactStatus::MeasurementIncomplete;
-            partial.artifact.complete = false;
             partial.artifact.incomplete_reason =
                 Some("Some entries could not be measured.".to_string());
         }
@@ -746,7 +744,6 @@ mod tests {
                 rebuild_hint: Some("cargo build".to_string()),
                 evidence: vec!["Cargo.toml".to_string()],
                 status: crate::models::DeveloperArtifactStatus::Complete,
-                complete: true,
                 incomplete_reason: None,
                 selected_by_default: false,
             },
@@ -812,7 +809,6 @@ mod tests {
                 rebuild_hint: Some("cargo build".to_string()),
                 evidence: vec!["Cargo.toml".to_string()],
                 status: crate::models::DeveloperArtifactStatus::Complete,
-                complete: true,
                 incomplete_reason: None,
                 selected_by_default: false,
             },

@@ -85,9 +85,6 @@ pub struct DeveloperArtifact {
     pub rebuild_hint: Option<String>,
     pub evidence: Vec<String>,
     pub status: DeveloperArtifactStatus,
-    /// Kept as a compatibility field for older persisted/frontend payloads.
-    /// New cleanup decisions must use `status`.
-    pub complete: bool,
     pub incomplete_reason: Option<String>,
     pub selected_by_default: bool,
 }

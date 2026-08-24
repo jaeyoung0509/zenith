@@ -462,8 +462,8 @@
           <p class="mt-1 text-xs text-muted-foreground">{plan.item_count} selected artifact{plan.item_count === 1 ? '' : 's'} · {formatBytes(plan.allocated_size)} allocated</p>
         </div>
         <div class="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
-          <Button variant="destructive" size="md" onclick={executeCleanup} disabled={isExecuting || isExpired} class="gap-1.5">
+          <Button variant="ghost" size="sm" onclick={() => { plan = null; partialCleanupConfirmed = false; }}>Cancel</Button>
+          <Button variant="destructive" size="md" onclick={executeCleanup} disabled={isExecuting || isExpired || (hasMeasurementIncompleteSelected && !partialCleanupConfirmed)} class="gap-1.5">
             {#if isExecuting}<DeletingDots size="sm" />{:else}<Trash2 size={14} />{/if}
             {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move generated folders to Trash'}
           </Button>
@@ -490,7 +490,7 @@
         {#if hasMeasurementIncompleteSelected}
           <div class="space-y-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
             <p class="font-medium">Some selected measurements are partial.</p>
-            <p class="text-warning/90">The generated-folder scope and project evidence were verified, but one or more entries could not be measured. The displayed size and file count may be lower than the actual contents.</p>
+            <p class="text-warning/90">The generated-folder scope and project evidence were verified, but one or more entries could not be measured. The displayed size and file count may be lower than the actual contents. Nested links are not followed.</p>
             <label class="flex items-start gap-2 text-warning">
               <input type="checkbox" bind:checked={partialCleanupConfirmed} class="mt-0.5 accent-warning" />
               <span>I understand the measurements may be partial and want to move the verified generated folder(s) to Trash.</span>
@@ -543,7 +543,7 @@
               checked={selectedIdSet.has(item.id)}
               onchange={() => toggleItem(item)}
               disabled={!canManuallyClean(item) || isScanning || isExecuting}
-              aria-label={`Select ${item.project_name} ${kindLabel(item)}`}
+              aria-label={`Select ${item.project_name} ${kindLabel(item)}${item.status === 'measurement_incomplete' ? ' with partial measurement warning' : ''}`}
               class="mt-1 accent-success"
             />
             <div class="min-w-0 flex-1 space-y-1.5">

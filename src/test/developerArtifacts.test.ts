@@ -37,6 +37,15 @@ describe('developer artifact review workflow', () => {
     ).rejects.toThrow('safety checks');
   });
 
+  it('rejects forged artifact IDs even when a valid ID is also selected', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(['workspace-myproject'], () => undefined);
+    const valid = result.items.find((item) => item.status === 'complete');
+    expect(valid).toBeDefined();
+    await expect(
+      mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [valid!.id, 'forged-artifact'])
+    ).rejects.toThrow('inventory changed');
+  });
+
   it('scans the whole user scope without manually adding project folders', async () => {
     const workspace = await mockStorageApi.registerDeveloperHomeWorkspace();
     const result = await mockStorageApi.startDeveloperArtifactScan([workspace.id], () => undefined);

@@ -195,7 +195,6 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     rebuild_hint: 'cargo build',
     evidence: ['Cargo.toml'],
     status: 'complete',
-    complete: true,
     incomplete_reason: null,
     selected_by_default: false,
   },
@@ -213,7 +212,6 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     rebuild_hint: 'pnpm install',
     evidence: ['package.json', 'pnpm-lock.yaml'],
     status: 'complete',
-    complete: true,
     incomplete_reason: null,
     selected_by_default: false,
   },
@@ -231,7 +229,6 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     rebuild_hint: './gradlew build',
     evidence: ['build.gradle.kts'],
     status: 'complete',
-    complete: true,
     incomplete_reason: null,
     selected_by_default: false,
   },
@@ -249,7 +246,6 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     rebuild_hint: 'composer install',
     evidence: ['composer.json', 'composer.lock'],
     status: 'complete',
-    complete: true,
     incomplete_reason: null,
     selected_by_default: false,
   },
@@ -267,7 +263,6 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     rebuild_hint: 'uv sync',
     evidence: ['pyproject.toml'],
     status: 'measurement_incomplete',
-    complete: false,
     incomplete_reason: 'Permission denied while reading one or more entries',
     selected_by_default: false,
   },
@@ -285,8 +280,7 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     rebuild_hint: 'pnpm install',
     evidence: ['package.json'],
     status: 'safety_blocked',
-    complete: false,
-    incomplete_reason: 'A symbolic link or filesystem boundary could not be verified; cleanup is blocked.',
+    incomplete_reason: 'Project markers could not be verified; cleanup is blocked.',
     selected_by_default: false,
   },
 ];
@@ -556,9 +550,13 @@ const mockStorageApi: StorageManagementApi = {
     const scan = mockDeveloperScans.get(scanId);
     if (!scan) throw new Error('Developer artifact inventory expired. Scan again.');
     if (scan.cancelled) throw new Error('This scan was cancelled. Scan the workspace again before cleanup.');
-    const selected = scan.items.filter((item) => selectedItemIds.includes(item.id));
+    const requestedIds = new Set(selectedItemIds);
+    const selected = scan.items.filter((item) => requestedIds.has(item.id));
     if (selected.length === 0) {
       throw new Error('Select at least one developer artifact to move to Trash.');
+    }
+    if (selected.length !== requestedIds.size) {
+      throw new Error('The developer-artifact inventory changed. Scan the workspace again.');
     }
     if (selected.some((item) => item.status === 'safety_blocked')) {
       throw new Error('Some selected artifacts are blocked because their cleanup safety checks could not be verified.');
