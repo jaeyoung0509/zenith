@@ -218,7 +218,7 @@ export type DeveloperArtifact = {
 	selected_by_default: boolean,
 };
 
-export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_venv" | "go_module_cache" | "go_build" | "maven_target" | "gradle_build" | "gradle_cache" | "composer_vendor" | "ruby_bundle" | "dotnet_bin" | "dotnet_obj" | "c_make_build" | "swift_build" | "flutter_tooling" | "elixir_build" | "elixir_deps" | "terraform_cache";
+export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_venv" | "go_module_cache" | "maven_target" | "gradle_build" | "gradle_cache" | "composer_vendor" | "ruby_bundle" | "dotnet_bin" | "dotnet_obj" | "c_make_build" | "swift_build" | "flutter_tooling" | "elixir_build" | "elixir_deps" | "terraform_cache";
 
 export type DeveloperArtifactScanEvent = { type: "started"; scan_id: string; workspace_count: number } | { type: "workspace_started"; workspace: DeveloperWorkspace } | { type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem } | { type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind } | { type: "artifact_found"; artifact: DeveloperArtifact } | { type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number } | { type: "workspace_finished"; workspace_id: string } | { type: "finished"; result: DeveloperArtifactScanResult } | { type: "cancelled"; scan_id: string };
 

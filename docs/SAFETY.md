@@ -131,14 +131,18 @@ cleanup rule. Roots must be user-owned children of the home directory and may
 not be protected locations.
 
 Discovery uses reviewed ecosystem evidence before a directory becomes a
-candidate:
+candidate. Project markers must be direct children of the exact project root;
+an ancestor marker never authorizes a same-named directory deeper in the
+source tree:
 
 - `target` requires `Cargo.toml` or `pom.xml`;
 - `node_modules` requires `package.json`;
-- `.venv`/`venv` requires Python dependency metadata;
-- `build`/`.gradle` requires Gradle markers or `CMakeLists.txt`;
-- `vendor`/`vendor/bundle` requires Composer or Bundler markers;
-- `bin`/`obj` requires .NET project markers, while Go `bin` requires `go.mod`;
+- `.venv`/`venv` requires Python dependency metadata and `pyvenv.cfg`;
+- `build`/`.gradle` requires Gradle markers; CMake `build` additionally
+  requires its generated `CMakeCache.txt`;
+- Composer `vendor` requires Composer metadata generated inside `vendor`, and
+  `vendor/bundle` requires Bundler markers;
+- `bin`/`obj` requires a direct .NET project marker;
 - `.build`, `.dart_tool`, `_build`, `deps`, and `.terraform` require Swift,
   Dart, Elixir, or Terraform markers respectively; and
 - `~/go/pkg/mod` is shown only as a separate shared cache when the user
@@ -160,7 +164,9 @@ incomplete records. Immediately before each move, it revalidates the workspace
 and project identities, exact relative artifact type, marker identities,
 symlink-free scope, directory type, and candidate identity. Project roots,
 workspace roots, `.git`, source paths, forged IDs, stale inventories, replayed
-plans, and frontend-provided paths fail closed.
+plans, and frontend-provided paths fail closed. Selecting a project directory
+as the workspace remains valid because only its exact generated child (for
+example, `target/`) enters the plan; the project directory itself never does.
 
 ## App Uninstaller
 

@@ -600,17 +600,17 @@ fn recognize_artifact(
     child_name: &str,
 ) -> Option<Candidate> {
     let artifact_match = match child_name {
-        "target" => recognize_target(project_root, &workspace.path),
-        "node_modules" => recognize_node(project_root, &workspace.path),
-        ".venv" | "venv" => recognize_python(project_root, &workspace.path, child_name),
-        "vendor" => recognize_vendor(project_root, &workspace.path),
-        "build" => recognize_build(project_root, &workspace.path, child_name),
-        ".gradle" => recognize_gradle(project_root, &workspace.path, child_name),
-        "bin" | "obj" => recognize_dotnet_or_go(project_root, &workspace.path, child_name),
-        ".build" => recognize_swift(project_root, &workspace.path, child_name),
-        ".dart_tool" => recognize_flutter(project_root, &workspace.path, child_name),
-        "_build" | "deps" => recognize_elixir(project_root, &workspace.path, child_name),
-        ".terraform" => recognize_terraform(project_root, &workspace.path, child_name),
+        "target" => recognize_target(project_root),
+        "node_modules" => recognize_node(project_root),
+        ".venv" | "venv" => recognize_python(project_root, child_name),
+        "vendor" => recognize_vendor(project_root),
+        "build" => recognize_build(project_root, child_name),
+        ".gradle" => recognize_gradle(project_root, child_name),
+        "bin" | "obj" => recognize_dotnet(project_root, child_name),
+        ".build" => recognize_swift(project_root, child_name),
+        ".dart_tool" => recognize_flutter(project_root, child_name),
+        "_build" | "deps" => recognize_elixir(project_root, child_name),
+        ".terraform" => recognize_terraform(project_root, child_name),
         "pkg" => None,
         _ => None,
     }?;
@@ -689,8 +689,8 @@ fn candidate_from_match(
     }
 }
 
-fn recognize_target(project_root: &Path, workspace_root: &Path) -> Option<ArtifactMatch> {
-    if let Some(marker) = find_named_marker(project_root, workspace_root, &["Cargo.toml"]) {
+fn recognize_target(project_root: &Path) -> Option<ArtifactMatch> {
+    if let Some(marker) = find_named_marker(project_root, &["Cargo.toml"]) {
         return Some(ArtifactMatch {
             ecosystem: DeveloperEcosystem::Rust,
             kind: DeveloperArtifactKind::CargoTarget,
@@ -701,7 +701,7 @@ fn recognize_target(project_root: &Path, workspace_root: &Path) -> Option<Artifa
             rebuild_hint: Some("cargo build".to_string()),
         });
     }
-    let marker = find_named_marker(project_root, workspace_root, &["pom.xml"])?;
+    let marker = find_named_marker(project_root, &["pom.xml"])?;
     Some(ArtifactMatch {
         ecosystem: DeveloperEcosystem::Java,
         kind: DeveloperArtifactKind::MavenTarget,
@@ -713,8 +713,8 @@ fn recognize_target(project_root: &Path, workspace_root: &Path) -> Option<Artifa
     })
 }
 
-fn recognize_node(project_root: &Path, workspace_root: &Path) -> Option<ArtifactMatch> {
-    let package_json = find_named_marker(project_root, workspace_root, &["package.json"])?;
+fn recognize_node(project_root: &Path) -> Option<ArtifactMatch> {
+    let package_json = find_named_marker(project_root, &["package.json"])?;
     let mut marker_paths = vec![package_json.clone()];
     let mut evidence = vec!["package.json".to_string()];
     let lockfiles = [
@@ -746,11 +746,7 @@ fn recognize_node(project_root: &Path, workspace_root: &Path) -> Option<Artifact
     })
 }
 
-fn recognize_python(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
+fn recognize_python(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
     let names = [
         "pyproject.toml",
         "uv.lock",
@@ -758,7 +754,10 @@ fn recognize_python(
         "requirements.txt",
         "Pipfile.lock",
     ];
-    let marker = find_named_marker(project_root, workspace_root, &names)?;
+    let marker = find_named_marker(project_root, &names)?;
+    if !is_regular_file(&project_root.join(child_name).join("pyvenv.cfg")) {
+        return None;
+    }
     let marker_name = marker.file_name()?.to_string_lossy();
     let hint = match marker_name.as_ref() {
         "uv.lock" => "uv sync",
@@ -778,8 +777,18 @@ fn recognize_python(
     })
 }
 
-fn recognize_vendor(project_root: &Path, workspace_root: &Path) -> Option<ArtifactMatch> {
-    if let Some(marker) = find_named_marker(project_root, workspace_root, &["composer.json"]) {
+fn recognize_vendor(project_root: &Path) -> Option<ArtifactMatch> {
+    if let Some(marker) = find_named_marker(project_root, &["composer.json"]) {
+        let vendor = project_root.join("vendor");
+        let installed = vendor.join("composer/installed.json");
+        let autoload = vendor.join("autoload.php");
+        let generated_evidence = if is_regular_file(&installed) {
+            installed
+        } else if is_regular_file(&autoload) {
+            autoload
+        } else {
+            return None;
+        };
         let mut marker_paths = vec![marker];
         let lock = project_root.join("composer.lock");
         let mut evidence = vec!["composer.json".to_string()];
@@ -787,6 +796,14 @@ fn recognize_vendor(project_root: &Path, workspace_root: &Path) -> Option<Artifa
             marker_paths.push(lock);
             evidence.push("composer.lock".to_string());
         }
+        marker_paths.push(generated_evidence.clone());
+        evidence.push(
+            generated_evidence
+                .strip_prefix(project_root)
+                .unwrap_or(&generated_evidence)
+                .to_string_lossy()
+                .into_owned(),
+        );
         return Some(ArtifactMatch {
             ecosystem: DeveloperEcosystem::Php,
             kind: DeveloperArtifactKind::ComposerVendor,
@@ -798,7 +815,7 @@ fn recognize_vendor(project_root: &Path, workspace_root: &Path) -> Option<Artifa
         });
     }
 
-    let marker = find_named_marker(project_root, workspace_root, &["Gemfile"])?;
+    let marker = find_named_marker(project_root, &["Gemfile"])?;
     let bundle = project_root.join("vendor/bundle");
     if !bundle.is_dir() {
         return None;
@@ -821,14 +838,9 @@ fn recognize_vendor(project_root: &Path, workspace_root: &Path) -> Option<Artifa
     })
 }
 
-fn recognize_build(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
+fn recognize_build(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
     let gradle = find_named_marker(
         project_root,
-        workspace_root,
         &[
             "build.gradle.kts",
             "build.gradle",
@@ -856,26 +868,28 @@ fn recognize_build(
             rebuild_hint: Some("./gradlew build".to_string()),
         });
     }
-    let marker = find_named_marker(project_root, workspace_root, &["CMakeLists.txt"])?;
+    let marker = find_named_marker(project_root, &["CMakeLists.txt"])?;
+    let cache = project_root.join(child_name).join("CMakeCache.txt");
+    if !is_regular_file(&cache) {
+        return None;
+    }
     Some(ArtifactMatch {
         ecosystem: DeveloperEcosystem::Cpp,
         kind: DeveloperArtifactKind::CMakeBuild,
         project_root: project_root.to_path_buf(),
         artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker],
-        evidence: vec!["CMakeLists.txt".to_string()],
+        marker_paths: vec![marker, cache],
+        evidence: vec![
+            "CMakeLists.txt".to_string(),
+            "build/CMakeCache.txt".to_string(),
+        ],
         rebuild_hint: Some("cmake --build build".to_string()),
     })
 }
 
-fn recognize_gradle(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
+fn recognize_gradle(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
     let marker = find_named_marker(
         project_root,
-        workspace_root,
         &[
             "build.gradle.kts",
             "build.gradle",
@@ -901,52 +915,27 @@ fn recognize_gradle(
     })
 }
 
-fn recognize_dotnet_or_go(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
-    if let Some(marker) = find_project_extension_marker(
-        project_root,
-        workspace_root,
-        &["csproj", "fsproj", "vbproj", "sln"],
-    ) {
-        let kind = if child_name == "bin" {
-            DeveloperArtifactKind::DotnetBin
-        } else {
-            DeveloperArtifactKind::DotnetObj
-        };
-        return Some(ArtifactMatch {
-            ecosystem: DeveloperEcosystem::Dotnet,
-            kind,
-            project_root: project_root.to_path_buf(),
-            artifact_relative: PathBuf::from(child_name),
-            marker_paths: vec![marker.clone()],
-            evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
-            rebuild_hint: Some("dotnet restore".to_string()),
-        });
-    }
-    if child_name == "bin" {
-        let marker = find_named_marker(project_root, workspace_root, &["go.mod"])?;
-        return Some(ArtifactMatch {
-            ecosystem: DeveloperEcosystem::Go,
-            kind: DeveloperArtifactKind::GoBuild,
-            project_root: project_root.to_path_buf(),
-            artifact_relative: PathBuf::from(child_name),
-            marker_paths: vec![marker],
-            evidence: vec!["go.mod".to_string()],
-            rebuild_hint: Some("go build ./...".to_string()),
-        });
-    }
-    None
+fn recognize_dotnet(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker =
+        find_project_extension_marker(project_root, &["csproj", "fsproj", "vbproj", "sln"])?;
+    let kind = if child_name == "bin" {
+        DeveloperArtifactKind::DotnetBin
+    } else {
+        DeveloperArtifactKind::DotnetObj
+    };
+    Some(ArtifactMatch {
+        ecosystem: DeveloperEcosystem::Dotnet,
+        kind,
+        project_root: project_root.to_path_buf(),
+        artifact_relative: PathBuf::from(child_name),
+        marker_paths: vec![marker.clone()],
+        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
+        rebuild_hint: Some("dotnet restore".to_string()),
+    })
 }
 
-fn recognize_swift(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, workspace_root, &["Package.swift"])?;
+fn recognize_swift(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &["Package.swift"])?;
     Some(ArtifactMatch {
         ecosystem: DeveloperEcosystem::Swift,
         kind: DeveloperArtifactKind::SwiftBuild,
@@ -958,12 +947,8 @@ fn recognize_swift(
     })
 }
 
-fn recognize_flutter(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, workspace_root, &["pubspec.yaml"])?;
+fn recognize_flutter(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &["pubspec.yaml"])?;
     Some(ArtifactMatch {
         ecosystem: DeveloperEcosystem::Dart,
         kind: DeveloperArtifactKind::FlutterTooling,
@@ -975,12 +960,8 @@ fn recognize_flutter(
     })
 }
 
-fn recognize_elixir(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, workspace_root, &["mix.exs"])?;
+fn recognize_elixir(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &["mix.exs"])?;
     let kind = if child_name == "_build" {
         DeveloperArtifactKind::ElixirBuild
     } else {
@@ -997,13 +978,9 @@ fn recognize_elixir(
     })
 }
 
-fn recognize_terraform(
-    project_root: &Path,
-    workspace_root: &Path,
-    child_name: &str,
-) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, workspace_root, &[".terraform.lock.hcl"])
-        .or_else(|| find_project_extension_marker(project_root, workspace_root, &["tf"]))?;
+fn recognize_terraform(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &[".terraform.lock.hcl"])
+        .or_else(|| find_project_extension_marker(project_root, &["tf"]))?;
     Some(ArtifactMatch {
         ecosystem: DeveloperEcosystem::Terraform,
         kind: DeveloperArtifactKind::TerraformCache,
@@ -1015,53 +992,26 @@ fn recognize_terraform(
     })
 }
 
-fn find_named_marker(start: &Path, root: &Path, names: &[&str]) -> Option<PathBuf> {
-    let mut current = Some(start);
-    while let Some(directory) = current {
-        for name in names {
-            let path = directory.join(name);
-            if is_regular_file(&path) {
-                return Some(path);
-            }
-        }
-        if directory == root {
-            break;
-        }
-        current = directory.parent();
-        if current.is_some_and(|parent| !parent.starts_with(root)) {
-            break;
-        }
-    }
-    None
+fn find_named_marker(project_root: &Path, names: &[&str]) -> Option<PathBuf> {
+    names
+        .iter()
+        .map(|name| project_root.join(name))
+        .find(|path| is_regular_file(path))
 }
 
-fn find_project_extension_marker(
-    start: &Path,
-    root: &Path,
-    extensions: &[&str],
-) -> Option<PathBuf> {
-    let mut current = Some(start);
-    while let Some(directory) = current {
-        let entries = fs::read_dir(directory).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !is_regular_file(&path) {
-                continue;
-            }
-            if path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|extension| extensions.contains(&extension))
-            {
-                return Some(path);
-            }
+fn find_project_extension_marker(project_root: &Path, extensions: &[&str]) -> Option<PathBuf> {
+    let entries = fs::read_dir(project_root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_regular_file(&path) {
+            continue;
         }
-        if directory == root {
-            break;
-        }
-        current = directory.parent();
-        if current.is_some_and(|parent| !parent.starts_with(root)) {
-            break;
+        if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extensions.contains(&extension))
+        {
+            return Some(path);
         }
     }
     None
@@ -1180,6 +1130,9 @@ fn record_from_measurement(
     candidate: Candidate,
     stats: TreeStats,
 ) -> Option<DeveloperArtifactRecord> {
+    if stats.logical_bytes == 0 && stats.allocated_bytes == 0 {
+        return None;
+    }
     let identity = FileIdentity::from_path(&candidate.path)?;
     let project_identity = FileIdentity::from_path(&candidate.project_root)?;
     let marker_identities = candidate
@@ -1329,6 +1282,7 @@ mod tests {
         let php = temp.path().join("php");
         fs::create_dir_all(php.join("vendor")).unwrap();
         fs::write(php.join("composer.json"), "{}\n").unwrap();
+        fs::write(php.join("vendor/autoload.php"), "<?php\n").unwrap();
         assert_eq!(
             recognize_artifact(&workspace, &php, "vendor").unwrap().kind,
             DeveloperArtifactKind::ComposerVendor
@@ -1355,7 +1309,9 @@ mod tests {
         fs::create_dir_all(rust_project.join("target")).unwrap();
         fs::create_dir_all(node_project.join("node_modules")).unwrap();
         fs::write(rust_project.join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
+        fs::write(rust_project.join("target/output.bin"), [1u8]).unwrap();
         fs::write(node_project.join("package.json"), "{}\n").unwrap();
+        fs::write(node_project.join("node_modules/package.json"), "{}\n").unwrap();
         let workspace = workspace_record(&workspace_path);
         WORKSPACES
             .lock()
@@ -1391,6 +1347,63 @@ mod tests {
         fs::create_dir_all(project.join("vendor")).unwrap();
         assert!(recognize_artifact(&workspace, &project, "build").is_none());
         assert!(recognize_artifact(&workspace, &project, "vendor").is_none());
+    }
+
+    #[test]
+    fn ancestor_markers_do_not_authorize_nested_same_named_source_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = workspace_record(temp.path());
+        fs::write(temp.path().join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
+        let source = temp.path().join("src");
+        fs::create_dir_all(source.join("target")).unwrap();
+        fs::write(source.join("target/module.rs"), "pub fn keep_me() {}\n").unwrap();
+
+        assert!(recognize_artifact(&workspace, &source, "target").is_none());
+    }
+
+    #[test]
+    fn ambiguous_environment_and_build_names_need_generated_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = workspace_record(temp.path());
+
+        let python = temp.path().join("python");
+        fs::create_dir_all(python.join("venv")).unwrap();
+        fs::write(python.join("pyproject.toml"), "[project]\nname='demo'\n").unwrap();
+        assert!(recognize_artifact(&workspace, &python, "venv").is_none());
+        fs::write(python.join("venv/pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        assert!(recognize_artifact(&workspace, &python, "venv").is_some());
+
+        let php = temp.path().join("php");
+        fs::create_dir_all(php.join("vendor")).unwrap();
+        fs::write(php.join("composer.json"), "{}\n").unwrap();
+        assert!(recognize_artifact(&workspace, &php, "vendor").is_none());
+        fs::write(php.join("vendor/autoload.php"), "<?php\n").unwrap();
+        assert!(recognize_artifact(&workspace, &php, "vendor").is_some());
+
+        let cmake = temp.path().join("cmake");
+        fs::create_dir_all(cmake.join("build")).unwrap();
+        fs::write(cmake.join("CMakeLists.txt"), "project(demo)\n").unwrap();
+        assert!(recognize_artifact(&workspace, &cmake, "build").is_none());
+        fs::write(cmake.join("build/CMakeCache.txt"), "# generated\n").unwrap();
+        assert!(recognize_artifact(&workspace, &cmake, "build").is_some());
+    }
+
+    #[test]
+    fn zero_byte_artifact_directories_are_not_reported() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
+        let workspace = workspace_record(temp.path());
+        let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
+        let stats = measure_tree(
+            &candidate.path,
+            workspace.identity.device,
+            &AtomicBool::new(false),
+            0,
+        );
+
+        assert!(record_from_measurement(candidate, stats).is_none());
     }
 
     #[test]

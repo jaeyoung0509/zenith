@@ -215,10 +215,13 @@ Trash is emptied.
 Developer Artifact Review is a third dedicated storage workflow. A native
 folder picker registers a bounded, user-owned workspace and returns only an
 opaque workspace ID to the frontend. Discovery recognizes generated trees only
-when ecosystem evidence proves their purpose: Cargo/Maven targets, Gradle
+when direct project-root evidence proves their purpose: Cargo/Maven targets, Gradle
 outputs, Node modules, Python environments, Composer/Ruby dependencies, Go,
 .NET, CMake, Swift, Flutter, Elixir, and Terraform artifacts. Generic names
 such as `build`, `vendor`, `bin`, or `target` are skipped without that evidence.
+Ambiguous directories require additional generated evidence such as
+`pyvenv.cfg`, Composer installation metadata, or `CMakeCache.txt`; ancestor
+markers never authorize nested same-named source directories.
 
 Discovery is cheap and does not descend into recognized artifact trees. The
 independent candidate trees are measured with a small Rayon pool; each
@@ -231,7 +234,9 @@ Cleanup accepts only opaque artifact IDs from a fresh inventory. The planner
 captures workspace/project/marker identities and the exact relative artifact
 type. Trash execution revalidates those identities, marker evidence, scope,
 symlink components, directory type, and completeness immediately before each
-move. Developer artifacts never contribute to Quick Clean totals.
+move. Only the exact reviewed generated directory moves to Trash; source files,
+manifests, lockfiles, project roots, and workspace roots remain in place.
+Developer artifacts never contribute to Quick Clean totals.
 
 ## Concurrency and lifecycle
 

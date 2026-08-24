@@ -390,10 +390,7 @@ fn validate_developer_artifact_target(
     marker_identities: &[(PathBuf, FileIdentity)],
     kind: DeveloperArtifactKind,
 ) -> Result<(), String> {
-    if (workspace_root == project_root && kind != DeveloperArtifactKind::GoModuleCache)
-        || target.path == *workspace_root
-        || target.path == *project_root
-    {
+    if target.path == *workspace_root || target.path == *project_root {
         return Err(
             "Skipped because a project or workspace root is never a cleanup target.".to_string(),
         );
@@ -422,6 +419,15 @@ fn validate_developer_artifact_target(
     }
     if marker_identities.is_empty() && kind != DeveloperArtifactKind::GoModuleCache {
         return Err("Skipped because project evidence is missing.".to_string());
+    }
+    if kind != DeveloperArtifactKind::GoModuleCache
+        && !marker_identities
+            .iter()
+            .any(|(marker, _)| marker.parent() == Some(project_root))
+    {
+        return Err(
+            "Skipped because no marker directly identifies the reviewed project root.".to_string(),
+        );
     }
     for (marker, identity) in marker_identities {
         if !marker.starts_with(workspace_root)
@@ -453,7 +459,7 @@ fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) ->
         DeveloperArtifactKind::PythonVenv => {
             return relative == Path::new(".venv") || relative == Path::new("venv")
         }
-        DeveloperArtifactKind::GoBuild | DeveloperArtifactKind::DotnetBin => "bin",
+        DeveloperArtifactKind::DotnetBin => "bin",
         DeveloperArtifactKind::DotnetObj => "obj",
         DeveloperArtifactKind::GradleBuild => "build",
         DeveloperArtifactKind::GradleCache => ".gradle",
@@ -724,6 +730,73 @@ mod tests {
         assert_eq!(move_attempts, 0);
         assert_eq!(result.skipped_count, 1);
         assert!(result.items[0].message.contains("project"));
+    }
+
+    #[test]
+    fn rust_cleanup_moves_only_target_when_project_is_the_selected_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("rust-project");
+        let source = project.join("src/lib.rs");
+        let target = project.join("target");
+        let marker = project.join("Cargo.toml");
+        let trashed = temp.path().join("trashed-target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "pub fn source_stays() {}\n").unwrap();
+        std::fs::write(&marker, "[package]\nname='demo'\n").unwrap();
+        std::fs::write(target.join("output.bin"), [1u8, 2, 3]).unwrap();
+
+        let record = crate::developer_artifacts::DeveloperArtifactRecord {
+            artifact: crate::models::DeveloperArtifact {
+                id: "artifact".to_string(),
+                workspace_id: "workspace-id".to_string(),
+                project_name: "rust-project".to_string(),
+                ecosystem: crate::models::DeveloperEcosystem::Rust,
+                kind: crate::models::DeveloperArtifactKind::CargoTarget,
+                path: target.to_string_lossy().into_owned(),
+                logical_bytes: 3,
+                allocated_bytes: 4096,
+                file_count: 1,
+                newest_mtime: None,
+                rebuild_hint: Some("cargo build".to_string()),
+                evidence: vec!["Cargo.toml".to_string()],
+                complete: true,
+                incomplete_reason: None,
+                selected_by_default: false,
+            },
+            path: target.clone(),
+            identity: FileIdentity::from_path(&target).unwrap(),
+            workspace_path: project.clone(),
+            workspace_identity: FileIdentity::from_path(&project).unwrap(),
+            project_root: project.clone(),
+            project_identity: FileIdentity::from_path(&project).unwrap(),
+            artifact_relative: PathBuf::from("target"),
+            marker_identities: vec![(marker.clone(), FileIdentity::from_path(&marker).unwrap())],
+        };
+        let inventory = DeveloperArtifactInventory {
+            scan_id: "developer-scan".to_string(),
+            records: HashMap::from([("artifact".to_string(), record)]),
+            workspace_ids: vec!["workspace-id".to_string()],
+            created_at: unix_timestamp(),
+            discovered_count: 1,
+            measured_count: 1,
+            skipped_entries: 0,
+            cancelled: false,
+            truncated: false,
+        };
+        let plan =
+            TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
+        let result = TrashExecutor::execute_with(plan, |path| {
+            assert_eq!(path, target);
+            std::fs::rename(path, &trashed).map_err(|error| error.to_string())
+        });
+
+        assert_eq!(result.moved_count, 1);
+        assert!(!target.exists());
+        assert!(trashed.join("output.bin").is_file());
+        assert!(marker.is_file());
+        assert!(source.is_file());
+        assert!(project.is_dir());
     }
 
     #[test]

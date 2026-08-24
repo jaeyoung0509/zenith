@@ -59,11 +59,8 @@
   let now = $state(Date.now());
   let expiryActionFocused = $state(false);
   let selectedIdSet = $derived(new Set(selectedIds));
-  let selectedBytes = $derived(
-    items
-      .filter((item) => selectedIdSet.has(item.id))
-      .reduce((total, item) => total + item.allocated_bytes, 0)
-  );
+  let selectedItems = $derived(items.filter((item) => selectedIdSet.has(item.id)));
+  let selectedBytes = $derived(selectedItems.reduce((total, item) => total + item.allocated_bytes, 0));
   let sortedItems = $derived(
     [...items].sort((left, right) => {
       if (sortBy === 'activity') {
@@ -95,11 +92,10 @@
 
   function kindLabel(item: DeveloperArtifact): string {
     const labels: Record<DeveloperArtifact['kind'], string> = {
-      cargo_target: 'Rust target',
+      cargo_target: 'Rust build output',
       node_modules: 'Node dependencies',
       python_venv: 'Python environment',
       go_module_cache: 'Go module cache',
-      go_build: 'Go build output',
       maven_target: 'Maven target',
       gradle_build: 'Gradle build',
       gradle_cache: 'Gradle cache',
@@ -113,6 +109,29 @@
       elixir_build: 'Elixir build',
       elixir_deps: 'Elixir dependencies',
       terraform_cache: 'Terraform cache',
+    };
+    return labels[item.kind];
+  }
+
+  function cleanupScopeLabel(item: DeveloperArtifact): string {
+    const labels: Record<DeveloperArtifact['kind'], string> = {
+      cargo_target: 'target/',
+      node_modules: 'node_modules/',
+      python_venv: item.path.endsWith('/.venv') ? '.venv/' : 'venv/',
+      go_module_cache: 'pkg/mod/',
+      maven_target: 'target/',
+      gradle_build: 'build/',
+      gradle_cache: '.gradle/',
+      composer_vendor: 'vendor/',
+      ruby_bundle: 'vendor/bundle/',
+      dotnet_bin: 'bin/',
+      dotnet_obj: 'obj/',
+      c_make_build: 'build/',
+      swift_build: '.build/',
+      flutter_tooling: '.dart_tool/',
+      elixir_build: '_build/',
+      elixir_deps: 'deps/',
+      terraform_cache: '.terraform/',
     };
     return labels[item.kind];
   }
@@ -295,7 +314,7 @@
         </div>
       </div>
       <p class="mt-1 text-xs text-muted-foreground">
-        Inspect rebuildable project environments across common ecosystems. Age is context, not permission; every cleanup is explicitly selected and revalidated by Rust.
+        Inspect rebuildable project environments across common ecosystems. Project source, manifests, lockfiles, and project roots are never cleanup targets.
       </p>
     </div>
   </div>
@@ -384,10 +403,10 @@
 
   {#if plan}
     <Card class={`space-y-3 p-5 ${isExpired ? 'border-destructive/40 bg-destructive/5' : 'border-warning/30 bg-warning/5'}`}>
-      <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+      <div class="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
         <div>
           <div class="flex items-center gap-2 text-sm font-semibold">
-            Cleanup review ready
+            Generated-folder review ready
             <span class="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-caption text-muted-foreground">{formatCountdown(remainingSecs)}</span>
           </div>
           <p class="mt-1 text-xs text-muted-foreground">{plan.item_count} selected artifact{plan.item_count === 1 ? '' : 's'} · {formatBytes(plan.allocated_size)} allocated</p>
@@ -396,8 +415,19 @@
           <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
           <Button variant="destructive" size="md" onclick={executeCleanup} disabled={isExecuting || isExpired} class="gap-1.5">
             <Trash2 size={14} />
-            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move to Trash'}
+            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move generated folders to Trash'}
           </Button>
+        </div>
+      </div>
+      <div class="rounded-lg border border-border/70 bg-background/60 p-3">
+        <p class="text-meta text-muted-foreground">Only the exact generated directories below will move. Project code and configuration stay in place.</p>
+        <div class="mt-2 max-h-32 space-y-1.5 overflow-y-auto">
+          {#each selectedItems as item (item.id)}
+            <div class="flex items-center justify-between gap-3 text-caption">
+              <span class="min-w-0 truncate font-mono" title={item.path}>{item.path}</span>
+              <span class="shrink-0 text-muted-foreground">{formatBytes(item.allocated_bytes)}</span>
+            </div>
+          {/each}
         </div>
       </div>
       {#if isExpired}
@@ -431,7 +461,7 @@
         <option value="type">Artifact type</option>
       </select>
       {#if items.length > 0}
-        <Button variant="ghost" size="sm" onclick={selectAll} disabled={isScanning || isExecuting}><CheckSquare size={13} /> Select complete</Button>
+        <Button variant="ghost" size="sm" onclick={selectAll} disabled={isScanning || isExecuting}><CheckSquare size={13} /> Select rebuildable</Button>
         <Button variant="ghost" size="sm" onclick={deselectAll} disabled={isScanning || isExecuting}><Square size={13} /> Clear</Button>
         <Button variant="primary" size="md" onclick={reviewCleanup} disabled={isScanning || isPreparing || isExecuting || selectedIds.length === 0} class="gap-1.5">
           <Trash2 size={14} />
@@ -472,6 +502,7 @@
                 {#if item.rebuild_hint}<span>↻ {item.rebuild_hint}</span>{/if}
               </div>
               <div class="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
+                <span>Cleanup scope: <span class="font-mono text-foreground">{cleanupScopeLabel(item)}</span> only · source stays</span>
                 <span>Evidence: {item.evidence.join(' · ')}</span>
                 {#if !item.complete && item.incomplete_reason}<span class="text-warning">{item.incomplete_reason}</span>{/if}
               </div>

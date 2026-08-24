@@ -35,6 +35,7 @@ describe('developer artifact review workflow', () => {
 
     expect(rendered.body).toContain('Developer Artifacts');
     expect(rendered.body).toContain('nothing selected by default');
+    expect(rendered.body).toContain('Project source, manifests, lockfiles, and project roots are never cleanup targets');
     expect(rendered.body).toContain('Java/Kotlin');
     expect(rendered.body).toContain('Terraform');
   });

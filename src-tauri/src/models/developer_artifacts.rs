@@ -33,7 +33,6 @@ pub enum DeveloperArtifactKind {
     NodeModules,
     PythonVenv,
     GoModuleCache,
-    GoBuild,
     MavenTarget,
     GradleBuild,
     GradleCache,
