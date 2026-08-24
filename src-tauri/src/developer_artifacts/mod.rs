@@ -1,7 +1,7 @@
 use crate::large_files::FileIdentity;
 use crate::models::{
     DeveloperArtifact, DeveloperArtifactKind, DeveloperArtifactScanEvent,
-    DeveloperArtifactScanResult, DeveloperEcosystem, DeveloperWorkspace,
+    DeveloperArtifactScanResult, DeveloperArtifactStatus, DeveloperEcosystem, DeveloperWorkspace,
 };
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::prelude::*;
@@ -102,6 +102,7 @@ struct TreeStats {
     file_count: u64,
     newest_mtime: Option<SystemTime>,
     complete: bool,
+    safety_blocked: bool,
     cancelled: bool,
 }
 
@@ -278,14 +279,14 @@ impl DeveloperArtifactScanner {
                     kind,
                 }),
                 MeasurementMessage::Finished { candidate, stats } => {
-                    if stats.cancelled {
-                        continue;
-                    }
                     measured_count = measured_count.saturating_add(1);
                     let Some(record) = record_from_measurement(*candidate, stats) else {
                         skipped_entries = skipped_entries.saturating_add(1);
                         continue;
                     };
+                    if record.artifact.status != DeveloperArtifactStatus::Complete {
+                        skipped_entries = skipped_entries.saturating_add(1);
+                    }
                     let artifact = record.artifact.clone();
                     let workspace_id = artifact.workspace_id.clone();
                     records.insert(artifact.id.clone(), record);
@@ -327,6 +328,17 @@ impl DeveloperArtifactScanner {
     where
         F: FnMut(DeveloperArtifactScanEvent),
     {
+        let mut records = records;
+        if progress.cancelled {
+            for record in records.values_mut() {
+                record.artifact.status = DeveloperArtifactStatus::ScanCancelled;
+                record.artifact.complete = false;
+                record.artifact.incomplete_reason = Some(
+                    "The scan was cancelled before this artifact could be fully verified. Scan again before cleanup."
+                        .to_string(),
+                );
+            }
+        }
         let inventory = DeveloperArtifactInventory {
             scan_id: scan_id.clone(),
             records,
@@ -1158,10 +1170,12 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
     #[cfg(unix)]
     if metadata.dev() != root_device {
         stats.complete = false;
+        stats.safety_blocked = true;
         return stats;
     }
     if metadata.file_type().is_symlink() {
         stats.complete = false;
+        stats.safety_blocked = true;
         return stats;
     }
     merge_mtime(&mut stats.newest_mtime, metadata.modified().ok());
@@ -1211,6 +1225,9 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
             stats.cancelled = true;
             break;
         }
+        if child_stats.safety_blocked {
+            stats.safety_blocked = true;
+        }
     }
     stats
 }
@@ -1229,7 +1246,35 @@ fn record_from_measurement(
         .iter()
         .filter_map(|path| FileIdentity::from_path(path).map(|identity| (path.clone(), identity)))
         .collect::<Vec<_>>();
-    let complete = stats.complete && marker_identities.len() == candidate.marker_paths.len();
+    let status = if stats.cancelled {
+        DeveloperArtifactStatus::ScanCancelled
+    } else if stats.safety_blocked {
+        DeveloperArtifactStatus::SafetyBlocked
+    } else if marker_identities.len() != candidate.marker_paths.len() {
+        DeveloperArtifactStatus::SafetyBlocked
+    } else if stats.complete {
+        DeveloperArtifactStatus::Complete
+    } else {
+        DeveloperArtifactStatus::MeasurementIncomplete
+    };
+    let complete = matches!(status, DeveloperArtifactStatus::Complete);
+    let incomplete_reason = match status {
+        DeveloperArtifactStatus::Complete => None,
+        DeveloperArtifactStatus::MeasurementIncomplete => Some(
+            "Some entries could not be measured; displayed size and file counts may be partial."
+                .to_string(),
+        ),
+        DeveloperArtifactStatus::SafetyBlocked => Some(if stats.safety_blocked {
+            "A symbolic link or filesystem boundary could not be verified; cleanup is blocked."
+                .to_string()
+        } else {
+            "Project markers could not be verified; cleanup is blocked.".to_string()
+        }),
+        DeveloperArtifactStatus::ScanCancelled => Some(
+            "The scan was cancelled before this artifact could be fully verified. Scan again before cleanup."
+                .to_string(),
+        ),
+    };
     let artifact = DeveloperArtifact {
         id: candidate.id,
         workspace_id: candidate.workspace.workspace.id.clone(),
@@ -1246,10 +1291,9 @@ fn record_from_measurement(
             .map(|duration| duration.as_secs()),
         rebuild_hint: candidate.rebuild_hint,
         evidence: candidate.evidence,
+        status,
         complete,
-        incomplete_reason: (!complete).then(|| {
-            "Some entries or project markers could not be verified during the scan.".to_string()
-        }),
+        incomplete_reason,
         selected_by_default: false,
     };
     Some(DeveloperArtifactRecord {
@@ -1555,6 +1599,33 @@ mod tests {
     }
 
     #[test]
+    fn partial_measurement_is_typed_as_manual_cleanup_eligible() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir_all(project.join("target")).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
+        fs::write(project.join("target/output.bin"), [1u8]).unwrap();
+        let workspace = workspace_record(temp.path());
+        let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
+        let mut stats = measure_tree(
+            &candidate.path,
+            workspace.identity.device,
+            &AtomicBool::new(false),
+            0,
+        );
+        stats.complete = false;
+
+        let record = record_from_measurement(candidate, stats).unwrap();
+        assert_eq!(
+            record.artifact.status,
+            DeveloperArtifactStatus::MeasurementIncomplete
+        );
+        assert!(!record.artifact.complete);
+        assert!(record.artifact.incomplete_reason.is_some());
+        assert!(record.artifact.status.allows_manual_cleanup());
+    }
+
+    #[test]
     fn workspace_validation_requires_a_real_child_of_the_selected_home() {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
         let temp = tempfile::tempdir_in(&home).unwrap();
@@ -1599,6 +1670,7 @@ mod tests {
         let device = FileIdentity::from_path(temp.path()).unwrap().device;
         let stats = measure_tree(temp.path(), device, &AtomicBool::new(false), 0);
         assert!(!stats.complete);
+        assert!(stats.safety_blocked);
         assert_eq!(stats.file_count, 0);
     }
 }

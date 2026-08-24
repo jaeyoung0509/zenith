@@ -48,6 +48,28 @@ pub enum DeveloperArtifactKind {
     TerraformCache,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DeveloperArtifactStatus {
+    /// Every measured entry and project marker was verified.
+    Complete,
+    /// The generated-folder scope and project evidence are verified, but one
+    /// or more descendants could not be measured. Manual cleanup is allowed
+    /// after an explicit warning and execution-time revalidation.
+    MeasurementIncomplete,
+    /// A safety boundary (for example a symlink, filesystem boundary, or
+    /// project marker identity) could not be verified. Cleanup is forbidden.
+    SafetyBlocked,
+    /// The scan was cancelled before this artifact could be fully validated.
+    ScanCancelled,
+}
+
+impl DeveloperArtifactStatus {
+    pub fn allows_manual_cleanup(self) -> bool {
+        matches!(self, Self::Complete | Self::MeasurementIncomplete)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DeveloperArtifact {
     pub id: String,
@@ -62,6 +84,9 @@ pub struct DeveloperArtifact {
     pub newest_mtime: Option<u64>,
     pub rebuild_hint: Option<String>,
     pub evidence: Vec<String>,
+    pub status: DeveloperArtifactStatus,
+    /// Kept as a compatibility field for older persisted/frontend payloads.
+    /// New cleanup decisions must use `status`.
     pub complete: bool,
     pub incomplete_reason: Option<String>,
     pub selected_by_default: bool,

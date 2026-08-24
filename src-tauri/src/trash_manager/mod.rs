@@ -3,7 +3,9 @@ use crate::developer_artifacts::DeveloperArtifactInventory;
 use crate::large_files::{
     allowed_large_file_root, is_allowed_large_file_path, FileIdentity, LargeFileInventory,
 };
-use crate::models::{DeveloperArtifactKind, TrashItemResult, TrashPlanPreview, TrashResult};
+use crate::models::{
+    DeveloperArtifactKind, DeveloperArtifactStatus, TrashItemResult, TrashPlanPreview, TrashResult,
+};
 use crate::safety::{Blacklist, SymlinkGuard};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -161,6 +163,11 @@ impl TrashPlanner {
         if selected_ids.is_empty() {
             return Err("Select at least one developer artifact to move to Trash.".to_string());
         }
+        if inventory.cancelled {
+            return Err(
+                "This scan was cancelled. Scan the workspace again before cleanup.".to_string(),
+            );
+        }
         let mut targets = Vec::with_capacity(selected_ids.len());
         let mut seen = HashSet::with_capacity(selected_ids.len());
         for id in selected_ids {
@@ -170,11 +177,21 @@ impl TrashPlanner {
             let record = inventory.records.get(id).ok_or_else(|| {
                 "The developer-artifact inventory changed. Scan the workspace again.".to_string()
             })?;
-            if !record.artifact.complete {
-                return Err(format!(
-                    "{} is incomplete and cannot be cleaned until it is scanned again.",
-                    record.artifact.project_name
-                ));
+            match record.artifact.status {
+                DeveloperArtifactStatus::Complete => {}
+                DeveloperArtifactStatus::MeasurementIncomplete => {}
+                DeveloperArtifactStatus::SafetyBlocked => {
+                    return Err(format!(
+                        "{} is blocked because its cleanup safety checks could not be verified.",
+                        record.artifact.project_name
+                    ));
+                }
+                DeveloperArtifactStatus::ScanCancelled => {
+                    return Err(format!(
+                        "{} was not fully scanned. Scan the workspace again before cleanup.",
+                        record.artifact.project_name
+                    ));
+                }
             }
             targets.push(TrashTarget {
                 item_id: id.clone(),
@@ -608,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn developer_artifact_planner_accepts_only_complete_opaque_candidates() {
+    fn developer_artifact_planner_accepts_complete_and_partial_opaque_candidates() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
         let project = workspace.join("project");
@@ -633,6 +650,7 @@ mod tests {
             newest_mtime: None,
             rebuild_hint: Some("cargo build".to_string()),
             evidence: vec!["Cargo.toml".to_string()],
+            status: crate::models::DeveloperArtifactStatus::Complete,
             complete: true,
             incomplete_reason: None,
             selected_by_default: false,
@@ -668,6 +686,39 @@ mod tests {
         assert!(
             TrashPlanner::from_developer_artifacts(&inventory, &["forged".to_string()]).is_err()
         );
+
+        let mut partial_inventory = inventory.clone();
+        {
+            let partial = partial_inventory.records.get_mut("artifact").unwrap();
+            partial.artifact.status = crate::models::DeveloperArtifactStatus::MeasurementIncomplete;
+            partial.artifact.complete = false;
+            partial.artifact.incomplete_reason =
+                Some("Some entries could not be measured.".to_string());
+        }
+        assert!(TrashPlanner::from_developer_artifacts(
+            &partial_inventory,
+            &["artifact".to_string()]
+        )
+        .is_ok());
+
+        partial_inventory
+            .records
+            .get_mut("artifact")
+            .unwrap()
+            .artifact
+            .status = crate::models::DeveloperArtifactStatus::SafetyBlocked;
+        assert!(TrashPlanner::from_developer_artifacts(
+            &partial_inventory,
+            &["artifact".to_string()]
+        )
+        .is_err());
+
+        partial_inventory.cancelled = true;
+        assert!(TrashPlanner::from_developer_artifacts(
+            &partial_inventory,
+            &["artifact".to_string()]
+        )
+        .is_err());
     }
 
     #[test]
@@ -694,6 +745,7 @@ mod tests {
                 newest_mtime: None,
                 rebuild_hint: Some("cargo build".to_string()),
                 evidence: vec!["Cargo.toml".to_string()],
+                status: crate::models::DeveloperArtifactStatus::Complete,
                 complete: true,
                 incomplete_reason: None,
                 selected_by_default: false,
@@ -759,6 +811,7 @@ mod tests {
                 newest_mtime: None,
                 rebuild_hint: Some("cargo build".to_string()),
                 evidence: vec!["Cargo.toml".to_string()],
+                status: crate::models::DeveloperArtifactStatus::Complete,
                 complete: true,
                 incomplete_reason: None,
                 selected_by_default: false,

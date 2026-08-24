@@ -194,6 +194,7 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 3,
     rebuild_hint: 'cargo build',
     evidence: ['Cargo.toml'],
+    status: 'complete',
     complete: true,
     incomplete_reason: null,
     selected_by_default: false,
@@ -211,6 +212,7 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 12,
     rebuild_hint: 'pnpm install',
     evidence: ['package.json', 'pnpm-lock.yaml'],
+    status: 'complete',
     complete: true,
     incomplete_reason: null,
     selected_by_default: false,
@@ -228,6 +230,7 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 28,
     rebuild_hint: './gradlew build',
     evidence: ['build.gradle.kts'],
+    status: 'complete',
     complete: true,
     incomplete_reason: null,
     selected_by_default: false,
@@ -245,6 +248,7 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 4,
     rebuild_hint: 'composer install',
     evidence: ['composer.json', 'composer.lock'],
+    status: 'complete',
     complete: true,
     incomplete_reason: null,
     selected_by_default: false,
@@ -262,8 +266,27 @@ const mockDeveloperArtifacts: DeveloperArtifact[] = [
     newest_mtime: Math.floor(Date.now() / 1000),
     rebuild_hint: 'uv sync',
     evidence: ['pyproject.toml'],
+    status: 'measurement_incomplete',
     complete: false,
     incomplete_reason: 'Permission denied while reading one or more entries',
+    selected_by_default: false,
+  },
+  {
+    id: 'artifact-node-safety-blocked',
+    workspace_id: 'workspace-work',
+    project_name: 'unsafe-link-project',
+    ecosystem: 'node',
+    kind: 'node_modules',
+    path: '/Users/mock/work/unsafe-link-project/node_modules',
+    logical_bytes: 96 * MIB,
+    allocated_bytes: 92 * MIB,
+    file_count: 2400,
+    newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 7,
+    rebuild_hint: 'pnpm install',
+    evidence: ['package.json'],
+    status: 'safety_blocked',
+    complete: false,
+    incomplete_reason: 'A symbolic link or filesystem boundary could not be verified; cleanup is blocked.',
     selected_by_default: false,
   },
 ];
@@ -501,7 +524,7 @@ const mockStorageApi: StorageManagementApi = {
           workspace_id: workspace.id,
           discovered_count: items.length,
           measured_count: items.length,
-          skipped_entries: artifact.complete ? 0 : 1,
+          skipped_entries: artifact.status === 'complete' ? 0 : 1,
         });
       }
       onEvent({ type: 'workspace_finished', workspace_id: workspace.id });
@@ -511,7 +534,7 @@ const mockStorageApi: StorageManagementApi = {
       items,
       discovered_count: items.length,
       measured_count: items.length,
-      skipped_entries: items.filter((item) => !item.complete).length,
+      skipped_entries: items.filter((item) => item.status !== 'complete').length,
       cancelled: mockDeveloperScanCancelled,
       truncated: false,
     };
@@ -532,12 +555,16 @@ const mockStorageApi: StorageManagementApi = {
   async prepareDeveloperArtifactCleanup(scanId, selectedItemIds) {
     const scan = mockDeveloperScans.get(scanId);
     if (!scan) throw new Error('Developer artifact inventory expired. Scan again.');
+    if (scan.cancelled) throw new Error('This scan was cancelled. Scan the workspace again before cleanup.');
     const selected = scan.items.filter((item) => selectedItemIds.includes(item.id));
     if (selected.length === 0) {
       throw new Error('Select at least one developer artifact to move to Trash.');
     }
-    if (selected.some((item) => !item.complete)) {
-      throw new Error('Incomplete artifacts cannot be cleaned until they are scanned again.');
+    if (selected.some((item) => item.status === 'safety_blocked')) {
+      throw new Error('Some selected artifacts are blocked because their cleanup safety checks could not be verified.');
+    }
+    if (selected.some((item) => item.status === 'scan_cancelled')) {
+      throw new Error('Cancelled artifacts require a new scan before cleanup.');
     }
     const planId = `mock-developer-trash-plan-${Date.now()}`;
     const preview: TrashPlanPreview = {
