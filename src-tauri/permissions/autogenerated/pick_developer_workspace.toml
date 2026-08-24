@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pick-developer-workspace"
+description = "Enables the pick_developer_workspace command without any pre-configured scope."
+commands.allow = ["pick_developer_workspace"]
+
+[[permission]]
+identifier = "deny-pick-developer-workspace"
+description = "Denies the pick_developer_workspace command without any pre-configured scope."
+commands.deny = ["pick_developer_workspace"]

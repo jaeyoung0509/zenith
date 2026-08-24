@@ -121,6 +121,47 @@ The specialized Large Files scope does not change `Blacklist` behavior for any
 other cleaner. In particular, `Documents`, `Desktop`, and `Movies` remain
 blacklisted for generic signature-based cleanup.
 
+## Developer Artifact Review
+
+Developer Artifact Review is manual inventory, not Quick Clean. The only
+workspace roots it can scan are real directories selected through the native
+folder picker. Rust stores their canonical path and filesystem identity and
+returns an opaque workspace ID; the frontend cannot submit a path, scope, or
+cleanup rule. Roots must be user-owned children of the home directory and may
+not be protected locations.
+
+Discovery uses reviewed ecosystem evidence before a directory becomes a
+candidate:
+
+- `target` requires `Cargo.toml` or `pom.xml`;
+- `node_modules` requires `package.json`;
+- `.venv`/`venv` requires Python dependency metadata;
+- `build`/`.gradle` requires Gradle markers or `CMakeLists.txt`;
+- `vendor`/`vendor/bundle` requires Composer or Bundler markers;
+- `bin`/`obj` requires .NET project markers, while Go `bin` requires `go.mod`;
+- `.build`, `.dart_tool`, `_build`, `deps`, and `.terraform` require Swift,
+  Dart, Elixir, or Terraform markers respectively; and
+- `~/go/pkg/mod` is shown only as a separate shared cache when the user
+  explicitly selects the `go` workspace root.
+
+Unknown `build`, `dist`, `out`, `cache`, `vendor`, or hidden directories are
+never executable based on their names alone. Discovery skips `.git`, symlinks,
+other filesystems, and recognized artifact trees. Candidate measurement is a
+single bounded traversal that records logical/allocated bytes, file count, and
+newest modification time. A permission error, symlink, depth cutoff, or marker
+change marks the candidate incomplete and blocks planning. Measurement workers
+are bounded at four and cancellation stops new work while retaining only
+completed candidates.
+
+Age is informational. Recent artifacts remain selectable when the user chooses
+them, and old artifacts are not selected automatically. Before a Trash plan is
+created, Rust resolves selected IDs from the fresh inventory and rejects
+incomplete records. Immediately before each move, it revalidates the workspace
+and project identities, exact relative artifact type, marker identities,
+symlink-free scope, directory type, and candidate identity. Project roots,
+workspace roots, `.git`, source paths, forged IDs, stale inventories, replayed
+plans, and frontend-provided paths fail closed.
+
 ## App Uninstaller
 
 App Uninstaller also uses its own backend-owned inventory and Trash plan. It does

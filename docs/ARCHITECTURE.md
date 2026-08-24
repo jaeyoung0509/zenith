@@ -28,6 +28,10 @@ macOS menu bar
             large-file inventory, app inventory,
             one-shot Trash plans
 
+        +-- developer artifact review
+            picker-owned workspace roots, marker discovery,
+            bounded candidate measurement, one-shot Trash plans
+
         +-- development-port management
             listener discovery + classification,
             one-shot leases, exact-process signaling
@@ -49,6 +53,9 @@ Rust process state rather than in a browser singleton.
   Library-data inspection.
 - `src-tauri/src/storage_commands`: IPC orchestration and ephemeral inventories
   for Large Files and App Uninstaller.
+- `src-tauri/src/developer_artifacts`: explicit workspace registration,
+  ecosystem-marker discovery, bounded candidate-tree measurement, progress and
+  cancellation events, and private artifact inventory records.
 - `src-tauri/src/trash_manager`: separate one-shot Trash planning and execution
   for user-reviewed files and apps.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
@@ -204,6 +211,27 @@ Both workflows use the native Trash adapter instead of permanent deletion.
 Moving to Trash does not mean disk space has already been reclaimed; the UI
 reports the amount moved and describes it as potentially reclaimable after the
 Trash is emptied.
+
+Developer Artifact Review is a third dedicated storage workflow. A native
+folder picker registers a bounded, user-owned workspace and returns only an
+opaque workspace ID to the frontend. Discovery recognizes generated trees only
+when ecosystem evidence proves their purpose: Cargo/Maven targets, Gradle
+outputs, Node modules, Python environments, Composer/Ruby dependencies, Go,
+.NET, CMake, Swift, Flutter, Elixir, and Terraform artifacts. Generic names
+such as `build`, `vendor`, `bin`, or `target` are skipped without that evidence.
+
+Discovery is cheap and does not descend into recognized artifact trees. The
+independent candidate trees are measured with a small Rayon pool; each
+candidate produces logical/allocated size, file count, and newest modification
+time in one traversal. Results stream as measurements finish and cancellation
+retains only individually completed candidates. Age is displayed as decision
+metadata and never gates or auto-selects a candidate.
+
+Cleanup accepts only opaque artifact IDs from a fresh inventory. The planner
+captures workspace/project/marker identities and the exact relative artifact
+type. Trash execution revalidates those identities, marker evidence, scope,
+symlink components, directory type, and completeness immediately before each
+move. Developer artifacts never contribute to Quick Clean totals.
 
 ## Concurrency and lifecycle
 

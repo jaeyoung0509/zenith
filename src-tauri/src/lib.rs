@@ -3,6 +3,7 @@ pub mod applications;
 pub mod cleaner;
 pub mod commands;
 pub mod dev_ports;
+pub mod developer_artifacts;
 pub mod diagnostics;
 pub mod docker;
 pub mod large_files;
@@ -282,6 +283,10 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             storage_commands::start_large_file_scan,
             storage_commands::cancel_large_file_scan,
             storage_commands::prepare_large_file_trash,
+            storage_commands::pick_developer_workspace,
+            storage_commands::start_developer_artifact_scan,
+            storage_commands::cancel_developer_artifact_scan,
+            storage_commands::prepare_developer_artifact_cleanup,
             storage_commands::get_installed_apps,
             storage_commands::inspect_app_uninstall,
             storage_commands::prepare_app_uninstall,

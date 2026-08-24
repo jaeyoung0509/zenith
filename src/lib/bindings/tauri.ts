@@ -50,6 +50,14 @@ export const commands = {
 	startLargeFileScan: (request: LargeFileScanRequest, onEvent: Channel<LargeFileScanEvent>) => typedError<LargeFileScanResult, string>(__TAURI_INVOKE("start_large_file_scan", { request, onEvent })),
 	cancelLargeFileScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_large_file_scan", { scanId })),
 	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
+	pickDeveloperWorkspace: () => typedError<{
+	id: string,
+	name: string,
+	display_path: string,
+} | null, string>(__TAURI_INVOKE("pick_developer_workspace")),
+	startDeveloperArtifactScan: (workspaceIds: string[], onEvent: Channel<DeveloperArtifactScanEvent>) => typedError<DeveloperArtifactScanResult, string>(__TAURI_INVOKE("start_developer_artifact_scan", { workspaceIds, onEvent })),
+	cancelDeveloperArtifactScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_developer_artifact_scan", { scanId })),
+	prepareDeveloperArtifactCleanup: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_developer_artifact_cleanup", { scanId, selectedItemIds })),
 	getInstalledApps: () => typedError<InstalledApp[], string>(__TAURI_INVOKE("get_installed_apps")),
 	inspectAppUninstall: (appId: string) => typedError<AppUninstallInspection, string>(__TAURI_INVOKE("inspect_app_uninstall", { appId })),
 	prepareAppUninstall: (inspectionId: string, selectedRelatedIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_app_uninstall", { inspectionId, selectedRelatedIds })),
@@ -191,6 +199,46 @@ export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
 
 export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
+
+export type DeveloperArtifact = {
+	id: string,
+	workspace_id: string,
+	project_name: string,
+	ecosystem: DeveloperEcosystem,
+	kind: DeveloperArtifactKind,
+	path: string,
+	logical_bytes: number,
+	allocated_bytes: number,
+	file_count: number,
+	newest_mtime: number | null,
+	rebuild_hint: string | null,
+	evidence: string[],
+	complete: boolean,
+	incomplete_reason: string | null,
+	selected_by_default: boolean,
+};
+
+export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_venv" | "go_module_cache" | "go_build" | "maven_target" | "gradle_build" | "gradle_cache" | "composer_vendor" | "ruby_bundle" | "dotnet_bin" | "dotnet_obj" | "c_make_build" | "swift_build" | "flutter_tooling" | "elixir_build" | "elixir_deps" | "terraform_cache";
+
+export type DeveloperArtifactScanEvent = { type: "started"; scan_id: string; workspace_count: number } | { type: "workspace_started"; workspace: DeveloperWorkspace } | { type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem } | { type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind } | { type: "artifact_found"; artifact: DeveloperArtifact } | { type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number } | { type: "workspace_finished"; workspace_id: string } | { type: "finished"; result: DeveloperArtifactScanResult } | { type: "cancelled"; scan_id: string };
+
+export type DeveloperArtifactScanResult = {
+	scan_id: string,
+	items: DeveloperArtifact[],
+	discovered_count: number,
+	measured_count: number,
+	skipped_entries: number,
+	cancelled: boolean,
+	truncated: boolean,
+};
+
+export type DeveloperEcosystem = "rust" | "node" | "python" | "go" | "java" | "kotlin" | "php" | "ruby" | "dotnet" | "cpp" | "swift" | "dart" | "elixir" | "terraform";
+
+export type DeveloperWorkspace = {
+	id: string,
+	name: string,
+	display_path: string,
+};
 
 export type DevelopmentListener = {
 	id: string,

@@ -1,10 +1,11 @@
 <script lang="ts">
   import Button from '../../lib/components/Button.svelte';
-  import { AppWindow, ChevronRight, FileSearch, RotateCw } from 'lucide-svelte';
+  import { AppWindow, ChevronRight, FileSearch, FolderSearch, RotateCw } from 'lucide-svelte';
 
   interface Props {
     onOpenLargeFiles: () => void;
     onOpenApplications: () => void;
+    onOpenDeveloperArtifacts?: () => void;
     onScanStorage?: () => void;
     isScanning?: boolean;
     isCleaning?: boolean;
@@ -13,6 +14,7 @@
   let {
     onOpenLargeFiles,
     onOpenApplications,
+    onOpenDeveloperArtifacts,
     onScanStorage,
     isScanning = false,
     isCleaning = false,
@@ -41,7 +43,7 @@
     {/if}
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
     <button
       type="button"
       onclick={onOpenLargeFiles}
@@ -85,5 +87,29 @@
         </span>
       </span>
     </button>
+
+    {#if onOpenDeveloperArtifacts}
+    <button
+      type="button"
+      onclick={onOpenDeveloperArtifacts}
+      aria-label="Open Developer Artifacts"
+      class="group w-full rounded-xl border border-border/70 bg-card/60 p-4 text-left text-card-foreground shadow-sm backdrop-blur-sm transition-colors hover:border-border hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <span class="flex items-center gap-3">
+        <span class="h-9 w-9 rounded-lg bg-secondary/70 border border-border/60 flex items-center justify-center shrink-0">
+          <FolderSearch size={17} class="text-muted-foreground" />
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-xs font-semibold">Developer Artifacts</span>
+          <span class="block text-caption text-muted-foreground mt-0.5">
+            Review rebuildable project environments
+          </span>
+        </span>
+        <span aria-hidden="true" class="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5">
+          <ChevronRight size={15} />
+        </span>
+      </span>
+    </button>
+    {/if}
   </div>
 </div>

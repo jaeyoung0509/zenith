@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-developer-artifact-scan"
+description = "Enables the start_developer_artifact_scan command without any pre-configured scope."
+commands.allow = ["start_developer_artifact_scan"]
+
+[[permission]]
+identifier = "deny-start-developer-artifact-scan"
+description = "Denies the start_developer_artifact_scan command without any pre-configured scope."
+commands.deny = ["start_developer_artifact_scan"]
