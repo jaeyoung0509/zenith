@@ -238,8 +238,7 @@ const mockStorageApi: StorageManagementApi = {
     const threshold = Math.max(request.min_size_bytes, isInstallerFilter ? 10 * MIB : 100 * MIB);
     const matchingMockFiles = mockLargeFiles
       .filter((item) => item.logical_size >= threshold)
-      .filter((item) => !isInstallerFilter || ['dmg', 'pkg', 'mpkg', 'xip', 'iso'].includes(item.extension ?? ''))
-      .map((item) => isInstallerFilter ? { ...item, kind: 'installer' as const } : item);
+      .filter((item) => !isInstallerFilter || ['dmg', 'pkg', 'mpkg', 'xip', 'iso'].includes(item.extension ?? ''));
     onEvent({ type: 'started', scan_id: scanId });
 
     const roots = request.roots.length > 0 ? request.roots : ['downloads', 'desktop', 'documents'];

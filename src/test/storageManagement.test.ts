@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppUninstallInspection, LargeFileItem } from '../lib/models/types';
+import { mockStorageApi } from '../lib/api/storage';
 import {
   LARGE_FILE_DEFAULT_THRESHOLD_BYTES,
   INSTALLER_FILE_MIN_BYTES,
@@ -116,5 +117,27 @@ describe('storage management helpers', () => {
     expect(largeFileKindLabel('developer_artifact')).toBe('Developer Artifact');
     expect(largeFileKindLabel('installer')).toBe('Installer');
     expect(largeFileKindLabel('other')).toBe('Other');
+  });
+
+  it('keeps the installer filter extension-scoped while allowing the 10 MB floor', async () => {
+    const result = await mockStorageApi.startLargeFileScan(
+      { roots: ['downloads'], min_size_bytes: 1, filter: 'installers' },
+      () => undefined
+    );
+
+    expect(result.items.map((item) => item.extension)).toEqual(['dmg', 'pkg']);
+    expect(result.items.every((item) => item.logical_size >= INSTALLER_FILE_MIN_BYTES)).toBe(true);
+    expect(result.items.find((item) => item.extension === 'pkg')?.kind).toBe('installer');
+    expect(result.items.find((item) => item.extension === 'dmg')?.kind).toBe('disk_image');
+  });
+
+  it('keeps the 100 MB floor for the unfiltered large-file mode', async () => {
+    const result = await mockStorageApi.startLargeFileScan(
+      { roots: ['downloads'], min_size_bytes: 1, filter: 'all' },
+      () => undefined
+    );
+
+    expect(result.items.every((item) => item.logical_size >= LARGE_FILE_MIN_BYTES)).toBe(true);
+    expect(result.items.some((item) => item.name === 'ExampleTool.dmg')).toBe(false);
   });
 });

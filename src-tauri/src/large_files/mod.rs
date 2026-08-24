@@ -1,6 +1,5 @@
 use crate::models::{
-    LargeFileFilter, LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest,
-    LargeFileScanResult,
+    LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -205,22 +204,24 @@ impl LargeFileScanner {
                         stack.push(path);
                         continue;
                     }
-                    if !meta.is_file() || meta.len() < threshold {
+                    if !meta.is_file() {
                         continue;
                     }
 
+                    let extension = path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|value| value.to_ascii_lowercase());
+                    if !request.filter.matches_extension(extension.as_deref())
+                        || meta.len() < threshold
+                    {
+                        continue;
+                    }
                     let id = Uuid::new_v4().to_string();
                     #[cfg(unix)]
                     let allocated_size = meta.blocks().saturating_mul(512);
                     #[cfg(not(unix))]
                     let allocated_size = meta.len();
-                    let extension = path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|value| value.to_ascii_lowercase());
-                    if !request.filter.matches_extension(extension.as_deref()) {
-                        continue;
-                    }
                     let item = LargeFileItem {
                         id: id.clone(),
                         name: path
@@ -235,7 +236,7 @@ impl LargeFileScanner {
                         logical_size: meta.len(),
                         allocated_size,
                         modified_at: modified_secs(&meta),
-                        kind: classify(extension.as_deref(), request.filter),
+                        kind: classify(extension.as_deref()),
                         extension,
                     };
                     let identity = FileIdentity {
@@ -398,14 +399,12 @@ fn should_skip_directory(path: &Path) -> bool {
     )
 }
 
-fn classify(extension: Option<&str>, filter: LargeFileFilter) -> LargeFileKind {
-    if matches!(filter, LargeFileFilter::Installers) {
-        return LargeFileKind::Installer;
-    }
+fn classify(extension: Option<&str>) -> LargeFileKind {
     match extension.unwrap_or_default() {
         "mov" | "mp4" | "mkv" | "avi" | "webm" | "m4v" => LargeFileKind::Video,
         "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => LargeFileKind::Archive,
         "dmg" | "iso" => LargeFileKind::DiskImage,
+        "pkg" | "mpkg" | "xip" => LargeFileKind::Installer,
         "qcow2" | "vmdk" | "vdi" | "pvm" => LargeFileKind::VmImage,
         "gguf" | "safetensors" | "ckpt" | "onnx" => LargeFileKind::AiModel,
         "db" | "sqlite" | "sqlite3" | "dump" | "sql" => LargeFileKind::Database,
@@ -431,21 +430,13 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::LargeFileFilter;
 
     #[test]
     fn classifies_developer_large_files() {
-        assert_eq!(
-            classify(Some("gguf"), LargeFileFilter::All),
-            LargeFileKind::AiModel
-        );
-        assert_eq!(
-            classify(Some("qcow2"), LargeFileFilter::All),
-            LargeFileKind::VmImage
-        );
-        assert_eq!(
-            classify(Some("mkv"), LargeFileFilter::All),
-            LargeFileKind::Video
-        );
+        assert_eq!(classify(Some("gguf")), LargeFileKind::AiModel);
+        assert_eq!(classify(Some("qcow2")), LargeFileKind::VmImage);
+        assert_eq!(classify(Some("mkv")), LargeFileKind::Video);
     }
 
     #[test]
@@ -457,10 +448,8 @@ mod tests {
         assert!(LargeFileFilter::Installers.matches_extension(Some("pkg")));
         assert!(LargeFileFilter::Installers.matches_extension(Some("dmg")));
         assert!(!LargeFileFilter::Installers.matches_extension(Some("zip")));
-        assert_eq!(
-            classify(Some("pkg"), LargeFileFilter::Installers),
-            LargeFileKind::Installer
-        );
+        assert_eq!(classify(Some("pkg")), LargeFileKind::Installer);
+        assert_eq!(classify(Some("dmg")), LargeFileKind::DiskImage);
     }
 
     #[test]

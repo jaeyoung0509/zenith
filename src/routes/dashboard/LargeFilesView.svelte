@@ -117,10 +117,16 @@
       ? INSTALLER_FILE_MIN_BYTES / MIB
       : LARGE_FILE_DEFAULT_THRESHOLD_BYTES / MIB;
     resetReview();
+    error = null;
     scanResult = null;
     items = [];
     selectedIds = [];
     selectedBytes = 0;
+    seenItemIds.clear();
+    itemBytesById.clear();
+    resultsScrollTop = 0;
+    entriesScanned = 0;
+    matchesFound = 0;
   }
 
   function toggleItem(id: string) {
