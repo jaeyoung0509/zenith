@@ -1,8 +1,9 @@
 use crate::applications::AppInspectionRecord;
+use crate::developer_artifacts::DeveloperArtifactInventory;
 use crate::large_files::{
     allowed_large_file_root, is_allowed_large_file_path, FileIdentity, LargeFileInventory,
 };
-use crate::models::{TrashItemResult, TrashPlanPreview, TrashResult};
+use crate::models::{DeveloperArtifactKind, TrashItemResult, TrashPlanPreview, TrashResult};
 use crate::safety::{Blacklist, SymlinkGuard};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -24,9 +25,20 @@ pub struct TrashTarget {
 
 #[derive(Debug, Clone)]
 pub enum TrashScope {
-    LargeFile { approved_parent: PathBuf },
+    LargeFile {
+        approved_parent: PathBuf,
+    },
     AppBundle,
     AppRelated,
+    DeveloperArtifact {
+        workspace_root: PathBuf,
+        workspace_identity: FileIdentity,
+        project_root: PathBuf,
+        project_identity: FileIdentity,
+        artifact_relative: PathBuf,
+        marker_identities: Vec<(PathBuf, FileIdentity)>,
+        kind: DeveloperArtifactKind,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +153,56 @@ impl TrashPlanner {
             targets,
         })
     }
+
+    pub fn from_developer_artifacts(
+        inventory: &DeveloperArtifactInventory,
+        selected_ids: &[String],
+    ) -> Result<TrashPlan, String> {
+        if selected_ids.is_empty() {
+            return Err("Select at least one developer artifact to move to Trash.".to_string());
+        }
+        let mut targets = Vec::with_capacity(selected_ids.len());
+        let mut seen = HashSet::with_capacity(selected_ids.len());
+        for id in selected_ids {
+            if !seen.insert(id) {
+                continue;
+            }
+            let record = inventory.records.get(id).ok_or_else(|| {
+                "The developer-artifact inventory changed. Scan the workspace again.".to_string()
+            })?;
+            if !record.artifact.complete {
+                return Err(format!(
+                    "{} is incomplete and cannot be cleaned until it is scanned again.",
+                    record.artifact.project_name
+                ));
+            }
+            targets.push(TrashTarget {
+                item_id: id.clone(),
+                path: record.path.clone(),
+                identity: record.identity.clone(),
+                logical_size: record.artifact.logical_bytes,
+                allocated_size: record.artifact.allocated_bytes,
+                scope: TrashScope::DeveloperArtifact {
+                    workspace_root: record.workspace_path.clone(),
+                    workspace_identity: record.workspace_identity.clone(),
+                    project_root: record.project_root.clone(),
+                    project_identity: record.project_identity.clone(),
+                    artifact_relative: record.artifact_relative.clone(),
+                    marker_identities: record.marker_identities.clone(),
+                    kind: record.artifact.kind,
+                },
+            });
+        }
+        if targets.is_empty() {
+            return Err("Select at least one developer artifact to move to Trash.".to_string());
+        }
+        Ok(TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: inventory.scan_id.clone(),
+            targets,
+        })
+    }
 }
 
 pub struct TrashExecutor;
@@ -252,6 +314,26 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
             })?;
             validate_no_symlink_components(&target.path, &root)?;
         }
+        TrashScope::DeveloperArtifact {
+            workspace_root,
+            workspace_identity,
+            project_root,
+            project_identity,
+            artifact_relative,
+            marker_identities,
+            kind,
+        } => {
+            validate_developer_artifact_target(
+                target,
+                workspace_root,
+                workspace_identity,
+                project_root,
+                project_identity,
+                artifact_relative,
+                marker_identities,
+                *kind,
+            )?;
+        }
     }
 
     let current = FileIdentity::from_path(&target.path)
@@ -286,8 +368,111 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
                 );
             }
         }
+        TrashScope::DeveloperArtifact { .. } => {
+            if !target.path.is_dir() {
+                return Err(
+                    "Skipped because the developer artifact is no longer a directory.".to_string(),
+                );
+            }
+        }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_developer_artifact_target(
+    target: &TrashTarget,
+    workspace_root: &Path,
+    workspace_identity: &FileIdentity,
+    project_root: &Path,
+    project_identity: &FileIdentity,
+    artifact_relative: &Path,
+    marker_identities: &[(PathBuf, FileIdentity)],
+    kind: DeveloperArtifactKind,
+) -> Result<(), String> {
+    if target.path == *workspace_root || target.path == *project_root {
+        return Err(
+            "Skipped because a project or workspace root is never a cleanup target.".to_string(),
+        );
+    }
+    if Blacklist::is_blacklisted(target.path.as_path()) {
+        return Err("Skipped because the developer artifact is protected by Zenith.".to_string());
+    }
+    if !target.path.starts_with(workspace_root)
+        || !project_root.starts_with(workspace_root)
+        || !artifact_relative_is_allowed(artifact_relative, kind)
+    {
+        return Err("Skipped because the artifact moved outside its reviewed scope.".to_string());
+    }
+    validate_no_symlink_components(target.path.as_path(), workspace_root)?;
+    if !same_directory_identity(workspace_root, workspace_identity) {
+        return Err("Skipped because the workspace changed after review.".to_string());
+    }
+    if !same_directory_identity(project_root, project_identity) {
+        return Err("Skipped because the project marker scope changed after review.".to_string());
+    }
+    let expected_path = project_root.join(artifact_relative);
+    if target.path != expected_path {
+        return Err(
+            "Skipped because the artifact path no longer matches its reviewed type.".to_string(),
+        );
+    }
+    if marker_identities.is_empty() && kind != DeveloperArtifactKind::GoModuleCache {
+        return Err("Skipped because project evidence is missing.".to_string());
+    }
+    if kind != DeveloperArtifactKind::GoModuleCache
+        && !marker_identities
+            .iter()
+            .any(|(marker, _)| marker.parent() == Some(project_root))
+    {
+        return Err(
+            "Skipped because no marker directly identifies the reviewed project root.".to_string(),
+        );
+    }
+    for (marker, identity) in marker_identities {
+        if !marker.starts_with(workspace_root)
+            || FileIdentity::from_path(marker) != Some(identity.clone())
+        {
+            return Err("Skipped because project evidence changed after review.".to_string());
+        }
+    }
+    if kind == DeveloperArtifactKind::GoModuleCache && target.path != project_root.join("pkg/mod") {
+        return Err(
+            "Skipped because the shared Go module cache is outside its explicit scope.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn same_directory_identity(path: &Path, expected: &FileIdentity) -> bool {
+    let Some(current) = FileIdentity::from_path(path) else {
+        return false;
+    };
+    current.device == expected.device && current.inode == expected.inode && path.is_dir()
+}
+
+fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) -> bool {
+    let expected = match kind {
+        DeveloperArtifactKind::CargoTarget | DeveloperArtifactKind::MavenTarget => "target",
+        DeveloperArtifactKind::NodeModules => "node_modules",
+        DeveloperArtifactKind::PythonVenv => {
+            return relative == Path::new(".venv") || relative == Path::new("venv")
+        }
+        DeveloperArtifactKind::DotnetBin => "bin",
+        DeveloperArtifactKind::DotnetObj => "obj",
+        DeveloperArtifactKind::GradleBuild => "build",
+        DeveloperArtifactKind::GradleCache => ".gradle",
+        DeveloperArtifactKind::ComposerVendor => "vendor",
+        DeveloperArtifactKind::RubyBundle => return relative == Path::new("vendor/bundle"),
+        DeveloperArtifactKind::CMakeBuild => "build",
+        DeveloperArtifactKind::SwiftBuild => ".build",
+        DeveloperArtifactKind::FlutterTooling => ".dart_tool",
+        DeveloperArtifactKind::ElixirBuild => "_build",
+        DeveloperArtifactKind::ElixirDeps => "deps",
+        DeveloperArtifactKind::TerraformCache => ".terraform",
+        DeveloperArtifactKind::GoModuleCache => return relative == Path::new("pkg/mod"),
+    };
+    relative == Path::new(expected)
 }
 
 fn application_root_for_path(path: &Path) -> Option<PathBuf> {
@@ -420,6 +605,197 @@ mod tests {
             TrashPlanner::from_large_files(&inventory, &["item".to_string(), "item".to_string()])
                 .unwrap();
         assert_eq!(plan.targets.len(), 1);
+    }
+
+    #[test]
+    fn developer_artifact_planner_accepts_only_complete_opaque_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let project = workspace.join("project");
+        let target = project.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(project.join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
+        let workspace_identity = FileIdentity::from_path(&workspace).unwrap();
+        let project_identity = FileIdentity::from_path(&project).unwrap();
+        let target_identity = FileIdentity::from_path(&target).unwrap();
+        let marker = project.join("Cargo.toml");
+        let marker_identity = FileIdentity::from_path(&marker).unwrap();
+        let artifact = crate::models::DeveloperArtifact {
+            id: "artifact".to_string(),
+            workspace_id: "workspace-id".to_string(),
+            project_name: "project".to_string(),
+            ecosystem: crate::models::DeveloperEcosystem::Rust,
+            kind: crate::models::DeveloperArtifactKind::CargoTarget,
+            path: target.to_string_lossy().into_owned(),
+            logical_bytes: 1,
+            allocated_bytes: 1,
+            file_count: 0,
+            newest_mtime: None,
+            rebuild_hint: Some("cargo build".to_string()),
+            evidence: vec!["Cargo.toml".to_string()],
+            complete: true,
+            incomplete_reason: None,
+            selected_by_default: false,
+        };
+        let record = crate::developer_artifacts::DeveloperArtifactRecord {
+            artifact,
+            path: target,
+            identity: target_identity,
+            workspace_path: workspace,
+            workspace_identity,
+            project_root: project,
+            project_identity,
+            artifact_relative: PathBuf::from("target"),
+            marker_identities: vec![(marker, marker_identity)],
+        };
+        let inventory = DeveloperArtifactInventory {
+            scan_id: "developer-scan".to_string(),
+            records: HashMap::from([("artifact".to_string(), record)]),
+            workspace_ids: vec!["workspace-id".to_string()],
+            created_at: unix_timestamp(),
+            discovered_count: 1,
+            measured_count: 1,
+            skipped_entries: 0,
+            cancelled: false,
+            truncated: false,
+        };
+        let plan = TrashPlanner::from_developer_artifacts(
+            &inventory,
+            &["artifact".to_string(), "artifact".to_string()],
+        )
+        .unwrap();
+        assert_eq!(plan.targets.len(), 1);
+        assert!(
+            TrashPlanner::from_developer_artifacts(&inventory, &["forged".to_string()]).is_err()
+        );
+    }
+
+    #[test]
+    fn developer_artifact_execution_rejects_removed_project_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let project = workspace.join("project");
+        let target = project.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let marker = project.join("Cargo.toml");
+        std::fs::write(&marker, "[package]\nname='demo'\n").unwrap();
+        let marker_identity = FileIdentity::from_path(&marker).unwrap();
+        let record = crate::developer_artifacts::DeveloperArtifactRecord {
+            artifact: crate::models::DeveloperArtifact {
+                id: "artifact".to_string(),
+                workspace_id: "workspace-id".to_string(),
+                project_name: "project".to_string(),
+                ecosystem: crate::models::DeveloperEcosystem::Rust,
+                kind: crate::models::DeveloperArtifactKind::CargoTarget,
+                path: target.to_string_lossy().into_owned(),
+                logical_bytes: 1,
+                allocated_bytes: 1,
+                file_count: 0,
+                newest_mtime: None,
+                rebuild_hint: Some("cargo build".to_string()),
+                evidence: vec!["Cargo.toml".to_string()],
+                complete: true,
+                incomplete_reason: None,
+                selected_by_default: false,
+            },
+            path: target.clone(),
+            identity: FileIdentity::from_path(&target).unwrap(),
+            workspace_path: workspace.clone(),
+            workspace_identity: FileIdentity::from_path(&workspace).unwrap(),
+            project_root: project.clone(),
+            project_identity: FileIdentity::from_path(&project).unwrap(),
+            artifact_relative: PathBuf::from("target"),
+            marker_identities: vec![(marker.clone(), marker_identity)],
+        };
+        let inventory = DeveloperArtifactInventory {
+            scan_id: "developer-scan".to_string(),
+            records: HashMap::from([("artifact".to_string(), record)]),
+            workspace_ids: vec!["workspace-id".to_string()],
+            created_at: unix_timestamp(),
+            discovered_count: 1,
+            measured_count: 1,
+            skipped_entries: 0,
+            cancelled: false,
+            truncated: false,
+        };
+        let plan =
+            TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
+        std::fs::remove_file(marker).unwrap();
+        let mut move_attempts = 0;
+        let result = TrashExecutor::execute_with(plan, |_| {
+            move_attempts += 1;
+            Ok(())
+        });
+        assert_eq!(move_attempts, 0);
+        assert_eq!(result.skipped_count, 1);
+        assert!(result.items[0].message.contains("project"));
+    }
+
+    #[test]
+    fn rust_cleanup_moves_only_target_when_project_is_the_selected_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("rust-project");
+        let source = project.join("src/lib.rs");
+        let target = project.join("target");
+        let marker = project.join("Cargo.toml");
+        let trashed = temp.path().join("trashed-target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "pub fn source_stays() {}\n").unwrap();
+        std::fs::write(&marker, "[package]\nname='demo'\n").unwrap();
+        std::fs::write(target.join("output.bin"), [1u8, 2, 3]).unwrap();
+
+        let record = crate::developer_artifacts::DeveloperArtifactRecord {
+            artifact: crate::models::DeveloperArtifact {
+                id: "artifact".to_string(),
+                workspace_id: "workspace-id".to_string(),
+                project_name: "rust-project".to_string(),
+                ecosystem: crate::models::DeveloperEcosystem::Rust,
+                kind: crate::models::DeveloperArtifactKind::CargoTarget,
+                path: target.to_string_lossy().into_owned(),
+                logical_bytes: 3,
+                allocated_bytes: 4096,
+                file_count: 1,
+                newest_mtime: None,
+                rebuild_hint: Some("cargo build".to_string()),
+                evidence: vec!["Cargo.toml".to_string()],
+                complete: true,
+                incomplete_reason: None,
+                selected_by_default: false,
+            },
+            path: target.clone(),
+            identity: FileIdentity::from_path(&target).unwrap(),
+            workspace_path: project.clone(),
+            workspace_identity: FileIdentity::from_path(&project).unwrap(),
+            project_root: project.clone(),
+            project_identity: FileIdentity::from_path(&project).unwrap(),
+            artifact_relative: PathBuf::from("target"),
+            marker_identities: vec![(marker.clone(), FileIdentity::from_path(&marker).unwrap())],
+        };
+        let inventory = DeveloperArtifactInventory {
+            scan_id: "developer-scan".to_string(),
+            records: HashMap::from([("artifact".to_string(), record)]),
+            workspace_ids: vec!["workspace-id".to_string()],
+            created_at: unix_timestamp(),
+            discovered_count: 1,
+            measured_count: 1,
+            skipped_entries: 0,
+            cancelled: false,
+            truncated: false,
+        };
+        let plan =
+            TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
+        let result = TrashExecutor::execute_with(plan, |path| {
+            assert_eq!(path, target);
+            std::fs::rename(path, &trashed).map_err(|error| error.to_string())
+        });
+
+        assert_eq!(result.moved_count, 1);
+        assert!(!target.exists());
+        assert!(trashed.join("output.bin").is_file());
+        assert!(marker.is_file());
+        assert!(source.is_file());
+        assert!(project.is_dir());
     }
 
     #[test]

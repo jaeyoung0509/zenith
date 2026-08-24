@@ -121,6 +121,59 @@ The specialized Large Files scope does not change `Blacklist` behavior for any
 other cleaner. In particular, `Documents`, `Desktop`, and `Movies` remain
 blacklisted for generic signature-based cleanup.
 
+## Developer Artifact Review
+
+Developer Artifact Review is manual inventory, not Quick Clean. `Scan this
+Mac` registers the canonical current-user home as a backend-owned scan scope;
+the frontend receives only its opaque workspace ID and cannot submit a path,
+scope, or cleanup rule. The native picker remains available for narrower
+user-owned folders beneath home.
+
+The whole-home scope prunes protected paths before traversal. It bypasses
+`Library`, credential stores such as `.ssh`, `.gnupg`, `.aws`, `.azure`, and
+`.kube`, user media/content roots protected by the global blacklist, installed
+`.app` bundles, and known top-level package-manager/runtime state directories.
+Symlinks are not followed. These bypassed paths do not become candidates and
+do not consume recursive measurement work.
+
+Discovery uses reviewed ecosystem evidence before a directory becomes a
+candidate. Project markers must be direct children of the exact project root;
+an ancestor marker never authorizes a same-named directory deeper in the
+source tree:
+
+- `target` requires `Cargo.toml` or `pom.xml`;
+- `node_modules` requires `package.json`;
+- `.venv`/`venv` requires Python dependency metadata and `pyvenv.cfg`;
+- `build`/`.gradle` requires Gradle markers; CMake `build` additionally
+  requires its generated `CMakeCache.txt`;
+- Composer `vendor` requires Composer metadata generated inside `vendor`, and
+  `vendor/bundle` requires Bundler markers;
+- `bin`/`obj` requires a direct .NET project marker;
+- `.build`, `.dart_tool`, `_build`, `deps`, and `.terraform` require Swift,
+  Dart, Elixir, or Terraform markers respectively; and
+- `~/go/pkg/mod` is shown as a separate shared cache when the user selects the
+  `go` workspace root or uses the backend-owned whole-home scope.
+
+Unknown `build`, `dist`, `out`, `cache`, `vendor`, or hidden directories are
+never executable based on their names alone. Discovery skips `.git`, symlinks,
+other filesystems, and recognized artifact trees. Candidate measurement is a
+single bounded traversal that records logical/allocated bytes, file count, and
+newest modification time. A permission error, symlink, depth cutoff, or marker
+change marks the candidate incomplete and blocks planning. Measurement workers
+are bounded at four and cancellation stops new work while retaining only
+completed candidates.
+
+Age is informational. Recent artifacts remain selectable when the user chooses
+them, and old artifacts are not selected automatically. Before a Trash plan is
+created, Rust resolves selected IDs from the fresh inventory and rejects
+incomplete records. Immediately before each move, it revalidates the workspace
+and project identities, exact relative artifact type, marker identities,
+symlink-free scope, directory type, and candidate identity. Project roots,
+workspace roots, `.git`, source paths, forged IDs, stale inventories, replayed
+plans, and frontend-provided paths fail closed. Selecting a project directory
+as the workspace remains valid because only its exact generated child (for
+example, `target/`) enters the plan; the project directory itself never does.
+
 ## App Uninstaller
 
 App Uninstaller also uses its own backend-owned inventory and Trash plan. It does

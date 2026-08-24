@@ -20,6 +20,7 @@
   import SettingsView from './SettingsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
   import ApplicationsView from './ApplicationsView.svelte';
+  import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { formatBytes } from '../../lib/utils/format';
   import { tauriStartWindowDrag } from '../../lib/utils/tauri';
@@ -38,7 +39,7 @@
     Shield,
   } from 'lucide-svelte';
 
-  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications';
+  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications' | 'developer-artifacts';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -233,6 +234,7 @@
             <StorageTools
               onOpenLargeFiles={() => selectTab('large-files')}
               onOpenApplications={() => selectTab('applications')}
+              onOpenDeveloperArtifacts={() => selectTab('developer-artifacts')}
               onScanStorage={() => scanStore.runScan()}
               isScanning={scanStore.isScanning}
               isCleaning={scanStore.isCleaning}
@@ -243,6 +245,8 @@
           <LargeFilesView onBack={() => selectTab('storage')} />
         {:else if currentTab === 'applications'}
           <ApplicationsView onBack={() => selectTab('storage')} />
+        {:else if currentTab === 'developer-artifacts'}
+          <DeveloperArtifactsView onBack={() => selectTab('storage')} />
         {:else if currentTab === 'docker'}
           <DockerView />
         {:else if currentTab === 'models'}

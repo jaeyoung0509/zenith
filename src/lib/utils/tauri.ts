@@ -11,6 +11,9 @@ import type {
   CleanEvent,
   CleanResult,
   DevelopmentListener,
+  DeveloperArtifactScanEvent,
+  DeveloperArtifactScanResult,
+  DeveloperWorkspace,
   DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
@@ -192,6 +195,32 @@ export function tauriPrepareLargeFileTrash(
   selectedItemIds: string[]
 ): Promise<TrashPlanPreview> {
   return storageApi.prepareLargeFileTrash(scanId, selectedItemIds);
+}
+
+export function tauriPickDeveloperWorkspace(): Promise<DeveloperWorkspace | null> {
+  return storageApi.pickDeveloperWorkspace();
+}
+
+export function tauriRegisterDeveloperHomeWorkspace(): Promise<DeveloperWorkspace> {
+  return storageApi.registerDeveloperHomeWorkspace();
+}
+
+export function tauriStartDeveloperArtifactScan(
+  workspaceIds: string[],
+  onEvent: (event: DeveloperArtifactScanEvent) => void
+): Promise<DeveloperArtifactScanResult> {
+  return storageApi.startDeveloperArtifactScan(workspaceIds, onEvent);
+}
+
+export function tauriCancelDeveloperArtifactScan(scanId: string): Promise<void> {
+  return storageApi.cancelDeveloperArtifactScan(scanId);
+}
+
+export function tauriPrepareDeveloperArtifactCleanup(
+  scanId: string,
+  selectedItemIds: string[]
+): Promise<TrashPlanPreview> {
+  return storageApi.prepareDeveloperArtifactCleanup(scanId, selectedItemIds);
 }
 
 export function tauriGetInstalledApps(): Promise<InstalledApp[]> {

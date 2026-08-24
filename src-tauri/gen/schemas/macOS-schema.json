@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the cancel_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-developer-artifact-scan",
+          "markdownDescription": "Enables the cancel_developer_artifact_scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the cancel_large_file_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel-large-file-scan",
@@ -321,6 +327,12 @@
           "markdownDescription": "Enables the open_logs_folder command without any pre-configured scope."
         },
         {
+          "description": "Enables the pick_developer_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-developer-workspace",
+          "markdownDescription": "Enables the pick_developer_workspace command without any pre-configured scope."
+        },
+        {
           "description": "Enables the pick_keep_awake_application command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pick-keep-awake-application",
@@ -333,6 +345,12 @@
           "markdownDescription": "Enables the prepare_app_uninstall command without any pre-configured scope."
         },
         {
+          "description": "Enables the prepare_developer_artifact_cleanup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-developer-artifact-cleanup",
+          "markdownDescription": "Enables the prepare_developer_artifact_cleanup command without any pre-configured scope."
+        },
+        {
           "description": "Enables the prepare_large_file_trash command without any pre-configured scope.",
           "type": "string",
           "const": "allow-prepare-large-file-trash",
@@ -343,6 +361,12 @@
           "type": "string",
           "const": "allow-prune-docker-target",
           "markdownDescription": "Enables the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_developer_home_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-register-developer-home-workspace",
+          "markdownDescription": "Enables the register_developer_home_workspace command without any pre-configured scope."
         },
         {
           "description": "Enables the release_development_listener command without any pre-configured scope.",
@@ -375,6 +399,12 @@
           "markdownDescription": "Enables the set_manual_awake command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-developer-artifact-scan",
+          "markdownDescription": "Enables the start_developer_artifact_scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_large_file_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-large-file-scan",
@@ -397,6 +427,12 @@
           "type": "string",
           "const": "allow-toggle-quick-panel",
           "markdownDescription": "Enables the toggle_quick_panel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-developer-artifact-scan",
+          "markdownDescription": "Denies the cancel_developer_artifact_scan command without any pre-configured scope."
         },
         {
           "description": "Denies the cancel_large_file_scan command without any pre-configured scope.",
@@ -543,6 +579,12 @@
           "markdownDescription": "Denies the open_logs_folder command without any pre-configured scope."
         },
         {
+          "description": "Denies the pick_developer_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-developer-workspace",
+          "markdownDescription": "Denies the pick_developer_workspace command without any pre-configured scope."
+        },
+        {
           "description": "Denies the pick_keep_awake_application command without any pre-configured scope.",
           "type": "string",
           "const": "deny-pick-keep-awake-application",
@@ -555,6 +597,12 @@
           "markdownDescription": "Denies the prepare_app_uninstall command without any pre-configured scope."
         },
         {
+          "description": "Denies the prepare_developer_artifact_cleanup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-developer-artifact-cleanup",
+          "markdownDescription": "Denies the prepare_developer_artifact_cleanup command without any pre-configured scope."
+        },
+        {
           "description": "Denies the prepare_large_file_trash command without any pre-configured scope.",
           "type": "string",
           "const": "deny-prepare-large-file-trash",
@@ -565,6 +613,12 @@
           "type": "string",
           "const": "deny-prune-docker-target",
           "markdownDescription": "Denies the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_developer_home_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-register-developer-home-workspace",
+          "markdownDescription": "Denies the register_developer_home_workspace command without any pre-configured scope."
         },
         {
           "description": "Denies the release_development_listener command without any pre-configured scope.",
@@ -595,6 +649,12 @@
           "type": "string",
           "const": "deny-set-manual-awake",
           "markdownDescription": "Denies the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-developer-artifact-scan",
+          "markdownDescription": "Denies the start_developer_artifact_scan command without any pre-configured scope."
         },
         {
           "description": "Denies the start_large_file_scan command without any pre-configured scope.",
