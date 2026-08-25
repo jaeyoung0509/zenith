@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.1.15"
+version = "0.1.16"
 description = "Zenith - macOS AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
