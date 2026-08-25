@@ -172,4 +172,18 @@ mod tests {
         }
         assert_eq!(signature.min_age_days, Some(3));
     }
+
+    #[test]
+    fn user_app_caches_exclude_tool_managed_dotslash_cache() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let signature = registry.get("system.intensive.user_app_caches").unwrap();
+
+        assert!(
+            signature
+                .exclude_prefixes
+                .iter()
+                .any(|prefix| prefix == "dotslash"),
+            "dotslash cache must stay excluded: it is content-addressed and managed by the dotslash CLI"
+        );
+    }
 }
