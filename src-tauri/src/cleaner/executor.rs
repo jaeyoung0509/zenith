@@ -297,6 +297,8 @@ impl CleanExecutor {
             let error_str = report.errors.join("; ");
             let failure_reason = if error_str.contains("Permission denied") {
                 CleanFailureReason::PermissionDenied
+            } else if error_str.contains("changed during cleanup") {
+                CleanFailureReason::ChangedSinceScan
             } else if error_str.contains("No such file") {
                 CleanFailureReason::NotFound
             } else {

@@ -353,6 +353,45 @@ fn cleaner_restores_read_only_root_after_delete_contents() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cleaner_unlinks_symlink_without_changing_target_permissions() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let dir = tempdir().expect("create cleanup root");
+    let cache_root = dir.path().join("cache");
+    fs::create_dir(&cache_root).expect("create cache directory");
+
+    let outside = tempdir().expect("create outside directory");
+    let outside_file = outside.path().join("preserved.bin");
+    fs::write(&outside_file, b"preserved").expect("write outside file");
+    fs::set_permissions(outside.path(), fs::Permissions::from_mode(0o555))
+        .expect("make outside directory read-only");
+
+    let link = cache_root.join("outside-link");
+    symlink(outside.path(), &link).expect("create symlink");
+
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &[]);
+
+    assert!(
+        report.is_success(),
+        "unexpected cleanup errors: {:?}",
+        report.errors
+    );
+    assert!(!link.exists());
+    assert!(outside_file.exists());
+    assert_eq!(
+        fs::metadata(outside.path())
+            .expect("read target metadata")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o555
+    );
+    fs::set_permissions(outside.path(), fs::Permissions::from_mode(0o755))
+        .expect("restore fixture permissions");
+}
+
 #[test]
 fn frontend_selection_must_resolve_against_trusted_scan() {
     let registry = SignatureRegistry::load_embedded().unwrap();

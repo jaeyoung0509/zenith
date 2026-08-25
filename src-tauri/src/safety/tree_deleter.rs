@@ -5,7 +5,7 @@ use std::io;
 use std::path::Path;
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TreeDeleteReport {
@@ -25,10 +25,12 @@ pub struct SafeTreeDeleter;
 
 /// Records the directory identity and mode before cleanup temporarily adds the
 /// owner permissions needed to remove a read-only tree.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Default)]
 struct PermissionSnapshot {
     #[cfg(unix)]
     original_mode: Option<u32>,
+    #[cfg(unix)]
+    directory: Option<fs::File>,
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -55,13 +57,25 @@ impl SafeTreeDeleter {
             return report;
         }
 
-        let permissions = match Self::prepare_directory(root) {
+        let root_metadata = match fs::symlink_metadata(root) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                report.errors.push(format!("{}: {}", root.display(), error));
+                return report;
+            }
+        };
+        let permissions = match Self::prepare_directory(root, &root_metadata) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 report.errors.push(error);
                 return report;
             }
         };
+        if let Err(error) = Self::verify_directory_identity(root, &permissions) {
+            report.errors.push(error);
+            Self::restore_directory_permissions(root, permissions, &mut report);
+            return report;
+        }
 
         let entries = match fs::read_dir(root) {
             Ok(e) => e,
@@ -131,7 +145,16 @@ impl SafeTreeDeleter {
             return;
         }
 
+        if let Err(error) = Self::validate_entry_owner(path, &metadata) {
+            report.errors.push(error);
+            return;
+        }
+
         if metadata.file_type().is_symlink() || metadata.is_file() {
+            if let Err(error) = Self::verify_entry_identity(path, &metadata) {
+                report.errors.push(error);
+                return;
+            }
             let bytes = allocated_bytes(&metadata);
             match fs::remove_file(path) {
                 Ok(()) => {
@@ -149,13 +172,18 @@ impl SafeTreeDeleter {
             return;
         }
 
-        let permissions = match Self::prepare_directory(path) {
+        let permissions = match Self::prepare_directory(path, &metadata) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 report.errors.push(error);
                 return;
             }
         };
+        if let Err(error) = Self::verify_directory_identity(path, &permissions) {
+            report.errors.push(error);
+            Self::restore_directory_permissions(path, permissions, report);
+            return;
+        }
 
         let entries = match fs::read_dir(path) {
             Ok(e) => e,
@@ -173,6 +201,12 @@ impl SafeTreeDeleter {
             }
         }
 
+        if let Err(error) = Self::verify_directory_identity(path, &permissions) {
+            report.errors.push(error);
+            Self::restore_directory_permissions(path, permissions, report);
+            return;
+        }
+
         match fs::remove_dir(path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
@@ -188,17 +222,43 @@ impl SafeTreeDeleter {
     /// Make a user-owned directory traversable and writable for the duration
     /// of recursive deletion. Only missing owner bits are added; group/other
     /// permissions and special bits are preserved.
-    fn prepare_directory(path: &Path) -> Result<PermissionSnapshot, String> {
+    fn prepare_directory(
+        path: &Path,
+        expected_metadata: &fs::Metadata,
+    ) -> Result<PermissionSnapshot, String> {
         #[cfg(unix)]
         {
-            let metadata = fs::symlink_metadata(path)
-                .map_err(|error| format!("{}: {}", path.display(), error))?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Ok(PermissionSnapshot::default());
+            let directory = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(path)
+                .map_err(|error| {
+                    format!(
+                        "Permission denied: could not safely open cleanup directory ({}): {}",
+                        path.display(),
+                        error
+                    )
+                })?;
+            let metadata = directory.metadata().map_err(|error| {
+                format!(
+                    "Could not verify cleanup directory {}: {}",
+                    path.display(),
+                    error
+                )
+            })?;
+            if metadata.dev() != expected_metadata.dev()
+                || metadata.ino() != expected_metadata.ino()
+                || !metadata.is_dir()
+            {
+                return Err(format!(
+                    "Directory changed during cleanup: {}",
+                    path.display()
+                ));
             }
 
-            // chmod is intentionally limited to directories owned by the
-            // effective user. Zenith never escalates privileges for cleanup.
+            // fchmod is intentionally limited to a no-follow descriptor for a
+            // directory owned by the effective user. Zenith never escalates
+            // privileges or chmods a replacement symlink.
             let effective_uid = unsafe { libc::geteuid() } as u32;
             if metadata.uid() != effective_uid {
                 return Err(format!(
@@ -209,30 +269,31 @@ impl SafeTreeDeleter {
 
             let original_mode = metadata.mode() & 0o7777;
             let required_mode = original_mode | 0o700;
-            let snapshot = PermissionSnapshot {
-                original_mode: (required_mode != original_mode).then_some(original_mode),
-                device: metadata.dev(),
-                inode: metadata.ino(),
-            };
-
             if required_mode != original_mode {
-                fs::set_permissions(path, fs::Permissions::from_mode(required_mode)).map_err(
-                    |error| {
+                directory
+                    .set_permissions(fs::Permissions::from_mode(required_mode))
+                    .map_err(|error| {
                         format!(
                             "Permission denied: could not make cleanup directory writable ({}): {}",
                             path.display(),
                             error
                         )
-                    },
-                )?;
+                    })?;
             }
+
+            let snapshot = PermissionSnapshot {
+                original_mode: (required_mode != original_mode).then_some(original_mode),
+                directory: Some(directory),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            };
 
             Ok(snapshot)
         }
 
         #[cfg(not(unix))]
         {
-            let _ = path;
+            let _ = (path, expected_metadata);
             Ok(PermissionSnapshot::default())
         }
     }
@@ -258,7 +319,10 @@ impl SafeTreeDeleter {
                 return;
             }
 
-            if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(original_mode))
+            let Some(directory) = snapshot.directory.as_ref() else {
+                return;
+            };
+            if let Err(error) = directory.set_permissions(fs::Permissions::from_mode(original_mode))
             {
                 report.errors.push(format!(
                     "Permission denied: could not restore directory permissions ({}): {}",
@@ -272,6 +336,72 @@ impl SafeTreeDeleter {
         {
             let _ = (path, snapshot, report);
         }
+    }
+
+    fn validate_entry_owner(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let effective_uid = unsafe { libc::geteuid() } as u32;
+            if metadata.uid() != effective_uid {
+                return Err(format!(
+                    "Permission denied: cleanup entry is not owned by the current user: {}",
+                    path.display()
+                ));
+            }
+        }
+
+        #[cfg(not(unix))]
+        let _ = (path, metadata);
+
+        Ok(())
+    }
+
+    fn verify_entry_identity(path: &Path, expected: &fs::Metadata) -> Result<(), String> {
+        let current = fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "Could not re-verify cleanup entry {}: {}",
+                path.display(),
+                error
+            )
+        })?;
+
+        #[cfg(unix)]
+        if current.dev() != expected.dev() || current.ino() != expected.ino() {
+            return Err(format!("Entry changed during cleanup: {}", path.display()));
+        }
+
+        if current.file_type() != expected.file_type() {
+            return Err(format!("Entry changed during cleanup: {}", path.display()));
+        }
+        Ok(())
+    }
+
+    fn verify_directory_identity(path: &Path, snapshot: &PermissionSnapshot) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let current = fs::symlink_metadata(path).map_err(|error| {
+                format!(
+                    "Could not re-verify cleanup directory {}: {}",
+                    path.display(),
+                    error
+                )
+            })?;
+            if current.file_type().is_symlink()
+                || !current.is_dir()
+                || current.dev() != snapshot.device
+                || current.ino() != snapshot.inode
+            {
+                return Err(format!(
+                    "Directory changed during cleanup: {}",
+                    path.display()
+                ));
+            }
+        }
+
+        #[cfg(not(unix))]
+        let _ = (path, snapshot);
+
+        Ok(())
     }
 
     fn validate_verified_scope(

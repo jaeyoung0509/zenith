@@ -91,7 +91,7 @@
         </div>
         <div class="text-xs text-muted-foreground mt-0.5">
           Disk Space Reclaimed
-          {#if result.actual_disk_free_delta != null && result.actual_disk_free_delta > 0}
+          {#if outcome !== 'failed' && result.actual_disk_free_delta != null && result.actual_disk_free_delta > 0}
             <span class="text-success ml-1">
               (Free space delta: +{formatBytes(result.actual_disk_free_delta)})
             </span>

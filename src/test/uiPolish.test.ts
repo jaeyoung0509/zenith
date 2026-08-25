@@ -116,12 +116,14 @@ describe('cleanup result feedback', () => {
     expect(partial.body).toContain('Clean Partially Complete');
     expect(partial.body).toContain('Some storage was reclaimed');
 
+    const failedResult = result('failed', false, 'Permission denied (os error 13)');
+    failedResult.actual_disk_free_delta = 4096;
     const failed = render(CleanResultModal, {
-      props: { result: result('failed', false, 'Permission denied (os error 13)'), onClose: () => undefined },
+      props: { result: failedResult, onClose: () => undefined },
     });
     expect(failed.body).toContain('Clean Failed');
     expect(failed.body).toContain('No storage was reclaimed');
     expect(failed.body).not.toContain('Clean Complete');
-    expect(failed.body).not.toContain('Free space delta: +0 B');
+    expect(failed.body).not.toContain('Free space delta');
   });
 });
