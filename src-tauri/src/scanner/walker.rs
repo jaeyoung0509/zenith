@@ -217,7 +217,12 @@ impl DirectoryScanner {
         // chmod and deletion inside them fail with EPERM even for the owning
         // user, so generic cleanup can never succeed. Treat any bundle in the
         // tree like an unreadable subtree and fail closed.
-        if meta.is_dir() && path.extension().and_then(|ext| ext.to_str()) == Some("app") {
+        if meta.is_dir()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+        {
             stats.complete = false;
             return stats;
         }
@@ -358,12 +363,16 @@ mod tests {
         let eligible = root.path().join("plain.cache");
         let nested = root.path().join("bundled.cache");
         let bundle_root = nested.join("Tool.app/Contents/MacOS");
+        let mixed_case = root.path().join("mixed-case-bundled.cache");
+        let mixed_case_bundle_root = mixed_case.join("Tool.App/Contents/MacOS");
         let standalone = root.path().join("Standalone.app/Contents/MacOS");
         std::fs::create_dir_all(&bundle_root).unwrap();
+        std::fs::create_dir_all(&mixed_case_bundle_root).unwrap();
         std::fs::create_dir_all(&standalone).unwrap();
         std::fs::create_dir(&eligible).unwrap();
         std::fs::write(eligible.join("data.bin"), vec![1u8; 4096]).unwrap();
         std::fs::write(bundle_root.join("tool"), vec![1u8; 4096]).unwrap();
+        std::fs::write(mixed_case_bundle_root.join("tool"), vec![1u8; 4096]).unwrap();
         std::fs::write(standalone.join("tool"), vec![1u8; 4096]).unwrap();
 
         let signature = Signature {
@@ -391,5 +400,7 @@ mod tests {
         // The guard must also fail closed at delete-time TOCTOU re-verification.
         let stats = DirectoryScanner::measure_tree_stats(&nested, &[], 0, 32);
         assert!(!stats.complete);
+        let mixed_case_stats = DirectoryScanner::measure_tree_stats(&mixed_case, &[], 0, 32);
+        assert!(!mixed_case_stats.complete);
     }
 }
