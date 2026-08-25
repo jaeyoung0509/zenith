@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ScanItem } from '../lib/models/types';
 import { filterAndSortCleanupItems } from '../lib/utils/cleanup';
+import { cleanOutcome } from '../lib/utils/cleanResult';
 
 function item(overrides: Partial<ScanItem>): ScanItem {
   return {
@@ -61,6 +62,33 @@ describe('filterAndSortCleanupItems', () => {
       'name'
     );
     expect(result.map((entry) => entry.id)).toEqual(['ollama']);
+  });
+});
+
+describe('cleanOutcome', () => {
+  const item = (status: 'success' | 'partial' | 'failed', success: boolean, error_message: string | null = null) => ({
+    item_id: status,
+    name: status,
+    path: `/tmp/${status}`,
+    status,
+    success,
+    bytes_reclaimed: success ? 10 : 0,
+    failure_reason: null,
+    error_message,
+  });
+
+  it('reports a total failure when every item fails', () => {
+    expect(cleanOutcome({ items: [item('failed', false)] })).toBe('failed');
+  });
+
+  it('reports partial cleanup when successful and failed items are mixed', () => {
+    expect(cleanOutcome({ items: [item('success', true), item('failed', false)] })).toBe('partial');
+    expect(cleanOutcome({ items: [item('partial', true, 'one file was locked')] })).toBe('partial');
+  });
+
+  it('reports complete cleanup only when every item succeeds cleanly', () => {
+    expect(cleanOutcome({ items: [item('success', true), item('success', true)] })).toBe('success');
+    expect(cleanOutcome({ items: [] })).toBe('failed');
   });
 });
 

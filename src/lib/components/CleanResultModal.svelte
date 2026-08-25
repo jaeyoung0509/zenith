@@ -4,6 +4,7 @@
   import { prefersReducedMotion } from 'svelte/motion';
   import type { CleanResult } from '../models/types';
   import { formatBytes } from '../utils/format';
+  import { cleanOutcome } from '../utils/cleanResult';
   import Button from './Button.svelte';
   import Card from './Card.svelte';
   import { CheckCircle2, AlertTriangle, X, AlertCircle } from 'lucide-svelte';
@@ -15,14 +16,17 @@
 
   let { result, onClose }: Props = $props();
 
+  let outcome = $derived(cleanOutcome(result));
   let failedItems = $derived(
     result.items.filter((i) => !i.success || i.status === 'failed')
   );
   let partialItems = $derived(
-    result.items.filter((i) => i.status === 'partial' || (i.success && !!i.error_message))
+    result.items.filter(
+      (i) => i.success && (i.status === 'partial' || !!i.error_message)
+    )
   );
   let fullSuccessItems = $derived(
-    result.items.filter((i) => i.status === 'success' || (i.success && !i.error_message && i.status !== 'partial'))
+    result.items.filter((i) => i.success && i.status === 'success' && !i.error_message)
   );
 </script>
 
@@ -41,12 +45,38 @@
     <Card class="w-full bg-card shadow-2xl border-border">
     <div class="flex items-center justify-between pb-3 border-b border-border/80">
       <div class="flex items-center gap-2">
-        <div class="h-8 w-8 rounded-full bg-success/20 text-success flex items-center justify-center">
-          <CheckCircle2 size={18} />
+        <div
+          class={`h-8 w-8 rounded-full flex items-center justify-center ${
+            outcome === 'success'
+              ? 'bg-success/20 text-success'
+              : outcome === 'partial'
+                ? 'bg-warning/20 text-warning'
+                : 'bg-destructive/20 text-destructive'
+          }`}
+        >
+          {#if outcome === 'success'}
+            <CheckCircle2 size={18} />
+          {:else if outcome === 'partial'}
+            <AlertTriangle size={18} />
+          {:else}
+            <AlertCircle size={18} />
+          {/if}
         </div>
         <div>
-          <h3 class="text-sm font-semibold text-foreground">Clean Complete</h3>
-          <p class="text-xs text-muted-foreground">Storage has been safely reclaimed</p>
+          <h3 class="text-sm font-semibold text-foreground">
+            {outcome === 'success'
+              ? 'Clean Complete'
+              : outcome === 'partial'
+                ? 'Clean Partially Complete'
+                : 'Clean Failed'}
+          </h3>
+          <p class="text-xs text-muted-foreground">
+            {outcome === 'success'
+              ? 'Storage has been safely reclaimed'
+              : outcome === 'partial'
+                ? 'Some storage was reclaimed; review the remaining items'
+                : 'No storage was reclaimed; review the errors below'}
+          </p>
         </div>
       </div>
       <Button variant="ghost" size="icon" onclick={onClose} ariaLabel="Close cleanup result" title="Close">
@@ -61,9 +91,9 @@
         </div>
         <div class="text-xs text-muted-foreground mt-0.5">
           Disk Space Reclaimed
-          {#if result.actual_disk_free_delta}
+          {#if result.actual_disk_free_delta != null && result.actual_disk_free_delta > 0}
             <span class="text-success ml-1">
-              (Free space delta: +{formatBytes(Math.max(0, result.actual_disk_free_delta))})
+              (Free space delta: +{formatBytes(result.actual_disk_free_delta)})
             </span>
           {/if}
         </div>

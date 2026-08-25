@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
+import type { CleanFailureReason, CleanResult } from '../lib/models/types';
+import CleanResultModal from '../lib/components/CleanResultModal.svelte';
 import QuickPanel from '../routes/quick/QuickPanel.svelte';
 import SettingsView from '../routes/dashboard/SettingsView.svelte';
 import Card from '../lib/components/Card.svelte';
@@ -76,5 +78,50 @@ describe('accessible action contracts', () => {
       'transition-[background-color,color,border-color,transform,opacity]'
     );
     expect(rendered.body).not.toContain('transition-all');
+  });
+});
+
+describe('cleanup result feedback', () => {
+  const result = (status: 'success' | 'partial' | 'failed', success: boolean, error_message: string | null = null): CleanResult => ({
+    plan_id: 'plan-1',
+    started_at: 1,
+    finished_at: 2,
+    total_reclaimed_bytes: success ? 1024 : 0,
+    total_failed_bytes: success ? 0 : 1024,
+    items: [
+      {
+        item_id: 'item-1',
+        name: 'Cache item',
+        path: '/tmp/cache-item',
+        status,
+        success,
+        bytes_reclaimed: success ? 1024 : 0,
+        failure_reason: (success ? null : 'permission_denied') as CleanFailureReason | null,
+        error_message,
+      },
+    ],
+    actual_disk_free_delta: 0,
+  });
+
+  it('renders aggregate success, partial, and failure copy honestly', () => {
+    const success = render(CleanResultModal, {
+      props: { result: result('success', true), onClose: () => undefined },
+    });
+    expect(success.body).toContain('Clean Complete');
+    expect(success.body).toContain('Storage has been safely reclaimed');
+
+    const partial = render(CleanResultModal, {
+      props: { result: result('partial', true, 'one file was locked'), onClose: () => undefined },
+    });
+    expect(partial.body).toContain('Clean Partially Complete');
+    expect(partial.body).toContain('Some storage was reclaimed');
+
+    const failed = render(CleanResultModal, {
+      props: { result: result('failed', false, 'Permission denied (os error 13)'), onClose: () => undefined },
+    });
+    expect(failed.body).toContain('Clean Failed');
+    expect(failed.body).toContain('No storage was reclaimed');
+    expect(failed.body).not.toContain('Clean Complete');
+    expect(failed.body).not.toContain('Free space delta: +0 B');
   });
 });

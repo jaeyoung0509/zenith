@@ -283,6 +283,76 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
     assert!(!subdir.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn cleaner_removes_user_owned_read_only_cache_trees_without_privilege_escalation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().expect("create temp dir");
+    let cache_root = dir.path().join("react-native-devtools");
+    let nested = cache_root.join("Contents").join("Resources");
+    fs::create_dir_all(&nested).expect("create nested app bundle directories");
+    fs::write(nested.join("resources.pak"), b"cache payload").expect("write cache payload");
+
+    // macOS app bundles downloaded into caches can be owner-readable but not
+    // owner-writable. The target remains owned by this test process.
+    fs::set_permissions(&cache_root, fs::Permissions::from_mode(0o555))
+        .expect("make cache root read-only");
+    fs::set_permissions(
+        cache_root.join("Contents"),
+        fs::Permissions::from_mode(0o555),
+    )
+    .expect("make app contents read-only");
+    fs::set_permissions(&nested, fs::Permissions::from_mode(0o555))
+        .expect("make app resources read-only");
+
+    let report = SafeTreeDeleter::delete_path(&cache_root, &[]);
+
+    assert!(
+        report.is_success(),
+        "unexpected cleanup errors: {:?}",
+        report.errors
+    );
+    assert_eq!(report.deleted_files, 1);
+    assert!(!cache_root.exists());
+
+    // The fixture is owned by the current user, so no administrator command or
+    // broad chmod is needed to remove the read-only tree.
+}
+
+#[cfg(unix)]
+#[test]
+fn cleaner_restores_read_only_root_after_delete_contents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().expect("create temp dir");
+    let cache_root = dir.path().join("read-only-root");
+    fs::create_dir_all(cache_root.join("nested")).expect("create cache tree");
+    fs::write(cache_root.join("nested").join("payload.bin"), b"payload").expect("write payload");
+    fs::set_permissions(&cache_root, fs::Permissions::from_mode(0o555))
+        .expect("make cache root read-only");
+    fs::set_permissions(cache_root.join("nested"), fs::Permissions::from_mode(0o555))
+        .expect("make nested directory read-only");
+
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &[]);
+
+    assert!(
+        report.is_success(),
+        "unexpected cleanup errors: {:?}",
+        report.errors
+    );
+    assert!(!cache_root.join("nested").exists());
+    assert!(cache_root.is_dir());
+    assert_eq!(
+        fs::metadata(&cache_root)
+            .expect("read root metadata")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o555
+    );
+}
+
 #[test]
 fn frontend_selection_must_resolve_against_trusted_scan() {
     let registry = SignatureRegistry::load_embedded().unwrap();
