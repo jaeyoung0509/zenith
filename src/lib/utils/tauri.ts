@@ -3,6 +3,7 @@ import { storageApi } from '../api/storage';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   AiUsageSnapshot,
+  AgentActivitySnapshot,
   AppUninstallInspection,
   AwakeBehavior,
   AwakeRule,
@@ -37,6 +38,10 @@ import type {
 } from '../models/types';
 
 export const isTauri = isTauriCheck();
+
+export function tauriGetProjectContext(force = false): Promise<AgentActivitySnapshot> {
+  return api.getProjectContext(force);
+}
 
 export function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {
   return api.getAiUsage(force);

@@ -16,8 +16,8 @@ export class SettingsStore {
     excluded_signatures: [],
     quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'],
-    dashboard_tabs_revision: 1,
+    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'],
+    dashboard_tabs_revision: 2,
     sidebar_collapsed: false,
     awake_rules: [
       {
@@ -95,8 +95,8 @@ export class SettingsStore {
         intensive_cleanup: fetched.intensive_cleanup ?? false,
         quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
         quick_panel_ai_providers: fetched.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-        dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'],
-        dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 1,
+        dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'],
+        dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 2,
         sidebar_collapsed: fetched.sidebar_collapsed ?? false,
       };
       this.settings = normalized;

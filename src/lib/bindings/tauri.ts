@@ -5,6 +5,7 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getAiUsage: (force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { force })),
+	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot, string>(__TAURI_INVOKE("get_project_context", { force })),
 	connectOpenrouterOauth: () => typedError<null, string>(__TAURI_INVOKE("connect_openrouter_oauth")),
 	startScan: (onEvent: Channel<ScanEvent>, categories: Category[] | null) => typedError<ScanResult, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
 	getLastScan: () => __TAURI_INVOKE<{
@@ -66,6 +67,45 @@ export const commands = {
 };
 
 /* Types */
+export type AgentActivitySnapshot = {
+	observed_at: number,
+	quality: SnapshotQuality,
+	projects: ProjectContext[],
+	unassigned_sessions: AgentSession[],
+	adapters: AgentAdapterHealth[],
+	partial_errors: string[],
+};
+
+export type AgentActivityStatus = "active" | "waiting" | "finished" | "exited" | "unknown";
+
+export type AgentAdapterHealth = {
+	tool_id: string,
+	display_name: string,
+	state: AgentAdapterState,
+	evidence: AgentEvidence | null,
+	message: string,
+};
+
+export type AgentAdapterState = "not_installed" | "process_only" | "integration_available" | "connected" | "version_unsupported" | "partial";
+
+export type AgentEvidence = "vendor_confirmed" | "process_observed" | "heuristic";
+
+export type AgentSession = {
+	/**  Opaque, snapshot-stable identity. Never a PID. */
+	id: string,
+	tool_id: string,
+	tool_name: string,
+	status: AgentActivityStatus,
+	evidence: AgentEvidence,
+	observed_at: number,
+	started_at: number,
+	elapsed_seconds: number,
+	cpu_percent: number | null,
+	memory_bytes: number,
+	project_id: string | null,
+	detail: string,
+};
+
 export type AiProviderUsage = {
 	id: string,
 	name: string,
@@ -197,9 +237,9 @@ export type CleanStatus = "success" | "partial" | "failed";
 
 export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 
-export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
+export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "awake";
 
-export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
+export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "awake";
 
 export type DeveloperArtifact = {
 	id: string,
@@ -469,6 +509,23 @@ export type ProcessMemory = {
 	can_terminate: boolean,
 };
 
+export type ProjectContext = {
+	identity: ProjectIdentity,
+	sessions: AgentSession[],
+	last_seen_at: number,
+};
+
+export type ProjectIdentity = {
+	/**  Opaque hash of the canonical project/worktree root. */
+	id: string,
+	display_name: string,
+	/**  A compact parent/name hint, never a full absolute path. */
+	location_hint: string,
+	repository_id: string | null,
+	is_worktree: boolean,
+	branch: string | null,
+};
+
 export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory";
 
 export type ReleaseDevelopmentListenerResult = {
@@ -525,6 +582,8 @@ export type SelectedApplication = {
 	executable_pattern: string,
 	path: string,
 };
+
+export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";
 
 export type TrashItemResult = {
 	item_id: string,

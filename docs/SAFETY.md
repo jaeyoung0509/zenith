@@ -246,6 +246,20 @@ manifest filesystem path.
 
 ## Process termination
 
+Project Cockpit is observation-only. Its adapter registry matches exact CLI
+executable identities for Antigravity (`agy`), legacy/enterprise Gemini CLI,
+Codex, Claude Code, Cursor Agent CLI, Grok Build, Copilot CLI, and OpenCode.
+Names and substrings alone are insufficient, and Cursor's GUI process never
+creates an agent session. Current-user ownership, a non-zero start time, an
+executable path, and cwd are checked before project correlation. No termination
+lease or mutable command is exposed by this workflow.
+
+Public project/activity snapshots contain opaque hashes rather than PID or full
+filesystem paths. They never serialize raw argv, environment values, prompts,
+tool arguments/results, transcripts, account identity, credentials, remotes,
+or diff content. An inaccessible or unprovable cwd yields an Unassigned session
+instead of basename, branch, port, or recent-activity guessing.
+
 Memory Inspector resolves a fresh process snapshot from a recognized user-app
 group. It does not accept a PID from the WebView. System processes, terminals,
 and Zenith are protected. Normal application termination is offered before a

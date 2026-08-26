@@ -3,10 +3,11 @@ use crate::cleaner::CleanExecutor;
 use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
-    AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus,
-    LocalModelItem, MemoryMetrics, PlanPreview, ReleaseDevelopmentListenerResult, ReleaseMode,
-    ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
+    AgentActivitySnapshot, AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category,
+    CleanEvent, CleanResult, DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
+    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview,
+    ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent, ScanResult, SelectedApplication,
+    ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
@@ -32,6 +33,7 @@ pub struct AppState {
     pub storage_operation_gate: StorageOperationGate,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
     pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
+    pub agent_activity_cache: Arc<Mutex<Option<AgentActivitySnapshot>>>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -83,6 +85,38 @@ pub async fn get_ai_usage(
     })
     .await
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_project_context(
+    force: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<AgentActivitySnapshot, String> {
+    let should_force = force.unwrap_or(false);
+    if !should_force {
+        if let Some(snapshot) = state
+            .agent_activity_cache
+            .lock()
+            .expect("agent_activity_cache poisoned")
+            .as_ref()
+        {
+            if unix_timestamp().saturating_sub(snapshot.observed_at)
+                < crate::agent_activity::SNAPSHOT_TTL_SECONDS
+            {
+                return Ok(snapshot.clone());
+            }
+        }
+    }
+
+    let cache = state.agent_activity_cache.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let snapshot = crate::agent_activity::collect();
+        *cache.lock().expect("agent_activity_cache poisoned") = Some(snapshot.clone());
+        snapshot
+    })
+    .await
+    .map_err(|error| format!("Agent activity refresh failed: {error}"))
 }
 
 #[tauri::command]

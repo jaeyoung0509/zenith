@@ -1,4 +1,5 @@
 import type {
+  AgentActivitySnapshot,
   AiUsageSnapshot,
   AwakeBehavior,
   AwakeRule,
@@ -29,6 +30,77 @@ import type { nativeApi } from './native';
 type ZenithApi = typeof nativeApi;
 
 export const mockApi = {
+  async getProjectContext(_force = false): Promise<AgentActivitySnapshot> {
+    const observedAt = Math.floor(Date.now() / 1000);
+    return {
+      observed_at: observedAt,
+      quality: 'fresh',
+      projects: [
+        {
+          identity: {
+            id: 'project-zenith-preview',
+            display_name: 'zenith',
+            location_hint: 'Myproject/zenith',
+            repository_id: 'repository-zenith-preview',
+            is_worktree: false,
+            branch: 'feature/project-cockpit',
+          },
+          sessions: [
+            {
+              id: 'session-codex-preview',
+              tool_id: 'codex',
+              tool_name: 'Codex CLI',
+              status: 'active',
+              evidence: 'process_observed',
+              observed_at: observedAt,
+              started_at: observedAt - 1320,
+              elapsed_seconds: 1320,
+              cpu_percent: 6.4,
+              memory_bytes: 468 * 1024 * 1024,
+              project_id: 'project-zenith-preview',
+              detail: 'Process observed · detailed status unavailable',
+            },
+          ],
+          last_seen_at: observedAt,
+        },
+        {
+          identity: {
+            id: 'project-design-preview',
+            display_name: 'design-system',
+            location_hint: 'worktrees/design-system',
+            repository_id: 'repository-design-preview',
+            is_worktree: true,
+            branch: 'feature/token-audit',
+          },
+          sessions: [
+            {
+              id: 'session-claude-preview',
+              tool_id: 'claude',
+              tool_name: 'Claude Code',
+              status: 'active',
+              evidence: 'process_observed',
+              observed_at: observedAt,
+              started_at: observedAt - 420,
+              elapsed_seconds: 420,
+              cpu_percent: 2.1,
+              memory_bytes: 224 * 1024 * 1024,
+              project_id: 'project-design-preview',
+              detail: 'Process observed · detailed status unavailable',
+            },
+          ],
+          last_seen_at: observedAt,
+        },
+      ],
+      unassigned_sessions: [],
+      adapters: [
+        { tool_id: 'codex', display_name: 'Codex CLI', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.' },
+        { tool_id: 'claude', display_name: 'Claude Code', state: 'integration_available', evidence: 'process_observed', message: 'Process observed · detailed local integration is available but not enabled.' },
+        { tool_id: 'antigravity', display_name: 'Antigravity', state: 'not_installed', evidence: null, message: 'Not observed in this snapshot.' },
+      ],
+      partial_errors: [],
+    };
+  },
+
   async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
     return {
       fetched_at: Math.floor(Date.now() / 1000),
@@ -678,8 +750,8 @@ export const mockApi = {
       excluded_signatures: [],
       quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'],
-      dashboard_tabs_revision: 1,
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'],
+      dashboard_tabs_revision: 2,
       sidebar_collapsed: false,
       awake_rules: [
         {
@@ -733,7 +805,7 @@ export const mockApi = {
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
       enabled_features: [
-        'dashboard_tabs: Storage, Docker, LocalModel, Memory, DevelopmentServers, AiUsage, Awake',
+        'dashboard_tabs: Storage, Docker, LocalModel, Memory, Projects, DevelopmentServers, AiUsage, Awake',
         'quick_panel_sections: Storage, Cleanup, AiUsage, Categories, Memory',
         'clean_categories: ai=true, dev=true, docker=false, models=false',
         'awake_rules: total=2, active=0',

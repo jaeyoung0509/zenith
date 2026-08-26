@@ -1,3 +1,4 @@
+pub mod agent_activity;
 pub mod ai_usage;
 pub mod applications;
 pub mod cleaner;
@@ -125,6 +126,7 @@ pub fn run() {
     let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
+    let agent_activity_cache = Arc::new(Mutex::new(None));
 
     let app_state = AppState {
         registry,
@@ -138,6 +140,7 @@ pub fn run() {
         storage_operation_gate,
         memory_sampler,
         dev_port_store,
+        agent_activity_cache,
     };
 
     tauri::Builder::default()
@@ -251,6 +254,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .dangerously_cast_bigints_to_number()
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
+            commands::get_project_context,
             commands::connect_openrouter_oauth,
             commands::start_scan,
             commands::get_last_scan,

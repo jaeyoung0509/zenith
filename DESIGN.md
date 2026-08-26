@@ -150,6 +150,21 @@ pixel utilities for those sizes.
   ignored SIGTERM. Dialog focus enters on open and returns to the originating
   row action on cancel or completion.
 
+### Projects
+
+- Group rows by canonical repository/worktree identity and use the compact
+  parent/name hint plus branch to distinguish same-name projects without showing
+  an absolute path. Worktrees receive a text badge.
+- Every session shows a non-color evidence label. Process-only observations say
+  `Process observed · detailed status unavailable`; they never claim Finished,
+  Waiting, or Stalled.
+- Keep Unassigned sessions visible in their own section with an explanation that
+  project correlation could not be proven. Never guess from basename, branch,
+  port, or PID.
+- Preserve the last successful snapshot during refresh failures. First load uses
+  stable skeleton cards; empty state explains supported local observation and
+  the privacy boundary. Adapter health stays available in a secondary disclosure.
+
 ### Keep Awake
 
 - “Add Rule” leads with a native Applications picker and automatically fills the
