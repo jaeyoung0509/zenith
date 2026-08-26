@@ -1,6 +1,7 @@
 fn main() {
     const COMMANDS: &[&str] = &[
         "get_ai_usage",
+        "get_project_context",
         "connect_openrouter_oauth",
         "start_scan",
         "get_last_scan",

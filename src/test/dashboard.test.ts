@@ -70,4 +70,9 @@ describe('Dashboard sidebar affordances', () => {
     expect(memorySource).not.toContain('developmentPortsStore');
     expect(memorySource).not.toContain('Development Servers Section');
   });
+
+  it('exposes the canonical Projects dashboard route', () => {
+    const rendered = render(Dashboard);
+    expect(rendered.body).toContain('Projects');
+  });
 });

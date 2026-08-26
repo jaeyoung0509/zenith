@@ -30,6 +30,10 @@ remain outside the cleanup boundary.
   such as Vite, Next.js, agent-browser, and Chrome for Testing, shows their
   project and network exposure, and can release one exact verified listener
   without terminating unrelated browsers, Node.js, or runtime processes.
+- A local Projects cockpit that groups supported AI CLI processes by canonical
+  repository/worktree identity. Process-only evidence is labelled honestly,
+  inaccessible contexts stay Unassigned, and PID, argv, prompts, transcripts,
+  credentials, and absolute paths never cross into the WebView.
 - AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
 - A configurable menu-bar panel. Storage, cleanup, AI usage, categories, and
@@ -65,6 +69,9 @@ To launch Zenith on macOS:
 - **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
 - **Local Logs**: Rotating error logs are stored on your Mac at `~/Library/Logs/Zenith/zenith.log`.
 - **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
+- **Minimized Agent Metadata**: Project Cockpit returns opaque project/session
+  IDs, compact location hints, resource totals, and evidence labels. It does not
+  return process IDs, command lines, environment values, prompts, or transcripts.
 
 ## Cleanup safety
 

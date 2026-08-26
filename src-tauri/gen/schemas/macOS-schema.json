@@ -291,6 +291,12 @@
           "markdownDescription": "Enables the get_memory_metrics command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_project_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-project-context",
+          "markdownDescription": "Enables the get_project_context command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-settings",
@@ -541,6 +547,12 @@
           "type": "string",
           "const": "deny-get-memory-metrics",
           "markdownDescription": "Denies the get_memory_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_project_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-project-context",
+          "markdownDescription": "Denies the get_project_context command without any pre-configured scope."
         },
         {
           "description": "Denies the get_settings command without any pre-configured scope.",

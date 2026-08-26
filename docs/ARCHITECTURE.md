@@ -268,6 +268,21 @@ moves all blocking `lsof`, process-snapshot, wait, and signal work onto the
 blocking runtime. Existing dashboard settings receive the new tab once after
 Memory; later visibility and ordering choices remain user-controlled.
 
+Project Cockpit has a separate, read-only `agent_activity` domain. A bounded
+10-second Rust cache owns `ProjectContextSnapshot` / `AgentActivitySnapshot`,
+which is the canonical project/session input for the paired AI Control Center.
+The command runs process and filesystem inspection through `spawn_blocking`;
+the Svelte route refreshes only on mount or explicit user action and never owns
+a timer. The Quick Panel has no permission for this command.
+
+Classification requires an exact adapter executable basename, current UID,
+non-zero process start time, executable path, and safe cwd evidence. Repository
+correlation walks cwd ancestors to the deepest `.git` marker and distinguishes
+linked worktrees from ordinary repositories. Canonical paths stay backend-only:
+SHA-256-derived opaque IDs and a compact parent/name hint cross IPC, while PID,
+argv, environment, Git remotes, file changes, and full paths do not. When cwd
+cannot be verified, the session remains explicitly Unassigned.
+
 ## Settings
 
 Preferences are validated in Rust and stored at the Tauri application config

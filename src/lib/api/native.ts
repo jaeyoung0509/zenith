@@ -2,6 +2,7 @@ import { Channel } from '@tauri-apps/api/core';
 import { commands } from '../bindings/tauri';
 import type {
   AiUsageSnapshot,
+  AgentActivitySnapshot,
   AwakeBehavior,
   AwakeRule,
   AwakeState,
@@ -37,6 +38,10 @@ async function unwrap<T, E>(promise: Promise<Result<T, E>>): Promise<T> {
 }
 
 export const nativeApi = {
+  async getProjectContext(force = false): Promise<AgentActivitySnapshot> {
+    return await unwrap(commands.getProjectContext(force));
+  },
+
   async getAiUsage(force = false): Promise<AiUsageSnapshot> {
     return await unwrap(commands.getAiUsage(force));
   },

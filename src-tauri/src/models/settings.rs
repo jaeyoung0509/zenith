@@ -32,17 +32,19 @@ pub enum DashboardTab {
     Docker,
     Models,
     Memory,
+    Projects,
     DevelopmentServers,
     Usage,
     Awake,
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Storage,
         Self::Docker,
         Self::Models,
         Self::Memory,
+        Self::Projects,
         Self::DevelopmentServers,
         Self::Usage,
         Self::Awake,
@@ -165,7 +167,7 @@ impl Default for ZenithSettings {
                 "antigravity".to_string(),
             ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
-            dashboard_tabs_revision: 1,
+            dashboard_tabs_revision: 2,
             sidebar_collapsed: false,
         }
     }
@@ -209,6 +211,21 @@ impl ZenithSettings {
                     .insert(insert_at, DashboardTab::DevelopmentServers);
             }
             self.dashboard_tabs_revision = 1;
+        }
+
+        // #75 adds Projects once after Memory. The revision guard preserves
+        // any later user hide/reorder choice instead of re-inserting it.
+        if self.dashboard_tabs_revision < 2 {
+            if !self.dashboard_tabs.contains(&DashboardTab::Projects) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Memory)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Projects);
+            }
+            self.dashboard_tabs_revision = 2;
         }
 
         const SUPPORTED_PROVIDERS: [&str; 5] =
@@ -280,7 +297,7 @@ mod tests {
 
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.quick_panel_sections.len(), 4);
-        assert_eq!(parsed.dashboard_tabs.len(), 7);
+        assert_eq!(parsed.dashboard_tabs.len(), 8);
         assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
@@ -289,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_adds_development_servers_once_for_existing_settings() {
+    fn sanitize_adds_new_dashboard_tabs_once_for_existing_settings() {
         let raw = r#"{
             "dashboard_tabs": ["storage", "memory", "usage"],
             "theme": "system"
@@ -302,11 +319,12 @@ mod tests {
             vec![
                 DashboardTab::Storage,
                 DashboardTab::Memory,
+                DashboardTab::Projects,
                 DashboardTab::DevelopmentServers,
                 DashboardTab::Usage,
             ]
         );
-        assert_eq!(migrated.dashboard_tabs_revision, 1);
+        assert_eq!(migrated.dashboard_tabs_revision, 2);
 
         let hidden_again = ZenithSettings {
             dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Memory],
