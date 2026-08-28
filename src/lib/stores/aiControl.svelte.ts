@@ -1,6 +1,7 @@
 import type {
   AiControlCenterSnapshot,
   AiControlPreferences,
+  DashboardTab,
   RecommendationPreview,
 } from '../models/types';
 import {
@@ -71,11 +72,11 @@ export class AiControlStore {
     this.preview = await tauriPreviewAiRecommendation(recommendationId);
   }
 
-  async consumePreview(): Promise<string | null> {
+  async consumePreview(): Promise<DashboardTab | null> {
     if (!this.preview) return null;
     const consumed = await tauriConsumeAiRecommendationPreview(this.preview.id);
     this.preview = null;
-    return consumed.destination;
+    return consumed.destination as DashboardTab;
   }
 
   async loadGitDiff(projectId: string) {

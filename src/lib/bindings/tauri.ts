@@ -6,7 +6,7 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 export const commands = {
 	getAiUsage: (force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { force })),
 	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot, string>(__TAURI_INVOKE("get_project_context", { force })),
-	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
+	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
 	getAiControlQuickSummary: () => __TAURI_INVOKE<{
 	observed_at: number,
 	active_sessions: number,
@@ -17,8 +17,8 @@ export const commands = {
 	saveAiControlPreferences: (preferences: AiControlPreferences) => typedError<null, string>(__TAURI_INVOKE("save_ai_control_preferences", { preferences })),
 	runAiSafetyScan: () => typedError<SafetySnapshot, string>(__TAURI_INVOKE("run_ai_safety_scan")),
 	dismissAiSafetyFinding: (findingId: string) => typedError<null, string>(__TAURI_INVOKE("dismiss_ai_safety_finding", { findingId })),
-	previewAiRecommendation: (recommendationId: string) => typedError<RecommendationPreview, string>(__TAURI_INVOKE("preview_ai_recommendation", { recommendationId })),
-	consumeAiRecommendationPreview: (previewId: string) => typedError<RecommendationPreview, string>(__TAURI_INVOKE("consume_ai_recommendation_preview", { previewId })),
+	previewAiRecommendation: (recommendationId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("preview_ai_recommendation", { recommendationId })),
+	consumeAiRecommendationPreview: (previewId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("consume_ai_recommendation_preview", { previewId })),
 	getAiControlGitDiff: (projectId: string) => typedError<string, string>(__TAURI_INVOKE("get_ai_control_git_diff", { projectId })),
 	connectOpenrouterOauth: () => typedError<null, string>(__TAURI_INVOKE("connect_openrouter_oauth")),
 	startScan: (onEvent: Channel<ScanEvent>, categories: Category[] | null) => typedError<ScanResult, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
@@ -120,12 +120,28 @@ export type AgentSession = {
 	detail: string,
 };
 
-export type AiControlCenterSnapshot = {
+export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize | AiControlCenterSnapshot_Deserialize;
+
+export type AiControlCenterSnapshot_Deserialize = {
 	observed_at: number,
 	providers: ProviderObservation[],
 	budget_statuses: BudgetStatus[],
 	resources: ResourceAttribution[],
-	recommendations: Recommendation[],
+	recommendations: Recommendation_Deserialize[],
+	safety: SafetySnapshot,
+	git_summaries: GitChangeSummary[],
+	audit: AuditEntry[],
+	quick_summary: ControlCenterQuickSummary,
+	keep_awake_active: boolean,
+	partial_errors: string[],
+};
+
+export type AiControlCenterSnapshot_Serialize = {
+	observed_at: number,
+	providers: ProviderObservation[],
+	budget_statuses: BudgetStatus[],
+	resources: ResourceAttribution[],
+	recommendations: Recommendation_Serialize[],
 	safety: SafetySnapshot,
 	git_summaries: GitChangeSummary[],
 	audit: AuditEntry[],
@@ -689,7 +705,33 @@ export type ProviderObservation = {
 
 export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control";
 
-export type Recommendation = {
+export type Recommendation = Recommendation_Serialize | Recommendation_Deserialize;
+
+export type RecommendationKind = "battery" | "memory" | "session_completed" | "orphan_process" | "development_port" | "cleanup_review";
+
+export type RecommendationPreview = RecommendationPreview_Serialize | RecommendationPreview_Deserialize;
+
+export type RecommendationPreview_Deserialize = {
+	id: string,
+	recommendation_id: string,
+	title: string,
+	explanation: string,
+	destination: DashboardTab_Deserialize,
+	action_label: string,
+	expires_at: number,
+};
+
+export type RecommendationPreview_Serialize = {
+	id: string,
+	recommendation_id: string,
+	title: string,
+	explanation: string,
+	destination: DashboardTab_Serialize,
+	action_label: string,
+	expires_at: number,
+};
+
+export type Recommendation_Deserialize = {
 	id: string,
 	kind: RecommendationKind,
 	title: string,
@@ -699,17 +741,20 @@ export type Recommendation = {
 	session_id: string | null,
 	project_id: string | null,
 	action_label: string | null,
+	destination: DashboardTab_Deserialize,
 };
 
-export type RecommendationKind = "battery" | "memory" | "session_completed" | "orphan_process" | "development_port" | "cleanup_review";
-
-export type RecommendationPreview = {
+export type Recommendation_Serialize = {
 	id: string,
-	recommendation_id: string,
+	kind: RecommendationKind,
 	title: string,
-	explanation: string,
-	destination: string,
-	expires_at: number,
+	message: string,
+	created_at: number,
+	cooldown_until: number,
+	session_id: string | null,
+	project_id: string | null,
+	action_label: string | null,
+	destination: DashboardTab_Serialize,
 };
 
 export type ReleaseDevelopmentListenerResult = {

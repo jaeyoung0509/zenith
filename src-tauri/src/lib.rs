@@ -118,6 +118,7 @@ fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosit
 pub fn run() {
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
+    awake_manager.set_session_validator(|| crate::agent_activity::has_active_verified_session());
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
     let last_scan = Arc::new(Mutex::new(None));
     let openrouter_key = Arc::new(Mutex::new(None));

@@ -33,6 +33,7 @@ impl PolicyEngine {
                 None,
                 None,
                 "Open Projects",
+                DashboardTab::Projects,
             ));
         }
         if preferences.notify_on_memory_pressure
@@ -41,7 +42,15 @@ impl PolicyEngine {
                 Some(MemoryPressure::Warning | MemoryPressure::Critical)
             )
         {
-            candidates.push(candidate(RecommendationKind::Memory,"Memory pressure needs review","Review attributed sessions before choosing an existing process or cleanup workflow.",None,None,"Open Memory"));
+            candidates.push(candidate(
+                RecommendationKind::Memory,
+                "Memory pressure needs review",
+                "Review attributed sessions before choosing an existing process or cleanup workflow.",
+                None,
+                None,
+                "Open Memory",
+                DashboardTab::Memory,
+            ));
         }
         if preferences.notify_on_session_completion {
             for (session_id, project_id) in self
@@ -56,8 +65,17 @@ impl PolicyEngine {
                     Some(session_id.clone()),
                     project_id.clone(),
                     "Review project",
+                    DashboardTab::Projects,
                 ));
-                candidates.push(candidate(RecommendationKind::CleanupReview,"Generated artifacts may remain","Open the existing Developer Artifact Review workflow for an explicit scan and preview.",Some(session_id.clone()),project_id.clone(),"Open Developer Artifacts"));
+                candidates.push(candidate(
+                    RecommendationKind::CleanupReview,
+                    "Generated artifacts may remain",
+                    "Open the existing Developer Artifact Review workflow for an explicit scan and preview.",
+                    Some(session_id.clone()),
+                    project_id.clone(),
+                    "Open Developer Artifacts",
+                    DashboardTab::Storage,
+                ));
             }
         }
         for resource in resources
@@ -71,13 +89,25 @@ impl PolicyEngine {
                 Some(resource.session_id.clone()),
                 None,
                 "Open Projects",
+                DashboardTab::Projects,
             ));
         }
         for resource in resources
             .iter()
             .filter(|resource| resource.open_dev_ports > 0)
         {
-            candidates.push(candidate(RecommendationKind::DevelopmentPort,"Development listeners are still active",&format!("{} verified listener(s) are associated with this project. Review them before release.",resource.open_dev_ports),Some(resource.session_id.clone()),resource.project_id.clone(),"Open Development Servers"));
+            candidates.push(candidate(
+                RecommendationKind::DevelopmentPort,
+                "Development listeners are still active",
+                &format!(
+                    "{} verified listener(s) are associated with this project. Review them before release.",
+                    resource.open_dev_ports
+                ),
+                Some(resource.session_id.clone()),
+                resource.project_id.clone(),
+                "Open Development Servers",
+                DashboardTab::DevelopmentServers,
+            ));
         }
         self.previous_sessions = current;
         let cooldown = preferences.recommendation_cooldown_seconds.max(60);
@@ -108,6 +138,7 @@ struct Candidate {
     session_id: Option<String>,
     project_id: Option<String>,
     action_label: Option<String>,
+    destination: DashboardTab,
 }
 fn candidate(
     kind: RecommendationKind,
@@ -116,6 +147,7 @@ fn candidate(
     session_id: Option<String>,
     project_id: Option<String>,
     action: &str,
+    destination: DashboardTab,
 ) -> Candidate {
     Candidate {
         kind,
@@ -124,6 +156,7 @@ fn candidate(
         session_id,
         project_id,
         action_label: Some(action.into()),
+        destination,
     }
 }
 fn materialize(value: Candidate, now: u64, cooldown: u64) -> Recommendation {
@@ -142,12 +175,14 @@ fn materialize(value: Candidate, now: u64, cooldown: u64) -> Recommendation {
         session_id: value.session_id,
         project_id: value.project_id,
         action_label: value.action_label,
+        destination: value.destination,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     fn resource() -> ResourceAttribution {
         ResourceAttribution {
             session_id: "s".into(),
@@ -203,6 +238,30 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn recommendations_provide_valid_dashboard_tab_destinations() {
+        let mut engine = PolicyEngine::default();
+        let prefs = AutopilotPreferences {
+            notify_on_battery: true,
+            notify_on_memory_pressure: true,
+            notify_on_session_completion: true,
+            ..Default::default()
+        };
+        let mut res = resource();
+        res.open_dev_ports = 1;
+        let rows = engine.evaluate(
+            &[res],
+            Some(MemoryPressure::Critical),
+            PowerSourceType::Battery,
+            &prefs,
+            100,
+        );
+        let destinations: HashSet<DashboardTab> = rows.into_iter().map(|r| r.destination).collect();
+        assert!(destinations.contains(&DashboardTab::Projects));
+        assert!(destinations.contains(&DashboardTab::Memory));
+        assert!(destinations.contains(&DashboardTab::DevelopmentServers));
     }
     #[test]
     fn completion_is_advisory_and_requires_opt_in() {

@@ -1,3 +1,4 @@
+use crate::models::DashboardTab;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
@@ -231,6 +232,7 @@ pub struct Recommendation {
     pub session_id: Option<String>,
     pub project_id: Option<String>,
     pub action_label: Option<String>,
+    pub destination: DashboardTab,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -345,7 +347,8 @@ pub struct RecommendationPreview {
     pub recommendation_id: String,
     pub title: String,
     pub explanation: String,
-    pub destination: String,
+    pub destination: DashboardTab,
+    pub action_label: String,
     pub expires_at: u64,
 }
 

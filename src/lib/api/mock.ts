@@ -82,7 +82,7 @@ function mockControlSnapshot(): AiControlCenterSnapshot {
     ],
     budget_statuses: [],
     resources: [{ session_id: 'session-codex-preview', project_id: 'project-zenith-preview', tool_name: 'Codex CLI', cpu_percent: 6.4, memory_bytes: 490733568, process_count: 1, duration_seconds: 1320, open_dev_ports: 1, power_eligible: true, confidence: 'verified', reason: 'Canonical session and project identity matched.', mutable_actions_allowed: true }],
-    recommendations: [{ id: 'recommendation-port-preview', kind: 'development_port', title: 'Review open development port', message: 'A verified project session has an open development listener.', created_at: now, cooldown_until: now + 900, session_id: 'session-codex-preview', project_id: 'project-zenith-preview', action_label: 'Preview' }],
+    recommendations: [{ id: 'recommendation-port-preview', kind: 'development_port', title: 'Review open development port', message: 'A verified project session has an open development listener.', created_at: now, cooldown_until: now + 900, session_id: 'session-codex-preview', project_id: 'project-zenith-preview', action_label: 'Preview', destination: 'development_servers' }],
     safety: { observed_at: now, quality: 'unavailable', findings: [], scanned_files: 0, skipped_files: 0, status_message: 'Run an explicit bounded inspection.' },
     git_summaries: [{ project_id: 'project-zenith-preview', baseline_head: 'abc1234', current_head: 'abc1234', baseline_at: now - 1200, added: 0, modified: 2, deleted: 0, renamed: 0, untracked: 1, changed_paths: ['src/routes/dashboard/AiControlCenterView.svelte', 'src-tauri/src/ai_control_center/mod.rs'], available: true, status_message: '3 paths changed after the Zenith baseline.' }],
     audit: [],
@@ -297,12 +297,12 @@ export const mockApi = {
   async dismissAiSafetyFinding(_findingId: string): Promise<void> {},
 
   async previewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
-    return { id: `preview-${recommendationId}`, recommendation_id: recommendationId, title: 'Review open development port', explanation: 'This opens the existing Development Servers workflow. No process is changed by this preview.', destination: 'development_servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
+    return { id: `preview-${recommendationId}`, recommendation_id: recommendationId, title: 'Review open development port', explanation: 'This opens the existing Development Servers workflow. No process is changed by this preview.', destination: 'development_servers', action_label: 'Open Development Servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
   },
 
   async consumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
     if (!previewId.startsWith('preview-')) throw new Error('Preview expired or already used');
-    return { id: previewId, recommendation_id: previewId.slice(8), title: 'Review', explanation: 'Validated once.', destination: 'development_servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
+    return { id: previewId, recommendation_id: previewId.slice(8), title: 'Review', explanation: 'Validated once.', destination: 'development_servers', action_label: 'Open Development Servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
   },
 
   async getAiControlGitDiff(_projectId: string): Promise<string> {

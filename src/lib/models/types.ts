@@ -1,7 +1,6 @@
 // Re-export generated types from Tauri Specta bindings
 export type {
   AiProviderUsage,
-  AiControlCenterSnapshot,
   AiControlPreferences,
   AiUsageSnapshot,
   AgentActivitySnapshot,
@@ -83,9 +82,7 @@ export type {
   ProviderMetric,
   ProviderObservation,
   QuickPanelSection,
-  Recommendation,
   RecommendationKind,
-  RecommendationPreview,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ReleaseOutcome,
@@ -113,13 +110,19 @@ export type {
 } from '../bindings/tauri';
 
 import type {
+  AiControlCenterSnapshot_Serialize,
   DashboardTab_Serialize,
+  Recommendation_Serialize,
+  RecommendationPreview_Serialize,
   ZenithSettings_Serialize,
 } from '../bindings/tauri';
 
 // In the frontend runtime, settings and tabs are always fully resolved/serialized shapes
 export type ZenithSettings = ZenithSettings_Serialize;
 export type DashboardTab = DashboardTab_Serialize;
+export type Recommendation = Recommendation_Serialize;
+export type RecommendationPreview = RecommendationPreview_Serialize;
+export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize;
 
 // Frontend-specific helper types and aliases
 export type AiProviderId = 'codex' | 'claude' | 'opencode' | 'openrouter' | 'antigravity';

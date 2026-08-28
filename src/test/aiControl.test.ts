@@ -176,6 +176,7 @@ const sampleSnapshot: AiControlCenterSnapshot = {
       session_id: 'session-verified-1',
       project_id: 'project-zenith',
       action_label: 'Open Development Servers',
+      destination: 'development_servers',
     },
   ],
   safety: {
@@ -328,6 +329,7 @@ describe('AI Control Center Svelte component rendering', () => {
       title: 'Review active dev ports',
       explanation: 'Opens Development Servers. No mutations performed.',
       destination: 'development_servers',
+      action_label: 'Open Development Servers',
       expires_at: 1700000120,
     };
     const rendered = render(AiControlCenterView);
@@ -385,6 +387,7 @@ describe('AiControlStore logic and transitions', () => {
       recommendation_id: 'rec-1',
       title: 'Review port',
       explanation: 'Explain',
+      action_label: 'Review port',
       destination: 'development_servers',
       expires_at: 100,
     };
@@ -395,6 +398,7 @@ describe('AiControlStore logic and transitions', () => {
       recommendation_id: 'rec-1',
       title: 'Review port',
       explanation: 'Explain',
+      action_label: 'Review port',
       destination: 'development_servers',
       expires_at: 100,
     });
@@ -416,6 +420,33 @@ describe('AiControlStore logic and transitions', () => {
 
     store.clearGitDiff();
     expect(store.gitDiff).toBeNull();
+  });
+
+  it('contract test: recommendation preview preserves typed DashboardTab destination distinct from action_label', async () => {
+    const store = new AiControlStore();
+    const tauriModule = await import('../lib/utils/tauri');
+
+    const mockPreview: RecommendationPreview = {
+      id: 'preview-123',
+      recommendation_id: 'rec-port',
+      title: 'Review open development port',
+      explanation: 'Opens development servers view without executing commands.',
+      action_label: 'Open Development Servers',
+      destination: 'development_servers',
+      expires_at: 1700000120,
+    };
+
+    vi.spyOn(tauriModule, 'tauriPreviewAiRecommendation').mockResolvedValueOnce(mockPreview);
+    vi.spyOn(tauriModule, 'tauriConsumeAiRecommendationPreview').mockResolvedValueOnce(mockPreview);
+
+    await store.createPreview('rec-port');
+    expect(store.preview).toEqual(mockPreview);
+    expect(store.preview?.destination).toBe('development_servers');
+    expect(store.preview?.action_label).toBe('Open Development Servers');
+
+    const navigatedDestination = await store.consumePreview();
+    expect(navigatedDestination).toBe('development_servers');
+    expect(navigatedDestination).not.toBe('Open Development Servers');
   });
 });
 

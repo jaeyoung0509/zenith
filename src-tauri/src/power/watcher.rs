@@ -16,6 +16,7 @@ pub struct KeepAwakeManager {
     active_assertion: Arc<Mutex<Option<PowerAssertion>>>,
     manual_mode: Arc<Mutex<ManualMode>>,
     control_center_mode: Arc<Mutex<Option<bool>>>,
+    session_validator: Arc<Mutex<Option<SessionValidator>>>,
     last_trigger_app: Arc<Mutex<Option<String>>>,
     last_active_rule_id: Arc<Mutex<Option<String>>>,
     last_error: Arc<Mutex<Option<String>>>,
@@ -28,6 +29,7 @@ pub struct KeepAwakeManager {
 }
 
 type ManualMode = Option<(AwakeBehavior, Option<u64>)>;
+type SessionValidator = Arc<dyn Fn() -> bool + Send + Sync>;
 
 impl Default for KeepAwakeManager {
     fn default() -> Self {
@@ -52,6 +54,7 @@ impl KeepAwakeManager {
             active_assertion: Arc::new(Mutex::new(None)),
             manual_mode: Arc::new(Mutex::new(None)),
             control_center_mode: Arc::new(Mutex::new(None)),
+            session_validator: Arc::new(Mutex::new(None)),
             last_trigger_app: Arc::new(Mutex::new(None)),
             last_active_rule_id: Arc::new(Mutex::new(None)),
             last_error: Arc::new(Mutex::new(None)),
@@ -131,6 +134,18 @@ impl KeepAwakeManager {
             .expect("control_center_mode poisoned") = active.then_some(ac_only);
         self.notify_watcher();
         self.evaluate();
+    }
+
+    /// Sets a callback that dynamically revalidates whether verified agent sessions
+    /// are still running. Invoked by the background watcher thread during evaluate().
+    pub fn set_session_validator<F>(&self, validator: F)
+    where
+        F: Fn() -> bool + Send + Sync + 'static,
+    {
+        *self
+            .session_validator
+            .lock()
+            .expect("session_validator poisoned") = Some(Arc::new(validator));
     }
 
     /// Gets current Keep Awake state.
@@ -319,11 +334,25 @@ impl KeepAwakeManager {
 
         // 4. Control Center automation is explicitly enabled only for a
         // backend-verified active session. Unknown power fails AC-only closed.
-        let control_mode = *self
+        let mut control_mode_guard = self
             .control_center_mode
             .lock()
             .expect("control_center_mode poisoned");
-        if let Some(ac_only) = control_mode {
+        if let Some(ac_only) = *control_mode_guard {
+            let session_alive = {
+                let validator = self
+                    .session_validator
+                    .lock()
+                    .expect("session_validator poisoned");
+                validator.as_ref().map(|v| v()).unwrap_or(true)
+            };
+            if !session_alive {
+                *control_mode_guard = None;
+                drop(control_mode_guard);
+                self.release_assertion();
+                self.notify_watcher();
+                return;
+            }
             if !ac_only || power_source.is_ac() {
                 let _ = self.ensure_assertion(
                     AwakeBehavior::PreventSystemSleep,
@@ -336,6 +365,7 @@ impl KeepAwakeManager {
             }
             return;
         }
+        drop(control_mode_guard);
 
         // 5. Apply eligible process rule, or release assertion
         if let Some(rule) = first_eligible_rule {
@@ -704,6 +734,30 @@ mod tests {
         assert!(
             !plugged_in_manager.get_state().is_active,
             "assertion must release when the verified session exits"
+        );
+    }
+
+    #[test]
+    fn control_center_assertion_releases_automatically_when_session_validator_detects_exit() {
+        use std::sync::atomic::AtomicBool;
+        let plugged_in = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(plugged_in, assertion);
+
+        let session_alive = Arc::new(AtomicBool::new(true));
+        let session_alive_clone = session_alive.clone();
+        manager.set_session_validator(move || session_alive_clone.load(Ordering::SeqCst));
+
+        manager.set_control_center_session_awake(true, true);
+        assert!(manager.get_state().is_active);
+
+        // Simulate session termination: agent process exits without any UI interaction
+        session_alive.store(false, Ordering::SeqCst);
+        manager.evaluate();
+
+        assert!(
+            !manager.get_state().is_active,
+            "assertion must release automatically in background evaluation when session exits"
         );
     }
 

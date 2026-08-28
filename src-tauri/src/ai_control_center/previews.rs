@@ -24,10 +24,11 @@ impl PreviewStore {
             recommendation_id: recommendation.id.clone(),
             title: recommendation.title.clone(),
             explanation: recommendation.message.clone(),
-            destination: recommendation
+            destination: recommendation.destination,
+            action_label: recommendation
                 .action_label
                 .clone()
-                .unwrap_or_else(|| "Open AI Control Center".into()),
+                .unwrap_or_else(|| "Review".into()),
             expires_at: now + TTL,
         };
         self.items.insert(preview.id.clone(), preview.clone());
@@ -59,12 +60,15 @@ mod tests {
             session_id: None,
             project_id: None,
             action_label: Some("Open Memory".into()),
+            destination: crate::models::DashboardTab::Memory,
         }
     }
     #[test]
     fn preview_is_opaque_expiring_and_one_shot() {
         let mut store = PreviewStore::default();
         let item = store.create(&recommendation(), 10);
+        assert_eq!(item.destination, crate::models::DashboardTab::Memory);
+        assert_eq!(item.action_label, "Open Memory");
         assert!(store.consume(&item.id, 11).is_ok());
         assert!(store.consume(&item.id, 11).is_err());
         let expired = store.create(&recommendation(), 20);

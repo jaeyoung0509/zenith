@@ -37,16 +37,23 @@ pub fn inspect(
     let mut findings = Vec::new();
     let mut scanned = 0usize;
     let mut skipped = 0usize;
+    let mut visited_entries = 0usize;
     let mut partial = false;
     for (project_id, root) in projects {
+        if visited_entries >= MAX_FILES {
+            partial = true;
+            break;
+        }
         let root_device = device(root);
         let walker = WalkDir::new(root)
             .follow_links(false)
+            .same_file_system(true)
             .max_depth(MAX_DEPTH)
             .into_iter()
             .filter_entry(safe_entry);
         for entry in walker {
-            if scanned >= MAX_FILES {
+            visited_entries += 1;
+            if visited_entries > MAX_FILES {
                 partial = true;
                 break;
             }
@@ -75,6 +82,7 @@ pub fn inspect(
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".into());
             if !is_scannable_file(entry.path(), &relative) {
+                skipped += 1;
                 continue;
             }
             let Ok(bytes) = std::fs::read(entry.path()) else {
@@ -390,5 +398,21 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), temp.path().join("linked.txt")).unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
         assert!(inspect(&roots, &[], 10).findings.is_empty());
+    }
+
+    #[test]
+    fn safety_scan_traversal_hard_caps_at_max_files_even_for_skipped_files() {
+        let temp = tempfile::tempdir().unwrap();
+        for i in 0..2050 {
+            std::fs::write(
+                temp.path().join(format!("img_{}.png", i)),
+                b"fake image data",
+            )
+            .unwrap();
+        }
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&roots, &[], 10);
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result.status_message.contains("boundary"));
     }
 }

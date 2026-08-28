@@ -35,6 +35,15 @@ pub fn collect() -> AgentActivitySnapshot {
     collect_registry().snapshot
 }
 
+pub fn has_active_verified_session() -> bool {
+    let snapshot = collect();
+    snapshot
+        .projects
+        .iter()
+        .flat_map(|p| &p.sessions)
+        .any(|s| s.status == AgentActivityStatus::Active)
+}
+
 pub fn collect_registry() -> AgentActivityRegistry {
     let observed_at = now();
     let current_uid = current_user_uid();
