@@ -165,7 +165,6 @@ pub async fn get_ai_control_center(
         .path()
         .app_config_dir()
         .map_err(|error| error.to_string())?;
-    let notification_app = app_handle.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = refresh_lock.lock().expect("ai control refresh poisoned");
         let now = unix_timestamp();
@@ -209,13 +208,6 @@ pub async fn get_ai_control_center(
             awake_state.power_source,
             preferences.autopilot.keep_awake_ac_only,
         );
-        let verified = resources
-            .iter()
-            .any(|item| item.project_id.is_some() && item.confidence == "process_observed");
-        awake.set_control_center_session_awake(
-            preferences.autopilot.keep_awake_for_verified_sessions && verified,
-            preferences.autopilot.keep_awake_ac_only,
-        );
         let mut control = control.lock().expect("ai control poisoned");
         let providers = crate::ai_control_center::providers::normalize(&usage, &preferences);
         let providers = crate::ai_control_center::providers::retain_last_success(
@@ -231,16 +223,17 @@ pub async fn get_ai_control_center(
             &preferences.autopilot,
             now,
         );
-        let notification_errors =
-            crate::ai_control_center::notifications::emit_advisories(&notification_app, &new_items);
-        control.recommendations.extend(new_items);
-        control
-            .recommendations
-            .sort_by_key(|item| std::cmp::Reverse(item.created_at));
-        control.recommendations.truncate(64);
+        if !new_items.is_empty() {
+            control.recommendations.extend(new_items);
+            control
+                .recommendations
+                .sort_by_key(|item| std::cmp::Reverse(item.created_at));
+            control.recommendations.truncate(64);
+        }
         let recommendations = control.recommendations.clone();
         let git_summaries = control.git.summaries(&activity.project_roots, now);
         let safety = control.safety.clone();
+        let notification_errors: Vec<String> = Vec::new();
         let partial_errors = providers
             .iter()
             .filter_map(|item| item.partial_error.clone())
@@ -328,6 +321,10 @@ pub fn save_ai_control_preferences(
         crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
     }
     let retention = preferences.audit_retention_days;
+    state.awake_manager.set_control_center_awake_policy(
+        preferences.autopilot.keep_awake_for_verified_sessions,
+        preferences.autopilot.keep_awake_ac_only,
+    );
     let mut settings = state.settings.lock().expect("settings poisoned");
     settings.ai_control = preferences;
     settings_store::save(
@@ -374,12 +371,20 @@ pub async fn run_ai_safety_scan(
         .app_config_dir()
         .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let registry = cache
-            .lock()
-            .expect("activity cache poisoned")
-            .clone()
-            .unwrap_or_else(crate::agent_activity::collect_registry);
         let now = unix_timestamp();
+        let registry = {
+            let cached = cache.lock().expect("activity cache poisoned").clone();
+            if let Some(value) = cached.filter(|value| {
+                now.saturating_sub(value.snapshot.observed_at)
+                    < crate::agent_activity::SNAPSHOT_TTL_SECONDS
+            }) {
+                value
+            } else {
+                let value = crate::agent_activity::collect_registry();
+                *cache.lock().expect("activity cache poisoned") = Some(value.clone());
+                value
+            }
+        };
         let snapshot = crate::ai_control_center::safety::inspect(
             &registry.project_roots,
             &preferences.dismissed_findings,
@@ -387,7 +392,17 @@ pub async fn run_ai_safety_scan(
         );
         let mut control = control.lock().expect("ai control poisoned");
         control.safety = snapshot.clone();
-        control.last_snapshot = None;
+        if let Some(last) = &mut control.last_snapshot {
+            last.safety = snapshot.clone();
+            last.quick_summary.safety_findings = snapshot
+                .findings
+                .iter()
+                .filter(|item| !item.dismissed)
+                .count() as u32;
+            if snapshot.quality == crate::models::ObservationQuality::Partial {
+                last.quick_summary.quality = crate::models::ObservationQuality::Partial;
+            }
+        }
         control.audit.append(
             now,
             "safety_scan",
@@ -436,7 +451,22 @@ pub fn dismiss_ai_safety_finding(
     {
         item.dismissed = true;
     }
-    control.last_snapshot = None;
+    if let Some(last) = &mut control.last_snapshot {
+        if let Some(item) = last
+            .safety
+            .findings
+            .iter_mut()
+            .find(|item| item.id == finding_id)
+        {
+            item.dismissed = true;
+        }
+        last.quick_summary.safety_findings = last
+            .safety
+            .findings
+            .iter()
+            .filter(|item| !item.dismissed)
+            .count() as u32;
+    }
     control.audit.append(
         unix_timestamp(),
         "finding_dismissed",

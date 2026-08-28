@@ -1,7 +1,7 @@
 import type {
   AiControlCenterSnapshot,
   AiControlPreferences,
-  DashboardTab,
+  DashboardRoute,
   RecommendationPreview,
 } from '../models/types';
 import {
@@ -41,10 +41,20 @@ export class AiControlStore {
   }
 
   async scanSafety() {
+    if (this.isScanning) return;
     this.isScanning = true;
     try {
       const safety = await tauriRunAiSafetyScan();
-      if (this.snapshot) this.snapshot = { ...this.snapshot, safety };
+      if (this.snapshot) {
+        this.snapshot = {
+          ...this.snapshot,
+          safety,
+          quick_summary: {
+            ...this.snapshot.quick_summary,
+            safety_findings: safety.findings.filter((f) => !f.dismissed).length,
+          },
+        };
+      }
       this.error = null;
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Safety inspection failed.';
@@ -56,13 +66,18 @@ export class AiControlStore {
   async dismissFinding(findingId: string) {
     await tauriDismissAiSafetyFinding(findingId);
     if (this.snapshot) {
+      const updatedFindings = this.snapshot.safety.findings.map((finding) =>
+        finding.id === findingId ? { ...finding, dismissed: true } : finding
+      );
       this.snapshot = {
         ...this.snapshot,
         safety: {
           ...this.snapshot.safety,
-          findings: this.snapshot.safety.findings.map((finding) =>
-            finding.id === findingId ? { ...finding, dismissed: true } : finding
-          ),
+          findings: updatedFindings,
+        },
+        quick_summary: {
+          ...this.snapshot.quick_summary,
+          safety_findings: updatedFindings.filter((f) => !f.dismissed).length,
         },
       };
     }
@@ -72,11 +87,11 @@ export class AiControlStore {
     this.preview = await tauriPreviewAiRecommendation(recommendationId);
   }
 
-  async consumePreview(): Promise<DashboardTab | null> {
+  async consumePreview(): Promise<DashboardRoute | null> {
     if (!this.preview) return null;
     const consumed = await tauriConsumeAiRecommendationPreview(this.preview.id);
     this.preview = null;
-    return consumed.destination as DashboardTab;
+    return consumed.destination;
   }
 
   async loadGitDiff(projectId: string) {

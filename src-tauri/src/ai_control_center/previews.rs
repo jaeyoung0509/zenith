@@ -60,14 +60,14 @@ mod tests {
             session_id: None,
             project_id: None,
             action_label: Some("Open Memory".into()),
-            destination: crate::models::DashboardTab::Memory,
+            destination: crate::models::DashboardRoute::Memory,
         }
     }
     #[test]
     fn preview_is_opaque_expiring_and_one_shot() {
         let mut store = PreviewStore::default();
         let item = store.create(&recommendation(), 10);
-        assert_eq!(item.destination, crate::models::DashboardTab::Memory);
+        assert_eq!(item.destination, crate::models::DashboardRoute::Memory);
         assert_eq!(item.action_label, "Open Memory");
         assert!(store.consume(&item.id, 11).is_ok());
         assert!(store.consume(&item.id, 11).is_err());

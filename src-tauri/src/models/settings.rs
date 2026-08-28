@@ -41,6 +41,43 @@ pub enum DashboardTab {
     Awake,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardRoute {
+    #[serde(alias = "disk")]
+    Disk,
+    Storage,
+    Docker,
+    Models,
+    Memory,
+    Projects,
+    DevelopmentServers,
+    Usage,
+    AiControl,
+    Awake,
+    DeveloperArtifacts,
+    LargeFiles,
+    Applications,
+    Settings,
+}
+
+impl From<DashboardTab> for DashboardRoute {
+    fn from(tab: DashboardTab) -> Self {
+        match tab {
+            DashboardTab::Disk => Self::Disk,
+            DashboardTab::Storage => Self::Storage,
+            DashboardTab::Docker => Self::Docker,
+            DashboardTab::Models => Self::Models,
+            DashboardTab::Memory => Self::Memory,
+            DashboardTab::Projects => Self::Projects,
+            DashboardTab::DevelopmentServers => Self::DevelopmentServers,
+            DashboardTab::Usage => Self::Usage,
+            DashboardTab::AiControl => Self::AiControl,
+            DashboardTab::Awake => Self::Awake,
+        }
+    }
+}
+
 impl DashboardTab {
     pub const ALL: [Self; 9] = [
         Self::Storage,

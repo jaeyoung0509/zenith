@@ -292,7 +292,7 @@ describe('AI Control Center Svelte component rendering', () => {
 
   it('renders overview metrics cards accurately', () => {
     const rendered = render(AiControlCenterView);
-    expect(rendered.body).toContain('Verified sessions');
+    expect(rendered.body).toContain('Observed sessions');
     expect(rendered.body).toContain('Provider sources');
     expect(rendered.body).toContain('Zenith alerts');
     expect(rendered.body).toContain('Safety findings');
@@ -380,15 +380,15 @@ describe('AiControlStore logic and transitions', () => {
     expect(dismissed?.dismissed).toBe(true);
   });
 
-  it('consumes recommendation preview and clears local state', async () => {
+  it('consumes recommendation preview and clears local state with DashboardRoute', async () => {
     const store = new AiControlStore();
     store.preview = {
       id: 'preview-xyz',
       recommendation_id: 'rec-1',
-      title: 'Review port',
+      title: 'Review artifacts',
       explanation: 'Explain',
-      action_label: 'Review port',
-      destination: 'development_servers',
+      action_label: 'Open Developer Artifacts',
+      destination: 'developer_artifacts',
       expires_at: 100,
     };
 
@@ -396,15 +396,16 @@ describe('AiControlStore logic and transitions', () => {
     vi.spyOn(tauriModule, 'tauriConsumeAiRecommendationPreview').mockResolvedValueOnce({
       id: 'preview-xyz',
       recommendation_id: 'rec-1',
-      title: 'Review port',
+      title: 'Review artifacts',
       explanation: 'Explain',
-      action_label: 'Review port',
-      destination: 'development_servers',
+      action_label: 'Open Developer Artifacts',
+      destination: 'developer_artifacts',
       expires_at: 100,
     });
 
     const destination = await store.consumePreview();
-    expect(destination).toBe('development_servers');
+    expect(destination).toBe('developer_artifacts');
+    expect(destination).not.toBe('Open Developer Artifacts');
     expect(store.preview).toBeNull();
   });
 

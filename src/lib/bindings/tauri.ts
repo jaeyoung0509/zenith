@@ -266,7 +266,7 @@ export type AwakeState = {
 	rule_evaluations: AwakeRuleEvaluation[],
 };
 
-export type BudgetPeriod = "weekly" | "monthly";
+export type BudgetPeriod = "monthly";
 
 export type BudgetStatus = {
 	budget_id: string,
@@ -324,6 +324,12 @@ export type ControlCenterQuickSummary = {
 	safety_findings: number,
 	quality: ObservationQuality,
 };
+
+export type DashboardRoute = DashboardRoute_Serialize | DashboardRoute_Deserialize;
+
+export type DashboardRoute_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
+
+export type DashboardRoute_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
 
 export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 
@@ -716,7 +722,7 @@ export type RecommendationPreview_Deserialize = {
 	recommendation_id: string,
 	title: string,
 	explanation: string,
-	destination: DashboardTab_Deserialize,
+	destination: DashboardRoute_Deserialize,
 	action_label: string,
 	expires_at: number,
 };
@@ -726,7 +732,7 @@ export type RecommendationPreview_Serialize = {
 	recommendation_id: string,
 	title: string,
 	explanation: string,
-	destination: DashboardTab_Serialize,
+	destination: DashboardRoute_Serialize,
 	action_label: string,
 	expires_at: number,
 };
@@ -741,7 +747,7 @@ export type Recommendation_Deserialize = {
 	session_id: string | null,
 	project_id: string | null,
 	action_label: string | null,
-	destination: DashboardTab_Deserialize,
+	destination: DashboardRoute_Deserialize,
 };
 
 export type Recommendation_Serialize = {
@@ -754,7 +760,7 @@ export type Recommendation_Serialize = {
 	session_id: string | null,
 	project_id: string | null,
 	action_label: string | null,
-	destination: DashboardTab_Serialize,
+	destination: DashboardRoute_Serialize,
 };
 
 export type ReleaseDevelopmentListenerResult = {

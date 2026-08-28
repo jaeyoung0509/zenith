@@ -1,4 +1,4 @@
-use crate::models::DashboardTab;
+use crate::models::DashboardRoute;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
@@ -90,7 +90,6 @@ pub struct ProviderObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetPeriod {
-    Weekly,
     Monthly,
 }
 
@@ -232,7 +231,7 @@ pub struct Recommendation {
     pub session_id: Option<String>,
     pub project_id: Option<String>,
     pub action_label: Option<String>,
-    pub destination: DashboardTab,
+    pub destination: DashboardRoute,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -347,7 +346,7 @@ pub struct RecommendationPreview {
     pub recommendation_id: String,
     pub title: String,
     pub explanation: String,
-    pub destination: DashboardTab,
+    pub destination: DashboardRoute,
     pub action_label: String,
     pub expires_at: u64,
 }

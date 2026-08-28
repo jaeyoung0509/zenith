@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { AiControlPreferences, DashboardTab, ProviderObservation } from '../../lib/models/types';
+  import type { AiControlPreferences, DashboardRoute, ProviderObservation } from '../../lib/models/types';
   import { aiControlStore } from '../../lib/stores/aiControl.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { formatBytes } from '../../lib/utils/format';
@@ -10,7 +10,7 @@
   import Switch from '../../lib/components/Switch.svelte';
   import { Activity, Battery, Bot, GitBranch, RefreshCw, ShieldCheck, Sparkles, X } from 'lucide-svelte';
 
-  interface Props { onNavigateTab?: (tab: DashboardTab) => void }
+  interface Props { onNavigateTab?: (tab: DashboardRoute) => void }
   let { onNavigateTab }: Props = $props();
   let preferences = $derived(settingsStore.settings.ai_control);
   let manualProvider = $state('openai-api');
@@ -76,7 +76,7 @@
 
   async function confirmRecommendation() {
     const destination = await aiControlStore.consumePreview();
-    if (destination && onNavigateTab) onNavigateTab(destination as DashboardTab);
+    if (destination && onNavigateTab) onNavigateTab(destination);
   }
 </script>
 
@@ -103,7 +103,7 @@
 
     {#if selectedSection === 'overview'}
       <div class="grid grid-cols-4 gap-3">
-        <Card><p class="text-caption uppercase text-muted-foreground">Verified sessions</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.resources.length}</p></Card>
+        <Card><p class="text-caption uppercase text-muted-foreground">Observed sessions</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.resources.length}</p><p class="mt-0.5 text-micro text-muted-foreground">{snapshot.resources.filter((r) => r.mutable_actions_allowed).length} verified</p></Card>
         <Card><p class="text-caption uppercase text-muted-foreground">Provider sources</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.providers.filter((p) => p.quality !== 'unavailable').length}</p></Card>
         <Card><p class="text-caption uppercase text-muted-foreground">Zenith alerts</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.quick_summary.budget_alerts}</p></Card>
         <Card><p class="text-caption uppercase text-muted-foreground">Safety findings</p><p class="mt-1 font-mono text-2xl font-semibold">{snapshot.quick_summary.safety_findings}</p></Card>
@@ -135,7 +135,7 @@
     {:else}
       <div class="flex items-center justify-between rounded-xl border border-border bg-card p-4"><div class="flex gap-3"><ShieldCheck size={18} class="text-success" /><div><p class="text-sm font-semibold">Bounded, redacted inspection</p><p class="text-caption text-muted-foreground">Registered project roots only; symlinks, raw secrets, arguments, headers, environment values, and email addresses are excluded.</p></div></div><Button variant="outline" size="sm" disabled={aiControlStore.isScanning} onclick={() => aiControlStore.scanSafety()}>{aiControlStore.isScanning ? 'Inspecting…' : 'Run inspection'}</Button></div>
       <div class="grid grid-cols-2 gap-3">{#if snapshot.safety.findings.filter((finding) => !finding.dismissed).length === 0}<Card class="col-span-2 text-center"><p class="text-xs text-muted-foreground">{snapshot.safety.status_message}</p></Card>{/if}{#each snapshot.safety.findings.filter((finding) => !finding.dismissed) as finding}<Card class="space-y-2"><div class="flex justify-between"><span class="text-xs font-semibold">{titleCase(finding.kind)}</span><span class="text-caption uppercase text-warning">{finding.severity}</span></div><p class="text-caption text-muted-foreground">{finding.remediation}</p><div class="flex items-center justify-between"><span class="font-mono text-micro text-muted-foreground">{finding.relative_path ?? 'project scope'}{finding.line_start ? `:${finding.line_start}` : ''}</span><Button variant="ghost" size="sm" onclick={() => aiControlStore.dismissFinding(finding.id)}>Dismiss</Button></div></Card>{/each}</div>
-      <Card class="space-y-3"><div><h3 class="text-sm font-semibold">Git changes since Zenith baseline</h3><p class="text-caption text-muted-foreground">Metadata only. Pre-existing changes are excluded; diffs are fetched explicitly and never persisted.</p></div>{#each snapshot.git_summaries as git}<div class="flex items-center justify-between gap-3 rounded-lg bg-secondary/40 p-3"><div><p class="text-xs font-medium"><GitBranch size={12} class="mr-1 inline" />{git.status_message}</p><p class="mt-1 font-mono text-micro text-muted-foreground">+{git.added} ~{git.modified} -{git.deleted} R{git.renamed} ?{git.untracked}</p></div>{#if git.available}<Button variant="outline" size="sm" onclick={() => aiControlStore.loadGitDiff(git.project_id)}>View ephemeral diff</Button>{/if}</div>{/each}</Card>
+      <Card class="space-y-3"><div><h3 class="text-sm font-semibold">Git changes since Zenith baseline</h3><p class="text-caption text-muted-foreground">Metadata only. Files changed since baseline; diff shows current Git working-tree changes.</p></div>{#each snapshot.git_summaries as git}<div class="flex items-center justify-between gap-3 rounded-lg bg-secondary/40 p-3"><div><p class="text-xs font-medium"><GitBranch size={12} class="mr-1 inline" />{git.status_message}</p><p class="mt-1 font-mono text-micro text-muted-foreground">+{git.added} ~{git.modified} -{git.deleted} R{git.renamed} ?{git.untracked}</p></div>{#if git.available}<Button variant="outline" size="sm" onclick={() => aiControlStore.loadGitDiff(git.project_id)}>View ephemeral diff</Button>{/if}</div>{/each}</Card>
     {/if}
   {/if}
 </div>

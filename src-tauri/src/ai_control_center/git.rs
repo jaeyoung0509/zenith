@@ -102,7 +102,21 @@ fn compare(project_id: &str, baseline: &GitBaseline, current: &GitBaseline) -> G
             .filter(|(_, status)| status.contains(needle))
             .count() as u32
     };
-    GitChangeSummary { project_id: project_id.into(), baseline_head: baseline.head.clone(), current_head: current.head.clone(), baseline_at: baseline.captured_at, added: count('A'), modified: count('M'), deleted: count('D'), renamed: count('R'), untracked: changed.iter().filter(|(_,status)| status == "??").count() as u32, changed_paths: changed.into_iter().map(|(path,_)|path).collect(), available: true, status_message: "Changes are compared with the first verified-session baseline; pre-existing changes are excluded.".into() }
+    GitChangeSummary {
+        project_id: project_id.into(),
+        baseline_head: baseline.head.clone(),
+        current_head: current.head.clone(),
+        baseline_at: baseline.captured_at,
+        added: count('A'),
+        modified: count('M'),
+        deleted: count('D'),
+        renamed: count('R'),
+        untracked: changed.iter().filter(|(_, status)| status == "??").count() as u32,
+        changed_paths: changed.into_iter().map(|(path, _)| path).collect(),
+        available: true,
+        status_message:
+            "Files changed since baseline; diff shows current Git working-tree changes.".into(),
+    }
 }
 
 fn changed_entries(baseline: &GitBaseline, current: &GitBaseline) -> Vec<(String, String)> {
@@ -139,34 +153,28 @@ fn worktree_fingerprint(root: &Path, relative: &str) -> String {
     if metadata.len() <= MAX_HASH_BYTES {
         if let Ok(bytes) = std::fs::read(&path) {
             let mut digest = Sha256::new();
-            digest.update(bytes);
-            return format!("sha256:{:x}", digest.finalize());
+            digest.update(&bytes);
+            return format!("{:x}", digest.finalize())[..16].to_string();
         }
     }
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|value| value.as_nanos())
-        .unwrap_or_default();
-    format!("metadata:{}:{modified}", metadata.len())
+    format!("len:{}", metadata.len())
 }
 
 fn parse_status(bytes: &[u8]) -> HashMap<String, String> {
     let mut result = HashMap::new();
-    let chunks = bytes
-        .split(|byte| *byte == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .collect::<Vec<_>>();
     let mut index = 0;
-    while index < chunks.len() {
-        let chunk = String::from_utf8_lossy(chunks[index]);
-        if chunk.len() < 4 {
+    let tokens = bytes
+        .split(|byte| *byte == 0)
+        .filter(|slice| !slice.is_empty())
+        .collect::<Vec<_>>();
+    while index < tokens.len() {
+        let entry = String::from_utf8_lossy(tokens[index]).to_string();
+        if entry.len() < 4 {
             index += 1;
             continue;
         }
-        let status = chunk[..2].to_string();
-        let path = chunk[3..].to_string();
+        let status = entry[..2].to_string();
+        let path = entry[3..].to_string();
         if status.contains('R') || status.contains('C') {
             index += 1;
         }
@@ -195,33 +203,82 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
         .to_string())
 }
 
-pub fn explicit_diff(root: &Path, paths: &[String]) -> Result<String, String> {
-    if paths.is_empty() {
-        return Ok(String::new());
-    }
+fn run_diff_command(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = tooling::command("git");
     command
         .arg("-C")
         .arg(root)
-        .args(["diff", "HEAD", "--no-ext-diff", "--no-color", "--"]);
-    command
-        .args(paths)
+        .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C");
     let output = tooling::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err("Git diff unavailable".into());
+    if output.status.success() || output.status.code() == Some(1) {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err("Git diff unavailable".into())
     }
-    let value = String::from_utf8_lossy(&output.stdout).to_string();
+}
+
+pub fn explicit_diff(root: &Path, paths: &[String]) -> Result<String, String> {
+    if paths.is_empty() {
+        return Ok(String::new());
+    }
     const MAX: usize = 262_144;
-    if value.len() > MAX {
+    let mut combined_diff = String::new();
+
+    // 1. Try git diff HEAD for tracked modifications
+    let mut head_args = vec!["diff", "HEAD", "--no-ext-diff", "--no-color", "--"];
+    for p in paths {
+        head_args.push(p);
+    }
+    if let Ok(tracked_diff) = run_diff_command(root, &head_args) {
+        combined_diff.push_str(&tracked_diff);
+    } else {
+        // Fallback for fresh repos before initial commit
+        let mut empty_args = vec!["diff", "--no-ext-diff", "--no-color", "--"];
+        for p in paths {
+            empty_args.push(p);
+        }
+        if let Ok(staged_diff) = run_diff_command(root, &empty_args) {
+            combined_diff.push_str(&staged_diff);
+        }
+    }
+
+    // 2. Include untracked files using diff --no-index /dev/null <path>
+    for p in paths {
+        let full_path = root.join(p);
+        if !full_path.starts_with(root) {
+            continue;
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(&full_path) {
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() <= MAX as u64
+            {
+                let marker = format!("b/{}", p);
+                if !combined_diff.contains(&marker) {
+                    if let Ok(untracked_diff) = run_diff_command(
+                        root,
+                        &["diff", "--no-index", "--no-color", "--", "/dev/null", p],
+                    ) {
+                        if !combined_diff.is_empty() && !combined_diff.ends_with('\n') {
+                            combined_diff.push('\n');
+                        }
+                        combined_diff.push_str(&untracked_diff);
+                    }
+                }
+            }
+        }
+    }
+
+    if combined_diff.len() > MAX {
         Ok(format!(
             "{}\n\n[Diff truncated by Zenith at 256 KiB]",
-            &value[..value.floor_char_boundary(MAX)]
+            &combined_diff[..combined_diff.floor_char_boundary(MAX)]
         ))
     } else {
-        Ok(value)
+        Ok(combined_diff)
     }
 }
 
@@ -285,5 +342,30 @@ mod tests {
         assert_eq!(parsed.get("new.txt").map(String::as_str), Some("R "));
         assert_eq!(parsed.get("loose.txt").map(String::as_str), Some("??"));
         assert!(!parsed.contains_key("old.txt"));
+    }
+
+    #[test]
+    fn explicit_diff_includes_untracked_files() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "-q"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        git(temp.path(), &["config", "user.name", "Test"]);
+        std::fs::write(temp.path().join("tracked.txt"), "hello\n").unwrap();
+        git(temp.path(), &["add", "tracked.txt"]);
+        git(temp.path(), &["commit", "-qm", "initial"]);
+
+        // Create an untracked file and modify tracked file
+        std::fs::write(temp.path().join("untracked.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(temp.path().join("tracked.txt"), "hello world\n").unwrap();
+
+        let diff = explicit_diff(temp.path(), &["tracked.txt".into(), "untracked.rs".into()])
+            .expect("diff succeeds");
+
+        assert!(diff.contains("tracked.txt"));
+        assert!(diff.contains("untracked.rs"));
+        assert!(diff.contains("fn main()"));
     }
 }

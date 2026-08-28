@@ -3,7 +3,7 @@
   import { fade } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { prefersReducedMotion } from 'svelte/motion';
-  import type { CategoryResult, DashboardTab } from '../../lib/models/types';
+  import type { CategoryResult, DashboardRoute, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
@@ -43,7 +43,7 @@
     Sparkles,
   } from 'lucide-svelte';
 
-  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications' | 'developer-artifacts';
+  type Tab = DashboardRoute | 'large-files' | 'applications' | 'developer-artifacts';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -78,8 +78,18 @@
     });
   });
 
-  function selectTab(tab: Tab) {
-    currentTab = tab;
+  function selectTab(tab: Tab | string) {
+    if (tab === 'developer_artifacts' || tab === 'developer-artifacts') {
+      currentTab = 'developer-artifacts';
+    } else if (tab === 'large_files' || tab === 'large-files') {
+      currentTab = 'large-files';
+    } else if (tab === 'applications') {
+      currentTab = 'applications';
+    } else if (tab === 'settings') {
+      currentTab = 'settings';
+    } else {
+      currentTab = tab as Tab;
+    }
     selectedCategory = null;
   }
 

@@ -44,6 +44,10 @@ pub fn inspect(
             partial = true;
             break;
         }
+        if !is_eligible_safety_root(root) {
+            partial = true;
+            continue;
+        }
         let root_device = device(root);
         let walker = WalkDir::new(root)
             .follow_links(false)
@@ -336,12 +340,122 @@ fn sanitize_label(value: &str) -> String {
         .take(80)
         .collect()
 }
+
+fn is_eligible_safety_root(root: &Path) -> bool {
+    if !root.is_dir() {
+        return false;
+    }
+    let canonical = match root.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    if canonical.parent().is_none() {
+        return false;
+    }
+    if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+        if canonical == home {
+            return false;
+        }
+    }
+    let canonical_str = canonical.to_string_lossy();
+    let broad_denylist = [
+        "/",
+        "/Users",
+        "/home",
+        "/System",
+        "/Library",
+        "/Applications",
+        "/private",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/etc",
+        "/var",
+        "/Volumes",
+        "/tmp",
+        "/opt",
+    ];
+    for denied in broad_denylist {
+        if canonical_str == denied || canonical_str == format!("{}/", denied) {
+            return false;
+        }
+    }
+    if canonical.components().count() <= 2 {
+        return false;
+    }
+    true
+}
+
 fn strip_jsonc_comments(value: &str) -> String {
-    value
-        .lines()
-        .map(|line| line.split_once("//").map_or(line, |(before, _)| before))
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut result = String::with_capacity(value.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut in_single_comment = false;
+    let mut in_block_comment = false;
+    let chars: Vec<char> = value.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let ch = chars[i];
+        let next_ch = if i + 1 < len {
+            Some(chars[i + 1])
+        } else {
+            None
+        };
+
+        if in_single_comment {
+            if ch == '\n' {
+                in_single_comment = false;
+                result.push('\n');
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if ch == '*' && next_ch == Some('/') {
+                in_block_comment = false;
+                i += 2;
+            } else {
+                if ch == '\n' {
+                    result.push('\n');
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if in_string {
+            result.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            result.push(ch);
+            i += 1;
+        } else if ch == '/' && next_ch == Some('/') {
+            in_single_comment = true;
+            i += 2;
+        } else if ch == '/' && next_ch == Some('*') {
+            in_block_comment = true;
+            i += 2;
+        } else {
+            result.push(ch);
+            i += 1;
+        }
+    }
+
+    result
 }
 fn severity_rank(value: FindingSeverity) -> u8 {
     match value {
@@ -414,5 +528,38 @@ mod tests {
         let result = inspect(&roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
         assert!(result.status_message.contains("boundary"));
+    }
+
+    #[test]
+    fn strip_jsonc_preserves_urls_and_strips_comments() {
+        let jsonc_input = r#"{
+            // Line comment with // multiple slashes
+            "mcpServers": {
+                /* Block comment */
+                "remote": {
+                    "url": "https://example.com/mcp?foo=//bar"
+                }
+            }
+        }"#;
+        let stripped = strip_jsonc_comments(jsonc_input);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stripped).expect("valid JSON after comment stripping");
+        assert_eq!(
+            parsed["mcpServers"]["remote"]["url"].as_str(),
+            Some("https://example.com/mcp?foo=//bar")
+        );
+    }
+
+    #[test]
+    fn broad_roots_such_as_home_or_root_are_rejected_from_automatic_scan() {
+        assert!(!is_eligible_safety_root(Path::new("/")));
+        #[cfg(unix)]
+        {
+            assert!(!is_eligible_safety_root(Path::new("/Users")));
+            assert!(!is_eligible_safety_root(Path::new("/System")));
+        }
+        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+            assert!(!is_eligible_safety_root(&home));
+        }
     }
 }

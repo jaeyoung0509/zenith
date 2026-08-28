@@ -118,7 +118,7 @@ fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosit
 pub fn run() {
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
-    awake_manager.set_session_validator(|| crate::agent_activity::has_active_verified_session());
+    awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
     let last_scan = Arc::new(Mutex::new(None));
     let openrouter_key = Arc::new(Mutex::new(None));
@@ -137,17 +137,17 @@ pub fn run() {
     let app_state = AppState {
         registry,
         awake_manager: awake_manager.clone(),
-        settings,
+        settings: settings.clone(),
         last_scan,
         openrouter_key,
         ai_usage_cache,
         ai_usage_refresh_lock,
         delete_plans,
         storage_operation_gate,
-        memory_sampler,
-        dev_port_store,
-        agent_activity_cache,
-        ai_control_state,
+        memory_sampler: memory_sampler.clone(),
+        dev_port_store: dev_port_store.clone(),
+        agent_activity_cache: agent_activity_cache.clone(),
+        ai_control_state: ai_control_state.clone(),
         ai_control_refresh_lock,
     };
 
@@ -168,6 +168,12 @@ pub fn run() {
                 app.state::<AppState>()
                     .awake_manager
                     .set_rules(loaded.awake_rules.clone());
+                app.state::<AppState>()
+                    .awake_manager
+                    .set_control_center_awake_policy(
+                        loaded.ai_control.autopilot.keep_awake_for_verified_sessions,
+                        loaded.ai_control.autopilot.keep_awake_ac_only,
+                    );
                 *app.state::<AppState>()
                     .settings
                     .lock()
@@ -244,6 +250,20 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 watcher_ref.wait_for_next_evaluation();
                 watcher_ref.evaluate();
+            });
+
+            let bg_app = app.handle().clone();
+            let bg_runtime = Arc::new(crate::ai_control_center::runtime::AiControlRuntime::new(
+                memory_sampler.clone(),
+                dev_port_store.clone(),
+                agent_activity_cache.clone(),
+                ai_control_state.clone(),
+                awake_manager.clone(),
+                settings.clone(),
+            ));
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                bg_runtime.tick(Some(&bg_app));
             });
 
             Ok(())

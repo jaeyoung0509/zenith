@@ -22,10 +22,7 @@ impl PolicyEngine {
             .map(|resource| (resource.session_id.clone(), resource.project_id.clone()))
             .collect::<HashMap<_, _>>();
         let mut candidates = Vec::new();
-        if preferences.notify_on_battery
-            && power == PowerSourceType::Battery
-            && !resources.is_empty()
-        {
+        if !power.is_ac() && preferences.notify_on_battery && !resources.is_empty() {
             candidates.push(candidate(
                 RecommendationKind::Battery,
                 "Agent moved to battery",
@@ -33,7 +30,7 @@ impl PolicyEngine {
                 None,
                 None,
                 "Open Projects",
-                DashboardTab::Projects,
+                DashboardRoute::Projects,
             ));
         }
         if preferences.notify_on_memory_pressure
@@ -49,7 +46,7 @@ impl PolicyEngine {
                 None,
                 None,
                 "Open Memory",
-                DashboardTab::Memory,
+                DashboardRoute::Memory,
             ));
         }
         if preferences.notify_on_session_completion {
@@ -65,7 +62,7 @@ impl PolicyEngine {
                     Some(session_id.clone()),
                     project_id.clone(),
                     "Review project",
-                    DashboardTab::Projects,
+                    DashboardRoute::Projects,
                 ));
                 candidates.push(candidate(
                     RecommendationKind::CleanupReview,
@@ -74,7 +71,7 @@ impl PolicyEngine {
                     Some(session_id.clone()),
                     project_id.clone(),
                     "Open Developer Artifacts",
-                    DashboardTab::Storage,
+                    DashboardRoute::DeveloperArtifacts,
                 ));
             }
         }
@@ -89,7 +86,7 @@ impl PolicyEngine {
                 Some(resource.session_id.clone()),
                 None,
                 "Open Projects",
-                DashboardTab::Projects,
+                DashboardRoute::Projects,
             ));
         }
         for resource in resources
@@ -106,7 +103,7 @@ impl PolicyEngine {
                 Some(resource.session_id.clone()),
                 resource.project_id.clone(),
                 "Open Development Servers",
-                DashboardTab::DevelopmentServers,
+                DashboardRoute::DevelopmentServers,
             ));
         }
         self.previous_sessions = current;
@@ -138,7 +135,7 @@ struct Candidate {
     session_id: Option<String>,
     project_id: Option<String>,
     action_label: Option<String>,
-    destination: DashboardTab,
+    destination: DashboardRoute,
 }
 fn candidate(
     kind: RecommendationKind,
@@ -147,7 +144,7 @@ fn candidate(
     session_id: Option<String>,
     project_id: Option<String>,
     action: &str,
-    destination: DashboardTab,
+    destination: DashboardRoute,
 ) -> Candidate {
     Candidate {
         kind,
@@ -258,10 +255,11 @@ mod tests {
             &prefs,
             100,
         );
-        let destinations: HashSet<DashboardTab> = rows.into_iter().map(|r| r.destination).collect();
-        assert!(destinations.contains(&DashboardTab::Projects));
-        assert!(destinations.contains(&DashboardTab::Memory));
-        assert!(destinations.contains(&DashboardTab::DevelopmentServers));
+        let destinations: HashSet<DashboardRoute> =
+            rows.into_iter().map(|r| r.destination).collect();
+        assert!(destinations.contains(&DashboardRoute::Projects));
+        assert!(destinations.contains(&DashboardRoute::Memory));
+        assert!(destinations.contains(&DashboardRoute::DevelopmentServers));
     }
     #[test]
     fn completion_is_advisory_and_requires_opt_in() {
