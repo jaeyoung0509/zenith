@@ -90,6 +90,7 @@ pub struct ProviderObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetPeriod {
+    Weekly,
     Monthly,
 }
 
@@ -120,6 +121,7 @@ impl Default for LocalAlertBudget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct BudgetStatus {
     pub budget_id: String,
+    pub period: BudgetPeriod,
     pub spent: MoneyMicros,
     pub limit: MoneyMicros,
     pub used_basis_points: u16,

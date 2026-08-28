@@ -77,6 +77,7 @@ pub fn statuses(
             let used_basis_points = spent.percent_of(&budget.limit).unwrap_or(0);
             BudgetStatus {
                 budget_id: budget.id.clone(),
+                period: budget.period,
                 spent,
                 limit: budget.limit.clone(),
                 used_basis_points,
@@ -139,5 +140,24 @@ mod tests {
         assert_eq!(result[0].used_basis_points, 8_000);
         assert_eq!(result[0].crossed_thresholds, vec![50, 80]);
         assert!(result[0].mixed_sources);
+    }
+
+    #[test]
+    fn weekly_and_monthly_budgets_remain_distinct() {
+        let weekly = LocalAlertBudget {
+            id: "budget.weekly".into(),
+            period: BudgetPeriod::Weekly,
+            enabled: true,
+            ..LocalAlertBudget::default()
+        };
+        let monthly = LocalAlertBudget {
+            id: "budget.monthly".into(),
+            period: BudgetPeriod::Monthly,
+            enabled: true,
+            ..LocalAlertBudget::default()
+        };
+        let rows = statuses(&[weekly, monthly], &[]);
+        assert_eq!(rows[0].period, BudgetPeriod::Weekly);
+        assert_eq!(rows[1].period, BudgetPeriod::Monthly);
     }
 }

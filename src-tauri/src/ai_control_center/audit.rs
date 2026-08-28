@@ -23,7 +23,20 @@ impl AuditStore {
         let Ok(bytes) = std::fs::read(path) else {
             return Self::default();
         };
-        let entries = serde_json::from_slice::<VecDeque<AuditEntry>>(&bytes).unwrap_or_default();
+        let mut entries =
+            serde_json::from_slice::<VecDeque<AuditEntry>>(&bytes).unwrap_or_default();
+        for entry in &mut entries {
+            entry.event_kind = safe_label(&entry.event_kind);
+            entry.outcome = safe_label(&entry.outcome);
+            entry.project_ref = entry.project_ref.as_deref().map(safe_label);
+            entry.message = crate::diagnostics::sanitize_log(&entry.message)
+                .chars()
+                .take(240)
+                .collect();
+        }
+        while entries.len() > MAX_ENTRIES {
+            entries.pop_front();
+        }
         Self { entries }
     }
     pub fn append(
@@ -98,5 +111,31 @@ mod tests {
             .contains("abcdefghijklmnop1234"));
         store.save(temp.path()).unwrap();
         assert_eq!(AuditStore::load(temp.path()).entries.len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn load_revalidates_tampered_entries_and_enforces_the_entry_cap() {
+        let temp = tempfile::tempdir().unwrap();
+        let entries = (0..1_100)
+            .map(|index| AuditEntry {
+                id: index.to_string(),
+                timestamp: index,
+                event_kind: "scan<script>".into(),
+                outcome: "ok<script>".into(),
+                project_ref: Some("project/<unsafe>".into()),
+                message: "token sk-abcdefghijklmnop1234".into(),
+            })
+            .collect::<VecDeque<_>>();
+        std::fs::write(
+            temp.path().join(FILE_NAME),
+            serde_json::to_vec(&entries).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = AuditStore::load(temp.path());
+        assert_eq!(loaded.entries.len(), MAX_ENTRIES);
+        let serialized = serde_json::to_string(&loaded.entries).unwrap();
+        assert!(!serialized.contains("abcdefghijklmnop1234"));
+        assert!(!serialized.contains('<'));
     }
 }

@@ -32,26 +32,30 @@ impl GitBaselineStore {
                 .baselines
                 .entry(project_id.clone())
                 .or_insert_with(|| current.clone());
-            summaries.push(compare(project_id, baseline, &current));
+            summaries.push(compare(project_id, root, baseline, &current));
         }
         summaries.sort_by(|a, b| a.project_id.cmp(&b.project_id));
         summaries
     }
 
-    pub fn paths_for_diff(
+    pub fn diff_context(
         &self,
         project_id: &str,
         root: &Path,
         now: u64,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<(Option<String>, Vec<String>), String> {
         let baseline = self
             .baselines
             .get(project_id)
             .ok_or_else(|| "Git baseline is stale or unavailable".to_string())?;
-        Ok(changed_entries(baseline, &capture(root, now))
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect())
+        let current = capture(root, now);
+        Ok((
+            baseline.head.clone(),
+            all_changed_entries(root, baseline, &current)
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect(),
+        ))
     }
 }
 
@@ -77,7 +81,12 @@ fn capture(root: &Path, now: u64) -> GitBaseline {
     }
 }
 
-fn compare(project_id: &str, baseline: &GitBaseline, current: &GitBaseline) -> GitChangeSummary {
+fn compare(
+    project_id: &str,
+    root: &Path,
+    baseline: &GitBaseline,
+    current: &GitBaseline,
+) -> GitChangeSummary {
     if baseline.head.is_none() && current.head.is_none() && current.statuses.is_empty() {
         return GitChangeSummary {
             project_id: project_id.into(),
@@ -95,7 +104,7 @@ fn compare(project_id: &str, baseline: &GitBaseline, current: &GitBaseline) -> G
                 .into(),
         };
     }
-    let changed = changed_entries(baseline, current);
+    let changed = all_changed_entries(root, baseline, current);
     let count = |needle: char| {
         changed
             .iter()
@@ -114,9 +123,72 @@ fn compare(project_id: &str, baseline: &GitBaseline, current: &GitBaseline) -> G
         untracked: changed.iter().filter(|(_, status)| status == "??").count() as u32,
         changed_paths: changed.into_iter().map(|(path, _)| path).collect(),
         available: true,
-        status_message:
-            "Files changed since baseline; diff shows current Git working-tree changes.".into(),
+        status_message: "Files changed since baseline across commits and the working tree.".into(),
     }
+}
+
+fn all_changed_entries(
+    root: &Path,
+    baseline: &GitBaseline,
+    current: &GitBaseline,
+) -> Vec<(String, String)> {
+    let mut changed = changed_entries(baseline, current)
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    for (path, status) in committed_entries(root, baseline, current) {
+        changed
+            .entry(path)
+            .and_modify(|existing| {
+                if existing == "resolved" {
+                    *existing = status.clone();
+                }
+            })
+            .or_insert(status);
+    }
+    let mut changed = changed.into_iter().collect::<Vec<_>>();
+    changed.sort_by(|a, b| a.0.cmp(&b.0));
+    changed.truncate(256);
+    changed
+}
+
+fn committed_entries(
+    root: &Path,
+    baseline: &GitBaseline,
+    current: &GitBaseline,
+) -> Vec<(String, String)> {
+    let (Some(base), Some(head)) = (baseline.head.as_deref(), current.head.as_deref()) else {
+        return Vec::new();
+    };
+    if base == head {
+        return Vec::new();
+    }
+    run_git(root, &["diff", "--name-status", "-z", base, head, "--"])
+        .map(|output| parse_name_status(output.as_bytes()))
+        .unwrap_or_default()
+}
+
+fn parse_name_status(bytes: &[u8]) -> Vec<(String, String)> {
+    let tokens = bytes
+        .split(|byte| *byte == 0)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    let mut index = 0;
+    while index + 1 < tokens.len() {
+        let status = String::from_utf8_lossy(tokens[index]).to_string();
+        index += 1;
+        let first_path = String::from_utf8_lossy(tokens[index]).to_string();
+        index += 1;
+        let path = if (status.starts_with('R') || status.starts_with('C')) && index < tokens.len() {
+            let destination = String::from_utf8_lossy(tokens[index]).to_string();
+            index += 1;
+            destination
+        } else {
+            first_path
+        };
+        entries.push((path, status.chars().next().unwrap_or('M').to_string()));
+    }
+    entries
 }
 
 fn changed_entries(baseline: &GitBaseline, current: &GitBaseline) -> Vec<(String, String)> {
@@ -197,10 +269,9 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
     if !output.status.success() {
         return Err("Git command unavailable".into());
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .trim_end_matches('\0')
-        .trim()
-        .to_string())
+    // Preserve NUL delimiters and path whitespace for porcelain/name-status callers.
+    // Scalar callers such as `rev-parse` normalize their own output.
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn run_diff_command(root: &Path, args: &[&str]) -> Result<String, String> {
@@ -220,7 +291,11 @@ fn run_diff_command(root: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-pub fn explicit_diff(root: &Path, paths: &[String]) -> Result<String, String> {
+pub fn explicit_diff(
+    root: &Path,
+    baseline_head: Option<&str>,
+    paths: &[String],
+) -> Result<String, String> {
     if paths.is_empty() {
         return Ok(String::new());
     }
@@ -228,7 +303,9 @@ pub fn explicit_diff(root: &Path, paths: &[String]) -> Result<String, String> {
     let mut combined_diff = String::new();
 
     // 1. Try git diff HEAD for tracked modifications
-    let mut head_args = vec!["diff", "HEAD", "--no-ext-diff", "--no-color", "--"];
+    let mut head_args = vec!["diff"];
+    head_args.push(baseline_head.unwrap_or("HEAD"));
+    head_args.extend(["--no-ext-diff", "--no-color", "--"]);
     for p in paths {
         head_args.push(p);
     }
@@ -345,6 +422,18 @@ mod tests {
     }
 
     #[test]
+    fn name_status_parser_uses_the_rename_destination() {
+        let parsed = parse_name_status(b"R100\0old.txt\0new.txt\0M\0changed.txt\0");
+        assert_eq!(
+            parsed,
+            vec![
+                ("new.txt".into(), "R".into()),
+                ("changed.txt".into(), "M".into())
+            ]
+        );
+    }
+
+    #[test]
     fn explicit_diff_includes_untracked_files() {
         let temp = tempfile::tempdir().unwrap();
         git(temp.path(), &["init", "-q"]);
@@ -361,11 +450,45 @@ mod tests {
         std::fs::write(temp.path().join("untracked.rs"), "fn main() {}\n").unwrap();
         std::fs::write(temp.path().join("tracked.txt"), "hello world\n").unwrap();
 
-        let diff = explicit_diff(temp.path(), &["tracked.txt".into(), "untracked.rs".into()])
-            .expect("diff succeeds");
+        let diff = explicit_diff(
+            temp.path(),
+            None,
+            &["tracked.txt".into(), "untracked.rs".into()],
+        )
+        .expect("diff succeeds");
 
         assert!(diff.contains("tracked.txt"));
         assert!(diff.contains("untracked.rs"));
         assert!(diff.contains("fn main()"));
+    }
+
+    #[test]
+    fn baseline_reports_and_diffs_changes_committed_after_capture() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "-q"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "test@example.invalid"],
+        );
+        git(temp.path(), &["config", "user.name", "Test"]);
+        std::fs::write(temp.path().join("tracked.txt"), "before\n").unwrap();
+        git(temp.path(), &["add", "tracked.txt"]);
+        git(temp.path(), &["commit", "-qm", "initial"]);
+
+        let roots = HashMap::from([("p".into(), temp.path().into())]);
+        let mut store = GitBaselineStore::default();
+        assert!(store.summaries(&roots, 10)[0].changed_paths.is_empty());
+
+        std::fs::write(temp.path().join("tracked.txt"), "after\n").unwrap();
+        git(temp.path(), &["add", "tracked.txt"]);
+        git(temp.path(), &["commit", "-qm", "agent change"]);
+
+        let summary = store.summaries(&roots, 20).remove(0);
+        assert_eq!(summary.changed_paths, vec!["tracked.txt"]);
+        assert_eq!(summary.modified, 1);
+        let (baseline, paths) = store.diff_context("p", temp.path(), 20).unwrap();
+        let diff = explicit_diff(temp.path(), baseline.as_deref(), &paths).unwrap();
+        assert!(diff.contains("-before"));
+        assert!(diff.contains("+after"));
     }
 }

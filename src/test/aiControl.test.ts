@@ -127,6 +127,7 @@ const sampleSnapshot: AiControlCenterSnapshot = {
   budget_statuses: [
     {
       budget_id: 'budget-primary',
+      period: 'monthly',
       spent: { micros: 40000000, currency: 'USD' },
       limit: { micros: 50000000, currency: 'USD' },
       used_basis_points: 8000,
@@ -288,6 +289,12 @@ describe('AI Control Center Svelte component rendering', () => {
     expect(rendered.body).toContain('Usage &amp; Budgets');
     expect(rendered.body).toContain('Resource Autopilot');
     expect(rendered.body).toContain('Safety Posture');
+    const source = readFileSync(
+      path.resolve(process.cwd(), 'src/routes/dashboard/AiControlCenterView.svelte'),
+      'utf-8'
+    );
+    expect(source).toContain('aria-label="Budget period"');
+    expect(source).toContain('<option value="weekly">Weekly</option>');
   });
 
   it('renders overview metrics cards accurately', () => {

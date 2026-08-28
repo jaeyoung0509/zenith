@@ -162,11 +162,16 @@ fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservat
         "claude" => "Manual/external subscription usage. Use Claude Code /usage; Zenith does not scrape the TUI or credentials.".into(),
         _ => provider.status_message.clone(),
     };
-    let unavailable = !provider.connected
-        && matches!(
-            source_kind,
-            ObservationSourceKind::LiveAuthoritative | ObservationSourceKind::LiveQuota
-        );
+    let has_measurement = !metrics.is_empty();
+    let unavailable = match source_kind {
+        ObservationSourceKind::LiveAuthoritative | ObservationSourceKind::LiveQuota => {
+            !provider.connected
+        }
+        ObservationSourceKind::LocalEstimate => !has_measurement,
+        // Capability/install detection is not a manual observation. Only an explicit
+        // user entry added by `normalize` below receives a fresh manual timestamp.
+        ObservationSourceKind::Manual => true,
+    };
     ProviderObservation {
         provider_id: provider.id.clone(),
         display_name: provider.name.clone(),
@@ -204,7 +209,8 @@ fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservat
         status_message,
         metrics,
         action_url: provider.action_url.clone(),
-        partial_error: unavailable.then(|| provider.status_message.clone()),
+        partial_error: (unavailable && source_kind != ObservationSourceKind::Manual)
+            .then(|| provider.status_message.clone()),
     }
 }
 
@@ -331,6 +337,47 @@ mod tests {
     fn rejects_non_finite_money() {
         assert_eq!(usd_float_to_micros(f64::NAN), None);
         assert_eq!(usd_float_to_micros(1.234567), Some(1_234_567));
+    }
+
+    #[test]
+    fn external_capabilities_are_unavailable_until_the_user_enters_a_value() {
+        let existing = AiUsageSnapshot {
+            fetched_at: 10,
+            providers: vec![AiProviderUsage {
+                id: "claude".into(),
+                name: "Claude Code".into(),
+                installed: true,
+                connected: false,
+                auth_label: "Claude.ai OAuth".into(),
+                status_message: "Use /usage".into(),
+                support: UsageSupport::Manual,
+                windows: vec![],
+                summary: UsageSummary::default(),
+                action_url: None,
+            }],
+        };
+        let rows = normalize(&existing, &AiControlPreferences::default());
+        let claude = rows.iter().find(|row| row.provider_id == "claude").unwrap();
+        assert_eq!(claude.source_kind, ObservationSourceKind::Manual);
+        assert_eq!(claude.quality, ObservationQuality::Unavailable);
+        assert_eq!(claude.partial_error, None);
+
+        let preferences = AiControlPreferences {
+            manual_usage: vec![ManualProviderUsage {
+                provider_id: "claude".into(),
+                spent: MoneyMicros::usd(1_000_000),
+                entered_at: 9,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rows = normalize(&existing, &preferences);
+        let manual = rows
+            .iter()
+            .find(|row| row.source_id == "manual.claude")
+            .unwrap();
+        assert_eq!(manual.quality, ObservationQuality::Fresh);
+        assert_eq!(manual.observed_at, 9);
     }
 
     struct FakeAdapter(ObservationQuality, ObservationSourceKind);

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { AiControlPreferences, DashboardRoute, ProviderObservation } from '../../lib/models/types';
+  import type { AiControlPreferences, BudgetPeriod, DashboardRoute, ProviderObservation } from '../../lib/models/types';
   import { aiControlStore } from '../../lib/stores/aiControl.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { formatBytes } from '../../lib/utils/format';
@@ -17,6 +17,7 @@
   let manualSpent = $state('');
   let manualLimit = $state('');
   let budgetProvider = $state('openai-api');
+  let budgetPeriod = $state<BudgetPeriod>('monthly');
   let budgetLimit = $state('20');
   let selectedSection = $state<'overview' | 'usage' | 'autopilot' | 'safety'>('overview');
 
@@ -27,12 +28,13 @@
   const titleCase = (value: string) => value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 
   function metricValue(provider: ProviderObservation) {
-    const metric = provider.metrics[0];
-    if (!metric) return 'No value';
-    if (metric.used_basis_points != null) return `${Math.round(metric.used_basis_points / 100)}% used`;
-    if (metric.cost) return dollars(metric.cost.micros);
-    if (metric.tokens != null) return `${compact.format(metric.tokens)} tokens`;
-    return 'No value';
+    if (provider.metrics.length === 0) return 'No value';
+    return provider.metrics.map((metric) => {
+      if (metric.used_basis_points != null) return `${metric.label}: ${Math.round(metric.used_basis_points / 100)}% used`;
+      if (metric.cost) return `${metric.label}: ${dollars(metric.cost.micros)}`;
+      if (metric.tokens != null) return `${metric.label}: ${compact.format(metric.tokens)} tokens`;
+      return `${metric.label}: No value`;
+    }).join(' · ');
   }
 
   async function updateAutopilot(key: keyof NonNullable<AiControlPreferences['autopilot']>, value: boolean) {
@@ -49,8 +51,8 @@
     await aiControlStore.savePreferences({
       ...preferences,
       budgets: [
-        ...(preferences.budgets ?? []).filter((budget) => budget.provider_id !== budgetProvider),
-        { id: `budget-${budgetProvider}`, provider_id: budgetProvider, period: 'monthly', limit: { micros: Math.round(limit * 1_000_000), currency: 'USD' }, threshold_percents: [50, 80, 100], enabled: true },
+        ...(preferences.budgets ?? []).filter((budget) => budget.provider_id !== budgetProvider || budget.period !== budgetPeriod),
+        { id: `budget-${budgetPeriod}-${budgetProvider}`, provider_id: budgetProvider, period: budgetPeriod, limit: { micros: Math.round(limit * 1_000_000), currency: 'USD' }, threshold_percents: [50, 80, 100], enabled: true },
       ],
     });
     await settingsStore.load(true);
@@ -122,7 +124,7 @@
         {/each}
       </div>
       <div class="grid grid-cols-2 gap-3">
-        <Card class="space-y-3"><h3 class="text-sm font-semibold">Zenith local budget alert</h3><p class="text-caption text-muted-foreground">A local alert only. It does not change provider billing or limits.</p><div class="grid grid-cols-2 gap-2"><select bind:value={budgetProvider} class="rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="openai-api">OpenAI API</option><option value="openrouter">OpenRouter</option><option value="anthropic-api">Anthropic API</option><option value="xai-api">xAI API</option></select><input bind:value={budgetLimit} aria-label="Monthly budget in USD" inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder="Monthly USD" /></div><Button size="sm" onclick={addBudget}>Save local alert</Button>{#each snapshot.budget_statuses as status}<div class="space-y-1"><div class="flex justify-between text-caption"><span>{status.source_label}{status.mixed_sources ? ' · mixed sources' : ''}</span><span>{dollars(status.spent.micros)} / {dollars(status.limit.micros)}</span></div><ProgressBar value={status.used_basis_points / 100} height="h-1.5" /></div>{/each}</Card>
+        <Card class="space-y-3"><h3 class="text-sm font-semibold">Zenith local budget alert</h3><p class="text-caption text-muted-foreground">A local alert only. It does not change provider billing or limits.</p><div class="grid grid-cols-3 gap-2"><select bind:value={budgetProvider} aria-label="Budget provider" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="openai-api">OpenAI API</option><option value="openrouter">OpenRouter</option><option value="anthropic-api">Anthropic API</option><option value="xai-api">xAI API</option></select><select bind:value={budgetPeriod} aria-label="Budget period" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select><input bind:value={budgetLimit} aria-label={`${titleCase(budgetPeriod)} budget in USD`} inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder={`${titleCase(budgetPeriod)} USD`} /></div><Button size="sm" onclick={addBudget}>Save local alert</Button>{#each snapshot.budget_statuses as status}<div class="space-y-1"><div class="flex justify-between text-caption"><span>{titleCase(status.period)} · {status.source_label}{status.mixed_sources ? ' · mixed sources' : ''}</span><span>{dollars(status.spent.micros)} / {dollars(status.limit.micros)}</span></div><ProgressBar value={status.used_basis_points / 100} height="h-1.5" /></div>{/each}</Card>
         <Card class="space-y-3"><h3 class="text-sm font-semibold">Manual provider entry</h3><p class="text-caption text-muted-foreground">Stored locally and always labelled Manual.</p><select bind:value={manualProvider} class="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs"><option value="claude-individual">Claude individual</option><option value="cursor-individual">Cursor individual</option><option value="grok-individual">Grok individual</option><option value="gemini-enterprise">Gemini enterprise</option><option value="openai-api">OpenAI API</option></select><div class="grid grid-cols-2 gap-2"><input bind:value={manualSpent} aria-label="Manual spend in USD" inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder="Spent USD" /><input bind:value={manualLimit} aria-label="Manual limit in USD" inputmode="decimal" class="rounded-md border border-border bg-background px-2 py-1.5 text-xs" placeholder="Limit (optional)" /></div><Button size="sm" onclick={saveManualUsage}>Save manual value</Button></Card>
       </div>
     {:else if selectedSection === 'autopilot'}
@@ -135,7 +137,7 @@
     {:else}
       <div class="flex items-center justify-between rounded-xl border border-border bg-card p-4"><div class="flex gap-3"><ShieldCheck size={18} class="text-success" /><div><p class="text-sm font-semibold">Bounded, redacted inspection</p><p class="text-caption text-muted-foreground">Registered project roots only; symlinks, raw secrets, arguments, headers, environment values, and email addresses are excluded.</p></div></div><Button variant="outline" size="sm" disabled={aiControlStore.isScanning} onclick={() => aiControlStore.scanSafety()}>{aiControlStore.isScanning ? 'Inspecting…' : 'Run inspection'}</Button></div>
       <div class="grid grid-cols-2 gap-3">{#if snapshot.safety.findings.filter((finding) => !finding.dismissed).length === 0}<Card class="col-span-2 text-center"><p class="text-xs text-muted-foreground">{snapshot.safety.status_message}</p></Card>{/if}{#each snapshot.safety.findings.filter((finding) => !finding.dismissed) as finding}<Card class="space-y-2"><div class="flex justify-between"><span class="text-xs font-semibold">{titleCase(finding.kind)}</span><span class="text-caption uppercase text-warning">{finding.severity}</span></div><p class="text-caption text-muted-foreground">{finding.remediation}</p><div class="flex items-center justify-between"><span class="font-mono text-micro text-muted-foreground">{finding.relative_path ?? 'project scope'}{finding.line_start ? `:${finding.line_start}` : ''}</span><Button variant="ghost" size="sm" onclick={() => aiControlStore.dismissFinding(finding.id)}>Dismiss</Button></div></Card>{/each}</div>
-      <Card class="space-y-3"><div><h3 class="text-sm font-semibold">Git changes since Zenith baseline</h3><p class="text-caption text-muted-foreground">Metadata only. Files changed since baseline; diff shows current Git working-tree changes.</p></div>{#each snapshot.git_summaries as git}<div class="flex items-center justify-between gap-3 rounded-lg bg-secondary/40 p-3"><div><p class="text-xs font-medium"><GitBranch size={12} class="mr-1 inline" />{git.status_message}</p><p class="mt-1 font-mono text-micro text-muted-foreground">+{git.added} ~{git.modified} -{git.deleted} R{git.renamed} ?{git.untracked}</p></div>{#if git.available}<Button variant="outline" size="sm" onclick={() => aiControlStore.loadGitDiff(git.project_id)}>View ephemeral diff</Button>{/if}</div>{/each}</Card>
+      <Card class="space-y-3"><div><h3 class="text-sm font-semibold">Git changes since Zenith baseline</h3><p class="text-caption text-muted-foreground">Metadata only. The on-demand diff includes post-baseline commits and current working-tree changes.</p></div>{#each snapshot.git_summaries as git}<div class="flex items-center justify-between gap-3 rounded-lg bg-secondary/40 p-3"><div><p class="text-xs font-medium"><GitBranch size={12} class="mr-1 inline" />{git.status_message}</p><p class="mt-1 font-mono text-micro text-muted-foreground">+{git.added} ~{git.modified} -{git.deleted} R{git.renamed} ?{git.untracked}</p></div>{#if git.available}<Button variant="outline" size="sm" onclick={() => aiControlStore.loadGitDiff(git.project_id)}>View ephemeral diff</Button>{/if}</div>{/each}</Card>
     {/if}
   {/if}
 </div>

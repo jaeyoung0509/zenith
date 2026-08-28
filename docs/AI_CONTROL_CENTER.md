@@ -30,7 +30,8 @@ Manual entries are stored in validated Zenith settings and are always labelled
 Manual. Money uses integer micro-units internally. “Zenith local budget alert”
 means a local notification threshold; it never changes provider billing,
 credits, or hard limits. A budget that combines authoritative, estimated, or
-manual sources is labelled as mixed-source.
+manual sources is labelled as mixed-source. Weekly and monthly alert periods
+are stored independently and remain local Zenith policy.
 
 ## Resource policy and actions
 

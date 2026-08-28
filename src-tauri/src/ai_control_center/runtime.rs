@@ -51,6 +51,14 @@ impl AiControlRuntime {
                 .unwrap_or_default()
         };
 
+        // Passive observations are built on explicit main-window refreshes. When every
+        // native advisory is disabled there is no background policy work to perform, so
+        // avoid a full process snapshot, memory sample, and `lsof` invocation every five
+        // seconds while Zenith is otherwise idle.
+        if !background_advisories_enabled(&preferences.autopilot) {
+            return Vec::new();
+        }
+
         // 1. Collect or check local agent activity snapshot
         let activity = {
             let cached = self
@@ -72,14 +80,23 @@ impl AiControlRuntime {
             }
         };
 
-        // 2. Sample memory pressure and power source
-        let memory = self.memory_sampler.sample();
+        // 2. Sample only the signals required by the enabled advisories. Listener
+        // discovery shells out to `lsof`, so battery/memory-only policies must not pay
+        // that cost on every runtime tick.
+        let memory = preferences
+            .autopilot
+            .notify_on_memory_pressure
+            .then(|| self.memory_sampler.sample());
         let awake_state = self.awake_manager.get_state();
-        let listeners = crate::dev_ports::list_listeners(
-            &self.dev_port_store,
-            &crate::dev_ports::RealDevPortSystem::default(),
-        )
-        .unwrap_or_default();
+        let listeners = if preferences.autopilot.notify_on_session_completion {
+            crate::dev_ports::list_listeners(
+                &self.dev_port_store,
+                &crate::dev_ports::RealDevPortSystem::default(),
+            )
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         let resources = resources::attribute(
             &activity.snapshot,
@@ -97,7 +114,7 @@ impl AiControlRuntime {
 
         let new_items = control.policy.evaluate(
             &resources,
-            Some(memory.pressure),
+            memory.map(|sample| sample.pressure),
             awake_state.power_source,
             &preferences.autopilot,
             now,
@@ -115,5 +132,39 @@ impl AiControlRuntime {
         }
 
         new_items
+    }
+}
+
+fn background_advisories_enabled(preferences: &crate::models::AutopilotPreferences) -> bool {
+    preferences.notify_on_battery
+        || preferences.notify_on_memory_pressure
+        || preferences.notify_on_session_completion
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_sampling_is_disabled_until_an_advisory_is_enabled() {
+        let disabled = crate::models::AutopilotPreferences::default();
+        assert!(!background_advisories_enabled(&disabled));
+
+        for enabled in [
+            crate::models::AutopilotPreferences {
+                notify_on_battery: true,
+                ..Default::default()
+            },
+            crate::models::AutopilotPreferences {
+                notify_on_memory_pressure: true,
+                ..Default::default()
+            },
+            crate::models::AutopilotPreferences {
+                notify_on_session_completion: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(background_advisories_enabled(&enabled));
+        }
     }
 }

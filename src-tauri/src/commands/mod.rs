@@ -321,20 +321,22 @@ pub fn save_ai_control_preferences(
         crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
     }
     let retention = preferences.audit_retention_days;
-    state.awake_manager.set_control_center_awake_policy(
-        preferences.autopilot.keep_awake_for_verified_sessions,
-        preferences.autopilot.keep_awake_ac_only,
-    );
-    let mut settings = state.settings.lock().expect("settings poisoned");
-    settings.ai_control = preferences;
+    let mut next_settings = state.settings.lock().expect("settings poisoned").clone();
+    next_settings.ai_control = preferences.clone();
     settings_store::save(
         &app_handle
             .path()
             .app_config_dir()
             .map_err(|error| error.to_string())?,
-        &settings,
+        &next_settings,
     )?;
-    drop(settings);
+    *state.settings.lock().expect("settings poisoned") = next_settings;
+    // Apply the native policy only after persistence succeeds, keeping the runtime
+    // and the settings file consistent if an atomic settings write is rejected.
+    state.awake_manager.set_control_center_awake_policy(
+        preferences.autopilot.keep_awake_for_verified_sessions,
+        preferences.autopilot.keep_awake_ac_only,
+    );
     let config = app_handle
         .path()
         .app_config_dir()
@@ -570,14 +572,14 @@ pub async fn get_ai_control_git_diff(
         .and_then(|value| value.project_roots.get(&project_id))
         .cloned()
         .ok_or_else(|| "Project identity is stale or unavailable".to_string())?;
-    let paths = state
+    let (baseline_head, paths) = state
         .ai_control_state
         .lock()
         .expect("ai control poisoned")
         .git
-        .paths_for_diff(&project_id, &root, unix_timestamp())?;
+        .diff_context(&project_id, &root, unix_timestamp())?;
     let diff = tauri::async_runtime::spawn_blocking(move || {
-        crate::ai_control_center::git::explicit_diff(&root, &paths)
+        crate::ai_control_center::git::explicit_diff(&root, baseline_head.as_deref(), &paths)
     })
     .await
     .map_err(|error| error.to_string())??;

@@ -266,10 +266,11 @@ export type AwakeState = {
 	rule_evaluations: AwakeRuleEvaluation[],
 };
 
-export type BudgetPeriod = "monthly";
+export type BudgetPeriod = "weekly" | "monthly";
 
 export type BudgetStatus = {
 	budget_id: string,
+	period: BudgetPeriod,
 	spent: MoneyMicros,
 	limit: MoneyMicros,
 	used_basis_points: number,
