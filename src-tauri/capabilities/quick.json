@@ -8,6 +8,7 @@
     "core:window:allow-hide",
     "core:window:allow-start-dragging",
     "allow-get-ai-usage",
+    "allow-get-ai-control-quick-summary",
     "allow-start-scan",
     "allow-get-last-scan",
     "allow-create-delete-plan",

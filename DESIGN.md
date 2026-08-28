@@ -99,6 +99,27 @@ pixel utilities for those sizes.
 - Never show account email addresses or secret-bearing identifiers. Connection
   buttons describe the provider and open only user-initiated OAuth flows.
 
+### AI Control Center
+
+- Use four compact sections: Overview, Usage & Budgets, Resource Autopilot, and
+  Safety Posture.
+- Provider rows always show provenance scope and freshness badges (`Fresh`, `Stale`,
+  `Partial`, `Unavailable`); local estimates and manual values must never look like
+  provider-enforced quotas.
+- Local alert thresholds must be labelled as "Zenith local budget alert" and must
+  not imply provider billing or quota enforcement. When aggregating across different
+  provenance kinds (e.g. authoritative + local estimate + manual), copy must
+  explicitly indicate "mixed sources".
+- Recommendations are presented as advisory cards with clear action labels.
+  Preview modals clearly inform the user that one-shot previews expire and that
+  no mutation has occurred.
+- Safety findings are displayed with distinct severity badges (`Critical`, `Warning`,
+  `Info`), concise remediation steps, relative file locations, and dismiss controls.
+- Automation switches state that they are off by default and emphasize that policies
+  never terminate processes, release ports, or delete files automatically.
+- The Quick Panel shows only the cached compact summary and offers no refresh or
+  mutation control for this feature.
+
 ### Quick panel
 
 - Show only user-selected high-frequency sections: storage, safe reclaim amount,

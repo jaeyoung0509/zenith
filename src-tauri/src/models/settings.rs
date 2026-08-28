@@ -1,4 +1,4 @@
-use crate::models::AwakeRule;
+use crate::models::{AiControlPreferences, AwakeRule};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -10,16 +10,18 @@ pub enum QuickPanelSection {
     AiUsage,
     Categories,
     Memory,
+    AiControl,
 }
 
 impl QuickPanelSection {
-    pub const DEFAULTS: [Self; 4] = [Self::Cleanup, Self::Storage, Self::Memory, Self::AiUsage];
-    pub const ALL: [Self; 5] = [
+    pub const DEFAULTS: [Self; 4] = [Self::Cleanup, Self::Storage, Self::Memory, Self::AiControl];
+    pub const ALL: [Self; 6] = [
         Self::Cleanup,
         Self::Storage,
         Self::Memory,
         Self::AiUsage,
         Self::Categories,
+        Self::AiControl,
     ];
 }
 
@@ -35,11 +37,12 @@ pub enum DashboardTab {
     Projects,
     DevelopmentServers,
     Usage,
+    AiControl,
     Awake,
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Storage,
         Self::Docker,
         Self::Models,
@@ -47,6 +50,7 @@ impl DashboardTab {
         Self::Projects,
         Self::DevelopmentServers,
         Self::Usage,
+        Self::AiControl,
         Self::Awake,
     ];
 }
@@ -70,6 +74,7 @@ pub struct ZenithSettings {
     #[serde(default = "legacy_dashboard_tabs_revision")]
     pub dashboard_tabs_revision: u8,
     pub sidebar_collapsed: bool,
+    pub ai_control: AiControlPreferences,
 }
 
 impl Default for ZenithSettings {
@@ -167,8 +172,9 @@ impl Default for ZenithSettings {
                 "antigravity".to_string(),
             ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
-            dashboard_tabs_revision: 2,
+            dashboard_tabs_revision: 3,
             sidebar_collapsed: false,
+            ai_control: AiControlPreferences::default(),
         }
     }
 }
@@ -228,12 +234,28 @@ impl ZenithSettings {
             self.dashboard_tabs_revision = 2;
         }
 
+        // #74 adds AI Control once after Projects. Preserve user ordering and
+        // allow the tab to remain hidden after this migration has run.
+        if self.dashboard_tabs_revision < 3 {
+            if !self.dashboard_tabs.contains(&DashboardTab::AiControl) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Projects)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::AiControl);
+            }
+            self.dashboard_tabs_revision = 3;
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
         self.quick_panel_ai_providers.retain(|provider| {
             SUPPORTED_PROVIDERS.contains(&provider.as_str()) && providers.insert(provider.clone())
         });
+        self.ai_control = crate::ai_control_center::budgets::sanitize(self.ai_control);
         self
     }
 }
@@ -297,7 +319,7 @@ mod tests {
 
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.quick_panel_sections.len(), 4);
-        assert_eq!(parsed.dashboard_tabs.len(), 8);
+        assert_eq!(parsed.dashboard_tabs.len(), 9);
         assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
@@ -320,11 +342,12 @@ mod tests {
                 DashboardTab::Storage,
                 DashboardTab::Memory,
                 DashboardTab::Projects,
+                DashboardTab::AiControl,
                 DashboardTab::DevelopmentServers,
                 DashboardTab::Usage,
             ]
         );
-        assert_eq!(migrated.dashboard_tabs_revision, 2);
+        assert_eq!(migrated.dashboard_tabs_revision, 3);
 
         let hidden_again = ZenithSettings {
             dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Memory],

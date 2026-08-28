@@ -65,7 +65,10 @@ Rust process state rather than in a browser singleton.
   development/testing-tool classification, opaque lease storage, TOCTOU validation,
   and exact-process graceful/force signaling.
 - `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry
-  points.
+  points. `src-tauri/src/ai_control_center` normalizes those observations with
+  explicit provenance, applies local budget/policy rules, and consumes the
+  canonical Project Cockpit registry for resource and safety attribution. See
+  [AI_CONTROL_CENTER.md](AI_CONTROL_CENTER.md).
 - `src/lib/utils/tauri.ts`: frontend command wrappers — the single `invoke` boundary for all Tauri commands. The dedicated storage-management workflows (Large Files and App Uninstaller) are the sanctioned exception: their native and browser-preview split lives in `src/lib/api/storage.ts` and reuses the shared `isTauri()` from `src/lib/api/index.ts` to decide at runtime. New generic commands belong in `utils/tauri.ts`; new storage commands belong in `api/storage.ts`.
 - `src/lib/stores`: Svelte state and lifecycle orchestration.
 - `src/routes/dashboard` and `src/routes/quick`: the two window surfaces.
@@ -282,6 +285,39 @@ linked worktrees from ordinary repositories. Canonical paths stay backend-only:
 SHA-256-derived opaque IDs and a compact parent/name hint cross IPC, while PID,
 argv, environment, Git remotes, file changes, and full paths do not. When cwd
 cannot be verified, the session remains explicitly Unassigned.
+
+## AI Control Center
+
+AI Control Center (`src-tauri/src/ai_control_center`) provides a unified,
+provenance-aware local control plane:
+
+- **Observation provenance:** Provider observations carry an explicit source
+  kind (`LiveAuthoritative`, `LiveQuota`, `LocalEstimate`, `Manual`), scope
+  (`Subscription`, `ApiKey`, `Project`, `Organization`, `LocalSessions`), and
+  quality (`Fresh`, `Stale`, `Partial`, `Unavailable`). Authoritative billing,
+  local estimates, and manual values are never conflated.
+- **Shared session dependency:** Consumes the canonical `AgentActivityRegistry`
+  (`snapshot` and `project_roots`) from Project Cockpit. It does not run a
+  competing process classifier or rely on CWD authority alone.
+- **Policy engine:** Evaluates memory pressure, battery transitions, session
+  exits, orphan processes, dev ports, and cleanup opportunities in Rust.
+  Recommendations are advisory-first; native macOS notifications are emitted
+  only for explicitly enabled user preferences with cooldown deduplication.
+- **Opaque action previews:** Recommendations generate opaque, expiring (120s),
+  one-shot `RecommendationPreview` tokens. Consuming a preview directs the user
+  to dedicated workflows (such as Development Servers or Developer Artifacts);
+  it never performs destructive mutations directly.
+- **Safety posture:** User-initiated, bounded scan (max 2,000 files, 1 MiB per
+  file, depth 8) of registered active project roots. Secret and MCP/permission
+  findings are sanitized before crossing IPC; symlinks are never followed and
+  config files are never executed.
+- **Git baseline tracking:** Captures a repository baseline on first session
+  observation. Post-baseline modifications are tracked as metadata counts; full
+  diff content is fetched on-demand, bounded to 256 KiB, and never persisted.
+- **Quick-panel and cache lifecycle:** The quick panel reads only the last
+  cached `ControlCenterQuickSummary` in-memory. Hidden panels execute zero
+  provider calls, Git commands, or safety scans. Full snapshots use a bounded
+  backend cache protected by an async refresh lock.
 
 ## Settings
 

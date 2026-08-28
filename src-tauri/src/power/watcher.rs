@@ -15,6 +15,7 @@ pub struct KeepAwakeManager {
     rules: Arc<Mutex<Vec<AwakeRule>>>,
     active_assertion: Arc<Mutex<Option<PowerAssertion>>>,
     manual_mode: Arc<Mutex<ManualMode>>,
+    control_center_mode: Arc<Mutex<Option<bool>>>,
     last_trigger_app: Arc<Mutex<Option<String>>>,
     last_active_rule_id: Arc<Mutex<Option<String>>>,
     last_error: Arc<Mutex<Option<String>>>,
@@ -50,6 +51,7 @@ impl KeepAwakeManager {
             rules: Arc::new(Mutex::new(Vec::new())),
             active_assertion: Arc::new(Mutex::new(None)),
             manual_mode: Arc::new(Mutex::new(None)),
+            control_center_mode: Arc::new(Mutex::new(None)),
             last_trigger_app: Arc::new(Mutex::new(None)),
             last_active_rule_id: Arc::new(Mutex::new(None)),
             last_error: Arc::new(Mutex::new(None)),
@@ -116,6 +118,17 @@ impl KeepAwakeManager {
         *manual = None;
         drop(manual);
 
+        self.notify_watcher();
+        self.evaluate();
+    }
+
+    /// Applies the Control Center's backend-verified session policy. The caller
+    /// supplies only the canonical snapshot result, never a PID or process name.
+    pub fn set_control_center_session_awake(&self, active: bool, ac_only: bool) {
+        *self
+            .control_center_mode
+            .lock()
+            .expect("control_center_mode poisoned") = active.then_some(ac_only);
         self.notify_watcher();
         self.evaluate();
     }
@@ -304,7 +317,27 @@ impl KeepAwakeManager {
             return;
         }
 
-        // 4. Apply eligible process rule, or release assertion
+        // 4. Control Center automation is explicitly enabled only for a
+        // backend-verified active session. Unknown power fails AC-only closed.
+        let control_mode = *self
+            .control_center_mode
+            .lock()
+            .expect("control_center_mode poisoned");
+        if let Some(ac_only) = control_mode {
+            if !ac_only || power_source.is_ac() {
+                let _ = self.ensure_assertion(
+                    AwakeBehavior::PreventSystemSleep,
+                    "Zenith AI Control Center verified agent session",
+                    Some("AI Control Center".to_string()),
+                    Some("ai-control.verified-session".to_string()),
+                );
+            } else {
+                self.release_assertion();
+            }
+            return;
+        }
+
+        // 5. Apply eligible process rule, or release assertion
         if let Some(rule) = first_eligible_rule {
             let _ = self.ensure_assertion(
                 rule.behavior,
@@ -330,6 +363,12 @@ impl KeepAwakeManager {
                 .expect("rules poisoned")
                 .iter()
                 .any(|rule| rule.enabled);
+        let has_work = has_work
+            || self
+                .control_center_mode
+                .lock()
+                .expect("control_center_mode poisoned")
+                .is_some();
         let guard = self.wake_signal.0.lock().expect("wake_signal poisoned");
         if self.wake_generation.load(Ordering::Acquire) != observed {
             return;
@@ -640,6 +679,41 @@ mod tests {
             calls_after_eval,
             "get_state must be a pure in-memory read without invoking power source query or process enumeration"
         );
+    }
+
+    #[test]
+    fn control_center_assertion_honors_power_and_releases_on_session_exit() {
+        let power = Arc::new(MockPowerSource::new(PowerSourceType::Battery));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power.clone(), assertion);
+        manager.set_control_center_session_awake(true, true);
+        assert!(
+            !manager.get_state().is_active,
+            "AC-only must fail closed on battery"
+        );
+        let plugged_in = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let plugged_in_manager = KeepAwakeManager::with_providers(plugged_in, assertion);
+        plugged_in_manager.set_control_center_session_awake(true, true);
+        assert!(plugged_in_manager.get_state().is_active);
+        assert_eq!(
+            plugged_in_manager.get_state().active_rule_id.as_deref(),
+            Some("ai-control.verified-session")
+        );
+        plugged_in_manager.set_control_center_session_awake(false, true);
+        assert!(
+            !plugged_in_manager.get_state().is_active,
+            "assertion must release when the verified session exits"
+        );
+    }
+
+    #[test]
+    fn control_center_ac_only_rejects_unknown_power() {
+        let power = Arc::new(MockPowerSource::new(PowerSourceType::Unknown));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power, assertion);
+        manager.set_control_center_session_awake(true, true);
+        assert!(!manager.get_state().is_active);
     }
 
     #[test]

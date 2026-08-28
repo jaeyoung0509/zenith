@@ -3,6 +3,8 @@ import { storageApi } from '../api/storage';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
   AiUsageSnapshot,
+  AiControlCenterSnapshot,
+  AiControlPreferences,
   AgentActivitySnapshot,
   AppUninstallInspection,
   AwakeBehavior,
@@ -11,6 +13,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  ControlCenterQuickSummary,
   DevelopmentListener,
   DeveloperArtifactScanEvent,
   DeveloperArtifactScanResult,
@@ -26,6 +29,8 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  RecommendationPreview,
+  SafetySnapshot,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
@@ -45,6 +50,38 @@ export function tauriGetProjectContext(force = false): Promise<AgentActivitySnap
 
 export function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {
   return api.getAiUsage(force);
+}
+
+export function tauriGetAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
+  return api.getAiControlCenter(force);
+}
+
+export function tauriGetAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
+  return api.getAiControlQuickSummary();
+}
+
+export function tauriSaveAiControlPreferences(preferences: AiControlPreferences): Promise<void> {
+  return api.saveAiControlPreferences(preferences);
+}
+
+export function tauriRunAiSafetyScan(): Promise<SafetySnapshot> {
+  return api.runAiSafetyScan();
+}
+
+export function tauriDismissAiSafetyFinding(findingId: string): Promise<void> {
+  return api.dismissAiSafetyFinding(findingId);
+}
+
+export function tauriPreviewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
+  return api.previewAiRecommendation(recommendationId);
+}
+
+export function tauriConsumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
+  return api.consumeAiRecommendationPreview(previewId);
+}
+
+export function tauriGetAiControlGitDiff(projectId: string): Promise<string> {
+  return api.getAiControlGitDiff(projectId);
 }
 
 export function tauriConnectOpenRouter(): Promise<void> {

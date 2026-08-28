@@ -17,6 +17,7 @@
   import MemoryView from './MemoryView.svelte';
   import DevelopmentServersView from './DevelopmentServersView.svelte';
   import ProjectCockpitView from './ProjectCockpitView.svelte';
+  import AiControlCenterView from './AiControlCenterView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
@@ -39,6 +40,7 @@
     Server,
     Settings,
     Shield,
+    Sparkles,
   } from 'lucide-svelte';
 
   type Tab = DashboardTab | 'settings' | 'large-files' | 'applications' | 'developer-artifacts';
@@ -55,6 +57,7 @@
     models: { label: 'Local Models', icon: Boxes },
     memory: { label: 'Memory', icon: Activity },
     projects: { label: 'Projects', icon: FolderGit2 },
+    ai_control: { label: 'AI Control', icon: Sparkles },
     development_servers: { label: 'Dev Servers', icon: Server },
     usage: { label: 'AI Usage', icon: ChartNoAxesCombined },
     awake: { label: 'Keep Awake', icon: Moon },
@@ -145,7 +148,7 @@
 
       <!-- Navigation Links -->
       <nav class="space-y-1 no-drag">
-        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'] as tabId}
+        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'] as tabId}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
             <button
@@ -260,6 +263,8 @@
           <MemoryView />
         {:else if currentTab === 'projects'}
           <ProjectCockpitView />
+        {:else if currentTab === 'ai_control'}
+          <AiControlCenterView onNavigateTab={(tab) => selectTab(tab)} />
         {:else if currentTab === 'development_servers'}
           <DevelopmentServersView />
         {:else if currentTab === 'awake'}

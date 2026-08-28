@@ -15,6 +15,12 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 pub const SNAPSHOT_TTL_SECONDS: u64 = 10;
 
 #[derive(Debug, Clone)]
+pub struct AgentActivityRegistry {
+    pub snapshot: AgentActivitySnapshot,
+    pub project_roots: HashMap<String, PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 struct ProcessRecord {
     pid: u32,
     uid: Option<u32>,
@@ -26,6 +32,10 @@ struct ProcessRecord {
 }
 
 pub fn collect() -> AgentActivitySnapshot {
+    collect_registry().snapshot
+}
+
+pub fn collect_registry() -> AgentActivityRegistry {
     let observed_at = now();
     let current_uid = current_user_uid();
     let mut system = System::new();
@@ -50,18 +60,28 @@ pub fn collect() -> AgentActivitySnapshot {
             memory_bytes: process.memory(),
         })
         .collect::<Vec<_>>();
-    snapshot_from_records(records, current_uid, observed_at)
+    registry_from_records(records, current_uid, observed_at)
 }
 
+#[cfg(test)]
 fn snapshot_from_records(
     records: Vec<ProcessRecord>,
     current_uid: u32,
     observed_at: u64,
 ) -> AgentActivitySnapshot {
+    registry_from_records(records, current_uid, observed_at).snapshot
+}
+
+fn registry_from_records(
+    records: Vec<ProcessRecord>,
+    current_uid: u32,
+    observed_at: u64,
+) -> AgentActivityRegistry {
     let mut projects: HashMap<String, ProjectContext> = HashMap::new();
     let mut unassigned_sessions = Vec::new();
     let mut observed_ids = HashSet::new();
     let mut partial_errors = Vec::new();
+    let mut project_roots = HashMap::new();
 
     for record in records {
         let Some(executable) = record.executable.as_deref() else {
@@ -100,7 +120,8 @@ fn snapshot_from_records(
             detail: "Process observed · detailed status unavailable".to_string(),
         };
 
-        if let Some((_, identity)) = project {
+        if let Some((root, identity)) = project {
+            project_roots.insert(identity.id.clone(), root);
             let entry = projects
                 .entry(identity.id.clone())
                 .or_insert(ProjectContext {
@@ -138,13 +159,17 @@ fn snapshot_from_records(
     } else {
         SnapshotQuality::Partial
     };
-    AgentActivitySnapshot {
+    let snapshot = AgentActivitySnapshot {
         observed_at,
         quality,
         projects,
         unassigned_sessions,
         adapters: health(&observed_ids),
         partial_errors,
+    };
+    AgentActivityRegistry {
+        snapshot,
+        project_roots,
     }
 }
 

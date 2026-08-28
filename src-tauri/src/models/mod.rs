@@ -1,4 +1,5 @@
 pub mod agent_activity;
+pub mod ai_control_center;
 pub mod ai_usage;
 pub mod awake;
 pub mod category;
@@ -18,6 +19,7 @@ pub mod signature;
 pub mod storage_management;
 
 pub use agent_activity::*;
+pub use ai_control_center::*;
 pub use ai_usage::*;
 pub use awake::*;
 pub use category::*;

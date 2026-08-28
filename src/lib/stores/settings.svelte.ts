@@ -14,10 +14,10 @@ export class SettingsStore {
     intensive_cleanup: false,
     theme: 'system',
     excluded_signatures: [],
-    quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'],
+    quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_control'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'],
-    dashboard_tabs_revision: 2,
+    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
+    dashboard_tabs_revision: 3,
     sidebar_collapsed: false,
     awake_rules: [
       {
@@ -53,6 +53,20 @@ export class SettingsStore {
         enabled: false,
       },
     ],
+    ai_control: {
+      budgets: [],
+      manual_usage: [],
+      autopilot: {
+        keep_awake_for_verified_sessions: false,
+        keep_awake_ac_only: true,
+        notify_on_battery: false,
+        notify_on_memory_pressure: false,
+        notify_on_session_completion: false,
+        recommendation_cooldown_seconds: 900,
+      },
+      dismissed_findings: [],
+      audit_retention_days: 30,
+    },
   });
 
   isLoading = $state(false);
@@ -95,9 +109,10 @@ export class SettingsStore {
         intensive_cleanup: fetched.intensive_cleanup ?? false,
         quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
         quick_panel_ai_providers: fetched.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-        dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'],
-        dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 2,
+        dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
+        dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 3,
         sidebar_collapsed: fetched.sidebar_collapsed ?? false,
+        ai_control: fetched.ai_control ?? this.settings.ai_control,
       };
       this.settings = normalized;
       this.persistedSettings = serializeSettingsSnapshot(normalized);

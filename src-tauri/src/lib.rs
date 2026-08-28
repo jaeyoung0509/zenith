@@ -1,4 +1,5 @@
 pub mod agent_activity;
+pub mod ai_control_center;
 pub mod ai_usage;
 pub mod applications;
 pub mod cleaner;
@@ -127,6 +128,10 @@ pub fn run() {
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
     let agent_activity_cache = Arc::new(Mutex::new(None));
+    let ai_control_state = Arc::new(Mutex::new(
+        crate::ai_control_center::state::AiControlCenterState::default(),
+    ));
+    let ai_control_refresh_lock = Arc::new(Mutex::new(()));
 
     let app_state = AppState {
         registry,
@@ -141,9 +146,12 @@ pub fn run() {
         memory_sampler,
         dev_port_store,
         agent_activity_cache,
+        ai_control_state,
+        ai_control_refresh_lock,
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -163,6 +171,11 @@ pub fn run() {
                     .settings
                     .lock()
                     .expect("settings poisoned") = loaded;
+                app.state::<AppState>()
+                    .ai_control_state
+                    .lock()
+                    .expect("ai control poisoned")
+                    .audit = crate::ai_control_center::audit::AuditStore::load(&config_dir);
             }
             let open_dashboard =
                 MenuItem::with_id(app, "open_dashboard", "Open Zenith", true, None::<&str>)?;
@@ -255,6 +268,14 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
             commands::get_project_context,
+            commands::get_ai_control_center,
+            commands::get_ai_control_quick_summary,
+            commands::save_ai_control_preferences,
+            commands::run_ai_safety_scan,
+            commands::dismiss_ai_safety_finding,
+            commands::preview_ai_recommendation,
+            commands::consume_ai_recommendation_preview,
+            commands::get_ai_control_git_diff,
             commands::connect_openrouter_oauth,
             commands::start_scan,
             commands::get_last_scan,

@@ -31,6 +31,7 @@ sha2 = "0.10"
 url = "2.5"
 specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
+tauri-plugin-notification = "2"
 regex = "1.10"
 plist = "1.7"
 trash = "5.2"

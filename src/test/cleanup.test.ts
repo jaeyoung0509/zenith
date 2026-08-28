@@ -150,6 +150,7 @@ describe('quick clean eligibility and predicate consistency', () => {
       dashboard_tabs_revision: 1,
       sidebar_collapsed: false,
       awake_rules: [],
+      ai_control: {},
     };
 
     // Calculate bytes

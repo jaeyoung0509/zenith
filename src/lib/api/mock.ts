@@ -1,5 +1,7 @@
 import type {
   AgentActivitySnapshot,
+  AiControlCenterSnapshot,
+  AiControlPreferences,
   AiUsageSnapshot,
   AwakeBehavior,
   AwakeRule,
@@ -8,6 +10,7 @@ import type {
   CleanEvent,
   CleanItemResult,
   CleanResult,
+  ControlCenterQuickSummary,
   DevelopmentListener,
   DiagnosticsSnapshot,
   DiskMetrics,
@@ -16,6 +19,8 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  RecommendationPreview,
+  SafetySnapshot,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
@@ -28,6 +33,64 @@ import type {
 import type { nativeApi } from './native';
 
 type ZenithApi = typeof nativeApi;
+
+let mockControlPreferences: AiControlPreferences = {
+  budgets: [],
+  manual_usage: [],
+  autopilot: {
+    keep_awake_for_verified_sessions: false,
+    keep_awake_ac_only: true,
+    notify_on_battery: false,
+    notify_on_memory_pressure: false,
+    notify_on_session_completion: false,
+    recommendation_cooldown_seconds: 900,
+  },
+  dismissed_findings: [],
+  audit_retention_days: 30,
+};
+
+function mockControlSnapshot(): AiControlCenterSnapshot {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    observed_at: now,
+    providers: [
+      {
+        provider_id: 'codex-subscription', display_name: 'Codex subscription',
+        source_kind: 'live_quota', source_id: 'codex-app-server', scope: 'subscription',
+        observed_at: now, period: { starts_at: null, ends_at: now + 172800, resets_at: now + 172800, label: 'Weekly' },
+        fresh_for_seconds: 300, quality: 'fresh', installed: true, connected: true,
+        status_message: 'Live subscription window from Codex.',
+        metrics: [{ label: 'Weekly usage', tokens: null, cost: null, used_basis_points: 7000 }],
+        action_url: null, partial_error: null,
+      },
+      {
+        provider_id: 'opencode-local', display_name: 'OpenCode local activity',
+        source_kind: 'local_estimate', source_id: 'opencode-stats', scope: 'local_sessions',
+        observed_at: now, period: { starts_at: now - 604800, ends_at: now, resets_at: null, label: 'Last 7 days' },
+        fresh_for_seconds: 300, quality: 'fresh', installed: true, connected: true,
+        status_message: 'Local estimate; not a provider bill.',
+        metrics: [{ label: 'Local estimate', tokens: 1280000, cost: { micros: 1420000, currency: 'USD' }, used_basis_points: null }],
+        action_url: null, partial_error: null,
+      },
+      ...['openai-api', 'openrouter', 'anthropic-api', 'claude-individual', 'cursor-individual', 'antigravity', 'gemini-enterprise', 'xai-api', 'grok-individual'].map((provider_id) => ({
+        provider_id, display_name: provider_id.replaceAll('-', ' '), source_kind: 'manual' as const,
+        source_id: 'manual-entry', scope: provider_id.includes('individual') || provider_id === 'antigravity' ? 'subscription' as const : 'api_key' as const,
+        observed_at: now, period: { starts_at: null, ends_at: null, resets_at: null, label: 'Not reported' },
+        fresh_for_seconds: 0, quality: 'unavailable' as const, installed: false, connected: false,
+        status_message: 'No authoritative usage source is connected.', metrics: [], action_url: null, partial_error: null,
+      })),
+    ],
+    budget_statuses: [],
+    resources: [{ session_id: 'session-codex-preview', project_id: 'project-zenith-preview', tool_name: 'Codex CLI', cpu_percent: 6.4, memory_bytes: 490733568, process_count: 1, duration_seconds: 1320, open_dev_ports: 1, power_eligible: true, confidence: 'verified', reason: 'Canonical session and project identity matched.', mutable_actions_allowed: true }],
+    recommendations: [{ id: 'recommendation-port-preview', kind: 'development_port', title: 'Review open development port', message: 'A verified project session has an open development listener.', created_at: now, cooldown_until: now + 900, session_id: 'session-codex-preview', project_id: 'project-zenith-preview', action_label: 'Preview' }],
+    safety: { observed_at: now, quality: 'unavailable', findings: [], scanned_files: 0, skipped_files: 0, status_message: 'Run an explicit bounded inspection.' },
+    git_summaries: [{ project_id: 'project-zenith-preview', baseline_head: 'abc1234', current_head: 'abc1234', baseline_at: now - 1200, added: 0, modified: 2, deleted: 0, renamed: 0, untracked: 1, changed_paths: ['src/routes/dashboard/AiControlCenterView.svelte', 'src-tauri/src/ai_control_center/mod.rs'], available: true, status_message: '3 paths changed after the Zenith baseline.' }],
+    audit: [],
+    quick_summary: { observed_at: now, active_sessions: 1, budget_alerts: 0, safety_findings: 0, quality: 'fresh' },
+    keep_awake_active: false,
+    partial_errors: [],
+  };
+}
 
 export const mockApi = {
   async getProjectContext(_force = false): Promise<AgentActivitySnapshot> {
@@ -212,6 +275,38 @@ export const mockApi = {
         },
       ],
     };
+  },
+
+  async getAiControlCenter(_force = false): Promise<AiControlCenterSnapshot> {
+    return mockControlSnapshot();
+  },
+
+  async getAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
+    return mockControlSnapshot().quick_summary;
+  },
+
+  async saveAiControlPreferences(preferences: AiControlPreferences): Promise<void> {
+    mockControlPreferences = structuredClone(preferences);
+  },
+
+  async runAiSafetyScan(): Promise<SafetySnapshot> {
+    const snapshot = mockControlSnapshot().safety;
+    return { ...snapshot, quality: 'fresh', scanned_files: 12, status_message: 'Bounded inspection complete.' };
+  },
+
+  async dismissAiSafetyFinding(_findingId: string): Promise<void> {},
+
+  async previewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
+    return { id: `preview-${recommendationId}`, recommendation_id: recommendationId, title: 'Review open development port', explanation: 'This opens the existing Development Servers workflow. No process is changed by this preview.', destination: 'development_servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
+  },
+
+  async consumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
+    if (!previewId.startsWith('preview-')) throw new Error('Preview expired or already used');
+    return { id: previewId, recommendation_id: previewId.slice(8), title: 'Review', explanation: 'Validated once.', destination: 'development_servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
+  },
+
+  async getAiControlGitDiff(_projectId: string): Promise<string> {
+    return 'diff --git a/src/example.ts b/src/example.ts\n+// Explicit, ephemeral preview';
   },
 
   async connectOpenRouter(): Promise<void> {
@@ -748,10 +843,10 @@ export const mockApi = {
       intensive_cleanup: false,
       theme: 'system',
       excluded_signatures: [],
-      quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+      quick_panel_sections: ['storage', 'cleanup', 'ai_control'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'development_servers', 'usage', 'awake'],
-      dashboard_tabs_revision: 2,
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
+      dashboard_tabs_revision: 3,
       sidebar_collapsed: false,
       awake_rules: [
         {
@@ -771,6 +866,7 @@ export const mockApi = {
           enabled: false,
         },
       ],
+      ai_control: mockControlPreferences,
     };
   },
 

@@ -3,9 +3,10 @@ use crate::cleaner::CleanExecutor;
 use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
-    AgentActivitySnapshot, AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category,
-    CleanEvent, CleanResult, DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview,
+    AgentActivitySnapshot, AiControlCenterSnapshot, AiControlPreferences, AiUsageSnapshot,
+    AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
+    ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
+    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview, RecommendationPreview,
     ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent, ScanResult, SelectedApplication,
     ZenithSettings,
 };
@@ -33,7 +34,9 @@ pub struct AppState {
     pub storage_operation_gate: StorageOperationGate,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
     pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
-    pub agent_activity_cache: Arc<Mutex<Option<AgentActivitySnapshot>>>,
+    pub agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+    pub ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
+    pub ai_control_refresh_lock: Arc<Mutex<()>>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -101,22 +104,475 @@ pub async fn get_project_context(
             .expect("agent_activity_cache poisoned")
             .as_ref()
         {
-            if unix_timestamp().saturating_sub(snapshot.observed_at)
+            if unix_timestamp().saturating_sub(snapshot.snapshot.observed_at)
                 < crate::agent_activity::SNAPSHOT_TTL_SECONDS
             {
-                return Ok(snapshot.clone());
+                return Ok(snapshot.snapshot.clone());
             }
         }
     }
 
     let cache = state.agent_activity_cache.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let snapshot = crate::agent_activity::collect();
-        *cache.lock().expect("agent_activity_cache poisoned") = Some(snapshot.clone());
+        let registry = crate::agent_activity::collect_registry();
+        let snapshot = registry.snapshot.clone();
+        *cache.lock().expect("agent_activity_cache poisoned") = Some(registry);
         snapshot
     })
     .await
     .map_err(|error| format!("Agent activity refresh failed: {error}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_ai_control_center(
+    force: Option<bool>,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AiControlCenterSnapshot, String> {
+    if !force.unwrap_or(false) {
+        if let Some(snapshot) = state
+            .ai_control_state
+            .lock()
+            .expect("ai control poisoned")
+            .last_snapshot
+            .as_ref()
+        {
+            if unix_timestamp().saturating_sub(snapshot.observed_at) < 10 {
+                return Ok(snapshot.clone());
+            }
+        }
+    }
+    let refresh_lock = state.ai_control_refresh_lock.clone();
+    let control = state.ai_control_state.clone();
+    let activity_cache = state.agent_activity_cache.clone();
+    let usage_cache = state.ai_usage_cache.clone();
+    let openrouter_key = state
+        .openrouter_key
+        .lock()
+        .expect("openrouter key poisoned")
+        .clone();
+    let memory_sampler = state.memory_sampler.clone();
+    let awake = state.awake_manager.clone();
+    let dev_store = state.dev_port_store.clone();
+    let preferences = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_control
+        .clone();
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+    let notification_app = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = refresh_lock.lock().expect("ai control refresh poisoned");
+        let now = unix_timestamp();
+        let activity = {
+            let cached = activity_cache
+                .lock()
+                .expect("activity cache poisoned")
+                .clone();
+            if let Some(value) = cached.filter(|value| {
+                now.saturating_sub(value.snapshot.observed_at)
+                    < crate::agent_activity::SNAPSHOT_TTL_SECONDS
+            }) {
+                value
+            } else {
+                let value = crate::agent_activity::collect_registry();
+                *activity_cache.lock().expect("activity cache poisoned") = Some(value.clone());
+                value
+            }
+        };
+        let usage = {
+            let cached = usage_cache.lock().expect("usage cache poisoned").clone();
+            if let Some(value) = cached.filter(|value| value.is_fresh_at(now, 60)) {
+                value
+            } else {
+                let value = AiUsageCollector::collect(openrouter_key);
+                *usage_cache.lock().expect("usage cache poisoned") = Some(value.clone());
+                value
+            }
+        };
+        let memory = memory_sampler.sample();
+        let awake_state = awake.get_state();
+        let listeners = crate::dev_ports::list_listeners(
+            &dev_store,
+            &crate::dev_ports::RealDevPortSystem::default(),
+        )
+        .unwrap_or_default();
+        let resources = crate::ai_control_center::resources::attribute(
+            &activity.snapshot,
+            &activity.project_roots,
+            &listeners,
+            awake_state.power_source,
+            preferences.autopilot.keep_awake_ac_only,
+        );
+        let verified = resources
+            .iter()
+            .any(|item| item.project_id.is_some() && item.confidence == "process_observed");
+        awake.set_control_center_session_awake(
+            preferences.autopilot.keep_awake_for_verified_sessions && verified,
+            preferences.autopilot.keep_awake_ac_only,
+        );
+        let mut control = control.lock().expect("ai control poisoned");
+        let providers = crate::ai_control_center::providers::normalize(&usage, &preferences);
+        let providers = crate::ai_control_center::providers::retain_last_success(
+            providers,
+            &mut control.providers_last_success,
+        );
+        let budget_statuses =
+            crate::ai_control_center::budgets::statuses(&preferences.budgets, &providers);
+        let new_items = control.policy.evaluate(
+            &resources,
+            Some(memory.pressure),
+            awake_state.power_source,
+            &preferences.autopilot,
+            now,
+        );
+        let notification_errors =
+            crate::ai_control_center::notifications::emit_advisories(&notification_app, &new_items);
+        control.recommendations.extend(new_items);
+        control
+            .recommendations
+            .sort_by_key(|item| std::cmp::Reverse(item.created_at));
+        control.recommendations.truncate(64);
+        let recommendations = control.recommendations.clone();
+        let git_summaries = control.git.summaries(&activity.project_roots, now);
+        let safety = control.safety.clone();
+        let partial_errors = providers
+            .iter()
+            .filter_map(|item| item.partial_error.clone())
+            .chain(activity.snapshot.partial_errors.clone())
+            .chain(notification_errors)
+            .collect::<Vec<_>>();
+        let quality = if !partial_errors.is_empty()
+            || safety.quality == crate::models::ObservationQuality::Partial
+        {
+            crate::models::ObservationQuality::Partial
+        } else {
+            crate::models::ObservationQuality::Fresh
+        };
+        let quick_summary = ControlCenterQuickSummary {
+            observed_at: now,
+            active_sessions: resources.len() as u32,
+            budget_alerts: budget_statuses
+                .iter()
+                .filter(|item| !item.crossed_thresholds.is_empty())
+                .count() as u32,
+            safety_findings: safety
+                .findings
+                .iter()
+                .filter(|item| !item.dismissed)
+                .count() as u32,
+            quality,
+        };
+        control.audit.append(
+            now,
+            "refresh",
+            "ok",
+            None,
+            "AI Control Center local snapshot refreshed",
+            preferences.audit_retention_days,
+        );
+        let _ = control.audit.save(&config_dir);
+        let audit = control.audit.entries();
+        let snapshot = AiControlCenterSnapshot {
+            observed_at: now,
+            providers,
+            budget_statuses,
+            resources,
+            recommendations,
+            safety,
+            git_summaries,
+            audit,
+            quick_summary,
+            keep_awake_active: awake.get_state().active_rule_id.as_deref()
+                == Some("ai-control.verified-session"),
+            partial_errors,
+        };
+        control.last_snapshot = Some(snapshot.clone());
+        Ok(snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_ai_control_quick_summary(
+    state: State<'_, AppState>,
+) -> Option<ControlCenterQuickSummary> {
+    state
+        .ai_control_state
+        .lock()
+        .expect("ai control poisoned")
+        .last_snapshot
+        .as_ref()
+        .map(|value| value.quick_summary.clone())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_ai_control_preferences(
+    preferences: AiControlPreferences,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let preferences = crate::ai_control_center::budgets::sanitize(preferences);
+    if preferences.autopilot.notify_on_battery
+        || preferences.autopilot.notify_on_memory_pressure
+        || preferences.autopilot.notify_on_session_completion
+    {
+        crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
+    }
+    let retention = preferences.audit_retention_days;
+    let mut settings = state.settings.lock().expect("settings poisoned");
+    settings.ai_control = preferences;
+    settings_store::save(
+        &app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?,
+        &settings,
+    )?;
+    drop(settings);
+    let config = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
+    control.last_snapshot = None;
+    control.audit.append(
+        unix_timestamp(),
+        "preferences",
+        "saved",
+        None,
+        "AI Control preferences updated",
+        retention,
+    );
+    control.audit.save(&config)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn run_ai_safety_scan(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::models::SafetySnapshot, String> {
+    let cache = state.agent_activity_cache.clone();
+    let control = state.ai_control_state.clone();
+    let preferences = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_control
+        .clone();
+    let config = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let registry = cache
+            .lock()
+            .expect("activity cache poisoned")
+            .clone()
+            .unwrap_or_else(crate::agent_activity::collect_registry);
+        let now = unix_timestamp();
+        let snapshot = crate::ai_control_center::safety::inspect(
+            &registry.project_roots,
+            &preferences.dismissed_findings,
+            now,
+        );
+        let mut control = control.lock().expect("ai control poisoned");
+        control.safety = snapshot.clone();
+        control.last_snapshot = None;
+        control.audit.append(
+            now,
+            "safety_scan",
+            "ok",
+            None,
+            &snapshot.status_message,
+            preferences.audit_retention_days,
+        );
+        let _ = control.audit.save(&config);
+        snapshot
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn dismiss_ai_safety_finding(
+    finding_id: String,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut settings = state.settings.lock().expect("settings poisoned");
+    if !settings.ai_control.dismissed_findings.contains(&finding_id) {
+        settings
+            .ai_control
+            .dismissed_findings
+            .push(finding_id.clone());
+    }
+    settings.ai_control = crate::ai_control_center::budgets::sanitize(settings.ai_control.clone());
+    settings_store::save(
+        &app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?,
+        &settings,
+    )?;
+    let retention = settings.ai_control.audit_retention_days;
+    drop(settings);
+    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
+    if let Some(item) = control
+        .safety
+        .findings
+        .iter_mut()
+        .find(|item| item.id == finding_id)
+    {
+        item.dismissed = true;
+    }
+    control.last_snapshot = None;
+    control.audit.append(
+        unix_timestamp(),
+        "finding_dismissed",
+        "ok",
+        None,
+        "Safety finding dismissed",
+        retention,
+    );
+    control.audit.save(
+        &app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?,
+    )
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn preview_ai_recommendation(
+    recommendation_id: String,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<RecommendationPreview, String> {
+    let retention = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_control
+        .audit_retention_days;
+    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
+    let item = control
+        .recommendations
+        .iter()
+        .find(|item| item.id == recommendation_id)
+        .cloned()
+        .ok_or_else(|| "Recommendation is stale or unavailable".to_string())?;
+    let now = unix_timestamp();
+    let preview = control.previews.create(&item, now);
+    control.audit.append(
+        now,
+        "recommendation_preview",
+        "created",
+        item.project_id.clone(),
+        "One-shot recommendation preview created",
+        retention,
+    );
+    let _ = control.audit.save(
+        &app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?,
+    );
+    Ok(preview)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn consume_ai_recommendation_preview(
+    preview_id: String,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<RecommendationPreview, String> {
+    let now = unix_timestamp();
+    let retention = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_control
+        .audit_retention_days;
+    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
+    let preview = control.previews.consume(&preview_id, now)?;
+    control.audit.append(
+        now,
+        "recommendation_preview",
+        "consumed",
+        None,
+        "One-shot recommendation preview consumed",
+        retention,
+    );
+    let _ = control.audit.save(
+        &app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?,
+    );
+    Ok(preview)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_ai_control_git_diff(
+    project_id: String,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let root = state
+        .agent_activity_cache
+        .lock()
+        .expect("activity cache poisoned")
+        .as_ref()
+        .and_then(|value| value.project_roots.get(&project_id))
+        .cloned()
+        .ok_or_else(|| "Project identity is stale or unavailable".to_string())?;
+    let paths = state
+        .ai_control_state
+        .lock()
+        .expect("ai control poisoned")
+        .git
+        .paths_for_diff(&project_id, &root, unix_timestamp())?;
+    let diff = tauri::async_runtime::spawn_blocking(move || {
+        crate::ai_control_center::git::explicit_diff(&root, &paths)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    let retention = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_control
+        .audit_retention_days;
+    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
+    control.audit.append(
+        unix_timestamp(),
+        "git_diff",
+        "viewed",
+        Some(project_id),
+        "Ephemeral Git diff viewed",
+        retention,
+    );
+    let _ = control.audit.save(
+        &app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?,
+    );
+    Ok(diff)
 }
 
 #[tauri::command]
