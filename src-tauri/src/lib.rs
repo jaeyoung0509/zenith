@@ -1,3 +1,5 @@
+pub mod agent_activity;
+pub mod ai_control_center;
 pub mod ai_usage;
 pub mod applications;
 pub mod cleaner;
@@ -116,6 +118,7 @@ fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosit
 pub fn run() {
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
+    awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
     let last_scan = Arc::new(Mutex::new(None));
     let openrouter_key = Arc::new(Mutex::new(None));
@@ -125,22 +128,31 @@ pub fn run() {
     let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
+    let agent_activity_cache = Arc::new(Mutex::new(None));
+    let ai_control_state = Arc::new(Mutex::new(
+        crate::ai_control_center::state::AiControlCenterState::default(),
+    ));
+    let ai_control_refresh_lock = Arc::new(Mutex::new(()));
 
     let app_state = AppState {
         registry,
         awake_manager: awake_manager.clone(),
-        settings,
+        settings: settings.clone(),
         last_scan,
         openrouter_key,
         ai_usage_cache,
         ai_usage_refresh_lock,
         delete_plans,
         storage_operation_gate,
-        memory_sampler,
-        dev_port_store,
+        memory_sampler: memory_sampler.clone(),
+        dev_port_store: dev_port_store.clone(),
+        agent_activity_cache: agent_activity_cache.clone(),
+        ai_control_state: ai_control_state.clone(),
+        ai_control_refresh_lock,
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -156,10 +168,21 @@ pub fn run() {
                 app.state::<AppState>()
                     .awake_manager
                     .set_rules(loaded.awake_rules.clone());
+                app.state::<AppState>()
+                    .awake_manager
+                    .set_control_center_awake_policy(
+                        loaded.ai_control.autopilot.keep_awake_for_verified_sessions,
+                        loaded.ai_control.autopilot.keep_awake_ac_only,
+                    );
                 *app.state::<AppState>()
                     .settings
                     .lock()
                     .expect("settings poisoned") = loaded;
+                app.state::<AppState>()
+                    .ai_control_state
+                    .lock()
+                    .expect("ai control poisoned")
+                    .audit = crate::ai_control_center::audit::AuditStore::load(&config_dir);
             }
             let open_dashboard =
                 MenuItem::with_id(app, "open_dashboard", "Open Zenith", true, None::<&str>)?;
@@ -229,6 +252,20 @@ pub fn run() {
                 watcher_ref.evaluate();
             });
 
+            let bg_app = app.handle().clone();
+            let bg_runtime = Arc::new(crate::ai_control_center::runtime::AiControlRuntime::new(
+                memory_sampler.clone(),
+                dev_port_store.clone(),
+                agent_activity_cache.clone(),
+                ai_control_state.clone(),
+                awake_manager.clone(),
+                settings.clone(),
+            ));
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                bg_runtime.tick(Some(&bg_app));
+            });
+
             Ok(())
         })
         .invoke_handler(specta_builder().invoke_handler())
@@ -251,6 +288,15 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .dangerously_cast_bigints_to_number()
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
+            commands::get_project_context,
+            commands::get_ai_control_center,
+            commands::get_ai_control_quick_summary,
+            commands::save_ai_control_preferences,
+            commands::run_ai_safety_scan,
+            commands::dismiss_ai_safety_finding,
+            commands::preview_ai_recommendation,
+            commands::consume_ai_recommendation_preview,
+            commands::get_ai_control_git_diff,
             commands::connect_openrouter_oauth,
             commands::start_scan,
             commands::get_last_scan,

@@ -13,7 +13,7 @@ remain outside the cleanup boundary.
 
 ## Features
 
-- Storage cleanup for Claude Code, Cursor, Gemini CLI, Antigravity, Codex,
+- Storage cleanup for Claude Code, Cursor, Antigravity (and legacy Gemini CLI caches), Codex,
   OpenCode, Cargo, Go, Node.js, Python, Xcode, Docker, and related tools.
 - Explicit `Safe`, `Rebuild`, and `Manual` cleanup tiers. Only safe items are
   selected automatically.
@@ -30,9 +30,18 @@ remain outside the cleanup boundary.
   such as Vite, Next.js, agent-browser, and Chrome for Testing, shows their
   project and network exposure, and can release one exact verified listener
   without terminating unrelated browsers, Node.js, or runtime processes.
+- A local Projects cockpit that groups supported AI CLI processes by canonical
+  repository/worktree identity. Process-only evidence is labelled honestly,
+  inaccessible contexts stay Unassigned, and PID, argv, prompts, transcripts,
+  credentials, and absolute paths never cross into the WebView.
 - AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
-- A configurable menu-bar panel. Storage, cleanup, AI usage, categories, and
+- AI Control Center: provenance-aware usage tracking, local budget alert thresholds,
+  advisory resource autopilot, and bounded project safety posture (secret exposure & MCP
+  configuration inspection). Antigravity is Google's primary individual coding tool;
+  consumer Gemini CLI deprecation is accurately disclosed while Enterprise/API usage
+  remains supported.
+- A configurable menu-bar panel. Storage, cleanup, AI usage, categories, AI Control, and
   memory sections can be shown, hidden, and reordered.
 - Native Keep Awake rules for selected applications and manual timers.
 - Persistent theme, menu-bar layout, provider priority, cleanup defaults, and
@@ -65,6 +74,12 @@ To launch Zenith on macOS:
 - **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
 - **Local Logs**: Rotating error logs are stored on your Mac at `~/Library/Logs/Zenith/zenith.log`.
 - **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
+- **Minimized Agent Metadata**: Project Cockpit returns opaque project/session
+  IDs, compact location hints, resource totals, and evidence labels. It does not
+  return process IDs, command lines, environment values, prompts, or transcripts.
+- **AI Control Privacy**: AI Control Center reuses those opaque identities for
+  provenance-aware usage, advisory resource policy, bounded safety inspection,
+  and post-baseline Git metadata. See [AI Control Center](docs/AI_CONTROL_CENTER.md).
 
 ## Cleanup safety
 

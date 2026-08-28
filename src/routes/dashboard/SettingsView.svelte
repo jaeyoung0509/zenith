@@ -17,6 +17,8 @@
     { id: 'docker', label: 'Containers', description: 'Docker images, build cache, stopped containers, and volumes.' },
     { id: 'models', label: 'Local Models', description: 'Ollama, HuggingFace, LM Studio, and Apple MLX models.' },
     { id: 'memory', label: 'Memory', description: 'Memory pressure, top processes, and resource guard.' },
+    { id: 'projects', label: 'Projects', description: 'Verified AI sessions grouped by canonical project and worktree.' },
+    { id: 'ai_control', label: 'AI Control', description: 'Usage provenance, local budget alerts, resource policy, and safety posture.' },
     { id: 'development_servers', label: 'Development Servers', description: 'Inspect and safely release verified local TCP listeners.' },
     { id: 'usage', label: 'AI Usage', description: 'OAuth coding agent limits and local token insights.' },
     { id: 'awake', label: 'Keep Awake', description: 'Prevent system and display sleep rules.' },
@@ -28,6 +30,7 @@
     { id: 'ai_usage', label: 'AI Usage', description: 'Connected provider limits and local activity.' },
     { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
     { id: 'memory', label: 'Memory', description: 'Memory pressure and current usage.' },
+    { id: 'ai_control', label: 'AI Control', description: 'Cached sessions, alerts, and safety counts without background work.' },
   ];
   const providerOptions: { id: AiProviderId; label: string }[] = [
     { id: 'codex', label: 'Codex' },

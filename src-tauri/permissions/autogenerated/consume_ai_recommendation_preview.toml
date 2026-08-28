@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-consume-ai-recommendation-preview"
+description = "Enables the consume_ai_recommendation_preview command without any pre-configured scope."
+commands.allow = ["consume_ai_recommendation_preview"]
+
+[[permission]]
+identifier = "deny-consume-ai-recommendation-preview"
+description = "Denies the consume_ai_recommendation_preview command without any pre-configured scope."
+commands.deny = ["consume_ai_recommendation_preview"]

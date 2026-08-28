@@ -1,6 +1,15 @@
 fn main() {
     const COMMANDS: &[&str] = &[
         "get_ai_usage",
+        "get_project_context",
+        "get_ai_control_center",
+        "get_ai_control_quick_summary",
+        "save_ai_control_preferences",
+        "run_ai_safety_scan",
+        "dismiss_ai_safety_finding",
+        "preview_ai_recommendation",
+        "consume_ai_recommendation_preview",
+        "get_ai_control_git_diff",
         "connect_openrouter_oauth",
         "start_scan",
         "get_last_scan",

@@ -3,7 +3,7 @@
   import { fade } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { prefersReducedMotion } from 'svelte/motion';
-  import type { CategoryResult, DashboardTab } from '../../lib/models/types';
+  import type { CategoryResult, DashboardRoute, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
@@ -16,6 +16,8 @@
   import AiUsageView from './AiUsageView.svelte';
   import MemoryView from './MemoryView.svelte';
   import DevelopmentServersView from './DevelopmentServersView.svelte';
+  import ProjectCockpitView from './ProjectCockpitView.svelte';
+  import AiControlCenterView from './AiControlCenterView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
@@ -34,12 +36,14 @@
     ChevronsRight,
     HardDrive,
     Moon,
+    FolderGit2,
     Server,
     Settings,
     Shield,
+    Sparkles,
   } from 'lucide-svelte';
 
-  type Tab = DashboardTab | 'settings' | 'large-files' | 'applications' | 'developer-artifacts';
+  type Tab = DashboardRoute | 'large-files' | 'applications' | 'developer-artifacts';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -52,6 +56,8 @@
     docker: { label: 'Containers', icon: Container },
     models: { label: 'Local Models', icon: Boxes },
     memory: { label: 'Memory', icon: Activity },
+    projects: { label: 'Projects', icon: FolderGit2 },
+    ai_control: { label: 'AI Control', icon: Sparkles },
     development_servers: { label: 'Dev Servers', icon: Server },
     usage: { label: 'AI Usage', icon: ChartNoAxesCombined },
     awake: { label: 'Keep Awake', icon: Moon },
@@ -72,8 +78,18 @@
     });
   });
 
-  function selectTab(tab: Tab) {
-    currentTab = tab;
+  function selectTab(tab: Tab | string) {
+    if (tab === 'developer_artifacts' || tab === 'developer-artifacts') {
+      currentTab = 'developer-artifacts';
+    } else if (tab === 'large_files' || tab === 'large-files') {
+      currentTab = 'large-files';
+    } else if (tab === 'applications') {
+      currentTab = 'applications';
+    } else if (tab === 'settings') {
+      currentTab = 'settings';
+    } else {
+      currentTab = tab as Tab;
+    }
     selectedCategory = null;
   }
 
@@ -142,7 +158,7 @@
 
       <!-- Navigation Links -->
       <nav class="space-y-1 no-drag">
-        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'] as tabId}
+        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'] as tabId}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
             <button
@@ -255,6 +271,10 @@
           <AiUsageView />
         {:else if currentTab === 'memory'}
           <MemoryView />
+        {:else if currentTab === 'projects'}
+          <ProjectCockpitView />
+        {:else if currentTab === 'ai_control'}
+          <AiControlCenterView onNavigateTab={(tab) => selectTab(tab)} />
         {:else if currentTab === 'development_servers'}
           <DevelopmentServersView />
         {:else if currentTab === 'awake'}

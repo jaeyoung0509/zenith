@@ -2,6 +2,10 @@ import { Channel } from '@tauri-apps/api/core';
 import { commands } from '../bindings/tauri';
 import type {
   AiUsageSnapshot,
+  AiControlCenterSnapshot,
+  AiControlPreferences,
+  ControlCenterQuickSummary,
+  AgentActivitySnapshot,
   AwakeBehavior,
   AwakeRule,
   AwakeState,
@@ -16,6 +20,8 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  RecommendationPreview,
+  SafetySnapshot,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
@@ -37,8 +43,44 @@ async function unwrap<T, E>(promise: Promise<Result<T, E>>): Promise<T> {
 }
 
 export const nativeApi = {
+  async getProjectContext(force = false): Promise<AgentActivitySnapshot> {
+    return await unwrap(commands.getProjectContext(force));
+  },
+
   async getAiUsage(force = false): Promise<AiUsageSnapshot> {
     return await unwrap(commands.getAiUsage(force));
+  },
+
+  async getAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
+    return await unwrap(commands.getAiControlCenter(force));
+  },
+
+  async getAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
+    return await commands.getAiControlQuickSummary();
+  },
+
+  async saveAiControlPreferences(preferences: AiControlPreferences): Promise<void> {
+    await unwrap(commands.saveAiControlPreferences(preferences));
+  },
+
+  async runAiSafetyScan(): Promise<SafetySnapshot> {
+    return await unwrap(commands.runAiSafetyScan());
+  },
+
+  async dismissAiSafetyFinding(findingId: string): Promise<void> {
+    await unwrap(commands.dismissAiSafetyFinding(findingId));
+  },
+
+  async previewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
+    return await unwrap(commands.previewAiRecommendation(recommendationId));
+  },
+
+  async consumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
+    return await unwrap(commands.consumeAiRecommendationPreview(previewId));
+  },
+
+  async getAiControlGitDiff(projectId: string): Promise<string> {
+    return await unwrap(commands.getAiControlGitDiff(projectId));
   },
 
   async connectOpenRouter(): Promise<void> {

@@ -246,6 +246,20 @@ manifest filesystem path.
 
 ## Process termination
 
+Project Cockpit is observation-only. Its adapter registry matches exact CLI
+executable identities for Antigravity (`agy`), legacy/enterprise Gemini CLI,
+Codex, Claude Code, Cursor Agent CLI, Grok Build, Copilot CLI, and OpenCode.
+Names and substrings alone are insufficient, and Cursor's GUI process never
+creates an agent session. Current-user ownership, a non-zero start time, an
+executable path, and cwd are checked before project correlation. No termination
+lease or mutable command is exposed by this workflow.
+
+Public project/activity snapshots contain opaque hashes rather than PID or full
+filesystem paths. They never serialize raw argv, environment values, prompts,
+tool arguments/results, transcripts, account identity, credentials, remotes,
+or diff content. An inaccessible or unprovable cwd yields an Unassigned session
+instead of basename, branch, port, or recent-activity guessing.
+
 Memory Inspector resolves a fresh process snapshot from a recognized user-app
 group. It does not accept a PID from the WebView. System processes, terminals,
 and Zenith are protected. Normal application termination is offered before a
@@ -300,3 +314,38 @@ app-data scope, development-server classification, lease expiry/one-shot
 behavior, force authorization, PID reuse, and port ownership changes. Tests
 must never point destructive operations at real user processes or directories;
 the development-port integration test owns and cleans up its ephemeral child.
+
+## AI Control Center safety invariants
+
+AI Control Center enforces strict safety and privacy boundaries:
+
+- **Canonical session identity:** Resource attribution consumes only the
+  verified `AgentSession` and `ProjectIdentity` records from Project Cockpit.
+  Unassigned or low-confidence processes remain visible for transparency but
+  cannot authorize any mutable action.
+- **Advisory-first automation:** Keep Awake automation is disabled by default,
+  requires explicit policy opt-in, honors AC-only restrictions, treats unknown
+  power as ineligible, and automatically releases its assertion when verified
+  sessions exit. Recommendations never kill processes, close ports, or delete
+  files automatically.
+- **Opaque action previews:** Actionable recommendations generate opaque,
+  expiring (120-second), one-shot preview tokens. Consuming a preview navigates
+  the user to the corresponding review workflow; it never performs mutations
+  directly.
+- **Bounded safety inspection:** Project safety scans are user-initiated and
+  strictly bounded to registered active project roots, a maximum of 2,000 files,
+  1 MiB per file, and a directory depth of 8. Inspection never follows symlinks,
+  skips cross-filesystem mounts, and never executes or rewrites tool configs.
+- **Secret redaction guarantees:** Scans detect secret patterns (API keys,
+  tokens, private keys) and broad MCP permissions, returning only the evidence
+  type, relative path, and line numbers. Raw secret bytes, credentials, command
+  arguments, headers, environment variables, and email addresses are never
+  returned, logged, or persisted.
+- **Git baseline integrity:** Captures a repository baseline on first session
+  observation. Pre-existing uncommitted changes are excluded from change
+  counts. Diffs are generated only upon explicit user request, bounded at 256
+  KiB, and never persisted to disk.
+- **Audit and telemetry:** Audit logs are local, bounded to 1,024 entries and
+  512 KiB, sanitized before persistence, and retained for 1–365 days. Zenith
+  collects zero telemetry or analytics. Full details are in
+  [AI_CONTROL_CENTER.md](AI_CONTROL_CENTER.md).

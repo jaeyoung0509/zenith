@@ -5,6 +5,21 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getAiUsage: (force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { force })),
+	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot, string>(__TAURI_INVOKE("get_project_context", { force })),
+	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
+	getAiControlQuickSummary: () => __TAURI_INVOKE<{
+	observed_at: number,
+	active_sessions: number,
+	budget_alerts: number,
+	safety_findings: number,
+	quality: ObservationQuality,
+} | null>("get_ai_control_quick_summary"),
+	saveAiControlPreferences: (preferences: AiControlPreferences) => typedError<null, string>(__TAURI_INVOKE("save_ai_control_preferences", { preferences })),
+	runAiSafetyScan: () => typedError<SafetySnapshot, string>(__TAURI_INVOKE("run_ai_safety_scan")),
+	dismissAiSafetyFinding: (findingId: string) => typedError<null, string>(__TAURI_INVOKE("dismiss_ai_safety_finding", { findingId })),
+	previewAiRecommendation: (recommendationId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("preview_ai_recommendation", { recommendationId })),
+	consumeAiRecommendationPreview: (previewId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("consume_ai_recommendation_preview", { previewId })),
+	getAiControlGitDiff: (projectId: string) => typedError<string, string>(__TAURI_INVOKE("get_ai_control_git_diff", { projectId })),
 	connectOpenrouterOauth: () => typedError<null, string>(__TAURI_INVOKE("connect_openrouter_oauth")),
 	startScan: (onEvent: Channel<ScanEvent>, categories: Category[] | null) => typedError<ScanResult, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
 	getLastScan: () => __TAURI_INVOKE<{
@@ -66,6 +81,83 @@ export const commands = {
 };
 
 /* Types */
+export type AgentActivitySnapshot = {
+	observed_at: number,
+	quality: SnapshotQuality,
+	projects: ProjectContext[],
+	unassigned_sessions: AgentSession[],
+	adapters: AgentAdapterHealth[],
+	partial_errors: string[],
+};
+
+export type AgentActivityStatus = "active" | "waiting" | "finished" | "exited" | "unknown";
+
+export type AgentAdapterHealth = {
+	tool_id: string,
+	display_name: string,
+	state: AgentAdapterState,
+	evidence: AgentEvidence | null,
+	message: string,
+};
+
+export type AgentAdapterState = "not_installed" | "process_only" | "integration_available" | "connected" | "version_unsupported" | "partial";
+
+export type AgentEvidence = "vendor_confirmed" | "process_observed" | "heuristic";
+
+export type AgentSession = {
+	/**  Opaque, snapshot-stable identity. Never a PID. */
+	id: string,
+	tool_id: string,
+	tool_name: string,
+	status: AgentActivityStatus,
+	evidence: AgentEvidence,
+	observed_at: number,
+	started_at: number,
+	elapsed_seconds: number,
+	cpu_percent: number | null,
+	memory_bytes: number,
+	project_id: string | null,
+	detail: string,
+};
+
+export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize | AiControlCenterSnapshot_Deserialize;
+
+export type AiControlCenterSnapshot_Deserialize = {
+	observed_at: number,
+	providers: ProviderObservation[],
+	budget_statuses: BudgetStatus[],
+	resources: ResourceAttribution[],
+	recommendations: Recommendation_Deserialize[],
+	safety: SafetySnapshot,
+	git_summaries: GitChangeSummary[],
+	audit: AuditEntry[],
+	quick_summary: ControlCenterQuickSummary,
+	keep_awake_active: boolean,
+	partial_errors: string[],
+};
+
+export type AiControlCenterSnapshot_Serialize = {
+	observed_at: number,
+	providers: ProviderObservation[],
+	budget_statuses: BudgetStatus[],
+	resources: ResourceAttribution[],
+	recommendations: Recommendation_Serialize[],
+	safety: SafetySnapshot,
+	git_summaries: GitChangeSummary[],
+	audit: AuditEntry[],
+	quick_summary: ControlCenterQuickSummary,
+	keep_awake_active: boolean,
+	partial_errors: string[],
+};
+
+export type AiControlPreferences = {
+	budgets?: LocalAlertBudget[],
+	manual_usage?: ManualProviderUsage[],
+	autopilot?: AutopilotPreferences,
+	dismissed_findings?: string[],
+	audit_retention_days?: number,
+};
+
 export type AiProviderUsage = {
 	id: string,
 	name: string,
@@ -108,6 +200,24 @@ export type AppUninstallInspection = {
 	related_items: AppRelatedItem[],
 	incomplete: boolean,
 	warnings: string[],
+};
+
+export type AuditEntry = {
+	id: string,
+	timestamp: number,
+	event_kind: string,
+	outcome: string,
+	project_ref: string | null,
+	message: string,
+};
+
+export type AutopilotPreferences = {
+	keep_awake_for_verified_sessions?: boolean,
+	keep_awake_ac_only?: boolean,
+	notify_on_battery?: boolean,
+	notify_on_memory_pressure?: boolean,
+	notify_on_session_completion?: boolean,
+	recommendation_cooldown_seconds?: number,
 };
 
 export type AwakeBehavior = "prevent_system_sleep" | "keep_display_awake";
@@ -156,6 +266,19 @@ export type AwakeState = {
 	rule_evaluations: AwakeRuleEvaluation[],
 };
 
+export type BudgetPeriod = "weekly" | "monthly";
+
+export type BudgetStatus = {
+	budget_id: string,
+	period: BudgetPeriod,
+	spent: MoneyMicros,
+	limit: MoneyMicros,
+	used_basis_points: number,
+	crossed_thresholds: number[],
+	source_label: string,
+	mixed_sources: boolean,
+};
+
 export type Category = "ai" | "developer" | "container" | "model" | "system";
 
 export type CategoryResult = {
@@ -195,11 +318,25 @@ export type CleanResult = {
 
 export type CleanStatus = "success" | "partial" | "failed";
 
+export type ControlCenterQuickSummary = {
+	observed_at: number,
+	active_sessions: number,
+	budget_alerts: number,
+	safety_findings: number,
+	quality: ObservationQuality,
+};
+
+export type DashboardRoute = DashboardRoute_Serialize | DashboardRoute_Deserialize;
+
+export type DashboardRoute_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
+
+export type DashboardRoute_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake" | "developer_artifacts" | "large_files" | "applications" | "settings";
+
 export type DashboardTab = DashboardTab_Serialize | DashboardTab_Deserialize;
 
-export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
+export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
 
-export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "development_servers" | "usage" | "awake";
+export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
 
 export type DeveloperArtifact = {
 	id: string,
@@ -361,6 +498,23 @@ export type FileSize = {
 	allocated: number | null,
 };
 
+export type FindingSeverity = "info" | "warning" | "critical";
+
+export type GitChangeSummary = {
+	project_id: string,
+	baseline_head: string | null,
+	current_head: string | null,
+	baseline_at: number,
+	added: number,
+	modified: number,
+	deleted: number,
+	renamed: number,
+	untracked: number,
+	changed_paths: string[],
+	available: boolean,
+	status_message: string,
+};
+
 export type InstalledApp = {
 	id: string,
 	name: string,
@@ -412,6 +566,15 @@ export type ListenerExposure = "loopback" | "network" | "all_interfaces";
 
 export type ListenerProtocol = "tcp";
 
+export type LocalAlertBudget = {
+	id?: string,
+	provider_id?: string | null,
+	period?: BudgetPeriod,
+	limit?: MoneyMicros,
+	threshold_percents?: number[],
+	enabled?: boolean,
+};
+
 export type LocalModelItem = {
 	id: string,
 	name: string,
@@ -422,6 +585,14 @@ export type LocalModelItem = {
 	parameter_size: string | null,
 	quantization: string | null,
 	last_modified: number | null,
+};
+
+export type ManualProviderUsage = {
+	provider_id?: string,
+	spent?: MoneyMicros,
+	limit?: MoneyMicros | null,
+	resets_at?: number | null,
+	entered_at?: number,
 };
 
 export type MemoryMetrics = {
@@ -440,6 +611,34 @@ export type MemoryMetrics = {
 export type MemoryPressure = "normal" | "warning" | "critical";
 
 export type ModelSource = "ollama" | "huggingface" | "lmstudio" | "mlx";
+
+export type MoneyMicros = {
+	micros: number,
+	currency: string,
+};
+
+export type NormalizedSafetyEvidence = {
+	server_name: string | null,
+	scope: string | null,
+	transport: string | null,
+	permission_mode: string | null,
+	sandbox_mode: string | null,
+	command_basename: string | null,
+	domain: string | null,
+};
+
+export type ObservationPeriod = {
+	starts_at: number | null,
+	ends_at: number | null,
+	resets_at: number | null,
+	label: string,
+};
+
+export type ObservationQuality = "fresh" | "stale" | "partial" | "unavailable";
+
+export type ObservationScope = "subscription" | "api_key" | "project" | "organization" | "local_sessions";
+
+export type ObservationSourceKind = "live_authoritative" | "live_quota" | "local_estimate" | "manual";
 
 export type PlanPreview = {
 	id: string,
@@ -469,7 +668,101 @@ export type ProcessMemory = {
 	can_terminate: boolean,
 };
 
-export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory";
+export type ProjectContext = {
+	identity: ProjectIdentity,
+	sessions: AgentSession[],
+	last_seen_at: number,
+};
+
+export type ProjectIdentity = {
+	/**  Opaque hash of the canonical project/worktree root. */
+	id: string,
+	display_name: string,
+	/**  A compact parent/name hint, never a full absolute path. */
+	location_hint: string,
+	repository_id: string | null,
+	is_worktree: boolean,
+	branch: string | null,
+};
+
+export type ProviderMetric = {
+	label: string,
+	tokens: number | null,
+	cost: MoneyMicros | null,
+	used_basis_points: number | null,
+};
+
+export type ProviderObservation = {
+	provider_id: string,
+	display_name: string,
+	source_kind: ObservationSourceKind,
+	source_id: string,
+	scope: ObservationScope,
+	observed_at: number,
+	period: ObservationPeriod,
+	fresh_for_seconds: number,
+	quality: ObservationQuality,
+	installed: boolean,
+	connected: boolean,
+	status_message: string,
+	metrics: ProviderMetric[],
+	action_url: string | null,
+	partial_error: string | null,
+};
+
+export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control";
+
+export type Recommendation = Recommendation_Serialize | Recommendation_Deserialize;
+
+export type RecommendationKind = "battery" | "memory" | "session_completed" | "orphan_process" | "development_port" | "cleanup_review";
+
+export type RecommendationPreview = RecommendationPreview_Serialize | RecommendationPreview_Deserialize;
+
+export type RecommendationPreview_Deserialize = {
+	id: string,
+	recommendation_id: string,
+	title: string,
+	explanation: string,
+	destination: DashboardRoute_Deserialize,
+	action_label: string,
+	expires_at: number,
+};
+
+export type RecommendationPreview_Serialize = {
+	id: string,
+	recommendation_id: string,
+	title: string,
+	explanation: string,
+	destination: DashboardRoute_Serialize,
+	action_label: string,
+	expires_at: number,
+};
+
+export type Recommendation_Deserialize = {
+	id: string,
+	kind: RecommendationKind,
+	title: string,
+	message: string,
+	created_at: number,
+	cooldown_until: number,
+	session_id: string | null,
+	project_id: string | null,
+	action_label: string | null,
+	destination: DashboardRoute_Deserialize,
+};
+
+export type Recommendation_Serialize = {
+	id: string,
+	kind: RecommendationKind,
+	title: string,
+	message: string,
+	created_at: number,
+	cooldown_until: number,
+	session_id: string | null,
+	project_id: string | null,
+	action_label: string | null,
+	destination: DashboardRoute_Serialize,
+};
 
 export type ReleaseDevelopmentListenerResult = {
 	port: number,
@@ -481,6 +774,21 @@ export type ReleaseMode = "graceful" | "force";
 
 export type ReleaseOutcome = "released" | "still_listening" | "ownership_changed";
 
+export type ResourceAttribution = {
+	session_id: string,
+	project_id: string | null,
+	tool_name: string,
+	cpu_percent: number | null,
+	memory_bytes: number,
+	process_count: number,
+	duration_seconds: number,
+	open_dev_ports: number,
+	power_eligible: boolean,
+	confidence: string,
+	reason: string,
+	mutable_actions_allowed: boolean,
+};
+
 export type RiskSummary = {
 	safe_count: number,
 	rebuild_count: number,
@@ -491,6 +799,33 @@ export type RiskSummary = {
 };
 
 export type RiskTier = "safe" | "rebuild" | "manual";
+
+export type SafetyFinding = {
+	id: string,
+	project_id: string,
+	kind: SafetyFindingKind,
+	severity: FindingSeverity,
+	evidence_type: string,
+	adapter: string,
+	relative_path: string | null,
+	line_start: number | null,
+	line_end: number | null,
+	observed_at: number,
+	remediation: string,
+	dismissed: boolean,
+	normalized_evidence: NormalizedSafetyEvidence | null,
+};
+
+export type SafetyFindingKind = "secrets_exposure" | "tool_permissions" | "mcp_servers" | "protected_paths" | "git_changes";
+
+export type SafetySnapshot = {
+	observed_at: number,
+	quality: ObservationQuality,
+	findings: SafetyFinding[],
+	scanned_files: number,
+	skipped_files: number,
+	status_message: string,
+};
 
 export type ScanEvent = { type: "Started"; scan_id: string } | { type: "CategoryStarted"; category: Category } | { type: "ItemFound"; item: ScanItem } | { type: "CategoryFinished"; category: Category; bytes: number; item_count: number } | { type: "Finished"; result: ScanResult } | { type: "Error"; message: string };
 
@@ -525,6 +860,8 @@ export type SelectedApplication = {
 	executable_pattern: string,
 	path: string,
 };
+
+export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";
 
 export type TrashItemResult = {
 	item_id: string,
@@ -585,6 +922,7 @@ export type ZenithSettings_Deserialize = {
 	dashboard_tabs?: DashboardTab_Deserialize[],
 	dashboard_tabs_revision?: number,
 	sidebar_collapsed?: boolean,
+	ai_control?: AiControlPreferences,
 };
 
 export type ZenithSettings_Serialize = {
@@ -603,6 +941,7 @@ export type ZenithSettings_Serialize = {
 	dashboard_tabs: DashboardTab_Serialize[],
 	dashboard_tabs_revision: number,
 	sidebar_collapsed: boolean,
+	ai_control: AiControlPreferences,
 };
 
 /* Tauri Specta runtime */

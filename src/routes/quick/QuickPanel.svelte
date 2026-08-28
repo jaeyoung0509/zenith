@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { AiProviderUsage } from '../../lib/models/types';
+  import type { AiProviderUsage, ControlCenterQuickSummary } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
@@ -11,6 +11,7 @@
   import {
     isTauri,
     tauriHideCurrentWindow,
+    tauriGetAiControlQuickSummary,
     tauriOpenDashboard,
     tauriStartWindowDrag,
   } from '../../lib/utils/tauri';
@@ -39,6 +40,7 @@
 
   let panelActive = false;
   let showResultModal = $state(false);
+  let controlSummary = $state<ControlCenterQuickSummary | null>(null);
   let settings = $derived(settingsStore.settings);
   let disk = $derived(memoryStore.disk);
   let memory = $derived(memoryStore.memory);
@@ -79,6 +81,12 @@
     if (hasSection('memory')) memoryStore.startPolling(3000);
     if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length > 0) {
       void usageStore.refreshIfStale();
+    }
+    if (hasSection('ai_control')) {
+      // Cached backend projection only: no provider calls, scans, or hidden polling.
+      void tauriGetAiControlQuickSummary().then((summary) => {
+        if (panelActive) controlSummary = summary;
+      });
     }
     if (hasSection('cleanup') || hasSection('categories')) {
       await scanStore.init();
@@ -349,6 +357,20 @@
             <p class="text-xs text-muted-foreground">Scanning caches...</p>
           </div>
         {/if}
+      {:else if section === 'ai_control'}
+        <div class="space-y-2 rounded-xl border border-border/60 bg-card/40 p-2.5">
+          <div class="flex items-center justify-between px-1">
+            <div class="flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-muted-foreground"><Sparkles size={12} class="text-violet-400" />AI Control</div>
+            <span class="text-micro capitalize text-muted-foreground">{controlSummary?.quality ?? 'not cached'}</span>
+          </div>
+          {#if controlSummary}
+            <div class="grid grid-cols-3 gap-1.5 text-center">
+              <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.active_sessions}</p><p class="text-micro text-muted-foreground">Sessions</p></div>
+              <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.budget_alerts}</p><p class="text-micro text-muted-foreground">Alerts</p></div>
+              <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.safety_findings}</p><p class="text-micro text-muted-foreground">Safety</p></div>
+            </div>
+          {:else}<p class="px-1 py-2 text-caption text-muted-foreground">Open AI Control in the dashboard to create a cached snapshot.</p>{/if}
+        </div>
       {/if}
     {/each}
   </div>

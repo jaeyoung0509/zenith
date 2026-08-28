@@ -70,4 +70,22 @@ describe('Dashboard sidebar affordances', () => {
     expect(memorySource).not.toContain('developmentPortsStore');
     expect(memorySource).not.toContain('Development Servers Section');
   });
+
+  it('exposes the canonical Projects dashboard route', () => {
+    const rendered = render(Dashboard);
+    expect(rendered.body).toContain('Projects');
+  });
+
+  it('exposes the four-section AI Control dashboard route', () => {
+    const rendered = render(Dashboard);
+    const source = readFileSync(
+      new URL('../routes/dashboard/AiControlCenterView.svelte', import.meta.url),
+      'utf8'
+    );
+    expect(rendered.body).toContain('AI Control');
+    expect(source).toContain('Overview');
+    expect(source).toContain('Usage &amp; Budgets'.replace('&amp;', '&'));
+    expect(source).toContain('Resource Autopilot');
+    expect(source).toContain('Safety Posture');
+  });
 });
