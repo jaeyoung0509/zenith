@@ -36,6 +36,7 @@ pub fn correlate(
         if let Some(project_id) = matched_project_id {
             session.project_id = Some(project_id.clone());
             if let Some(context) = project_contexts.get_mut(&project_id) {
+                session.worktree_id = context.identity.worktree_id.clone();
                 context.sessions.push(session);
             } else {
                 unassigned_sessions.push(session);

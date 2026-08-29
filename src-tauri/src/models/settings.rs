@@ -350,12 +350,30 @@ impl ZenithSettings {
             self.dashboard_tabs_revision = 5;
         }
 
+        // Retired identifiers stay invalid even if a malformed/newer settings
+        // payload already claims migration revision 5.
+        self.dashboard_tabs
+            .retain(|tab| *tab != DashboardTab::AiControl && *tab != DashboardTab::Usage);
+        if self.dashboard_tabs.is_empty() {
+            self.dashboard_tabs.push(DashboardTab::Storage);
+        }
+        self.quick_panel_sections.retain(|section| {
+            *section != QuickPanelSection::AiControl && *section != QuickPanelSection::AiUsage
+        });
+        if self.quick_panel_sections.is_empty() {
+            self.quick_panel_sections.push(QuickPanelSection::Storage);
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
         self.quick_panel_ai_providers.retain(|provider| {
             SUPPORTED_PROVIDERS.contains(&provider.as_str()) && providers.insert(provider.clone())
         });
+        self.agent_notifications.inactivity_threshold_minutes = self
+            .agent_notifications
+            .inactivity_threshold_minutes
+            .clamp(5, 120);
         self.ai_control = crate::ai_control_center::budgets::sanitize(self.ai_control);
         self
     }
@@ -402,12 +420,9 @@ mod tests {
         let sanitized = configured.sanitize();
         assert_eq!(
             sanitized.quick_panel_sections,
-            vec![QuickPanelSection::AiUsage, QuickPanelSection::Memory]
+            vec![QuickPanelSection::Memory]
         );
-        assert_eq!(
-            sanitized.dashboard_tabs,
-            vec![DashboardTab::Usage, DashboardTab::Storage]
-        );
+        assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
         assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
     }
 

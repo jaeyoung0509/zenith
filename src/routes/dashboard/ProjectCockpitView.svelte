@@ -2,20 +2,14 @@
   import { onMount } from 'svelte';
   import {
     Activity,
-    AlertCircle,
     ArrowLeft,
     Bot,
-    CheckCircle2,
-    Clock,
-    Cpu,
     ExternalLink,
     FolderGit2,
     FolderOpen,
     HardDrive,
-    Layers,
     RefreshCw,
     Server,
-    ShieldCheck,
     Square,
     Terminal,
   } from 'lucide-svelte';
@@ -33,9 +27,9 @@
   import { formatBytes } from '../../lib/utils/format';
   import { tauriRevealInFinder } from '../../lib/utils/tauri';
   import Badge from '../../lib/components/Badge.svelte';
+  import AiUsageCards from '../../lib/components/AiUsageCards.svelte';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
-  import ProgressBar from '../../lib/components/ProgressBar.svelte';
 
   interface Props {
     onNavigateTab?: (tab: string) => void;
@@ -147,15 +141,6 @@
       setTimeout(() => {
         actionFeedback = null;
       }, 5000);
-    }
-  }
-
-  async function handleInstallIntegration(toolId: string) {
-    try {
-      const res = await agentActivityStore.installIntegration(toolId);
-      actionFeedback = res.message;
-    } catch (err) {
-      actionFeedback = `Install failed: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
@@ -454,55 +439,42 @@
         {/each}
       </div>
     {:else if snapshot}
-      <!-- Connected AI Accounts & Quota Strip -->
-      {#if usageSnapshot && usageSnapshot.providers.length > 0}
-        <section aria-label="Connected AI Accounts" class="space-y-2">
-          <div class="flex items-center justify-between">
-            <h3 class="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
-              AI Accounts & Quota
-            </h3>
-            <span class="text-caption text-muted-foreground">
-              {usageSnapshot.providers.filter((p) => p.connected).length} Connected
+      <!-- Connected AI Accounts & Quota -->
+      <section aria-label="Connected AI Accounts" class="space-y-3">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h3 class="text-sm font-semibold">AI Accounts & Quota</h3>
+            <p class="text-caption text-muted-foreground">
+              Official-client usage metadata and local coding-agent activity. OAuth token files never reach the UI.
+            </p>
+          </div>
+          {#if usageSnapshot}
+            <span class="shrink-0 text-caption text-muted-foreground">
+              {usageSnapshot.providers.filter((provider) => provider.connected).length} connected
             </span>
+          {/if}
+        </div>
+        {#if usageStore.error}
+          <div role="alert" class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+            {usageStore.error}
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
-            {#each usageSnapshot.providers as provider}
-              <div class="p-3 rounded-xl bg-card/70 border border-border/70 flex flex-col justify-between gap-2">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="flex items-center gap-1.5 min-w-0">
-                    <Bot size={13} class={provider.connected ? 'text-primary' : 'text-muted-foreground'} />
-                    <span class="text-xs font-semibold text-foreground truncate">{provider.name}</span>
-                  </div>
-                  <Badge variant={provider.connected ? 'success' : 'outline'}>
-                    {provider.connected ? 'Live' : 'Offline'}
-                  </Badge>
-                </div>
-                {#if provider.windows && provider.windows.length > 0}
-                  <div class="space-y-1">
-                    <div class="flex items-center justify-between text-caption text-muted-foreground">
-                      <span class="truncate">{provider.windows[0].label}</span>
-                      <span class="font-mono font-medium text-foreground">{Math.round(provider.windows[0].used_percent ?? 0)}%</span>
-                    </div>
-                    <ProgressBar value={provider.windows[0].used_percent ?? 0} max={100} height="h-1.5" />
-                  </div>
-                {:else if provider.summary.local_sessions != null && provider.summary.local_sessions > 0}
-                  <div class="text-caption text-muted-foreground">
-                    <span class="font-mono text-foreground">{provider.summary.local_sessions}</span> local sessions
-                  </div>
-                {:else if provider.summary.usage_usd != null}
-                  <div class="text-caption text-muted-foreground">
-                    Cost: <span class="font-mono text-foreground">${provider.summary.usage_usd.toFixed(2)}</span>
-                  </div>
-                {:else}
-                  <div class="text-caption text-muted-foreground truncate">
-                    {provider.status_message || (provider.connected ? 'Connected' : 'Not configured')}
-                  </div>
-                {/if}
-              </div>
-            {/each}
+        {:else if usageStore.isLoading && !usageSnapshot}
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-2" aria-label="Loading AI account usage">
+            <div class="h-[190px] animate-pulse rounded-xl border border-border/60 bg-secondary/30"></div>
+            <div class="h-[190px] animate-pulse rounded-xl border border-border/60 bg-secondary/30"></div>
           </div>
-        </section>
-      {/if}
+        {:else if usageSnapshot && usageSnapshot.providers.length > 0}
+          <AiUsageCards
+            providers={usageSnapshot.providers}
+            connectingProvider={usageStore.connectingProvider}
+            onConnectOpenRouter={() => usageStore.connectOpenRouter()}
+          />
+        {:else}
+          <Card class="p-4 bg-card/60 text-xs text-muted-foreground">
+            No AI account usage metadata is available yet.
+          </Card>
+        {/if}
+      </section>
 
       <!-- Metric Summary Cards -->
       <section aria-label="Project activity summary" class="grid grid-cols-4 gap-3">
@@ -667,9 +639,9 @@
       <section aria-label="Supported tool adapters" class="space-y-3 pt-4 border-t border-border/60">
         <div class="flex items-center justify-between">
           <div>
-            <h3 class="text-sm font-semibold">Tool Adapters & Local Integrations</h3>
+            <h3 class="text-sm font-semibold">Tool Adapters</h3>
             <p class="text-caption text-muted-foreground">
-              Truthful observation matrix across all supported AI developer tools.
+              Exact local process observation across supported AI developer tools.
             </p>
           </div>
         </div>
@@ -688,32 +660,21 @@
                   <p class="text-caption text-muted-foreground mt-1">{adapter.message}</p>
                 </div>
 
-                {#if integration && integration.supported}
+                {#if integration?.integration_active}
                   <div>
-                    {#if integration.integration_active}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        class="text-caption text-destructive hover:bg-destructive/10"
-                        onclick={() => handleUninstallIntegration(adapter.tool_id)}
-                      >
-                        Remove
-                      </Button>
-                    {:else}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        class="text-caption text-primary hover:bg-primary/10"
-                        onclick={() => handleInstallIntegration(adapter.tool_id)}
-                      >
-                        Install
-                      </Button>
-                    {/if}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="text-caption text-destructive hover:bg-destructive/10"
+                      onclick={() => handleUninstallIntegration(adapter.tool_id)}
+                    >
+                      Remove legacy marker
+                    </Button>
                   </div>
                 {/if}
               </div>
 
-              {#if integration?.config_path}
+              {#if integration?.integration_active && integration.config_path}
                 <div class="font-mono text-caption text-muted-foreground truncate pt-1 border-t border-border/40">
                   Config: {integration.config_path}
                 </div>

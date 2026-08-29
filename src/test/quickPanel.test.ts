@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
 import { isQuickPanelDismissShortcut, moveOrdered, projectAiProviders, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
 
@@ -112,5 +113,15 @@ describe('quick panel AI provider projection', () => {
   it('handles configured provider ids that do not exist in snapshot safely', () => {
     const result = projectAiProviders(['antigravity', 'claude'], mockSnapshot.providers);
     expect(result.map((p) => p.id)).toEqual(['claude']);
+  });
+
+  it('loads and renders every selected provider inside the consolidated agent section', () => {
+    const source = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    expect(source).toContain("hasSection('ai_usage') || hasSection('agent_activity')");
+    expect(source).toContain('{#each selectedProviders as provider (provider.id)}');
+    expect(source).not.toContain('providerValue(selectedProviders[0])');
   });
 });

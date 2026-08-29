@@ -96,6 +96,7 @@ pub async fn get_ai_usage(
 #[specta::specta]
 pub async fn get_project_context(
     force: Option<bool>,
+    app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AgentActivitySnapshot, String> {
     let should_force = force.unwrap_or(false);
@@ -116,15 +117,25 @@ pub async fn get_project_context(
 
     let cache = state.agent_activity_cache.clone();
     let dev_store = state.dev_port_store.clone();
+    let notification_preferences = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .agent_notifications
+        .clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut registry = crate::agent_activity::collect_registry();
+        let mut registry = crate::agent_activity::collect_registry_with_inactivity_threshold(
+            u64::from(notification_preferences.inactivity_threshold_minutes) * 60,
+        );
         let listeners = crate::dev_ports::list_listeners(
             &dev_store,
             &crate::dev_ports::RealDevPortSystem::default(),
         )
         .unwrap_or_default();
+        let artifact_sizes = crate::storage_commands::cached_developer_artifact_sizes();
         for project in &mut registry.snapshot.projects {
             if let Some(root) = registry.project_roots.get(&project.identity.id) {
+                project.artifact_size_bytes = artifact_sizes.get(root).copied();
                 for listener in &listeners {
                     if let Some(dir) = listener.working_directory.as_deref() {
                         if let Ok(canon) = std::path::Path::new(dir).canonicalize() {
@@ -140,6 +151,16 @@ pub async fn get_project_context(
             }
         }
         let snapshot = registry.snapshot.clone();
+        {
+            let store = crate::agent_activity::global_store();
+            let mut guard = store.lock().expect("agent activity store poisoned");
+            let _ = crate::agent_activity::notifications::emit_process_advisories(
+                &app_handle,
+                &snapshot,
+                &notification_preferences,
+                &mut guard.notification_filter,
+            );
+        }
         *cache.lock().expect("agent_activity_cache poisoned") = Some(registry);
         snapshot
     })
@@ -168,27 +189,6 @@ pub async fn request_stop_agent_session(
         let system = crate::agent_activity::termination::RealTerminationSystem;
         let result = crate::agent_activity::termination::execute_graceful_stop(&lease, &system);
         if result.is_ok() {
-            let store = crate::agent_activity::global_store();
-            let mut guard = store.lock().unwrap();
-            let dummy_session = crate::models::AgentSession {
-                id: session_id,
-                tool_id: "".into(),
-                tool_name: "".into(),
-                status: crate::models::AgentActivityStatus::Exited,
-                attention_reason: None,
-                evidence: crate::models::AgentEvidence::ProcessObserved,
-                observed_at: now,
-                started_at: lease.start_time,
-                elapsed_seconds: now.saturating_sub(lease.start_time),
-                cpu_percent: 0.0,
-                memory_bytes: 0,
-                project_id: None,
-                worktree_id: None,
-                detail: "Session exited.".to_string(),
-                can_stop: false,
-                stop_lease_id: None,
-            };
-            guard.record_exited_session(dummy_session, now);
             if let Ok(mut cache_guard) = cache.lock() {
                 *cache_guard = None;
             }
@@ -312,6 +312,7 @@ pub fn post_agent_event(
     event: IngestedAgentEvent,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let event = crate::agent_activity::events::validate_ingested_event(event, unix_timestamp())?;
     let store = crate::agent_activity::global_store();
     let mut guard = store.lock().unwrap();
     guard.record_event(event);
@@ -1063,6 +1064,9 @@ pub fn save_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let settings = settings.sanitize();
+    if settings.agent_notifications.enabled {
+        crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
+    }
     let config_dir = app_handle
         .path()
         .app_config_dir()
@@ -1079,9 +1083,12 @@ pub fn save_settings(
 pub fn reveal_in_finder(path: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .args(["-R", &path])
-            .spawn();
+        let path = expand_display_path(&path)?;
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("Could not open Finder: {error}"))?;
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1095,15 +1102,36 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 pub fn open_in_terminal(path: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
-            .args(["-a", "Terminal", &path])
-            .spawn();
+        let path = expand_display_path(&path)?;
+        if !path.is_dir() {
+            return Err("Project folder is no longer available.".to_string());
+        }
+        std::process::Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("Could not open Terminal: {error}"))?;
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn expand_display_path(path: &str) -> Result<PathBuf, String> {
+    let expanded = if let Some(relative) = path.strip_prefix("~/") {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "HOME environment variable is not set.".to_string())?;
+        home.join(relative)
+    } else {
+        PathBuf::from(path)
+    };
+    expanded
+        .canonicalize()
+        .map_err(|error| format!("Path is no longer available: {error}"))
 }
 
 #[tauri::command]

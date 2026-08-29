@@ -150,12 +150,15 @@ describe('Project Cockpit', () => {
           auth_label: 'CLI',
           status_message: 'Connected',
           action_url: null,
-          windows: [{ label: '5h limit', used_percent: 45, resets_at: 200 }],
+          windows: [
+            { label: '5h limit', used_percent: 45, resets_at: 2_000_000_000 },
+            { label: 'Weekly', used_percent: 21, resets_at: 2_000_100_000 },
+          ],
           summary: {
-            lifetime_tokens: null,
-            last_7d_tokens: null,
+            lifetime_tokens: 7_700_000_000,
+            last_7d_tokens: 409_100_000,
             peak_daily_tokens: null,
-            current_streak_days: null,
+            current_streak_days: 9,
             local_sessions: null,
             local_cost_usd: null,
             usage_usd: null,
@@ -167,6 +170,10 @@ describe('Project Cockpit', () => {
     const rendered = render(ProjectCockpitView);
     expect(rendered.body).toContain('AI Accounts');
     expect(rendered.body).toContain('Codex CLI');
-    expect(rendered.body).toContain('45%');
+    expect(rendered.body).toContain('45% used');
+    expect(rendered.body).toContain('Weekly');
+    expect(rendered.body).toContain('Lifetime');
+    expect(rendered.body).toContain('Recent 7 days');
+    expect(rendered.body).toContain('Resets');
   });
 });

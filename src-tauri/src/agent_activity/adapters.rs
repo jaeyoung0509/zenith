@@ -13,8 +13,8 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
     AgentToolAdapter {
         id: "antigravity",
         display_name: "Antigravity",
-        executables: &["agy"],
-        integration_available: true,
+        executables: &["agy", "antigravity"],
+        integration_available: false,
     },
     AgentToolAdapter {
         id: "gemini",
@@ -32,25 +32,25 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
         id: "claude",
         display_name: "Claude Code",
         executables: &["claude"],
-        integration_available: true,
+        integration_available: false,
     },
     AgentToolAdapter {
         id: "cursor",
         display_name: "Cursor Agent CLI",
         executables: &["cursor-agent"],
-        integration_available: true,
+        integration_available: false,
     },
     AgentToolAdapter {
         id: "grok",
         display_name: "Grok Build",
         executables: &["grok"],
-        integration_available: true,
+        integration_available: false,
     },
     AgentToolAdapter {
         id: "copilot",
         display_name: "GitHub Copilot CLI",
         executables: &["copilot"],
-        integration_available: true,
+        integration_available: false,
     },
     AgentToolAdapter {
         id: "opencode",

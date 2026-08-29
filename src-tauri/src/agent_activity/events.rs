@@ -4,6 +4,19 @@ use std::path::PathBuf;
 pub const MAX_PAYLOAD_BYTES: usize = 16 * 1024; // 16 KB
 pub const MAX_TIMESTAMP_AGE_SECS: u64 = 3600; // 1 hour
 pub const MAX_FUTURE_DRIFT_SECS: u64 = 60; // 60 seconds
+pub const MAX_SESSION_ID_BYTES: usize = 256;
+pub const MAX_TURN_ID_BYTES: usize = 256;
+pub const MAX_CWD_BYTES: usize = 4096;
+pub const ALLOWED_TOOLS: &[&str] = &[
+    "antigravity",
+    "claude",
+    "cursor",
+    "grok",
+    "copilot",
+    "codex",
+    "gemini",
+    "opencode",
+];
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RawAllowlistEvent {
@@ -25,16 +38,6 @@ pub fn parse_and_validate_event(bytes: &[u8], now: u64) -> Result<IngestedAgentE
     let raw: RawAllowlistEvent = serde_json::from_slice(bytes)
         .map_err(|e| format!("Invalid or malformed event payload: {e}"))?;
 
-    const ALLOWED_TOOLS: &[&str] = &[
-        "antigravity",
-        "claude",
-        "cursor",
-        "grok",
-        "copilot",
-        "codex",
-        "gemini",
-        "opencode",
-    ];
     if !ALLOWED_TOOLS.contains(&raw.tool_id.as_str()) {
         return Err(format!("Unknown or unapproved tool ID: {}", raw.tool_id));
     }
@@ -77,7 +80,7 @@ pub fn parse_and_validate_event(bytes: &[u8], now: u64) -> Result<IngestedAgentE
     };
 
     let timestamp = raw.timestamp.unwrap_or(now);
-    if timestamp + MAX_TIMESTAMP_AGE_SECS < now {
+    if timestamp.saturating_add(MAX_TIMESTAMP_AGE_SECS) < now {
         return Err("Event timestamp is too stale (> 1 hour old).".to_string());
     }
     if timestamp > now + MAX_FUTURE_DRIFT_SECS {
@@ -93,15 +96,51 @@ pub fn parse_and_validate_event(bytes: &[u8], now: u64) -> Result<IngestedAgentE
         }
     });
 
-    Ok(IngestedAgentEvent {
-        tool_id: raw.tool_id,
-        vendor_session_id: raw.session_id,
-        cwd,
-        lifecycle,
-        timestamp,
-        turn_id: raw.turn_id,
-        attention_reason,
-    })
+    validate_ingested_event(
+        IngestedAgentEvent {
+            tool_id: raw.tool_id,
+            vendor_session_id: raw.session_id,
+            cwd,
+            lifecycle,
+            timestamp,
+            turn_id: raw.turn_id,
+            attention_reason,
+        },
+        now,
+    )
+}
+
+pub fn validate_ingested_event(
+    event: IngestedAgentEvent,
+    now: u64,
+) -> Result<IngestedAgentEvent, String> {
+    if !ALLOWED_TOOLS.contains(&event.tool_id.as_str()) {
+        return Err(format!("Unknown or unapproved tool ID: {}", event.tool_id));
+    }
+    if event.vendor_session_id.trim().is_empty()
+        || event.vendor_session_id.len() > MAX_SESSION_ID_BYTES
+    {
+        return Err("Session ID is empty or exceeds 256 bytes.".to_string());
+    }
+    if event
+        .turn_id
+        .as_ref()
+        .is_some_and(|turn_id| turn_id.len() > MAX_TURN_ID_BYTES)
+    {
+        return Err("Turn ID exceeds 256 bytes.".to_string());
+    }
+    if event.timestamp.saturating_add(MAX_TIMESTAMP_AGE_SECS) < now {
+        return Err("Event timestamp is too stale (> 1 hour old).".to_string());
+    }
+    if event.timestamp > now.saturating_add(MAX_FUTURE_DRIFT_SECS) {
+        return Err("Event timestamp is in the future.".to_string());
+    }
+    if let Some(cwd) = &event.cwd {
+        if cwd.len() > MAX_CWD_BYTES || !PathBuf::from(cwd).is_absolute() {
+            return Err("Event working directory is invalid.".to_string());
+        }
+    }
+    Ok(event)
 }
 
 #[cfg(test)]
@@ -184,5 +223,19 @@ mod tests {
 
         let malformed = b"{ not json }";
         assert!(parse_and_validate_event(malformed, now).is_err());
+    }
+
+    #[test]
+    fn typed_event_validation_rejects_unbounded_or_relative_fields() {
+        let event = IngestedAgentEvent {
+            tool_id: "codex".into(),
+            vendor_session_id: "x".repeat(MAX_SESSION_ID_BYTES + 1),
+            cwd: Some("relative/path".into()),
+            lifecycle: AgentLifecycleEvent::Working,
+            timestamp: 1_000_000,
+            turn_id: None,
+            attention_reason: None,
+        };
+        assert!(validate_ingested_event(event, 1_000_000).is_err());
     }
 }

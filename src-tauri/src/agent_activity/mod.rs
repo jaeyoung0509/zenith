@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
 pub const SNAPSHOT_TTL_SECONDS: u64 = 10;
+pub const DEFAULT_INACTIVITY_THRESHOLD_SECONDS: u64 = 15 * 60;
 
 #[derive(Debug, Clone)]
 pub struct AgentActivityRegistry {
@@ -69,6 +70,12 @@ pub fn has_active_verified_session() -> bool {
 }
 
 pub fn collect_registry() -> AgentActivityRegistry {
+    collect_registry_with_inactivity_threshold(DEFAULT_INACTIVITY_THRESHOLD_SECONDS)
+}
+
+pub fn collect_registry_with_inactivity_threshold(
+    inactivity_threshold_seconds: u64,
+) -> AgentActivityRegistry {
     let observed_at = now();
     let current_uid = current_user_uid();
     let mut system = System::new();
@@ -96,7 +103,13 @@ pub fn collect_registry() -> AgentActivityRegistry {
 
     let store = global_store();
     let mut store_guard = store.lock().unwrap();
-    registry_from_records(records, current_uid, observed_at, &mut store_guard)
+    registry_from_records_with_inactivity_threshold(
+        records,
+        current_uid,
+        observed_at,
+        &mut store_guard,
+        inactivity_threshold_seconds,
+    )
 }
 
 pub fn registry_from_records(
@@ -105,6 +118,24 @@ pub fn registry_from_records(
     observed_at: u64,
     store: &mut store::AgentActivityStore,
 ) -> AgentActivityRegistry {
+    registry_from_records_with_inactivity_threshold(
+        records,
+        current_uid,
+        observed_at,
+        store,
+        DEFAULT_INACTIVITY_THRESHOLD_SECONDS,
+    )
+}
+
+fn registry_from_records_with_inactivity_threshold(
+    records: Vec<ProcessRecord>,
+    current_uid: u32,
+    observed_at: u64,
+    store: &mut store::AgentActivityStore,
+    inactivity_threshold_seconds: u64,
+) -> AgentActivityRegistry {
+    store.prune_active_events(observed_at);
+    let previous_snapshot = store.last_successful_snapshot.clone();
     let mut discovered_projects = HashMap::new();
     let mut project_roots = HashMap::new();
     let mut observed_ids = HashSet::new();
@@ -112,27 +143,60 @@ pub fn registry_from_records(
     let mut session_inputs = Vec::new();
     let mut current_observed_session_ids = HashSet::new();
 
-    for record in records {
+    let eligible_records = records
+        .into_iter()
+        .filter_map(|record| {
+            let executable = record.executable.as_deref()?;
+            let adapter = adapter_for_executable(executable)?;
+            if record.uid != Some(current_uid)
+                || record.started_at == 0
+                || record.pid <= 1
+                || record.pid == std::process::id()
+            {
+                return None;
+            }
+            Some((record, adapter))
+        })
+        .collect::<Vec<_>>();
+
+    // A vendor event is trustworthy only when it identifies exactly one observed
+    // process. Tool-only matching would incorrectly copy one session's state to
+    // every concurrent process from the same CLI.
+    let mut matched_events = HashMap::new();
+    for event in store.active_events.values() {
+        let candidates = eligible_records
+            .iter()
+            .filter(|(record, adapter)| {
+                if adapter.id != event.tool_id {
+                    return false;
+                }
+                match event.cwd.as_deref() {
+                    Some(event_cwd) => record.cwd.as_deref().is_some_and(|cwd| {
+                        same_project_or_directory(cwd, std::path::Path::new(event_cwd))
+                    }),
+                    None => true,
+                }
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() == 1 {
+            let (record, adapter) = candidates[0];
+            let session_id = session_id(adapter.id, record.pid, record.started_at);
+            let replace = matched_events.get(&session_id).is_none_or(
+                |current: &crate::models::IngestedAgentEvent| event.timestamp > current.timestamp,
+            );
+            if replace {
+                matched_events.insert(session_id, event.clone());
+            }
+        }
+    }
+
+    for (record, adapter) in eligible_records {
         let Some(executable) = record.executable.as_deref() else {
             continue;
         };
-        let Some(adapter) = adapter_for_executable(executable) else {
-            continue;
-        };
-        if record.uid != Some(current_uid)
-            || record.started_at == 0
-            || record.pid <= 1
-            || record.pid == std::process::id()
-        {
-            continue;
-        }
         observed_ids.insert(adapter.id);
 
-        let session_identity = PathBuf::from(format!(
-            "{}:{}:{}",
-            adapter.id, record.pid, record.started_at
-        ));
-        let session_id = opaque_id("session", &session_identity);
+        let session_id = session_id(adapter.id, record.pid, record.started_at);
         current_observed_session_ids.insert(session_id.clone());
 
         // Create stop lease
@@ -148,11 +212,7 @@ pub fn registry_from_records(
 
         let elapsed = observed_at.saturating_sub(record.started_at);
 
-        // Check if there is an active vendor event matching this tool
-        let matching_event = store
-            .active_events
-            .values()
-            .find(|e| e.tool_id == adapter.id);
+        let matching_event = matched_events.get(&session_id);
 
         let (status, evidence, attention_reason, detail) = if let Some(event) = matching_event {
             let status = match event.lifecycle {
@@ -174,14 +234,16 @@ pub fn registry_from_records(
                 "Vendor event confirmed".to_string(),
             )
         } else {
-            // Heuristic inactivity check: if no activity observed for > 15 minutes (or high threshold)
-            let status = if elapsed > 900 && record.cpu_percent < 0.1 {
+            let last_activity_at =
+                store.observe_process_activity(&session_id, record.cpu_percent, observed_at);
+            let inactive_for = observed_at.saturating_sub(last_activity_at);
+            let status = if inactive_for >= inactivity_threshold_seconds {
                 AgentActivityStatus::PossiblyInactive
             } else {
                 AgentActivityStatus::Working
             };
             let detail = if status == AgentActivityStatus::PossiblyInactive {
-                format!("No activity observed for {} minutes", elapsed / 60)
+                format!("No activity observed for {} minutes", inactive_for / 60)
             } else {
                 "Process observed · detailed status unavailable".to_string()
             };
@@ -218,7 +280,7 @@ pub fn registry_from_records(
     }
 
     // Correlate sessions, listeners, and artifact sizes
-    let (mut projects, unassigned_sessions) = correlation::correlate(
+    let (mut projects, mut unassigned_sessions) = correlation::correlate(
         discovered_projects,
         session_inputs,
         &[],
@@ -226,16 +288,51 @@ pub fn registry_from_records(
         observed_at,
     );
 
-    // Retain exited sessions if previously observed sessions disappeared
+    // Detect normal process exits from the previous snapshot. Explicit stop is
+    // not considered an exit until the process actually disappears.
+    if let Some(previous) = &previous_snapshot {
+        for previous_session in previous
+            .projects
+            .iter()
+            .flat_map(|project| &project.sessions)
+            .chain(&previous.unassigned_sessions)
+        {
+            if previous_session.status != AgentActivityStatus::Exited
+                && !current_observed_session_ids.contains(&previous_session.id)
+            {
+                store.record_exited_session(previous_session.clone(), observed_at);
+            }
+        }
+    }
+    store.retain_observed_processes(&current_observed_session_ids);
+
+    // Retain exited sessions for 60 seconds, including projects that no longer
+    // have a running process and sessions that were previously unassigned.
     store.prune_expired(observed_at);
     let exited = store.get_exited_sessions(observed_at);
     for exited_session in exited {
         if !current_observed_session_ids.contains(&exited_session.id) {
-            if let Some(pid) = &exited_session.project_id {
-                if let Some(p) = projects.iter_mut().find(|proj| &proj.identity.id == pid) {
-                    p.sessions.push(exited_session);
+            if let Some(project_id) = &exited_session.project_id {
+                if let Some(project) = projects
+                    .iter_mut()
+                    .find(|project| &project.identity.id == project_id)
+                {
+                    project.sessions.push(exited_session);
+                    continue;
+                }
+                if let Some(previous_project) = previous_snapshot.as_ref().and_then(|snapshot| {
+                    snapshot
+                        .projects
+                        .iter()
+                        .find(|project| &project.identity.id == project_id)
+                }) {
+                    let mut retained_project = previous_project.clone();
+                    retained_project.sessions = vec![exited_session];
+                    projects.push(retained_project);
+                    continue;
                 }
             }
+            unassigned_sessions.push(exited_session);
         }
     }
 
@@ -267,6 +364,27 @@ pub fn registry_from_records(
     AgentActivityRegistry {
         snapshot,
         project_roots,
+    }
+}
+
+fn session_id(tool_id: &str, pid: u32, started_at: u64) -> String {
+    opaque_id(
+        "session",
+        &PathBuf::from(format!("{tool_id}:{pid}:{started_at}")),
+    )
+}
+
+fn same_project_or_directory(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let left = left.canonicalize().ok();
+    let right = right.canonicalize().ok();
+    match (left, right) {
+        (Some(left), Some(right)) if left == right => true,
+        (Some(left), Some(right)) => {
+            let left_project = resolve_project(&left).map(|(root, _)| root);
+            let right_project = resolve_project(&right).map(|(root, _)| root);
+            left_project.is_some() && left_project == right_project
+        }
+        _ => false,
     }
 }
 
@@ -305,6 +423,24 @@ mod tests {
             executable: Some(PathBuf::from(executable)),
             cwd,
             cpu_percent: 2.5,
+            memory_bytes: 1024,
+        }
+    }
+
+    fn record_with_pid(
+        pid: u32,
+        executable: &str,
+        started_at: u64,
+        cwd: Option<PathBuf>,
+        cpu_percent: f32,
+    ) -> ProcessRecord {
+        ProcessRecord {
+            pid,
+            uid: Some(501),
+            started_at,
+            executable: Some(PathBuf::from(executable)),
+            cwd,
+            cpu_percent,
             memory_bytes: 1024,
         }
     }
@@ -362,5 +498,125 @@ mod tests {
         assert!(registry.snapshot.projects[0].sessions[0]
             .stop_lease_id
             .is_some());
+    }
+
+    #[test]
+    fn vendor_event_is_assigned_only_to_the_unique_matching_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        for repo in [&first, &second] {
+            std::fs::create_dir_all(repo.join(".git")).unwrap();
+            std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        let mut store = store::AgentActivityStore::new();
+        store.record_event(crate::models::IngestedAgentEvent {
+            tool_id: "claude".into(),
+            vendor_session_id: "vendor-1".into(),
+            cwd: Some(first.display().to_string()),
+            lifecycle: crate::models::AgentLifecycleEvent::WaitingForUser,
+            timestamp: 100,
+            turn_id: Some("turn-1".into()),
+            attention_reason: Some(crate::models::AttentionReason::Input),
+        });
+
+        let registry = registry_from_records(
+            vec![
+                record_with_pid(41, "/usr/bin/claude", 10, Some(first), 1.0),
+                record_with_pid(42, "/usr/bin/claude", 11, Some(second), 1.0),
+            ],
+            501,
+            100,
+            &mut store,
+        );
+        let sessions = registry
+            .snapshot
+            .projects
+            .iter()
+            .flat_map(|project| &project.sessions)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|session| session.evidence == AgentEvidence::VendorEvent)
+                .count(),
+            1
+        );
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|session| session.status == AgentActivityStatus::WaitingForUser)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn process_lifetime_is_not_mistaken_for_observed_inactivity() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = store::AgentActivityStore::new();
+        let first = registry_from_records(
+            vec![record_with_pid(
+                42,
+                "/usr/bin/codex",
+                10,
+                Some(temp.path().into()),
+                0.0,
+            )],
+            501,
+            10_000,
+            &mut store,
+        );
+        assert_eq!(
+            first.snapshot.projects[0].sessions[0].status,
+            AgentActivityStatus::Working
+        );
+
+        let second = registry_from_records(
+            vec![record_with_pid(
+                42,
+                "/usr/bin/codex",
+                10,
+                Some(temp.path().into()),
+                0.0,
+            )],
+            501,
+            10_000 + DEFAULT_INACTIVITY_THRESHOLD_SECONDS,
+            &mut store,
+        );
+        assert_eq!(
+            second.snapshot.projects[0].sessions[0].status,
+            AgentActivityStatus::PossiblyInactive
+        );
+    }
+
+    #[test]
+    fn retains_a_naturally_exited_session_with_its_project_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("project");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let mut store = store::AgentActivityStore::new();
+
+        registry_from_records(
+            vec![record_with_pid(42, "/usr/bin/codex", 10, Some(repo), 1.0)],
+            501,
+            100,
+            &mut store,
+        );
+        let exited = registry_from_records(vec![], 501, 110, &mut store);
+        assert_eq!(exited.snapshot.projects.len(), 1);
+        assert_eq!(
+            exited.snapshot.projects[0].sessions[0].status,
+            AgentActivityStatus::Exited
+        );
+
+        let expired = registry_from_records(
+            vec![],
+            501,
+            110 + store::EXITED_SESSION_RETENTION_SECS,
+            &mut store,
+        );
+        assert!(expired.snapshot.projects.is_empty());
     }
 }

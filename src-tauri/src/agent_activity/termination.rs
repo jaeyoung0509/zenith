@@ -55,17 +55,16 @@ impl StopLeaseStore {
         now: u64,
     ) -> Result<StopLease, String> {
         self.leases.retain(|_, l| l.expires_at > now);
-        let lease = self.leases.remove(session_id).ok_or_else(|| {
+        let lease = self.leases.get(session_id).ok_or_else(|| {
             "Stop lease expired or not found. Please refresh and try again.".to_string()
         })?;
 
         if lease.lease_id != lease_id {
             return Err("Invalid stop lease token.".to_string());
         }
-        if now > lease.expires_at {
-            return Err("Stop lease has expired.".to_string());
-        }
-        Ok(lease)
+        self.leases
+            .remove(session_id)
+            .ok_or_else(|| "Stop lease is no longer available.".to_string())
     }
 }
 
@@ -223,10 +222,8 @@ pub fn execute_graceful_stop(
     }
 
     // 7. Cwd check if present
-    if let (Some(lease_cwd), Some(current_cwd)) = (&lease.cwd, &info.cwd) {
-        if lease_cwd != current_cwd {
-            return Err("Process working directory has changed.".to_string());
-        }
+    if lease.cwd != info.cwd {
+        return Err("Process working directory is unavailable or has changed.".to_string());
     }
 
     // 8. Terminal and protected ancestry check
@@ -414,5 +411,45 @@ mod tests {
         );
         let expired = store.consume_lease("session-2", &lease_id2, 10 + LEASE_TTL_SECS + 5);
         assert!(expired.is_err());
+    }
+
+    #[test]
+    fn invalid_token_does_not_consume_the_valid_lease() {
+        let mut store = StopLeaseStore::default();
+        let lease_id = store.create_lease(
+            "session-1",
+            42,
+            100,
+            PathBuf::from("/usr/local/bin/claude"),
+            None,
+            501,
+            10,
+        );
+
+        assert!(store.consume_lease("session-1", "wrong-token", 15).is_err());
+        assert!(store.consume_lease("session-1", &lease_id, 16).is_ok());
+    }
+
+    #[test]
+    fn rejects_when_a_leased_cwd_becomes_unavailable() {
+        let system = FakeSystem {
+            current_uid: 501,
+            current_pid: 100,
+            process: Some(ProcessCheckInfo {
+                pid: 42,
+                uid: 501,
+                start_time: 200,
+                executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cwd: None,
+                parent_pid: Some(10),
+                name: "claude".into(),
+            }),
+            signaled: Mutex::new(vec![]),
+        };
+        let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
+
+        let error = execute_graceful_stop(&lease, &system).unwrap_err();
+        assert!(error.contains("working directory"));
+        assert!(system.signaled.lock().unwrap().is_empty());
     }
 }

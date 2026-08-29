@@ -123,7 +123,7 @@ export const mockApi = {
               tool_name: 'Antigravity',
               status: 'working',
               attention_reason: null,
-              evidence: 'vendor_event',
+              evidence: 'process_observed',
               observed_at: observedAt,
               started_at: observedAt - 1320,
               elapsed_seconds: 1320,
@@ -131,7 +131,7 @@ export const mockApi = {
               memory_bytes: 468 * 1024 * 1024,
               project_id: 'project-zenith-preview',
               worktree_id: null,
-              detail: 'Vendor event confirmed',
+              detail: 'Process observed · detailed status unavailable',
               can_stop: true,
               stop_lease_id: 'lease-antigravity-mock',
             },
@@ -158,8 +158,8 @@ export const mockApi = {
               id: 'session-claude-preview',
               tool_id: 'claude',
               tool_name: 'Claude Code',
-              status: 'waiting_for_user',
-              attention_reason: 'approval',
+              status: 'working',
+              attention_reason: null,
               evidence: 'process_observed',
               observed_at: observedAt,
               started_at: observedAt - 420,
@@ -168,7 +168,7 @@ export const mockApi = {
               memory_bytes: 224 * 1024 * 1024,
               project_id: 'project-design-preview',
               worktree_id: 'worktree-design-preview',
-              detail: 'Waiting for tool approval',
+              detail: 'Process observed · detailed status unavailable',
               can_stop: true,
               stop_lease_id: 'lease-claude-mock',
             },
@@ -180,11 +180,11 @@ export const mockApi = {
       ],
       unassigned_sessions: [],
       adapters: [
-        { tool_id: 'antigravity', display_name: 'Antigravity', state: 'connected', evidence: 'vendor_event', message: 'Local status hook connected and delivering lifecycle events.', installed_version: '2.0.0' },
-        { tool_id: 'claude', display_name: 'Claude Code', state: 'integration_available', evidence: 'process_observed', message: 'Process observed · local integration available to install.', installed_version: '1.0.0' },
-        { tool_id: 'cursor', display_name: 'Cursor Agent CLI', state: 'integration_available', evidence: null, message: 'Not observed · local integration available.', installed_version: null },
-        { tool_id: 'grok', display_name: 'Grok Build', state: 'integration_available', evidence: null, message: 'Not observed · local integration available.', installed_version: null },
-        { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', state: 'integration_available', evidence: null, message: 'Not observed · local integration available.', installed_version: null },
+        { tool_id: 'antigravity', display_name: 'Antigravity', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.', installed_version: '2.0.0' },
+        { tool_id: 'claude', display_name: 'Claude Code', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.', installed_version: '1.0.0' },
+        { tool_id: 'cursor', display_name: 'Cursor Agent CLI', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'grok', display_name: 'Grok Build', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
         { tool_id: 'gemini', display_name: 'Gemini CLI (legacy / enterprise)', state: 'process_only', evidence: null, message: 'Process-only observation.', installed_version: null },
         { tool_id: 'codex', display_name: 'Codex CLI', state: 'process_only', evidence: null, message: 'Process-only observation.', installed_version: null },
         { tool_id: 'opencode', display_name: 'OpenCode', state: 'process_only', evidence: null, message: 'Process-only baseline.', installed_version: null },
@@ -199,11 +199,11 @@ export const mockApi = {
 
   async getAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
     return [
-      { tool_id: 'antigravity', display_name: 'Antigravity', supported: true, installed: true, integration_active: true, config_path: '~/.gemini/antigravity/hooks.json', description: 'Google primary agent CLI.' },
-      { tool_id: 'claude', display_name: 'Claude Code', supported: true, installed: true, integration_active: false, config_path: '~/.claude/settings.json', description: 'Claude Code official lifecycle and notification hooks.' },
-      { tool_id: 'cursor', display_name: 'Cursor Agent CLI', supported: true, installed: false, integration_active: false, config_path: '~/.cursor/hooks.json', description: 'Cursor local lifecycle hooks.' },
-      { tool_id: 'grok', display_name: 'Grok Build', supported: true, installed: false, integration_active: false, config_path: '~/.grok/hooks.json', description: 'xAI Grok Build lifecycle hooks.' },
-      { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', supported: true, installed: false, integration_active: false, config_path: '~/.copilot/hooks.json', description: 'GitHub Copilot CLI lifecycle hooks.' },
+      { tool_id: 'antigravity', display_name: 'Antigravity', supported: true, installed: true, integration_active: true, config_path: '~/.gemini/antigravity/hooks.json', description: 'Legacy Zenith marker detected; removal only.' },
+      { tool_id: 'claude', display_name: 'Claude Code', supported: true, installed: true, integration_active: false, config_path: '~/.claude/settings.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'cursor', display_name: 'Cursor Agent CLI', supported: true, installed: false, integration_active: false, config_path: '~/.cursor/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'grok', display_name: 'Grok Build', supported: true, installed: false, integration_active: false, config_path: '~/.grok/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', supported: true, installed: false, integration_active: false, config_path: '~/.copilot/hooks.json', description: 'Process-only observation; no verified bridge.' },
       { tool_id: 'gemini', display_name: 'Gemini CLI (legacy / enterprise)', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
       { tool_id: 'codex', display_name: 'Codex CLI', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
       { tool_id: 'opencode', display_name: 'OpenCode', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
@@ -211,7 +211,7 @@ export const mockApi = {
   },
 
   async setupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
-    return { tool_id: toolId, success: true, message: `Integration for ${toolId} installed.` };
+    throw new Error(`Integration for ${toolId} requires a verified event bridge.`);
   },
 
   async removeAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
@@ -221,21 +221,21 @@ export const mockApi = {
   async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
     return {
       active_count: 2,
-      attention_count: 1,
+      attention_count: 0,
       sessions: [
         {
           session_id: 'session-antigravity-preview',
           tool_name: 'Antigravity',
           project_name: 'zenith',
           status: 'working',
-          evidence: 'vendor_event',
+          evidence: 'process_observed',
           elapsed_seconds: 1320,
         },
         {
           session_id: 'session-claude-preview',
           tool_name: 'Claude Code',
           project_name: 'design-system',
-          status: 'waiting_for_user',
+          status: 'working',
           evidence: 'process_observed',
           elapsed_seconds: 420,
         },
@@ -958,7 +958,7 @@ export const mockApi = {
         enabled: false,
         notify_on_turn_completed: true,
         notify_on_approval_or_input: true,
-        notify_on_possibly_inactive: true,
+        notify_on_possibly_inactive: false,
         hide_project_basename: false,
         inactivity_threshold_minutes: 15,
       },

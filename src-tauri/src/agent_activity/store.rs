@@ -7,11 +7,18 @@ use crate::models::{
 use std::collections::HashMap;
 
 pub const EXITED_SESSION_RETENTION_SECS: u64 = 60;
+pub const ACTIVE_EVENT_RETENTION_SECS: u64 = 60 * 60;
+
+#[derive(Debug, Clone)]
+pub struct ProcessActivityObservation {
+    pub last_observed_activity_at: u64,
+}
 
 #[derive(Debug, Default)]
 pub struct AgentActivityStore {
     pub active_events: HashMap<(String, String), IngestedAgentEvent>, // (tool_id, vendor_session_id)
     pub exited_sessions: HashMap<String, (AgentSession, u64)>, // session_id -> (session, exited_at)
+    pub process_activity: HashMap<String, ProcessActivityObservation>,
     pub stop_leases: StopLeaseStore,
     pub notification_filter: NotificationFilter,
     pub last_successful_snapshot: Option<AgentActivitySnapshot>,
@@ -31,13 +38,45 @@ impl AgentActivityStore {
         }
     }
 
+    pub fn prune_active_events(&mut self, now: u64) {
+        self.active_events
+            .retain(|_, event| now.saturating_sub(event.timestamp) < ACTIVE_EVENT_RETENTION_SECS);
+    }
+
+    pub fn observe_process_activity(
+        &mut self,
+        session_id: &str,
+        cpu_percent: f32,
+        now: u64,
+    ) -> u64 {
+        let observation = self
+            .process_activity
+            .entry(session_id.to_string())
+            .or_insert(ProcessActivityObservation {
+                last_observed_activity_at: now,
+            });
+        if cpu_percent >= 0.1 {
+            observation.last_observed_activity_at = now;
+        }
+        observation.last_observed_activity_at
+    }
+
+    pub fn retain_observed_processes(
+        &mut self,
+        observed_session_ids: &std::collections::HashSet<String>,
+    ) {
+        self.process_activity
+            .retain(|session_id, _| observed_session_ids.contains(session_id));
+    }
+
     pub fn record_exited_session(&mut self, mut session: AgentSession, now: u64) {
         session.status = AgentActivityStatus::Exited;
         session.detail = "Session exited.".to_string();
         session.can_stop = false;
         session.stop_lease_id = None;
         self.exited_sessions
-            .insert(session.id.clone(), (session, now));
+            .entry(session.id.clone())
+            .or_insert((session, now));
     }
 
     pub fn prune_expired(&mut self, now: u64) {

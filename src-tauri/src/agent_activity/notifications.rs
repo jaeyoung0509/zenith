@@ -1,5 +1,10 @@
-use crate::models::{AgentNotificationPreferences, AttentionReason};
+use crate::models::{
+    AgentActivitySnapshot, AgentActivityStatus, AgentNotificationPreferences, AttentionReason,
+};
 use std::collections::HashSet;
+use tauri::plugin::PermissionState;
+use tauri::AppHandle;
+use tauri_plugin_notification::NotificationExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NotificationDedupeKey {
@@ -84,6 +89,52 @@ impl NotificationFilter {
 
         (title, body)
     }
+}
+
+pub fn emit_process_advisories(
+    app: &AppHandle,
+    snapshot: &AgentActivitySnapshot,
+    prefs: &AgentNotificationPreferences,
+    filter: &mut NotificationFilter,
+) -> Vec<String> {
+    if !prefs.enabled || !prefs.notify_on_possibly_inactive {
+        return Vec::new();
+    }
+    let notification = app.notification();
+    if notification.permission_state().ok() != Some(PermissionState::Granted) {
+        return vec!["Notification permission is not granted".to_string()];
+    }
+    snapshot
+        .projects
+        .iter()
+        .flat_map(|project| {
+            project.sessions.iter().filter_map(move |session| {
+                (session.status == AgentActivityStatus::PossiblyInactive)
+                    .then_some((session, project.identity.display_name.as_str()))
+            })
+        })
+        .chain(snapshot.unassigned_sessions.iter().filter_map(|session| {
+            (session.status == AgentActivityStatus::PossiblyInactive)
+                .then_some((session, "an unassigned project"))
+        }))
+        .filter(|(session, _)| filter.should_notify(prefs, &session.id, "possibly_inactive", None))
+        .filter_map(|(session, project_name)| {
+            let (title, body) = NotificationFilter::format_notification(
+                prefs,
+                &session.tool_name,
+                project_name,
+                "possibly_inactive",
+                Some(AttentionReason::Inactivity),
+            );
+            notification
+                .builder()
+                .title(&title)
+                .body(&body)
+                .show()
+                .err()
+                .map(|error| format!("Native notification failed: {error}"))
+        })
+        .collect()
 }
 
 #[cfg(test)]

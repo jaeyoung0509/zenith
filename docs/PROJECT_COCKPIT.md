@@ -18,8 +18,9 @@ canonical project view.
   `:5173`) and developer artifact storage sizes (e.g. `50 MB`).
 - **Unassigned Sessions Card**: Clearly presents verified agent processes whose working
   directory could not be correlated to a known project root without guessing.
-- **Tool Adapters & Local Integrations**: Displays the truthful status and version of all
-  8 supported AI tool adapters with one-click install/remove actions.
+- **Tool Adapters**: Displays the truthful process-observation status of all 8 supported
+  AI tool adapters. Legacy Zenith hook markers can be removed, but new hook installation
+  remains disabled until a protocol-specific event bridge is shipped and verified.
 
 ### Level 2: Project Cockpit
 - **Repository Actions**: Open in Terminal and Reveal in Finder controls.
@@ -34,11 +35,11 @@ canonical project view.
 
 | Tool | Executable Names | Integration Mode | Evidence Reported | Hook Config Path |
 | :--- | :--- | :--- | :--- | :--- |
-| **Antigravity** | `agy`, `antigravity` | Local status hook / CLI | `Vendor confirmed`, `Process observed` | `~/.gemini/antigravity/hooks.json` |
-| **Claude Code** | `claude` | Official settings hook | `Vendor confirmed`, `Process observed` | `~/.claude/settings.json` |
-| **Cursor Agent CLI** | `cursor-agent` | Local lifecycle hook | `Vendor confirmed`, `Process observed` | `~/.cursor/hooks.json` |
-| **Grok Build** | `grok` | Local lifecycle hook | `Vendor confirmed`, `Process observed` | `~/.grok/hooks.json` |
-| **GitHub Copilot CLI** | `copilot` | Local lifecycle hook | `Vendor confirmed`, `Process observed` | `~/.copilot/hooks.json` |
+| **Antigravity** | `agy`, `antigravity` | Process-only | `Process observed` | No verified bridge |
+| **Claude Code** | `claude` | Process-only | `Process observed` | No verified bridge |
+| **Cursor Agent CLI** | `cursor-agent` | Process-only | `Process observed` | No verified bridge |
+| **Grok Build** | `grok` | Process-only | `Process observed` | No verified bridge |
+| **GitHub Copilot CLI** | `copilot` | Process-only | `Process observed` | No verified bridge |
 | **Gemini CLI (Legacy)** | `gemini` | Process-only | `Process observed` | N/A (transitioned to Antigravity) |
 | **Codex CLI** | `codex` | Process-only | `Process observed` | N/A |
 | **OpenCode** | `opencode` | Process-only | `Process observed` | N/A |
@@ -46,13 +47,14 @@ canonical project view.
 ## Truthful Status & Evidence Model
 
 Zenith strictly distinguishes between vendor-confirmed events and ambient OS process observation:
-- **Vendor confirmed / Vendor event**: Backed by a verified local hook lifecycle event
-  or status line. Shows precise states (`Working`, `Waiting for User`, `Starting`, `Idle`, `Turn Complete`).
+- **Vendor confirmed / Vendor event**: Reserved for a validated local lifecycle event
+  that identifies exactly one observed process. No bundled adapter currently emits this evidence.
 - **Process observed**: The exact allowlisted CLI is running under the current user's UID.
   Detailed internal state is labeled as `Process observed · detailed status unavailable`
   rather than guessing.
-- **Possibly inactive**: An observed process with zero CPU usage for longer than the
-  configured inactivity threshold (default 15 minutes).
+- **Possibly inactive**: A process repeatedly observed without measurable CPU activity
+  for the configured inactivity threshold (default 15 minutes). Process age alone is never
+  treated as inactivity.
 - **Exited**: A previously observed session that terminated, retained in memory for 60
   seconds with its exit timestamp before eviction.
 
@@ -81,7 +83,8 @@ Zenith strictly distinguishes between vendor-confirmed events and ambient OS pro
 ## Desktop Notifications & Privacy
 
 - **Opt-In**: Notifications are disabled by default.
-- **Configurable Events**: Turn completed, approval/input needed, and inactivity alerts.
+- **Configurable Events**: Repeatedly observed inactivity alerts are active. Turn-complete
+  and approval/input alerts remain dormant until a verified vendor event bridge is available.
 - **Privacy Masking**: Full paths, branch names, prompts, transcripts, and credentials are
   strictly omitted. The "Hide project name" option replaces folder names with "an active project".
 - **Deduplication**: Filtered by `(session_id, event_kind, turn_id)` to prevent spam.

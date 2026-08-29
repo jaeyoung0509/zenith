@@ -71,7 +71,7 @@ export class SettingsStore {
       enabled: false,
       notify_on_turn_completed: true,
       notify_on_approval_or_input: true,
-      notify_on_possibly_inactive: true,
+      notify_on_possibly_inactive: false,
       hide_project_basename: false,
       inactivity_threshold_minutes: 15,
     },

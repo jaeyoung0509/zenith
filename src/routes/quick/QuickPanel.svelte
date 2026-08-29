@@ -87,7 +87,10 @@
     void awakeStore.refresh();
     if (hasSection('storage')) void memoryStore.refreshDisk();
     if (hasSection('memory')) memoryStore.startPolling(3000);
-    if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length > 0) {
+    if (
+      (hasSection('ai_usage') || hasSection('agent_activity')) &&
+      settings.quick_panel_ai_providers.length > 0
+    ) {
       void usageStore.refreshIfStale();
     }
     if (hasSection('ai_control')) {
@@ -410,9 +413,19 @@
               </div>
             </div>
             {#if selectedProviders.length > 0}
-              <div class="flex items-center justify-between rounded-lg px-2 py-1 bg-secondary/30 text-xs">
-                <span class="truncate text-muted-foreground">{selectedProviders[0].name}</span>
-                <span class="font-mono text-caption text-foreground font-medium">{providerValue(selectedProviders[0])}</span>
+              <div class="space-y-0.5 rounded-lg border border-border/40 bg-background/30 p-1">
+                {#each selectedProviders as provider (provider.id)}
+                  <div
+                    class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                    title={providerTitle(provider)}
+                  >
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <span class="h-1.5 w-1.5 shrink-0 rounded-full {provider.connected ? 'bg-success' : 'bg-muted-foreground/50'}"></span>
+                      <span class="truncate text-muted-foreground">{provider.name}</span>
+                    </div>
+                    <span class="shrink-0 font-mono text-caption font-medium text-foreground">{providerValue(provider)}</span>
+                  </div>
+                {/each}
               </div>
             {/if}
             {#if agentSummary.sessions.length > 0}

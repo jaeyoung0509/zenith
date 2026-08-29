@@ -9,31 +9,31 @@ pub fn get_integration_info(tool_id: &str, home_dir: &Path) -> AgentIntegrationI
             "Antigravity",
             true,
             ".gemini/antigravity/hooks.json",
-            "Google's primary agent CLI. Supports lifecycle and status-line integration.",
+            "Process-only observation. A verified Zenith event bridge is not available yet.",
         ),
         "claude" => (
             "Claude Code",
             true,
             ".claude/settings.json",
-            "Claude Code official lifecycle and notification hooks.",
+            "Process-only observation. A verified Zenith event bridge is not available yet.",
         ),
         "cursor" => (
             "Cursor Agent CLI",
             true,
             ".cursor/hooks.json",
-            "Cursor local lifecycle hooks for Agent CLI.",
+            "Process-only observation. A verified Zenith event bridge is not available yet.",
         ),
         "grok" => (
             "Grok Build",
             true,
             ".grok/hooks.json",
-            "xAI Grok Build lifecycle hooks.",
+            "Process-only observation. A verified Zenith event bridge is not available yet.",
         ),
         "copilot" => (
             "GitHub Copilot CLI",
             true,
             ".copilot/hooks.json",
-            "GitHub Copilot CLI lifecycle and notification hooks.",
+            "Process-only observation. A verified Zenith event bridge is not available yet.",
         ),
         "gemini" => (
             "Gemini CLI (legacy / enterprise)",
@@ -92,71 +92,10 @@ pub fn install_integration(
             "Tool '{tool_id}' does not support local hook integration."
         ));
     }
-    let Some(config_str) = info.config_path else {
-        return Err("Configuration path not determined.".to_string());
-    };
-    let config_path = PathBuf::from(config_str);
-
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create config directory: {e}"))?;
-    }
-
-    let mut json_value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read existing config: {e}"))?;
-        serde_json::from_str::<serde_json::Value>(&content)
-            .unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    // Inject Zenith hook without overwriting other hooks
-    match tool_id {
-        "claude" => {
-            let hooks_obj = json_value
-                .as_object_mut()
-                .ok_or_else(|| "Invalid JSON format in Claude config.".to_string())?
-                .entry("hooks")
-                .or_insert_with(|| serde_json::json!({}));
-            if let Some(obj) = hooks_obj.as_object_mut() {
-                obj.insert(
-                    ZENITH_HOOK_ID.to_string(),
-                    serde_json::json!({
-                        "events": ["SessionStart", "Stop", "SessionEnd", "Notification"],
-                        "type": "zenith_local"
-                    }),
-                );
-            }
-        }
-        _ => {
-            // Array-based hooks (antigravity, cursor, grok, copilot)
-            let hooks_arr = json_value
-                .as_object_mut()
-                .ok_or_else(|| "Invalid JSON format in tool config.".to_string())?
-                .entry("hooks")
-                .or_insert_with(|| serde_json::json!([]));
-            if let Some(arr) = hooks_arr.as_array_mut() {
-                arr.retain(|item| item.get("id").and_then(|v| v.as_str()) != Some(ZENITH_HOOK_ID));
-                arr.push(serde_json::json!({
-                    "id": ZENITH_HOOK_ID,
-                    "events": ["SessionStart", "Stop", "SessionEnd"],
-                    "type": "zenith_local"
-                }));
-            }
-        }
-    }
-
-    atomic_write_json(&config_path, &json_value)?;
-
-    Ok(AgentIntegrationResult {
-        tool_id: tool_id.to_string(),
-        success: true,
-        message: format!(
-            "Local integration for {} installed successfully.",
-            info.display_name
-        ),
-    })
+    Err(format!(
+        "Local integration for {} is unavailable until Zenith ships a verified protocol-specific event bridge.",
+        info.display_name
+    ))
 }
 
 pub fn uninstall_integration(
@@ -214,7 +153,20 @@ fn is_hook_present(path: &Path) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return false;
     };
-    content.contains(ZENITH_HOOK_ID)
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let Some(hooks) = value.get("hooks") else {
+        return false;
+    };
+    hooks
+        .as_object()
+        .is_some_and(|object| object.contains_key(ZENITH_HOOK_ID))
+        || hooks.as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("id").and_then(|id| id.as_str()) == Some(ZENITH_HOOK_ID))
+        })
 }
 
 fn atomic_write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
@@ -233,75 +185,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn installs_and_uninstalls_preserving_other_configuration() {
+    fn refuses_to_install_an_unverified_vendor_hook() {
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-
-        // 1. Initial state: not installed
-        let info = get_integration_info("antigravity", home);
-        assert!(!info.integration_active);
-
-        // 2. Pre-create config with existing custom user hook
-        let config_path = home.join(".gemini/antigravity/hooks.json");
-        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-        let initial_json = serde_json::json!({
-            "custom_setting": "preserve_me",
-            "hooks": [
-                {
-                    "id": "user-custom-hook",
-                    "events": ["SessionStart"]
-                }
-            ]
-        });
-        std::fs::write(
-            &config_path,
-            serde_json::to_string_pretty(&initial_json).unwrap(),
-        )
-        .unwrap();
-
-        // 3. Install integration
-        let install_res = install_integration("antigravity", home);
-        assert!(install_res.is_ok());
-
-        let after_install = get_integration_info("antigravity", home);
-        assert!(after_install.integration_active);
-
-        // Verify existing custom hook was preserved!
-        let installed_content: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
-        assert_eq!(installed_content["custom_setting"], "preserve_me");
-        let hooks = installed_content["hooks"].as_array().unwrap();
-        assert_eq!(hooks.len(), 2);
-        assert!(hooks.iter().any(|h| h["id"] == "user-custom-hook"));
-        assert!(hooks.iter().any(|h| h["id"] == ZENITH_HOOK_ID));
-
-        // 4. Uninstall integration
-        let uninstall_res = uninstall_integration("antigravity", home);
-        assert!(uninstall_res.is_ok());
-
-        let after_uninstall = get_integration_info("antigravity", home);
-        assert!(!after_uninstall.integration_active);
-
-        // Verify custom hook is still preserved, only Zenith hook removed!
-        let final_content: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
-        assert_eq!(final_content["custom_setting"], "preserve_me");
-        let final_hooks = final_content["hooks"].as_array().unwrap();
-        assert_eq!(final_hooks.len(), 1);
-        assert_eq!(final_hooks[0]["id"], "user-custom-hook");
+        let result = install_integration("antigravity", temp.path());
+        assert!(result.unwrap_err().contains("verified protocol-specific"));
+        assert!(!temp.path().join(".gemini/antigravity/hooks.json").exists());
     }
 
     #[test]
-    fn handles_claude_object_structure() {
+    fn removes_a_legacy_zenith_marker_without_touching_user_hooks() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
-
-        let install_res = install_integration("claude", home);
-        assert!(install_res.is_ok());
+        let path = home.join(".claude/settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "custom_setting": "preserve_me",
+                "hooks": {
+                    "user-hook": { "type": "command" },
+                    ZENITH_HOOK_ID: { "type": "zenith_local" }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         assert!(get_integration_info("claude", home).integration_active);
 
         let uninstall_res = uninstall_integration("claude", home);
         assert!(uninstall_res.is_ok());
         assert!(!get_integration_info("claude", home).integration_active);
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["custom_setting"], "preserve_me");
+        assert!(value["hooks"].get("user-hook").is_some());
     }
 }
