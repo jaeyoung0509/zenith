@@ -39,7 +39,7 @@ run-fast:
 # 📦 Production Build & Distribution
 # ------------------------------------------------------------------------------
 
-# Clean existing binaries and build fresh release packages (.app & .dmg)
+# Package-only build: clean existing artifacts and create fresh .app and .dmg outputs.
 distribute: stop clean-bin
     ./scripts/tauri_release_build.sh
     @echo ""
@@ -48,13 +48,17 @@ distribute: stop clean-bin
     @echo "  - DMG Installer: target/release/bundle/dmg/"
     @echo "👉 Run directly with: just run-bin"
 
-# Alias for distribute
-release: distribute
+# Build, validate, and safely replace the installed /Applications/Zenith.app.
+release: distribute install-release
 
-# Build fresh release and launch immediately
+# Install an already-built release bundle with rollback on replacement failure.
+install-release:
+    ./scripts/install_release_app.sh
+
+# Build, replace the installed app, and launch that installed copy.
 release-and-run: release
-    @echo "🚀 Launching fresh release build..."
-    @just run-bin
+    @echo "🚀 Launching installed release..."
+    @open "/Applications/Zenith.app"
 
 # Clean existing binaries and build fresh standalone release macOS App bundle
 release-app: stop clean-bin
@@ -94,7 +98,7 @@ generate-bindings:
     @echo "✨ Generated TypeScript bindings at: src/lib/bindings/tauri.ts"
 
 # Run all test suites (Backend Rust Safety + Frontend Vitest)
-test: test-rust test-front
+test: test-rust test-front test-release-installer
     @echo "🎉 All Rust & Frontend tests passed!"
 
 # Run Rust safety invariants & unit tests
@@ -104,6 +108,10 @@ test-rust:
 # Run frontend Vitest unit tests
 test-front:
     pnpm test
+
+# Exercise release replacement and rollback using temporary fixture bundles only.
+test-release-installer:
+    ./scripts/test_install_release_app.sh
 
 # Check code types & compile check
 check:

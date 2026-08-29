@@ -86,6 +86,9 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
 
+      - name: Release installer regression tests
+        run: just test-release-installer
+
       # The tagged/manual Release workflow owns optimized DMG packaging.
       # CI only needs to prove that the current frontend is embedded in a macOS app bundle.
       - name: Build debug app bundle (embedded frontend check)
