@@ -6,6 +6,10 @@ import type {
   AiControlPreferences,
   ControlCenterQuickSummary,
   AgentActivitySnapshot,
+  AgentIntegrationInfo,
+  AgentIntegrationResult,
+  AgentQuickSummary,
+  IngestedAgentEvent,
   AwakeBehavior,
   AwakeRule,
   AwakeState,
@@ -45,6 +49,34 @@ async function unwrap<T, E>(promise: Promise<Result<T, E>>): Promise<T> {
 export const nativeApi = {
   async getProjectContext(force = false): Promise<AgentActivitySnapshot> {
     return await unwrap(commands.getProjectContext(force));
+  },
+
+  async requestStopAgentSession(sessionId: string, leaseId: string): Promise<void> {
+    await unwrap(commands.requestStopAgentSession(sessionId, leaseId));
+  },
+
+  async getAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
+    return await unwrap(commands.getAgentIntegrations());
+  },
+
+  async setupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    return await unwrap(commands.setupAgentIntegration(toolId));
+  },
+
+  async removeAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    return await unwrap(commands.removeAgentIntegration(toolId));
+  },
+
+  async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
+    return await commands.getAgentQuickSummary();
+  },
+
+  async postAgentEvent(event: IngestedAgentEvent): Promise<void> {
+    await unwrap(commands.postAgentEvent(event as any));
+  },
+
+  async openInTerminal(path: string): Promise<void> {
+    await unwrap(commands.openInTerminal(path));
   },
 
   async getAiUsage(force = false): Promise<AiUsageSnapshot> {

@@ -289,6 +289,13 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
             commands::get_project_context,
+            commands::request_stop_agent_session,
+            commands::get_agent_integrations,
+            commands::setup_agent_integration,
+            commands::remove_agent_integration,
+            commands::get_agent_quick_summary,
+            commands::post_agent_event,
+            commands::open_in_terminal,
             commands::get_ai_control_center,
             commands::get_ai_control_quick_summary,
             commands::save_ai_control_preferences,

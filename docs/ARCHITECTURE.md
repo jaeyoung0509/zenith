@@ -64,11 +64,8 @@ Rust process state rather than in a browser singleton.
 - `src-tauri/src/dev_ports`: bounded TCP-listener discovery, conservative
   development/testing-tool classification, opaque lease storage, TOCTOU validation,
   and exact-process graceful/force signaling.
-- `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry
-  points. `src-tauri/src/ai_control_center` normalizes those observations with
-  explicit provenance, applies local budget/policy rules, and consumes the
-  canonical Project Cockpit registry for resource and safety attribution. See
-  [AI_CONTROL_CENTER.md](AI_CONTROL_CENTER.md).
+- `src-tauri/src/ai_usage`: provider-specific usage collection and OAuth entry points.
+- `src-tauri/src/agent_activity`: canonical project and Git worktree discovery, cross-tool AI agent process observation (8 adapters), truthful status matrix, dev port and cached artifact correlation, opaque 30s stop leases, and safe graceful termination with PID-reuse protection. Vendor hooks remain disabled until a verified event bridge exists. See [PROJECT_COCKPIT.md](PROJECT_COCKPIT.md).
 - `src/lib/utils/tauri.ts`: frontend command wrappers — the single `invoke` boundary for all Tauri commands. The dedicated storage-management workflows (Large Files and App Uninstaller) are the sanctioned exception: their native and browser-preview split lives in `src/lib/api/storage.ts` and reuses the shared `isTauri()` from `src/lib/api/index.ts` to decide at runtime. New generic commands belong in `utils/tauri.ts`; new storage commands belong in `api/storage.ts`.
 - `src/lib/stores`: Svelte state and lifecycle orchestration.
 - `src/routes/dashboard` and `src/routes/quick`: the two window surfaces.

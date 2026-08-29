@@ -11,6 +11,7 @@ use crate::models::{
 };
 use crate::trash_manager::{TrashExecutor, TrashPlan, TrashPlanner};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,6 +33,22 @@ pub(crate) static TRASH_PLANS: LazyLock<Mutex<HashMap<uuid::Uuid, TrashPlan>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
 const PLAN_TTL_SECS: u64 = 5 * 60;
+
+pub(crate) fn cached_developer_artifact_sizes() -> HashMap<PathBuf, u64> {
+    let inventory = DEVELOPER_ARTIFACT_INVENTORY
+        .lock()
+        .expect("DEVELOPER_ARTIFACT_INVENTORY poisoned")
+        .clone()
+        .filter(DeveloperArtifactInventory::is_fresh);
+    let mut sizes = HashMap::new();
+    if let Some(inventory) = inventory {
+        for record in inventory.records.values() {
+            let total = sizes.entry(record.project_root.clone()).or_insert(0u64);
+            *total = total.saturating_add(record.artifact.allocated_bytes);
+        }
+    }
+    sizes
+}
 
 fn is_fresh_at(created_at: u64, ttl_secs: u64, now: u64) -> bool {
     now.saturating_sub(created_at) < ttl_secs

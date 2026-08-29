@@ -40,12 +40,44 @@ import type {
   TrashPlanPreview,
   TrashResult,
   ZenithSettings,
+  AgentIntegrationInfo,
+  AgentIntegrationResult,
+  AgentQuickSummary,
+  IngestedAgentEvent,
 } from '../models/types';
 
 export const isTauri = isTauriCheck();
 
 export function tauriGetProjectContext(force = false): Promise<AgentActivitySnapshot> {
   return api.getProjectContext(force);
+}
+
+export function tauriRequestStopAgentSession(sessionId: string, leaseId: string): Promise<void> {
+  return api.requestStopAgentSession(sessionId, leaseId);
+}
+
+export function tauriGetAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
+  return api.getAgentIntegrations();
+}
+
+export function tauriSetupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+  return api.setupAgentIntegration(toolId);
+}
+
+export function tauriRemoveAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+  return api.removeAgentIntegration(toolId);
+}
+
+export function tauriGetAgentQuickSummary(): Promise<AgentQuickSummary | null> {
+  return api.getAgentQuickSummary();
+}
+
+export function tauriPostAgentEvent(event: IngestedAgentEvent): Promise<void> {
+  return api.postAgentEvent(event);
+}
+
+export function tauriOpenInTerminal(path: string): Promise<void> {
+  return api.openInTerminal(path);
 }
 
 export function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {

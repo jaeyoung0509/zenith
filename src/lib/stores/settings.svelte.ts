@@ -14,10 +14,10 @@ export class SettingsStore {
     intensive_cleanup: false,
     theme: 'system',
     excluded_signatures: [],
-    quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_control'],
+    quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
-    dashboard_tabs_revision: 3,
+    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
+    dashboard_tabs_revision: 5,
     sidebar_collapsed: false,
     awake_rules: [
       {
@@ -66,6 +66,14 @@ export class SettingsStore {
       },
       dismissed_findings: [],
       audit_retention_days: 30,
+    },
+    agent_notifications: {
+      enabled: false,
+      notify_on_turn_completed: true,
+      notify_on_approval_or_input: true,
+      notify_on_possibly_inactive: false,
+      hide_project_basename: false,
+      inactivity_threshold_minutes: 15,
     },
   });
 

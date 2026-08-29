@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import type { AgentActivitySnapshot } from '../lib/models/types';
 import { AgentActivityStore, agentActivityStore } from '../lib/stores/agentActivity.svelte';
+import { usageStore } from '../lib/stores/usage.svelte';
 import ProjectCockpitView from '../routes/dashboard/ProjectCockpitView.svelte';
 
 const snapshot: AgentActivitySnapshot = {
@@ -14,9 +15,13 @@ const snapshot: AgentActivitySnapshot = {
         id: 'project-one',
         display_name: 'same-name',
         location_hint: 'parent-one/same-name',
+        display_path: '~/parent-one/same-name',
         repository_id: 'repo-one',
+        worktree_id: 'worktree-one',
         is_worktree: true,
         branch: 'feature/one',
+        is_dirty: false,
+        is_detached: false,
       },
       sessions: [
         {
@@ -24,6 +29,7 @@ const snapshot: AgentActivitySnapshot = {
           tool_id: 'codex',
           tool_name: 'Codex CLI',
           status: 'active',
+          attention_reason: null,
           evidence: 'process_observed',
           observed_at: 100,
           started_at: 40,
@@ -31,10 +37,15 @@ const snapshot: AgentActivitySnapshot = {
           cpu_percent: 2.5,
           memory_bytes: 1024,
           project_id: 'project-one',
+          worktree_id: 'worktree-one',
           detail: 'Process observed · detailed status unavailable',
+          can_stop: true,
+          stop_lease_id: 'lease-test-1',
         },
       ],
       last_seen_at: 100,
+      dev_ports: [5173],
+      artifact_size_bytes: 1024 * 1024 * 50,
     },
   ],
   unassigned_sessions: [],
@@ -45,6 +56,7 @@ const snapshot: AgentActivitySnapshot = {
       state: 'process_only',
       evidence: 'process_observed',
       message: 'Process observed · detailed status unavailable.',
+      installed_version: '1.0.0',
     },
   ],
   partial_errors: ['One adapter was unavailable.'],
@@ -52,23 +64,44 @@ const snapshot: AgentActivitySnapshot = {
 
 afterEach(() => {
   agentActivityStore.snapshot = null;
+  agentActivityStore.selectedProjectId = null;
   agentActivityStore.error = null;
   agentActivityStore.isLoading = false;
+  usageStore.snapshot = null;
 });
 
 describe('Project Cockpit', () => {
-  it('renders worktree identity and evidence without destructive controls', () => {
+  it('renders worktree identity, dev ports, and evidence in project list', () => {
     agentActivityStore.snapshot = snapshot;
     const rendered = render(ProjectCockpitView);
-    const source = readFileSync(new URL('../routes/dashboard/ProjectCockpitView.svelte', import.meta.url), 'utf8');
+    const source = readFileSync(
+      new URL('../routes/dashboard/ProjectCockpitView.svelte', import.meta.url),
+      'utf8'
+    );
 
     expect(rendered.body).toContain('same-name');
-    expect(rendered.body).toContain('parent-one/same-name');
     expect(rendered.body).toContain('Worktree');
     expect(rendered.body).toContain('Process observed');
     expect(rendered.body).toContain('Local only');
-    expect(source).not.toContain('terminate_process');
-    expect(source).not.toContain('requestStop');
+    expect(rendered.body).toContain(':5173');
+    // Never calls raw arbitrary process kill
+    expect(source).not.toContain('terminate_process_group');
+    expect(source).not.toContain('kill -9');
+  });
+
+  it('renders Level 2 Project Cockpit when a project is selected', () => {
+    agentActivityStore.snapshot = snapshot;
+    agentActivityStore.selectProject('project-one');
+    const rendered = render(ProjectCockpitView);
+
+    expect(rendered.body).toContain('Back to Projects');
+    expect(rendered.body).toContain('Active Agent Sessions');
+    expect(rendered.body).toContain('Development Services');
+    expect(rendered.body).toContain('Developer Storage');
+    expect(rendered.body).toContain('localhost:5173');
+    expect(rendered.body).toContain('Reveal in Finder');
+    expect(rendered.body).toContain('Open in Terminal');
+    expect(rendered.body).toContain('Stop');
   });
 
   it('keeps the last successful snapshot when refresh fails', async () => {
@@ -92,5 +125,55 @@ describe('Project Cockpit', () => {
     resolve(snapshot);
     await Promise.all([first, second]);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles graceful stop session delegation', async () => {
+    const store = new AgentActivityStore(vi.fn().mockResolvedValue(snapshot));
+    store.snapshot = snapshot;
+    const stopSpy = vi.spyOn(store, 'stopSession').mockResolvedValue(undefined);
+
+    await store.stopSession('opaque-session', 'lease-test-1');
+    expect(stopSpy).toHaveBeenCalledWith('opaque-session', 'lease-test-1');
+  });
+
+  it('renders AI accounts quota strip when usage data is present', () => {
+    agentActivityStore.snapshot = snapshot;
+    usageStore.snapshot = {
+      fetched_at: 100,
+      providers: [
+        {
+          id: 'codex',
+          name: 'Codex CLI',
+          installed: true,
+          connected: true,
+          support: 'live',
+          auth_label: 'CLI',
+          status_message: 'Connected',
+          action_url: null,
+          windows: [
+            { label: '5h limit', used_percent: 45, resets_at: 2_000_000_000 },
+            { label: 'Weekly', used_percent: 21, resets_at: 2_000_100_000 },
+          ],
+          summary: {
+            lifetime_tokens: 7_700_000_000,
+            last_7d_tokens: 409_100_000,
+            peak_daily_tokens: null,
+            current_streak_days: 9,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+        },
+      ],
+    };
+    const rendered = render(ProjectCockpitView);
+    expect(rendered.body).toContain('AI Accounts');
+    expect(rendered.body).toContain('Codex CLI');
+    expect(rendered.body).toContain('45% used');
+    expect(rendered.body).toContain('Weekly');
+    expect(rendered.body).toContain('Lifetime');
+    expect(rendered.body).toContain('Recent 7 days');
+    expect(rendered.body).toContain('Resets');
   });
 });

@@ -11,6 +11,10 @@ import type {
   CleanItemResult,
   CleanResult,
   ControlCenterQuickSummary,
+  AgentIntegrationInfo,
+  AgentIntegrationResult,
+  AgentQuickSummary,
+  IngestedAgentEvent,
   DevelopmentListener,
   DiagnosticsSnapshot,
   DiskMetrics,
@@ -103,17 +107,22 @@ export const mockApi = {
           identity: {
             id: 'project-zenith-preview',
             display_name: 'zenith',
-            location_hint: 'Myproject/zenith',
+            location_hint: 'Myproject/clean1',
+            display_path: '~/Myproject/clean1',
             repository_id: 'repository-zenith-preview',
+            worktree_id: null,
             is_worktree: false,
-            branch: 'feature/project-cockpit',
+            branch: 'feature/75-agent-project-cockpit',
+            is_dirty: true,
+            is_detached: false,
           },
           sessions: [
             {
-              id: 'session-codex-preview',
-              tool_id: 'codex',
-              tool_name: 'Codex CLI',
-              status: 'active',
+              id: 'session-antigravity-preview',
+              tool_id: 'antigravity',
+              tool_name: 'Antigravity',
+              status: 'working',
+              attention_reason: null,
               evidence: 'process_observed',
               observed_at: observedAt,
               started_at: observedAt - 1320,
@@ -121,26 +130,36 @@ export const mockApi = {
               cpu_percent: 6.4,
               memory_bytes: 468 * 1024 * 1024,
               project_id: 'project-zenith-preview',
+              worktree_id: null,
               detail: 'Process observed · detailed status unavailable',
+              can_stop: true,
+              stop_lease_id: 'lease-antigravity-mock',
             },
           ],
           last_seen_at: observedAt,
+          dev_ports: [5173],
+          artifact_size_bytes: 1024 * 1024 * 50,
         },
         {
           identity: {
             id: 'project-design-preview',
             display_name: 'design-system',
             location_hint: 'worktrees/design-system',
+            display_path: '~/worktrees/design-system',
             repository_id: 'repository-design-preview',
+            worktree_id: 'worktree-design-preview',
             is_worktree: true,
             branch: 'feature/token-audit',
+            is_dirty: false,
+            is_detached: false,
           },
           sessions: [
             {
               id: 'session-claude-preview',
               tool_id: 'claude',
               tool_name: 'Claude Code',
-              status: 'active',
+              status: 'working',
+              attention_reason: null,
               evidence: 'process_observed',
               observed_at: observedAt,
               started_at: observedAt - 420,
@@ -148,20 +167,88 @@ export const mockApi = {
               cpu_percent: 2.1,
               memory_bytes: 224 * 1024 * 1024,
               project_id: 'project-design-preview',
+              worktree_id: 'worktree-design-preview',
               detail: 'Process observed · detailed status unavailable',
+              can_stop: true,
+              stop_lease_id: 'lease-claude-mock',
             },
           ],
           last_seen_at: observedAt,
+          dev_ports: [3000],
+          artifact_size_bytes: 1024 * 1024 * 120,
         },
       ],
       unassigned_sessions: [],
       adapters: [
-        { tool_id: 'codex', display_name: 'Codex CLI', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.' },
-        { tool_id: 'claude', display_name: 'Claude Code', state: 'integration_available', evidence: 'process_observed', message: 'Process observed · detailed local integration is available but not enabled.' },
-        { tool_id: 'antigravity', display_name: 'Antigravity', state: 'not_installed', evidence: null, message: 'Not observed in this snapshot.' },
+        { tool_id: 'antigravity', display_name: 'Antigravity', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.', installed_version: '2.0.0' },
+        { tool_id: 'claude', display_name: 'Claude Code', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.', installed_version: '1.0.0' },
+        { tool_id: 'cursor', display_name: 'Cursor Agent CLI', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'grok', display_name: 'Grok Build', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'gemini', display_name: 'Gemini CLI (legacy / enterprise)', state: 'process_only', evidence: null, message: 'Process-only observation.', installed_version: null },
+        { tool_id: 'codex', display_name: 'Codex CLI', state: 'process_only', evidence: null, message: 'Process-only observation.', installed_version: null },
+        { tool_id: 'opencode', display_name: 'OpenCode', state: 'process_only', evidence: null, message: 'Process-only baseline.', installed_version: null },
       ],
       partial_errors: [],
     };
+  },
+
+  async requestStopAgentSession(_sessionId: string, _leaseId: string): Promise<void> {
+    // Mock successful stop
+  },
+
+  async getAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
+    return [
+      { tool_id: 'antigravity', display_name: 'Antigravity', supported: true, installed: true, integration_active: true, config_path: '~/.gemini/antigravity/hooks.json', description: 'Legacy Zenith marker detected; removal only.' },
+      { tool_id: 'claude', display_name: 'Claude Code', supported: true, installed: true, integration_active: false, config_path: '~/.claude/settings.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'cursor', display_name: 'Cursor Agent CLI', supported: true, installed: false, integration_active: false, config_path: '~/.cursor/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'grok', display_name: 'Grok Build', supported: true, installed: false, integration_active: false, config_path: '~/.grok/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', supported: true, installed: false, integration_active: false, config_path: '~/.copilot/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'gemini', display_name: 'Gemini CLI (legacy / enterprise)', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
+      { tool_id: 'codex', display_name: 'Codex CLI', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
+      { tool_id: 'opencode', display_name: 'OpenCode', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
+    ];
+  },
+
+  async setupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    throw new Error(`Integration for ${toolId} requires a verified event bridge.`);
+  },
+
+  async removeAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    return { tool_id: toolId, success: true, message: `Integration for ${toolId} removed.` };
+  },
+
+  async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
+    return {
+      active_count: 2,
+      attention_count: 0,
+      sessions: [
+        {
+          session_id: 'session-antigravity-preview',
+          tool_name: 'Antigravity',
+          project_name: 'zenith',
+          status: 'working',
+          evidence: 'process_observed',
+          elapsed_seconds: 1320,
+        },
+        {
+          session_id: 'session-claude-preview',
+          tool_name: 'Claude Code',
+          project_name: 'design-system',
+          status: 'working',
+          evidence: 'process_observed',
+          elapsed_seconds: 420,
+        },
+      ],
+    };
+  },
+
+  async postAgentEvent(_event: IngestedAgentEvent): Promise<void> {
+    // Mock event receipt
+  },
+
+  async openInTerminal(_path: string): Promise<void> {
+    // Mock open in terminal
   },
 
   async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
@@ -843,10 +930,10 @@ export const mockApi = {
       intensive_cleanup: false,
       theme: 'system',
       excluded_signatures: [],
-      quick_panel_sections: ['storage', 'cleanup', 'ai_control'],
+      quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
-      dashboard_tabs_revision: 3,
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
+      dashboard_tabs_revision: 5,
       sidebar_collapsed: false,
       awake_rules: [
         {
@@ -867,6 +954,14 @@ export const mockApi = {
         },
       ],
       ai_control: mockControlPreferences,
+      agent_notifications: {
+        enabled: false,
+        notify_on_turn_completed: true,
+        notify_on_approval_or_input: true,
+        notify_on_possibly_inactive: false,
+        hide_project_basename: false,
+        inactivity_threshold_minutes: 15,
+      },
     };
   },
 

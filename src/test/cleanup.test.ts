@@ -151,6 +151,14 @@ describe('quick clean eligibility and predicate consistency', () => {
       sidebar_collapsed: false,
       awake_rules: [],
       ai_control: {},
+      agent_notifications: {
+        enabled: false,
+        notify_on_turn_completed: true,
+        notify_on_approval_or_input: true,
+        notify_on_possibly_inactive: true,
+        hide_project_basename: false,
+        inactivity_threshold_minutes: 15,
+      },
     };
 
     // Calculate bytes
