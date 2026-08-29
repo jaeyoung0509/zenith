@@ -614,10 +614,10 @@ fn parse_antigravity_usage_json(value: &Value, provider: &mut AiProviderUsage) {
                         .unwrap_or("Limit"),
                 };
                 let label = format!("{group_prefix} · {window_label}");
-                let remaining = bucket
-                    .get("remaining_fraction")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(1.0);
+                let Some(remaining) = bucket.get("remaining_fraction").and_then(Value::as_f64)
+                else {
+                    continue;
+                };
                 let used_percent = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
                 let resets_at = bucket
                     .get("reset_time")
@@ -667,7 +667,7 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     }
     let day: u64 = s.get(8..10)?.parse().ok()?;
     let sep = *s.as_bytes().get(10)?;
-    if sep != b'T' && sep != b't' && sep != b' ' {
+    if sep != b'T' && sep != b't' {
         return None;
     }
     let hour: u64 = s.get(11..13)?.parse().ok()?;
@@ -681,10 +681,8 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     let sec: u64 = s.get(17..19)?.parse().ok()?;
 
     if year < 1970
-        || month < 1
-        || month > 12
-        || day < 1
-        || day > 31
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
         || hour > 23
         || min > 59
         || sec > 60
@@ -692,7 +690,7 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
         return None;
     }
 
-    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let is_leap = is_leap_year(year);
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -711,7 +709,7 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
 
     let mut days = 0u64;
     for y in 1970..year {
-        let y_leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+        let y_leap = is_leap_year(y);
         days += if y_leap { 366 } else { 365 };
     }
     let month_days = [
@@ -733,40 +731,48 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     }
     days += day - 1;
 
-    let mut epoch_secs = days * 86400 + hour * 3600 + min * 60 + sec;
+    let epoch_secs = days * 86400 + hour * 3600 + min * 60 + sec;
 
     let mut rest = &s[19..];
     if rest.starts_with('.') {
-        let end_digits = rest[1..]
+        let fraction = &rest[1..];
+        let end_digits = fraction
             .find(|c: char| !c.is_ascii_digit())
             .map(|idx| idx + 1)
             .unwrap_or(rest.len());
+        if end_digits == 1 {
+            return None;
+        }
         rest = &rest[end_digits..];
     }
 
-    if rest.starts_with('Z') || rest.starts_with('z') || rest.is_empty() {
+    if rest == "Z" || rest == "z" {
         return Some(epoch_secs);
     }
 
-    if rest.starts_with('+') || rest.starts_with('-') {
+    if rest.len() == 6
+        && (rest.starts_with('+') || rest.starts_with('-'))
+        && rest.as_bytes().get(3) == Some(&b':')
+    {
         let sign = if rest.starts_with('+') { -1i64 } else { 1i64 };
-        let offset_str = rest[1..].trim();
-        let (off_h, off_m) = if let Some((h, m)) = offset_str.split_once(':') {
-            (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?)
-        } else if offset_str.len() >= 2 {
-            (offset_str[..2].parse::<i64>().ok()?, 0)
-        } else {
+        let off_h = rest.get(1..3)?.parse::<i64>().ok()?;
+        let off_m = rest.get(4..6)?.parse::<i64>().ok()?;
+        if off_h > 23 || off_m > 59 {
             return None;
-        };
+        }
         let offset_secs = sign * (off_h * 3600 + off_m * 60);
         let adjusted = epoch_secs as i64 + offset_secs;
         if adjusted < 0 {
             return None;
         }
-        epoch_secs = adjusted as u64;
+        return Some(adjusted as u64);
     }
 
-    Some(epoch_secs)
+    None
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 #[cfg(test)]
@@ -795,6 +801,16 @@ mod tests {
         );
         assert_eq!(parse_rfc3339_to_unix_secs("invalid"), None);
         assert_eq!(parse_rfc3339_to_unix_secs("2026-13-01T00:00:00Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-02-29T00:00:00Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02 03:13:59Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59.Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59Zjunk"), None);
+        assert_eq!(
+            parse_rfc3339_to_unix_secs("2026-09-02T03:13:59+24:00"),
+            None
+        );
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59+09"), None);
     }
 
     #[test]
@@ -820,6 +836,12 @@ mod tests {
                                     "name": "Five Hour Limit Remaining",
                                     "window": "5h",
                                     "remaining_fraction": 0.988,
+                                    "reset_time": "2026-08-29T17:05:20Z"
+                                },
+                                {
+                                    "id": "malformed",
+                                    "name": "Bucket without remaining fraction",
+                                    "window": "5h",
                                     "reset_time": "2026-08-29T17:05:20Z"
                                 }
                             ]

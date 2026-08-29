@@ -69,7 +69,7 @@ export const nativeApi = {
   },
 
   async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
-    return await commands.getAgentQuickSummary();
+    return await unwrap(commands.getAgentQuickSummary());
   },
 
   async postAgentEvent(event: IngestedAgentEvent): Promise<void> {

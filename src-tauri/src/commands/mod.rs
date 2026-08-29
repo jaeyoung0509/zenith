@@ -253,18 +253,28 @@ pub fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResul
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_agent_quick_summary(state: State<'_, AppState>) -> Option<AgentQuickSummary> {
-    let guard = state.agent_activity_cache.lock().ok()?;
-    let registry = match guard.as_ref() {
-        Some(r) => r.clone(),
-        None => {
-            drop(guard);
+pub async fn get_agent_quick_summary(
+    state: State<'_, AppState>,
+) -> Result<Option<AgentQuickSummary>, String> {
+    let cached = state
+        .agent_activity_cache
+        .lock()
+        .map_err(|_| "Agent activity cache is unavailable.".to_string())?
+        .clone();
+    let registry = if let Some(registry) = cached {
+        registry
+    } else {
+        let cache = state.agent_activity_cache.clone();
+        tauri::async_runtime::spawn_blocking(move || {
             let fresh = crate::agent_activity::collect_registry();
-            if let Ok(mut g) = state.agent_activity_cache.lock() {
-                *g = Some(fresh.clone());
-            }
-            fresh
-        }
+            *cache
+                .lock()
+                .map_err(|_| "Agent activity cache is unavailable.".to_string())? =
+                Some(fresh.clone());
+            Ok::<_, String>(fresh)
+        })
+        .await
+        .map_err(|error| format!("Agent activity refresh failed: {error}"))??
     };
     let mut active_count = 0;
     let mut attention_count = 0;
@@ -318,11 +328,11 @@ pub fn get_agent_quick_summary(state: State<'_, AppState>) -> Option<AgentQuickS
     rows.sort_by_key(|b| std::cmp::Reverse(b.elapsed_seconds));
     rows.truncate(3);
 
-    Some(AgentQuickSummary {
+    Ok(Some(AgentQuickSummary {
         active_count,
         attention_count,
         sessions: rows,
-    })
+    }))
 }
 
 #[tauri::command]

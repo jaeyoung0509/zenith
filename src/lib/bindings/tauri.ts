@@ -10,11 +10,11 @@ export const commands = {
 	getAgentIntegrations: () => typedError<AgentIntegrationInfo[], string>(__TAURI_INVOKE("get_agent_integrations")),
 	setupAgentIntegration: (toolId: string) => typedError<AgentIntegrationResult, string>(__TAURI_INVOKE("setup_agent_integration", { toolId })),
 	removeAgentIntegration: (toolId: string) => typedError<AgentIntegrationResult, string>(__TAURI_INVOKE("remove_agent_integration", { toolId })),
-	getAgentQuickSummary: () => __TAURI_INVOKE<{
+	getAgentQuickSummary: () => typedError<{
 	active_count: number,
 	attention_count: number,
 	sessions: AgentQuickSessionRow_Serialize[],
-} | null>("get_agent_quick_summary"),
+} | null, string>(__TAURI_INVOKE("get_agent_quick_summary")),
 	postAgentEvent: (event: IngestedAgentEvent) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
 	openInTerminal: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_in_terminal", { path })),
 	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
