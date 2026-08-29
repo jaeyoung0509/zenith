@@ -2,6 +2,7 @@ import type {
   AgentActivitySnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
+  AiProviderUsage,
   AiUsageSnapshot,
   AwakeBehavior,
   AwakeRule,
@@ -251,8 +252,11 @@ export const mockApi = {
     // Mock open in terminal
   },
 
-  async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
-    return {
+  async getAiUsage(
+    _force = false,
+    onProvider?: (provider: AiProviderUsage) => void
+  ): Promise<AiUsageSnapshot> {
+    const snapshot: AiUsageSnapshot = {
       fetched_at: Math.floor(Date.now() / 1000),
       providers: [
         {
@@ -263,7 +267,10 @@ export const mockApi = {
           auth_label: 'plus · OAuth',
           status_message: 'Live account limits from the official Codex app-server.',
           support: 'live',
-          windows: [{ label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 }],
+          windows: [
+            { label: '5h', used_percent: 0, resets_at: Math.floor(Date.now() / 1000) + 17940 },
+            { label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 },
+          ],
           summary: {
             lifetime_tokens: 7111812241,
             last_7d_tokens: 452818756,
@@ -383,6 +390,12 @@ export const mockApi = {
         },
       ],
     };
+    if (onProvider) {
+      for (const provider of snapshot.providers) {
+        onProvider(provider);
+      }
+    }
+    return snapshot;
   },
 
   async getAiControlCenter(_force = false): Promise<AiControlCenterSnapshot> {

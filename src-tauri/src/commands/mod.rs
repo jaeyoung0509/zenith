@@ -5,11 +5,11 @@ use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AgentActivitySnapshot, AgentActivityStatus, AgentIntegrationInfo, AgentIntegrationResult,
     AgentQuickSessionRow, AgentQuickSummary, AiControlCenterSnapshot, AiControlPreferences,
-    AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, IngestedAgentEvent, LocalModelItem, MemoryMetrics, PlanPreview,
-    RecommendationPreview, ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent, ScanResult,
-    SelectedApplication, ZenithSettings,
+    AiProviderUsage, AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent,
+    CleanResult, ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot,
+    DiskMetrics, DiskVolume, DockerStatus, IngestedAgentEvent, LocalModelItem, MemoryMetrics,
+    PlanPreview, RecommendationPreview, ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent,
+    ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
@@ -51,6 +51,7 @@ fn unix_timestamp() -> u64 {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_ai_usage(
+    on_event: Channel<AiProviderUsage>,
     force: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<AiUsageSnapshot, String> {
@@ -63,6 +64,9 @@ pub async fn get_ai_usage(
             .as_ref()
         {
             if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                for p in &snapshot.providers {
+                    let _ = on_event.send(p.clone());
+                }
                 return Ok(snapshot.clone());
             }
         }
@@ -80,11 +84,16 @@ pub async fn get_ai_usage(
         if !force.unwrap_or(false) {
             if let Some(snapshot) = cache.lock().expect("ai_usage_cache poisoned").as_ref() {
                 if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                    for p in &snapshot.providers {
+                        let _ = on_event.send(p.clone());
+                    }
                     return snapshot.clone();
                 }
             }
         }
-        let snapshot = AiUsageCollector::collect(openrouter_key);
+        let snapshot = AiUsageCollector::collect_parallel(openrouter_key, |provider| {
+            let _ = on_event.send(provider);
+        });
         *cache.lock().expect("ai_usage_cache poisoned") = Some(snapshot.clone());
         snapshot
     })

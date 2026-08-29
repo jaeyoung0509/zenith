@@ -2,6 +2,7 @@ import { api, isTauri as isTauriCheck } from '../api';
 import { storageApi } from '../api/storage';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
+  AiProviderUsage,
   AiUsageSnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
@@ -80,8 +81,11 @@ export function tauriOpenInTerminal(path: string): Promise<void> {
   return api.openInTerminal(path);
 }
 
-export function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {
-  return api.getAiUsage(force);
+export function tauriGetAiUsage(
+  force = false,
+  onProvider?: (provider: AiProviderUsage) => void
+): Promise<AiUsageSnapshot> {
+  return api.getAiUsage(force, onProvider);
 }
 
 export function tauriGetAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {

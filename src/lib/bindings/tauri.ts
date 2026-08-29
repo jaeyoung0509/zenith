@@ -4,7 +4,7 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	getAiUsage: (force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { force })),
+	getAiUsage: (onEvent: Channel<AiProviderUsage>, force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { onEvent, force })),
 	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot_Serialize, string>(__TAURI_INVOKE("get_project_context", { force })),
 	requestStopAgentSession: (sessionId: string, leaseId: string) => typedError<null, string>(__TAURI_INVOKE("request_stop_agent_session", { sessionId, leaseId })),
 	getAgentIntegrations: () => typedError<AgentIntegrationInfo[], string>(__TAURI_INVOKE("get_agent_integrations")),

@@ -17,16 +17,71 @@ pub struct AiUsageCollector;
 
 impl AiUsageCollector {
     pub fn collect(openrouter_key: Option<String>) -> AiUsageSnapshot {
+        Self::collect_parallel(openrouter_key, |_| {})
+    }
+
+    pub fn collect_parallel<F>(openrouter_key: Option<String>, on_provider: F) -> AiUsageSnapshot
+    where
+        F: Fn(AiProviderUsage) + Send + Sync,
+    {
+        let on_p = &on_provider;
+        let (codex, claude, opencode, openrouter, antigravity) = std::thread::scope(|s| {
+            let h_codex = s.spawn(move || {
+                let p = Self::collect_codex();
+                on_p(p.clone());
+                p
+            });
+            let h_claude = s.spawn(move || {
+                let p = Self::collect_claude();
+                on_p(p.clone());
+                p
+            });
+            let h_opencode = s.spawn(move || {
+                let p = Self::collect_opencode();
+                on_p(p.clone());
+                p
+            });
+            let h_openrouter = s.spawn(move || {
+                let p = Self::collect_openrouter(openrouter_key.as_deref());
+                on_p(p.clone());
+                p
+            });
+            let h_antigravity = s.spawn(move || {
+                let p = Self::collect_antigravity();
+                on_p(p.clone());
+                p
+            });
+
+            (
+                h_codex
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("codex", "Codex")),
+                h_claude
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("claude", "Claude Code")),
+                h_opencode
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("opencode", "OpenCode")),
+                h_openrouter
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("openrouter", "OpenRouter")),
+                h_antigravity
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("antigravity", "Antigravity")),
+            )
+        });
+
         AiUsageSnapshot {
-            providers: vec![
-                Self::collect_codex(),
-                Self::collect_claude(),
-                Self::collect_opencode(),
-                Self::collect_openrouter(openrouter_key.as_deref()),
-                Self::collect_antigravity(),
-            ],
+            providers: vec![codex, claude, opencode, openrouter, antigravity],
             fetched_at: now_secs(),
         }
+    }
+
+    fn failed_provider(id: &str, name: &str) -> AiProviderUsage {
+        let mut provider = base_provider(id, name, "Unknown");
+        provider.support = UsageSupport::Manual;
+        provider.status_message = "Collector thread failed.".into();
+        provider
     }
 
     fn collect_codex() -> AiProviderUsage {
@@ -553,7 +608,10 @@ fn parse_antigravity_usage_json(value: &Value, provider: &mut AiProviderUsage) {
                 let window_label = match window_type {
                     "weekly" => "Weekly",
                     "5h" => "5h",
-                    _ => bucket.get("name").and_then(Value::as_str).unwrap_or("Limit"),
+                    _ => bucket
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Limit"),
                 };
                 let label = format!("{group_prefix} · {window_label}");
                 let remaining = bucket
@@ -574,6 +632,14 @@ fn parse_antigravity_usage_json(value: &Value, provider: &mut AiProviderUsage) {
             }
         }
     }
+
+    // Sort windows so shorter windows (5h) appear before longer ones (Weekly)
+    windows.sort_by_key(|w| {
+        let is_gemini = w.label.contains("Gemini");
+        let group_order = if is_gemini { 0 } else { 1 };
+        let window_order = if w.label.contains("5h") { 0 } else { 1 };
+        (group_order, window_order)
+    });
 
     if !windows.is_empty() {
         provider.connected = true;
@@ -614,7 +680,15 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     }
     let sec: u64 = s.get(17..19)?.parse().ok()?;
 
-    if year < 1970 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 60 {
+    if year < 1970
+        || month < 1
+        || month > 12
+        || day < 1
+        || day > 31
+        || hour > 23
+        || min > 59
+        || sec > 60
+    {
         return None;
     }
 
@@ -622,7 +696,13 @@ pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if is_leap { 29 } else { 28 },
+        2 => {
+            if is_leap {
+                29
+            } else {
+                28
+            }
+        }
         _ => return None,
     };
     if day > days_in_month {
@@ -708,10 +788,7 @@ mod tests {
             parse_rfc3339_to_unix_secs("2026-09-02T03:13:59.123456Z"),
             Some(1788318839)
         );
-        assert_eq!(
-            parse_rfc3339_to_unix_secs("1970-01-01T00:00:00Z"),
-            Some(0)
-        );
+        assert_eq!(parse_rfc3339_to_unix_secs("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(
             parse_rfc3339_to_unix_secs("2026-09-02T12:13:59+09:00"),
             Some(1788318839)
@@ -770,13 +847,13 @@ mod tests {
         assert!(provider.connected);
         assert!(matches!(provider.support, UsageSupport::Live));
         assert_eq!(provider.windows.len(), 3);
-        assert_eq!(provider.windows[0].label, "Gemini · Weekly");
-        assert!((provider.windows[0].used_percent - 20.8).abs() < 0.1);
-        assert_eq!(provider.windows[0].resets_at, Some(1788318839));
+        assert_eq!(provider.windows[0].label, "Gemini · 5h");
+        assert!((provider.windows[0].used_percent - 1.2).abs() < 0.1);
+        assert_eq!(provider.windows[0].resets_at, Some(1788023120));
 
-        assert_eq!(provider.windows[1].label, "Gemini · 5h");
-        assert!((provider.windows[1].used_percent - 1.2).abs() < 0.1);
-        assert_eq!(provider.windows[1].resets_at, Some(1788023120));
+        assert_eq!(provider.windows[1].label, "Gemini · Weekly");
+        assert!((provider.windows[1].used_percent - 20.8).abs() < 0.1);
+        assert_eq!(provider.windows[1].resets_at, Some(1788318839));
 
         assert_eq!(provider.windows[2].label, "Claude/GPT · Weekly");
         assert_eq!(provider.windows[2].used_percent, 0.0);

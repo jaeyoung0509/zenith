@@ -152,4 +152,22 @@ describe('quick panel AI provider projection', () => {
     expect(result.map((p) => p.id)).toEqual(['antigravity', 'codex']);
     expect(result[0].windows[0].label).toBe('Gemini · Weekly');
   });
+
+  it('projects placeholder entries when isLoading is true and providers are still in flight', () => {
+    const result = projectAiProviders(['codex', 'antigravity'], undefined, true);
+    expect(result).toHaveLength(2);
+    expect(result.map((p) => p.id)).toEqual(['codex', 'antigravity']);
+    expect(result[0].name).toBe('Codex');
+    expect(result[1].name).toBe('Antigravity');
+  });
+
+  it('renders spinning loader and dual 5h/Weekly window support in QuickPanel.svelte', () => {
+    const source = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    expect(source).toContain('usageStore.isProviderLoading(provider.id)');
+    expect(source).toContain('RotateCw size={11}');
+    expect(source).toContain('w5h && wWeekly');
+  });
 });

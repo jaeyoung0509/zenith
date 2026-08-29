@@ -49,7 +49,11 @@
   let scan = $derived(scanStore.lastScan);
   let awakeState = $derived(awakeStore.state);
   let selectedProviders = $derived(
-    projectAiProviders(settings.quick_panel_ai_providers, usageStore.snapshot?.providers)
+    projectAiProviders(
+      settings.quick_panel_ai_providers,
+      usageStore.snapshot?.providers,
+      usageStore.isLoading
+    )
   );
 
   let quickCleanableBytes = $derived.by(() =>
@@ -172,8 +176,40 @@
     void tauriHideCurrentWindow();
   }
 
+  function formatCompactTime(timeUntil: string): string {
+    if (timeUntil.includes('d')) {
+      const match = timeUntil.match(/(\d+)d/);
+      return match ? `${match[1]}d` : timeUntil;
+    }
+    if (timeUntil.includes('h')) {
+      const match = timeUntil.match(/(\d+)h/);
+      return match ? `${match[1]}h` : timeUntil;
+    }
+    return timeUntil;
+  }
+
   function providerValue(provider: AiProviderUsage) {
-    if (provider.windows[0]) {
+    if (usageStore.isProviderLoading(provider.id)) {
+      return '';
+    }
+
+    if (provider.windows.length > 0) {
+      const w5h = provider.windows.find(
+        (w) => w.label.toLowerCase().includes('5h') || w.label.toLowerCase().includes('5 hour')
+      );
+      const wWeekly = provider.windows.find((w) => w.label.toLowerCase().includes('week'));
+
+      if (w5h && wWeekly) {
+        const p5h = Math.round(w5h.used_percent ?? 0);
+        const pWk = Math.round(wWeekly.used_percent ?? 0);
+        const t5h = w5h.resets_at ? formatCompactTime(formatTimeUntil(w5h.resets_at)) : '';
+        const tWk = wWeekly.resets_at ? formatCompactTime(formatTimeUntil(wWeekly.resets_at)) : '';
+
+        const s5h = t5h ? `5h ${p5h}% (${t5h})` : `5h ${p5h}%`;
+        const sWk = tWk ? `Wk ${pWk}% (${tWk})` : `Wk ${pWk}%`;
+        return `${s5h} · ${sWk}`;
+      }
+
       const window = provider.windows[0];
       const percent = Math.round(window.used_percent ?? 0);
       if (window.resets_at) {
@@ -184,14 +220,23 @@
       }
       return `${percent}% used`;
     }
+
     if (provider.summary.local_sessions != null) return `${provider.summary.local_sessions} sessions`;
     if (provider.summary.usage_usd != null) return `$${provider.summary.usage_usd.toFixed(2)}`;
     return provider.connected ? 'Connected' : provider.installed ? 'Available' : 'Not installed';
   }
 
   function providerTitle(provider: AiProviderUsage) {
-    if (provider.windows[0]?.resets_at) {
-      return `${provider.name}: ${Math.round(provider.windows[0].used_percent ?? 0)}% used, resets on ${formatResetDate(provider.windows[0].resets_at)} (in ${formatTimeUntil(provider.windows[0].resets_at)})`;
+    if (usageStore.isProviderLoading(provider.id)) {
+      return `${provider.name}: Loading live quota...`;
+    }
+    if (provider.windows.length > 0) {
+      return provider.windows
+        .map((w) => {
+          const time = w.resets_at ? ` (resets in ${formatTimeUntil(w.resets_at)})` : '';
+          return `${w.label}: ${Math.round(w.used_percent ?? 0)}% used${time}`;
+        })
+        .join(' · ');
     }
     return provider.status_message || provider.auth_label || provider.name;
   }
@@ -409,10 +454,16 @@
                   title={providerTitle(provider)}
                 >
                   <div class="flex min-w-0 items-center gap-1.5">
-                    <span class="h-1.5 w-1.5 shrink-0 rounded-full {provider.connected ? 'bg-success' : 'bg-muted-foreground/50'}"></span>
+                    <span class="h-1.5 w-1.5 shrink-0 rounded-full {usageStore.isProviderLoading(provider.id) ? 'bg-muted-foreground/40 animate-pulse' : provider.connected ? 'bg-success' : 'bg-muted-foreground/50'}"></span>
                     <span class="truncate text-muted-foreground">{provider.name}</span>
                   </div>
-                  <span class="shrink-0 font-mono text-caption font-medium text-foreground">{providerValue(provider)}</span>
+                  {#if usageStore.isProviderLoading(provider.id)}
+                    <span class="shrink-0 inline-flex items-center text-muted-foreground/70" title="Loading live quota...">
+                      <RotateCw size={11} class="animate-spin" />
+                    </span>
+                  {:else}
+                    <span class="shrink-0 font-mono text-caption font-medium text-foreground">{providerValue(provider)}</span>
+                  {/if}
                 </div>
               {/each}
             </div>
