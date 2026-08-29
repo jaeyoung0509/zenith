@@ -246,7 +246,17 @@ pub fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResul
 #[specta::specta]
 pub fn get_agent_quick_summary(state: State<'_, AppState>) -> Option<AgentQuickSummary> {
     let guard = state.agent_activity_cache.lock().ok()?;
-    let registry = guard.as_ref()?;
+    let registry = match guard.as_ref() {
+        Some(r) => r.clone(),
+        None => {
+            drop(guard);
+            let fresh = crate::agent_activity::collect_registry();
+            if let Ok(mut g) = state.agent_activity_cache.lock() {
+                *g = Some(fresh.clone());
+            }
+            fresh
+        }
+    };
     let mut active_count = 0;
     let mut attention_count = 0;
     let mut rows = Vec::new();

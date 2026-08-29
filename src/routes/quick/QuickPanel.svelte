@@ -401,7 +401,24 @@
               Open AI Activity <ArrowRight size={10} />
             </button>
           </div>
-          {#if agentSummary}
+          {#if selectedProviders.length > 0}
+            <div class="space-y-0.5 rounded-lg border border-border/40 bg-background/30 p-1">
+              {#each selectedProviders as provider (provider.id)}
+                <div
+                  class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                  title={providerTitle(provider)}
+                >
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <span class="h-1.5 w-1.5 shrink-0 rounded-full {provider.connected ? 'bg-success' : 'bg-muted-foreground/50'}"></span>
+                    <span class="truncate text-muted-foreground">{provider.name}</span>
+                  </div>
+                  <span class="shrink-0 font-mono text-caption font-medium text-foreground">{providerValue(provider)}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if agentSummary && agentSummary.active_count > 0}
             <div class="grid grid-cols-2 gap-1.5 text-center">
               <div class="rounded-lg bg-secondary/50 p-2">
                 <p class="font-mono text-sm font-semibold">{agentSummary.active_count}</p>
@@ -412,22 +429,6 @@
                 <p class="text-micro text-muted-foreground">Attention</p>
               </div>
             </div>
-            {#if selectedProviders.length > 0}
-              <div class="space-y-0.5 rounded-lg border border-border/40 bg-background/30 p-1">
-                {#each selectedProviders as provider (provider.id)}
-                  <div
-                    class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
-                    title={providerTitle(provider)}
-                  >
-                    <div class="flex min-w-0 items-center gap-1.5">
-                      <span class="h-1.5 w-1.5 shrink-0 rounded-full {provider.connected ? 'bg-success' : 'bg-muted-foreground/50'}"></span>
-                      <span class="truncate text-muted-foreground">{provider.name}</span>
-                    </div>
-                    <span class="shrink-0 font-mono text-caption font-medium text-foreground">{providerValue(provider)}</span>
-                  </div>
-                {/each}
-              </div>
-            {/if}
             {#if agentSummary.sessions.length > 0}
               <div class="divide-y divide-border/40 rounded-lg border border-border/50 bg-background/30 overflow-hidden">
                 {#each agentSummary.sessions as session}
@@ -443,7 +444,7 @@
                 {/each}
               </div>
             {/if}
-          {:else}
+          {:else if selectedProviders.length === 0}
             <p class="px-1 py-2 text-caption text-muted-foreground">No active agent sessions detected.</p>
           {/if}
         </div>

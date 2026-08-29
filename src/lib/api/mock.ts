@@ -343,11 +343,32 @@ export const mockApi = {
           id: 'antigravity',
           name: 'Antigravity',
           installed: true,
-          connected: false,
+          connected: true,
           auth_label: 'Google OAuth',
-          status_message: 'Google does not publish an account-usage API.',
-          support: 'manual',
-          windows: [],
+          status_message: 'Live limits from Antigravity CLI (/usage).',
+          support: 'live',
+          windows: [
+            {
+              label: 'Gemini · Weekly',
+              used_percent: 21,
+              resets_at: Math.floor(Date.now() / 1000) + 316800,
+            },
+            {
+              label: 'Gemini · 5h',
+              used_percent: 1,
+              resets_at: Math.floor(Date.now() / 1000) + 18000,
+            },
+            {
+              label: 'Claude/GPT · Weekly',
+              used_percent: 0,
+              resets_at: Math.floor(Date.now() / 1000) + 604800,
+            },
+            {
+              label: 'Claude/GPT · 5h',
+              used_percent: 0,
+              resets_at: Math.floor(Date.now() / 1000) + 18000,
+            },
+          ],
           summary: {
             lifetime_tokens: null,
             last_7d_tokens: null,

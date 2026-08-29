@@ -101,6 +101,10 @@ fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservat
             ObservationSourceKind::LiveQuota,
             ObservationScope::Subscription,
         ),
+        "antigravity" if provider.connected => (
+            ObservationSourceKind::LiveQuota,
+            ObservationScope::Subscription,
+        ),
         "openrouter" => (
             ObservationSourceKind::LiveAuthoritative,
             ObservationScope::ApiKey,
@@ -158,6 +162,7 @@ fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservat
         .filter_map(|window| window.resets_at)
         .min();
     let status_message = match provider.id.as_str() {
+        "antigravity" if provider.connected => provider.status_message.clone(),
         "antigravity" => "Manual/external subscription usage. Antigravity is Google's primary individual coding CLI; no documented structured usage API was detected.".into(),
         "claude" => "Manual/external subscription usage. Use Claude Code /usage; Zenith does not scrape the TUI or credentials.".into(),
         _ => provider.status_message.clone(),

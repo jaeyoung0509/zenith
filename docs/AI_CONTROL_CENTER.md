@@ -17,7 +17,7 @@ different sources are never presented as equivalent.
 | OpenAI API | Optional organization capability | Organization/API key | Separate from Codex subscription; unavailable until explicitly connected |
 | OpenCode | Official local CLI statistics | Local sessions | Local estimate, not a provider bill |
 | OpenRouter | Official API through the existing OAuth flow | API key | Live authoritative spend/limit data when connected |
-| Antigravity | Existing local/external observation | Individual subscription | Primary individual Google coding product; no quota is implied |
+| Antigravity | Official local CLI (/usage) | Individual subscription | Live quota limits when connected; process observation and manual entry fallback |
 | Gemini Code Assist | Optional organization capability | Organization | Standard/Enterprise/API usage only; distinct from Antigravity |
 | Anthropic API | Optional organization capability | Organization | Distinct from a Claude individual subscription |
 | Claude individual | Manual/external | Subscription | Zenith never scrapes `/usage`, the TUI, or credential files |
