@@ -1,6 +1,48 @@
 import type { AiProviderUsage, AiUsageSnapshot } from '../models/types';
 import { tauriConnectOpenRouter, tauriGetAiUsage } from '../utils/tauri';
 
+const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
+  providerShell('codex', 'Codex', 'ChatGPT OAuth'),
+  providerShell('claude', 'Claude Code', 'Claude.ai OAuth'),
+  providerShell('opencode', 'OpenCode', 'Local providers'),
+  providerShell('openrouter', 'OpenRouter', 'OAuth PKCE'),
+  providerShell('antigravity', 'Antigravity', 'Google OAuth'),
+];
+
+function providerShell(id: string, name: string, authLabel: string): AiProviderUsage {
+  return {
+    id,
+    name,
+    installed: false,
+    connected: false,
+    auth_label: authLabel,
+    status_message: 'Loading usage metadata…',
+    support: 'manual',
+    windows: [],
+    summary: {
+      lifetime_tokens: null,
+      last_7d_tokens: null,
+      peak_daily_tokens: null,
+      current_streak_days: null,
+      local_sessions: null,
+      local_cost_usd: null,
+      usage_usd: null,
+      limit_remaining_usd: null,
+    },
+    action_url: null,
+  };
+}
+
+export function projectProviderSlots(
+  providers: readonly AiProviderUsage[],
+  isLoading: boolean
+): AiProviderUsage[] {
+  if (!isLoading) return [...providers];
+  return PROVIDER_SHELLS.map(
+    (shell) => providers.find((provider) => provider.id === shell.id) ?? shell
+  );
+}
+
 class UsageStore {
   snapshot = $state<AiUsageSnapshot | null>(null);
   loadingProviders = $state<string[]>([]);
@@ -8,6 +50,10 @@ class UsageStore {
   error = $state<string | null>(null);
   connectingProvider = $state<string | null>(null);
   private refreshPromise: Promise<void> | null = null;
+
+  get providers(): AiProviderUsage[] {
+    return projectProviderSlots(this.snapshot?.providers ?? [], this.isLoading);
+  }
 
   isProviderLoading(id: string): boolean {
     return this.isLoading && this.loadingProviders.includes(id);

@@ -7,13 +7,15 @@
   import ProgressBar from './ProgressBar.svelte';
 
   interface Props {
-    providers: AiProviderUsage[];
+    providers: readonly AiProviderUsage[];
+    isProviderLoading?: (id: string) => boolean;
     connectingProvider?: string | null;
     onConnectOpenRouter?: () => void | Promise<void>;
   }
 
   let {
     providers,
+    isProviderLoading = () => false,
     connectingProvider = null,
     onConnectOpenRouter,
   }: Props = $props();
@@ -30,6 +32,7 @@
 
 <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
   {#each providers as provider (provider.id)}
+    {@const loading = isProviderLoading(provider.id)}
     <Card class="p-4 min-h-[190px] flex flex-col bg-card/70 border-border/70">
       <div class="flex items-start justify-between gap-3">
         <div class="flex items-center gap-2.5 min-w-0">
@@ -43,12 +46,40 @@
             <p class="truncate text-caption text-muted-foreground">{provider.auth_label}</p>
           </div>
         </div>
-        <span class="shrink-0 text-caption px-2 py-0.5 rounded-full border {provider.connected ? 'border-success/30 bg-success/10 text-success' : provider.support === 'local' ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' : 'border-border text-muted-foreground'}">
-          {provider.connected ? 'Connected' : provider.support === 'manual' ? 'Manual' : 'Available'}
-        </span>
+        {#if loading}
+          <span class="h-5 w-16 shrink-0 animate-pulse rounded-full bg-secondary" aria-hidden="true"></span>
+        {:else}
+          <span class="shrink-0 text-caption px-2 py-0.5 rounded-full border {provider.connected ? 'border-success/30 bg-success/10 text-success' : provider.support === 'local' ? 'border-blue-500/30 bg-blue-500/10 text-blue-400' : 'border-border text-muted-foreground'}">
+            {provider.connected ? 'Connected' : provider.support === 'manual' ? 'Manual' : 'Available'}
+          </span>
+        {/if}
       </div>
 
-      {#if provider.windows.length}
+      {#if loading}
+        <div
+          class="mt-4 flex-1 space-y-4 animate-pulse"
+          role="status"
+          aria-label={`Loading ${provider.name} usage`}
+        >
+          <div class="space-y-2">
+            <div class="flex items-center justify-between gap-4">
+              <span class="h-2.5 w-16 rounded bg-secondary"></span>
+              <span class="h-2.5 w-14 rounded bg-secondary"></span>
+            </div>
+            <div class="h-1.5 w-full rounded-full bg-secondary"></div>
+            <div class="ml-auto h-2 w-28 rounded bg-secondary"></div>
+          </div>
+          <div class="grid grid-cols-3 gap-2 border-t border-border/40 pt-3">
+            {#each Array(3) as _}
+              <div class="space-y-1.5">
+                <div class="mx-auto h-2 w-10 rounded bg-secondary"></div>
+                <div class="mx-auto h-3 w-8 rounded bg-secondary"></div>
+              </div>
+            {/each}
+          </div>
+          <span class="sr-only">Loading usage metadata…</span>
+        </div>
+      {:else if provider.windows.length}
         <div class="mt-4 space-y-3">
           {#each provider.windows as usageWindow}
             <div class="space-y-1.5">
@@ -100,7 +131,7 @@
         </div>
       {/if}
 
-      {#if provider.id === 'openrouter' && !provider.connected && onConnectOpenRouter}
+      {#if !loading && provider.id === 'openrouter' && !provider.connected && onConnectOpenRouter}
         <Button
           variant="outline"
           size="sm"
@@ -112,7 +143,7 @@
         </Button>
       {/if}
 
-      {#if provider.id === 'codex' && provider.summary.lifetime_tokens != null}
+      {#if !loading && provider.id === 'codex' && provider.summary.lifetime_tokens != null}
         <div class="mt-auto pt-3 border-t border-border/50 grid grid-cols-3 gap-2 text-center">
           <div><p class="text-micro text-muted-foreground">Lifetime</p><p class="text-xs font-mono font-medium">{formatTokens(provider.summary.lifetime_tokens)}</p></div>
           <div><p class="text-micro text-muted-foreground">Recent 7 days</p><p class="text-xs font-mono font-medium">{formatTokens(provider.summary.last_7d_tokens)}</p></div>

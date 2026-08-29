@@ -47,14 +47,10 @@
 
   {#if usageStore.error}
     <div class="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive">{usageStore.error}</div>
-  {:else if usageStore.isLoading && !usageStore.snapshot}
-    <div class="py-20 text-center text-muted-foreground">
-      <RefreshCw size={22} class="animate-gentle-spin mx-auto mb-3" />
-      <p class="text-xs">Reading connected AI accounts…</p>
-    </div>
-  {:else if usageStore.snapshot}
+  {:else if usageStore.providers.length > 0}
     <AiUsageCards
-      providers={usageStore.snapshot.providers}
+      providers={usageStore.providers}
+      isProviderLoading={(id) => usageStore.isProviderLoading(id)}
       connectingProvider={usageStore.connectingProvider}
       onConnectOpenRouter={() => usageStore.connectOpenRouter()}
     />
