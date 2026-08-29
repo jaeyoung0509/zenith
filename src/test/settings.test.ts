@@ -31,6 +31,14 @@ describe('serializeSettingsSnapshot', () => {
       },
     ],
     ai_control: {},
+    agent_notifications: {
+      enabled: false,
+      notify_on_turn_completed: true,
+      notify_on_approval_or_input: true,
+      notify_on_possibly_inactive: true,
+      hide_project_basename: false,
+      inactivity_threshold_minutes: 15,
+    },
   };
 
   it('creates an unproxied plain POJO copy of settings', () => {

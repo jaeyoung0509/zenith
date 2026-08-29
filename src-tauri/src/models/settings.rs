@@ -11,17 +11,23 @@ pub enum QuickPanelSection {
     Categories,
     Memory,
     AiControl,
+    AgentActivity,
 }
 
 impl QuickPanelSection {
-    pub const DEFAULTS: [Self; 4] = [Self::Cleanup, Self::Storage, Self::Memory, Self::AiControl];
-    pub const ALL: [Self; 6] = [
+    pub const DEFAULTS: [Self; 4] = [
         Self::Cleanup,
         Self::Storage,
         Self::Memory,
-        Self::AiUsage,
+        Self::AgentActivity,
+    ];
+
+    pub const ALL: [Self; 5] = [
+        Self::Cleanup,
+        Self::Storage,
+        Self::Memory,
         Self::Categories,
-        Self::AiControl,
+        Self::AgentActivity,
     ];
 }
 
@@ -79,15 +85,13 @@ impl From<DashboardTab> for DashboardRoute {
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 7] = [
         Self::Storage,
         Self::Docker,
         Self::Models,
         Self::Memory,
-        Self::Projects,
         Self::DevelopmentServers,
-        Self::Usage,
-        Self::AiControl,
+        Self::Projects,
         Self::Awake,
     ];
 }
@@ -112,6 +116,8 @@ pub struct ZenithSettings {
     pub dashboard_tabs_revision: u8,
     pub sidebar_collapsed: bool,
     pub ai_control: AiControlPreferences,
+    #[serde(default)]
+    pub agent_notifications: crate::models::AgentNotificationPreferences,
 }
 
 impl Default for ZenithSettings {
@@ -209,9 +215,10 @@ impl Default for ZenithSettings {
                 "antigravity".to_string(),
             ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
-            dashboard_tabs_revision: 3,
+            dashboard_tabs_revision: 5,
             sidebar_collapsed: false,
             ai_control: AiControlPreferences::default(),
+            agent_notifications: crate::models::AgentNotificationPreferences::default(),
         }
     }
 }
@@ -286,6 +293,63 @@ impl ZenithSettings {
             self.dashboard_tabs_revision = 3;
         }
 
+        // #75 ensures Projects tab exists once, then preserves later user hide/reorder choices.
+        if self.dashboard_tabs_revision < 4 {
+            if !self.dashboard_tabs.contains(&DashboardTab::Projects) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Memory)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Projects);
+            }
+            self.dashboard_tabs_revision = 4;
+        }
+
+        // #78 consolidates AI tabs: if user had Usage, AiControl, or Projects,
+        // ensure Projects is preserved, and remove Usage and AiControl from dashboard_tabs.
+        if self.dashboard_tabs_revision < 5 {
+            let had_ai_tab = self.dashboard_tabs.contains(&DashboardTab::Projects)
+                || self.dashboard_tabs.contains(&DashboardTab::AiControl)
+                || self.dashboard_tabs.contains(&DashboardTab::Usage);
+            self.dashboard_tabs
+                .retain(|tab| *tab != DashboardTab::AiControl && *tab != DashboardTab::Usage);
+            if had_ai_tab && !self.dashboard_tabs.contains(&DashboardTab::Projects) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::DevelopmentServers)
+                    .unwrap_or(self.dashboard_tabs.len());
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Projects);
+            }
+
+            // Consolidate quick panel sections: replace ai_control and ai_usage with agent_activity
+            let had_ai_section = self
+                .quick_panel_sections
+                .contains(&QuickPanelSection::AgentActivity)
+                || self
+                    .quick_panel_sections
+                    .contains(&QuickPanelSection::AiControl)
+                || self
+                    .quick_panel_sections
+                    .contains(&QuickPanelSection::AiUsage);
+            self.quick_panel_sections.retain(|sec| {
+                *sec != QuickPanelSection::AiControl && *sec != QuickPanelSection::AiUsage
+            });
+            if had_ai_section
+                && !self
+                    .quick_panel_sections
+                    .contains(&QuickPanelSection::AgentActivity)
+            {
+                self.quick_panel_sections
+                    .push(QuickPanelSection::AgentActivity);
+            }
+
+            self.dashboard_tabs_revision = 5;
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
@@ -356,7 +420,7 @@ mod tests {
 
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.quick_panel_sections.len(), 4);
-        assert_eq!(parsed.dashboard_tabs.len(), 9);
+        assert_eq!(parsed.dashboard_tabs.len(), 7);
         assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
@@ -379,12 +443,10 @@ mod tests {
                 DashboardTab::Storage,
                 DashboardTab::Memory,
                 DashboardTab::Projects,
-                DashboardTab::AiControl,
                 DashboardTab::DevelopmentServers,
-                DashboardTab::Usage,
             ]
         );
-        assert_eq!(migrated.dashboard_tabs_revision, 3);
+        assert_eq!(migrated.dashboard_tabs_revision, 5);
 
         let hidden_again = ZenithSettings {
             dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Memory],

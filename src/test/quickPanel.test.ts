@@ -28,6 +28,16 @@ describe('quick panel customization', () => {
     expect(isQuickPanelDismissShortcut('w', true)).toBe(true);
     expect(isQuickPanelDismissShortcut('w', false)).toBe(false);
   });
+
+  it('supports toggling and ordering the agent_activity section', () => {
+    const initial = ['storage', 'cleanup', 'memory'] as const;
+    const withAgent = toggleOrdered(initial as any, 'agent_activity', true);
+    expect(withAgent).toContain('agent_activity');
+    expect(withAgent[withAgent.length - 1]).toBe('agent_activity');
+
+    const removed = toggleOrdered(withAgent, 'agent_activity', false);
+    expect(removed).not.toContain('agent_activity');
+  });
 });
 
 describe('quick panel AI provider projection', () => {

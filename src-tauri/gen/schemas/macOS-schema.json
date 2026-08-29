@@ -237,6 +237,18 @@
           "markdownDescription": "Enables the execute_trash_plan command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_agent_integrations command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-integrations",
+          "markdownDescription": "Enables the get_agent_integrations command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_quick_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-quick-summary",
+          "markdownDescription": "Enables the get_agent_quick_summary command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_ai_control_center command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-ai-control-center",
@@ -357,6 +369,12 @@
           "markdownDescription": "Enables the open_disk_utility command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_in_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-in-terminal",
+          "markdownDescription": "Enables the open_in_terminal command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-logs-folder",
@@ -373,6 +391,12 @@
           "type": "string",
           "const": "allow-pick-keep-awake-application",
           "markdownDescription": "Enables the pick_keep_awake_application command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the post_agent_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-post-agent-event",
+          "markdownDescription": "Enables the post_agent_event command without any pre-configured scope."
         },
         {
           "description": "Enables the prepare_app_uninstall command without any pre-configured scope.",
@@ -417,6 +441,18 @@
           "markdownDescription": "Enables the release_development_listener command without any pre-configured scope."
         },
         {
+          "description": "Enables the remove_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-agent-integration",
+          "markdownDescription": "Enables the remove_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_stop_agent_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-stop-agent-session",
+          "markdownDescription": "Enables the request_stop_agent_session command without any pre-configured scope."
+        },
+        {
           "description": "Enables the reveal_in_finder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-reveal-in-finder",
@@ -451,6 +487,12 @@
           "type": "string",
           "const": "allow-set-manual-awake",
           "markdownDescription": "Enables the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the setup_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-setup-agent-integration",
+          "markdownDescription": "Enables the setup_agent_integration command without any pre-configured scope."
         },
         {
           "description": "Enables the start_developer_artifact_scan command without any pre-configured scope.",
@@ -541,6 +583,18 @@
           "type": "string",
           "const": "deny-execute-trash-plan",
           "markdownDescription": "Denies the execute_trash_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_integrations command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-integrations",
+          "markdownDescription": "Denies the get_agent_integrations command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_quick_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-quick-summary",
+          "markdownDescription": "Denies the get_agent_quick_summary command without any pre-configured scope."
         },
         {
           "description": "Denies the get_ai_control_center command without any pre-configured scope.",
@@ -663,6 +717,12 @@
           "markdownDescription": "Denies the open_disk_utility command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_in_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-in-terminal",
+          "markdownDescription": "Denies the open_in_terminal command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-logs-folder",
@@ -679,6 +739,12 @@
           "type": "string",
           "const": "deny-pick-keep-awake-application",
           "markdownDescription": "Denies the pick_keep_awake_application command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the post_agent_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-post-agent-event",
+          "markdownDescription": "Denies the post_agent_event command without any pre-configured scope."
         },
         {
           "description": "Denies the prepare_app_uninstall command without any pre-configured scope.",
@@ -723,6 +789,18 @@
           "markdownDescription": "Denies the release_development_listener command without any pre-configured scope."
         },
         {
+          "description": "Denies the remove_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-agent-integration",
+          "markdownDescription": "Denies the remove_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_stop_agent_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-stop-agent-session",
+          "markdownDescription": "Denies the request_stop_agent_session command without any pre-configured scope."
+        },
+        {
           "description": "Denies the reveal_in_finder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-reveal-in-finder",
@@ -757,6 +835,12 @@
           "type": "string",
           "const": "deny-set-manual-awake",
           "markdownDescription": "Denies the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the setup_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-setup-agent-integration",
+          "markdownDescription": "Denies the setup_agent_integration command without any pre-configured scope."
         },
         {
           "description": "Denies the start_developer_artifact_scan command without any pre-configured scope.",

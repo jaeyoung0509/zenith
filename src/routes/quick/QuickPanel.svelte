@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { AiProviderUsage, ControlCenterQuickSummary } from '../../lib/models/types';
+  import type { AiProviderUsage, ControlCenterQuickSummary, AgentQuickSummary } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
@@ -12,6 +12,7 @@
     isTauri,
     tauriHideCurrentWindow,
     tauriGetAiControlQuickSummary,
+    tauriGetAgentQuickSummary,
     tauriOpenDashboard,
     tauriStartWindowDrag,
   } from '../../lib/utils/tauri';
@@ -41,6 +42,7 @@
   let panelActive = false;
   let showResultModal = $state(false);
   let controlSummary = $state<ControlCenterQuickSummary | null>(null);
+  let agentSummary = $state<AgentQuickSummary | null>(null);
   let settings = $derived(settingsStore.settings);
   let disk = $derived(memoryStore.disk);
   let memory = $derived(memoryStore.memory);
@@ -67,6 +69,12 @@
     return 'clean';
   });
 
+  function formatDuration(seconds: number) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours > 0 ? `${hours}h ${minutes}m` : `${Math.max(minutes, 1)}m`;
+  }
+
   function hasSection(section: typeof settings.quick_panel_sections[number]) {
     return settings.quick_panel_sections.includes(section);
   }
@@ -86,6 +94,11 @@
       // Cached backend projection only: no provider calls, scans, or hidden polling.
       void tauriGetAiControlQuickSummary().then((summary) => {
         if (panelActive) controlSummary = summary;
+      });
+    }
+    if (hasSection('agent_activity')) {
+      void tauriGetAgentQuickSummary().then((summary) => {
+        if (panelActive) agentSummary = summary;
       });
     }
     if (hasSection('cleanup') || hasSection('categories')) {
@@ -370,6 +383,56 @@
               <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.safety_findings}</p><p class="text-micro text-muted-foreground">Safety</p></div>
             </div>
           {:else}<p class="px-1 py-2 text-caption text-muted-foreground">Open AI Control in the dashboard to create a cached snapshot.</p>{/if}
+        </div>
+      {:else if section === 'agent_activity'}
+        <div class="space-y-2 rounded-xl border border-border/60 bg-card/40 p-2.5">
+          <div class="flex items-center justify-between px-1">
+            <div class="flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-muted-foreground">
+              <Bot size={12} class="text-primary" /> AI & Agents
+            </div>
+            <button
+              type="button"
+              class="text-caption text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              onclick={handleOpenDashboard}
+            >
+              Open AI Activity <ArrowRight size={10} />
+            </button>
+          </div>
+          {#if agentSummary}
+            <div class="grid grid-cols-2 gap-1.5 text-center">
+              <div class="rounded-lg bg-secondary/50 p-2">
+                <p class="font-mono text-sm font-semibold">{agentSummary.active_count}</p>
+                <p class="text-micro text-muted-foreground">Active</p>
+              </div>
+              <div class="rounded-lg bg-secondary/50 p-2">
+                <p class="font-mono text-sm font-semibold {agentSummary.attention_count > 0 ? 'text-destructive' : ''}">{agentSummary.attention_count}</p>
+                <p class="text-micro text-muted-foreground">Attention</p>
+              </div>
+            </div>
+            {#if selectedProviders.length > 0}
+              <div class="flex items-center justify-between rounded-lg px-2 py-1 bg-secondary/30 text-xs">
+                <span class="truncate text-muted-foreground">{selectedProviders[0].name}</span>
+                <span class="font-mono text-caption text-foreground font-medium">{providerValue(selectedProviders[0])}</span>
+              </div>
+            {/if}
+            {#if agentSummary.sessions.length > 0}
+              <div class="divide-y divide-border/40 rounded-lg border border-border/50 bg-background/30 overflow-hidden">
+                {#each agentSummary.sessions as session}
+                  <div class="flex items-center justify-between px-2 py-1.5 text-xs">
+                    <div class="flex items-center gap-1.5 min-w-0">
+                      <span class="font-medium truncate">{session.tool_name}</span>
+                      <span class="text-caption text-muted-foreground truncate">in {session.project_name}</span>
+                    </div>
+                    <span class="font-mono text-caption text-muted-foreground shrink-0 ml-2">
+                      {formatDuration(session.elapsed_seconds)}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {:else}
+            <p class="px-1 py-2 text-caption text-muted-foreground">No active agent sessions detected.</p>
+          {/if}
         </div>
       {/if}
     {/each}

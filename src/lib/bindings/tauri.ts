@@ -5,7 +5,18 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getAiUsage: (force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { force })),
-	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot, string>(__TAURI_INVOKE("get_project_context", { force })),
+	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot_Serialize, string>(__TAURI_INVOKE("get_project_context", { force })),
+	requestStopAgentSession: (sessionId: string, leaseId: string) => typedError<null, string>(__TAURI_INVOKE("request_stop_agent_session", { sessionId, leaseId })),
+	getAgentIntegrations: () => typedError<AgentIntegrationInfo[], string>(__TAURI_INVOKE("get_agent_integrations")),
+	setupAgentIntegration: (toolId: string) => typedError<AgentIntegrationResult, string>(__TAURI_INVOKE("setup_agent_integration", { toolId })),
+	removeAgentIntegration: (toolId: string) => typedError<AgentIntegrationResult, string>(__TAURI_INVOKE("remove_agent_integration", { toolId })),
+	getAgentQuickSummary: () => __TAURI_INVOKE<{
+	active_count: number,
+	attention_count: number,
+	sessions: AgentQuickSessionRow_Serialize[],
+} | null>("get_agent_quick_summary"),
+	postAgentEvent: (event: IngestedAgentEvent) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
+	openInTerminal: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_in_terminal", { path })),
 	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
 	getAiControlQuickSummary: () => __TAURI_INVOKE<{
 	observed_at: number,
@@ -81,43 +92,161 @@ export const commands = {
 };
 
 /* Types */
-export type AgentActivitySnapshot = {
+export type AgentActivitySnapshot = AgentActivitySnapshot_Serialize | AgentActivitySnapshot_Deserialize;
+
+export type AgentActivitySnapshot_Deserialize = {
 	observed_at: number,
 	quality: SnapshotQuality,
-	projects: ProjectContext[],
-	unassigned_sessions: AgentSession[],
-	adapters: AgentAdapterHealth[],
+	projects: ProjectContext_Deserialize[],
+	unassigned_sessions: AgentSession_Deserialize[],
+	adapters: AgentAdapterHealth_Deserialize[],
 	partial_errors: string[],
 };
 
-export type AgentActivityStatus = "active" | "waiting" | "finished" | "exited" | "unknown";
+export type AgentActivitySnapshot_Serialize = {
+	observed_at: number,
+	quality: SnapshotQuality,
+	projects: ProjectContext_Serialize[],
+	unassigned_sessions: AgentSession_Serialize[],
+	adapters: AgentAdapterHealth_Serialize[],
+	partial_errors: string[],
+};
 
-export type AgentAdapterHealth = {
+export type AgentActivityStatus = AgentActivityStatus_Serialize | AgentActivityStatus_Deserialize;
+
+export type AgentActivityStatus_Deserialize = "starting" | "working" | "waiting_for_user" | "idle" | "possibly_inactive" | "exited" | "unknown" | "active" | "waiting" | "finished";
+
+export type AgentActivityStatus_Serialize = "starting" | "working" | "waiting_for_user" | "idle" | "possibly_inactive" | "exited" | "unknown" | "active" | "waiting" | "finished";
+
+export type AgentAdapterHealth = AgentAdapterHealth_Serialize | AgentAdapterHealth_Deserialize;
+
+export type AgentAdapterHealth_Deserialize = {
 	tool_id: string,
 	display_name: string,
 	state: AgentAdapterState,
-	evidence: AgentEvidence | null,
+	evidence: AgentEvidence_Deserialize | null,
 	message: string,
+	installed_version: string | null,
+};
+
+export type AgentAdapterHealth_Serialize = {
+	tool_id: string,
+	display_name: string,
+	state: AgentAdapterState,
+	evidence: AgentEvidence_Serialize | null,
+	message: string,
+	installed_version: string | null,
 };
 
 export type AgentAdapterState = "not_installed" | "process_only" | "integration_available" | "connected" | "version_unsupported" | "partial";
 
-export type AgentEvidence = "vendor_confirmed" | "process_observed" | "heuristic";
+export type AgentEvidence = AgentEvidence_Serialize | AgentEvidence_Deserialize;
 
-export type AgentSession = {
+export type AgentEvidence_Deserialize = "vendor_event" | "vendor_confirmed" | "vendor_protocol" | "process_observed" | "heuristic";
+
+export type AgentEvidence_Serialize = "vendor_event" | "vendor_confirmed" | "vendor_protocol" | "process_observed" | "heuristic";
+
+export type AgentIntegrationInfo = {
+	tool_id: string,
+	display_name: string,
+	supported: boolean,
+	installed: boolean,
+	integration_active: boolean,
+	config_path: string | null,
+	description: string,
+};
+
+export type AgentIntegrationResult = {
+	tool_id: string,
+	success: boolean,
+	message: string,
+};
+
+export type AgentLifecycleEvent = "session_start" | "working" | "waiting_for_user" | "idle" | "turn_complete" | "session_end";
+
+export type AgentNotificationPreferences = {
+	enabled?: boolean,
+	notify_on_turn_completed?: boolean,
+	notify_on_approval_or_input?: boolean,
+	notify_on_possibly_inactive?: boolean,
+	hide_project_basename?: boolean,
+	inactivity_threshold_minutes?: number,
+};
+
+export type AgentQuickSessionRow = AgentQuickSessionRow_Serialize | AgentQuickSessionRow_Deserialize;
+
+export type AgentQuickSessionRow_Deserialize = {
+	session_id: string,
+	tool_name: string,
+	project_name: string,
+	status: AgentActivityStatus_Deserialize,
+	evidence: AgentEvidence_Deserialize,
+	elapsed_seconds: number,
+};
+
+export type AgentQuickSessionRow_Serialize = {
+	session_id: string,
+	tool_name: string,
+	project_name: string,
+	status: AgentActivityStatus_Serialize,
+	evidence: AgentEvidence_Serialize,
+	elapsed_seconds: number,
+};
+
+export type AgentQuickSummary = AgentQuickSummary_Serialize | AgentQuickSummary_Deserialize;
+
+export type AgentQuickSummary_Deserialize = {
+	active_count: number,
+	attention_count: number,
+	sessions: AgentQuickSessionRow_Deserialize[],
+};
+
+export type AgentQuickSummary_Serialize = {
+	active_count: number,
+	attention_count: number,
+	sessions: AgentQuickSessionRow_Serialize[],
+};
+
+export type AgentSession = AgentSession_Serialize | AgentSession_Deserialize;
+
+export type AgentSession_Deserialize = {
 	/**  Opaque, snapshot-stable identity. Never a PID. */
 	id: string,
 	tool_id: string,
 	tool_name: string,
-	status: AgentActivityStatus,
-	evidence: AgentEvidence,
+	status: AgentActivityStatus_Deserialize,
+	attention_reason: AttentionReason | null,
+	evidence: AgentEvidence_Deserialize,
 	observed_at: number,
 	started_at: number,
 	elapsed_seconds: number,
 	cpu_percent: number | null,
 	memory_bytes: number,
 	project_id: string | null,
+	worktree_id: string | null,
 	detail: string,
+	can_stop: boolean,
+	stop_lease_id: string | null,
+};
+
+export type AgentSession_Serialize = {
+	/**  Opaque, snapshot-stable identity. Never a PID. */
+	id: string,
+	tool_id: string,
+	tool_name: string,
+	status: AgentActivityStatus_Serialize,
+	attention_reason: AttentionReason | null,
+	evidence: AgentEvidence_Serialize,
+	observed_at: number,
+	started_at: number,
+	elapsed_seconds: number,
+	cpu_percent: number | null,
+	memory_bytes: number,
+	project_id: string | null,
+	worktree_id: string | null,
+	detail: string,
+	can_stop: boolean,
+	stop_lease_id: string | null,
 };
 
 export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize | AiControlCenterSnapshot_Deserialize;
@@ -201,6 +330,8 @@ export type AppUninstallInspection = {
 	incomplete: boolean,
 	warnings: string[],
 };
+
+export type AttentionReason = "approval" | "input" | "turn_complete" | "inactivity";
 
 export type AuditEntry = {
 	id: string,
@@ -515,6 +646,16 @@ export type GitChangeSummary = {
 	status_message: string,
 };
 
+export type IngestedAgentEvent = {
+	tool_id: string,
+	vendor_session_id: string,
+	cwd: string | null,
+	lifecycle: AgentLifecycleEvent,
+	timestamp: number,
+	turn_id: string | null,
+	attention_reason: AttentionReason | null,
+};
+
 export type InstalledApp = {
 	id: string,
 	name: string,
@@ -668,21 +809,38 @@ export type ProcessMemory = {
 	can_terminate: boolean,
 };
 
-export type ProjectContext = {
+export type ProjectContext = ProjectContext_Serialize | ProjectContext_Deserialize;
+
+export type ProjectContext_Deserialize = {
 	identity: ProjectIdentity,
-	sessions: AgentSession[],
+	sessions: AgentSession_Deserialize[],
 	last_seen_at: number,
+	dev_ports: number[],
+	artifact_size_bytes: number | null,
+};
+
+export type ProjectContext_Serialize = {
+	identity: ProjectIdentity,
+	sessions: AgentSession_Serialize[],
+	last_seen_at: number,
+	dev_ports: number[],
+	artifact_size_bytes: number | null,
 };
 
 export type ProjectIdentity = {
 	/**  Opaque hash of the canonical project/worktree root. */
 	id: string,
 	display_name: string,
-	/**  A compact parent/name hint, never a full absolute path. */
+	/**  A compact parent/name hint, never a full absolute path in public payloads. */
 	location_hint: string,
+	/**  Main-window only display path (e.g. ~/Myproject/clean1). */
+	display_path: string,
 	repository_id: string | null,
+	worktree_id: string | null,
 	is_worktree: boolean,
 	branch: string | null,
+	is_dirty: boolean,
+	is_detached: boolean,
 };
 
 export type ProviderMetric = {
@@ -710,7 +868,7 @@ export type ProviderObservation = {
 	partial_error: string | null,
 };
 
-export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control";
+export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control" | "agent_activity";
 
 export type Recommendation = Recommendation_Serialize | Recommendation_Deserialize;
 
@@ -923,6 +1081,7 @@ export type ZenithSettings_Deserialize = {
 	dashboard_tabs_revision?: number,
 	sidebar_collapsed?: boolean,
 	ai_control?: AiControlPreferences,
+	agent_notifications?: AgentNotificationPreferences,
 };
 
 export type ZenithSettings_Serialize = {
@@ -942,6 +1101,7 @@ export type ZenithSettings_Serialize = {
 	dashboard_tabs_revision: number,
 	sidebar_collapsed: boolean,
 	ai_control: AiControlPreferences,
+	agent_notifications: AgentNotificationPreferences,
 };
 
 /* Tauri Specta runtime */

@@ -2,6 +2,13 @@ fn main() {
     const COMMANDS: &[&str] = &[
         "get_ai_usage",
         "get_project_context",
+        "request_stop_agent_session",
+        "get_agent_integrations",
+        "setup_agent_integration",
+        "remove_agent_integration",
+        "get_agent_quick_summary",
+        "post_agent_event",
+        "open_in_terminal",
         "get_ai_control_center",
         "get_ai_control_quick_summary",
         "save_ai_control_preferences",

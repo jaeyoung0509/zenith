@@ -13,11 +13,9 @@
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
-  import AiUsageView from './AiUsageView.svelte';
   import MemoryView from './MemoryView.svelte';
   import DevelopmentServersView from './DevelopmentServersView.svelte';
   import ProjectCockpitView from './ProjectCockpitView.svelte';
-  import AiControlCenterView from './AiControlCenterView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
@@ -56,10 +54,8 @@
     docker: { label: 'Containers', icon: Container },
     models: { label: 'Local Models', icon: Boxes },
     memory: { label: 'Memory', icon: Activity },
-    projects: { label: 'Projects', icon: FolderGit2 },
-    ai_control: { label: 'AI Control', icon: Sparkles },
     development_servers: { label: 'Dev Servers', icon: Server },
-    usage: { label: 'AI Usage', icon: ChartNoAxesCombined },
+    projects: { label: 'AI Activity', icon: Sparkles },
     awake: { label: 'Keep Awake', icon: Moon },
   };
 
@@ -267,14 +263,10 @@
           <DockerView />
         {:else if currentTab === 'models'}
           <ModelsView />
-        {:else if currentTab === 'usage'}
-          <AiUsageView />
         {:else if currentTab === 'memory'}
           <MemoryView />
-        {:else if currentTab === 'projects'}
-          <ProjectCockpitView />
-        {:else if currentTab === 'ai_control'}
-          <AiControlCenterView onNavigateTab={(tab) => selectTab(tab)} />
+        {:else if currentTab === 'projects' || currentTab === 'usage' || currentTab === 'ai_control'}
+          <ProjectCockpitView onNavigateTab={(tab) => selectTab(tab)} />
         {:else if currentTab === 'development_servers'}
           <DevelopmentServersView />
         {:else if currentTab === 'awake'}

@@ -3,12 +3,13 @@ use crate::cleaner::CleanExecutor;
 use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
-    AgentActivitySnapshot, AiControlCenterSnapshot, AiControlPreferences, AiUsageSnapshot,
-    AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
+    AgentActivitySnapshot, AgentActivityStatus, AgentIntegrationInfo, AgentIntegrationResult,
+    AgentQuickSessionRow, AgentQuickSummary, AiControlCenterSnapshot, AiControlPreferences,
+    AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
     ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlanPreview, RecommendationPreview,
-    ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent, ScanResult, SelectedApplication,
-    ZenithSettings,
+    DiskVolume, DockerStatus, IngestedAgentEvent, LocalModelItem, MemoryMetrics, PlanPreview,
+    RecommendationPreview, ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent, ScanResult,
+    SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
@@ -18,6 +19,7 @@ use crate::scanner::ScanEngine;
 use crate::settings_store;
 use crate::signatures::SignatureRegistry;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -113,14 +115,210 @@ pub async fn get_project_context(
     }
 
     let cache = state.agent_activity_cache.clone();
+    let dev_store = state.dev_port_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let registry = crate::agent_activity::collect_registry();
+        let mut registry = crate::agent_activity::collect_registry();
+        let listeners = crate::dev_ports::list_listeners(
+            &dev_store,
+            &crate::dev_ports::RealDevPortSystem::default(),
+        )
+        .unwrap_or_default();
+        for project in &mut registry.snapshot.projects {
+            if let Some(root) = registry.project_roots.get(&project.identity.id) {
+                for listener in &listeners {
+                    if let Some(dir) = listener.working_directory.as_deref() {
+                        if let Ok(canon) = std::path::Path::new(dir).canonicalize() {
+                            if canon.starts_with(root)
+                                && !project.dev_ports.contains(&listener.port)
+                            {
+                                project.dev_ports.push(listener.port);
+                            }
+                        }
+                    }
+                }
+                project.dev_ports.sort_unstable();
+            }
+        }
         let snapshot = registry.snapshot.clone();
         *cache.lock().expect("agent_activity_cache poisoned") = Some(registry);
         snapshot
     })
     .await
     .map_err(|error| format!("Agent activity refresh failed: {error}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn request_stop_agent_session(
+    session_id: String,
+    lease_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let now = unix_timestamp();
+    let lease = {
+        let store = crate::agent_activity::global_store();
+        let mut guard = store.lock().unwrap();
+        guard
+            .stop_leases
+            .consume_lease(&session_id, &lease_id, now)?
+    };
+
+    let cache = state.agent_activity_cache.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let system = crate::agent_activity::termination::RealTerminationSystem;
+        let result = crate::agent_activity::termination::execute_graceful_stop(&lease, &system);
+        if result.is_ok() {
+            let store = crate::agent_activity::global_store();
+            let mut guard = store.lock().unwrap();
+            let dummy_session = crate::models::AgentSession {
+                id: session_id,
+                tool_id: "".into(),
+                tool_name: "".into(),
+                status: crate::models::AgentActivityStatus::Exited,
+                attention_reason: None,
+                evidence: crate::models::AgentEvidence::ProcessObserved,
+                observed_at: now,
+                started_at: lease.start_time,
+                elapsed_seconds: now.saturating_sub(lease.start_time),
+                cpu_percent: 0.0,
+                memory_bytes: 0,
+                project_id: None,
+                worktree_id: None,
+                detail: "Session exited.".to_string(),
+                can_stop: false,
+                stop_lease_id: None,
+            };
+            guard.record_exited_session(dummy_session, now);
+            if let Ok(mut cache_guard) = cache.lock() {
+                *cache_guard = None;
+            }
+        }
+        result
+    })
+    .await
+    .map_err(|e| format!("Graceful stop failed: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_agent_integrations() -> Result<Vec<AgentIntegrationInfo>, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME environment variable not set".to_string())?;
+    const TOOLS: &[&str] = &[
+        "antigravity",
+        "claude",
+        "cursor",
+        "grok",
+        "copilot",
+        "gemini",
+        "codex",
+        "opencode",
+    ];
+    let mut infos = Vec::new();
+    for tool in TOOLS {
+        infos.push(crate::agent_activity::hooks::get_integration_info(
+            tool, &home,
+        ));
+    }
+    Ok(infos)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn setup_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME environment variable not set".to_string())?;
+    crate::agent_activity::hooks::install_integration(&tool_id, &home)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME environment variable not set".to_string())?;
+    crate::agent_activity::hooks::uninstall_integration(&tool_id, &home)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_agent_quick_summary(state: State<'_, AppState>) -> Option<AgentQuickSummary> {
+    let guard = state.agent_activity_cache.lock().ok()?;
+    let registry = guard.as_ref()?;
+    let mut active_count = 0;
+    let mut attention_count = 0;
+    let mut rows = Vec::new();
+
+    for project in &registry.snapshot.projects {
+        for session in &project.sessions {
+            if matches!(
+                session.status,
+                AgentActivityStatus::Working
+                    | AgentActivityStatus::Active
+                    | AgentActivityStatus::Starting
+            ) {
+                active_count += 1;
+            }
+            if session.attention_reason.is_some() {
+                attention_count += 1;
+            }
+            rows.push(AgentQuickSessionRow {
+                session_id: session.id.clone(),
+                tool_name: session.tool_name.clone(),
+                project_name: project.identity.display_name.clone(),
+                status: session.status,
+                evidence: session.evidence,
+                elapsed_seconds: session.elapsed_seconds,
+            });
+        }
+    }
+    for session in &registry.snapshot.unassigned_sessions {
+        if matches!(
+            session.status,
+            AgentActivityStatus::Working
+                | AgentActivityStatus::Active
+                | AgentActivityStatus::Starting
+        ) {
+            active_count += 1;
+        }
+        if session.attention_reason.is_some() {
+            attention_count += 1;
+        }
+        rows.push(AgentQuickSessionRow {
+            session_id: session.id.clone(),
+            tool_name: session.tool_name.clone(),
+            project_name: "Unassigned".to_string(),
+            status: session.status,
+            evidence: session.evidence,
+            elapsed_seconds: session.elapsed_seconds,
+        });
+    }
+
+    rows.sort_by_key(|b| std::cmp::Reverse(b.elapsed_seconds));
+    rows.truncate(3);
+
+    Some(AgentQuickSummary {
+        active_count,
+        attention_count,
+        sessions: rows,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn post_agent_event(
+    event: IngestedAgentEvent,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let store = crate::agent_activity::global_store();
+    let mut guard = store.lock().unwrap();
+    guard.record_event(event);
+    if let Ok(mut cache_guard) = state.agent_activity_cache.lock() {
+        *cache_guard = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -883,6 +1081,22 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
     {
         let _ = std::process::Command::new("open")
             .args(["-R", &path])
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_in_terminal(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .args(["-a", "Terminal", &path])
             .spawn();
     }
     #[cfg(not(target_os = "macos"))]

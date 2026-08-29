@@ -56,7 +56,7 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
         id: "opencode",
         display_name: "OpenCode",
         executables: &["opencode"],
-        integration_available: true,
+        integration_available: false,
     },
 ];
 
@@ -106,38 +106,72 @@ fn is_supported_install_path(path: &Path) -> bool {
 }
 
 pub fn health(observed_ids: &std::collections::HashSet<&str>) -> Vec<AgentAdapterHealth> {
+    health_with_integrations(observed_ids, &std::collections::HashSet::new())
+}
+
+pub fn health_with_integrations(
+    observed_ids: &std::collections::HashSet<&str>,
+    active_integrations: &std::collections::HashSet<&str>,
+) -> Vec<AgentAdapterHealth> {
     ADAPTERS
         .iter()
         .map(|adapter| {
             let observed = observed_ids.contains(adapter.id);
+            let integration_active = active_integrations.contains(adapter.id);
             let installed = observed
                 || adapter
                     .executables
                     .iter()
                     .any(|executable| crate::tooling::resolve(executable).is_some());
-            let state = if installed && adapter.integration_available {
+            let state = if integration_active {
+                AgentAdapterState::Connected
+            } else if installed && adapter.integration_available {
                 AgentAdapterState::IntegrationAvailable
             } else if installed {
                 AgentAdapterState::ProcessOnly
             } else {
                 AgentAdapterState::NotInstalled
             };
+            let evidence = if integration_active {
+                Some(AgentEvidence::VendorEvent)
+            } else if observed {
+                Some(AgentEvidence::ProcessObserved)
+            } else {
+                None
+            };
+            let message = match (state, observed) {
+                (AgentAdapterState::Connected, _) => {
+                    format!("{} · verified local integration active.", adapter.display_name)
+                }
+                (AgentAdapterState::IntegrationAvailable, true) => {
+                    "Process observed · detailed local integration is available but not enabled.".to_string()
+                }
+                (AgentAdapterState::ProcessOnly, true) => {
+                    if adapter.id == "gemini" {
+                        "Process observed · legacy/enterprise fallback CLI. Transitioned to Antigravity CLI for individual accounts.".to_string()
+                    } else {
+                        "Process observed · detailed status unavailable.".to_string()
+                    }
+                }
+                (AgentAdapterState::IntegrationAvailable, false) => {
+                    "Installed · optional local integration is available; no active process observed.".to_string()
+                }
+                (AgentAdapterState::ProcessOnly, false) => {
+                    if adapter.id == "gemini" {
+                        "Installed · legacy/enterprise fallback CLI. Maintained for enterprise/API keys.".to_string()
+                    } else {
+                        "Installed · process-only observation; no active process observed.".to_string()
+                    }
+                }
+                _ => "Not installed in a supported location.".to_string(),
+            };
             AgentAdapterHealth {
                 tool_id: adapter.id.to_string(),
                 display_name: adapter.display_name.to_string(),
                 state,
-                evidence: observed.then_some(AgentEvidence::ProcessObserved),
-                message: match (state, observed) {
-                    (AgentAdapterState::IntegrationAvailable, true) =>
-                        "Process observed · detailed local integration is available but not enabled.".to_string(),
-                    (AgentAdapterState::ProcessOnly, true) =>
-                        "Process observed · detailed status unavailable.".to_string(),
-                    (AgentAdapterState::IntegrationAvailable, false) =>
-                        "Installed · optional local integration is available; no active process observed.".to_string(),
-                    (AgentAdapterState::ProcessOnly, false) =>
-                        "Installed · process-only observation; no active process observed.".to_string(),
-                    _ => "Not installed in a supported location.".to_string(),
-                },
+                evidence,
+                message,
+                installed_version: None,
             }
         })
         .collect()

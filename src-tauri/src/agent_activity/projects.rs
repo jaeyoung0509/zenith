@@ -1,6 +1,8 @@
 use crate::models::ProjectIdentity;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
     let canonical_cwd = cwd.canonicalize().ok()?;
@@ -8,14 +10,16 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
         return None;
     }
 
-    let root = canonical_cwd
+    let git_root = canonical_cwd
         .ancestors()
         .find(|candidate| candidate.join(".git").exists())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| canonical_cwd.clone());
-    let git_marker = root.join(".git");
-    let is_repository = git_marker.exists();
-    let is_worktree = git_marker.is_file();
+        .map(Path::to_path_buf);
+
+    let root = git_root.unwrap_or_else(|| canonical_cwd.clone());
+    let marker = root.join(".git");
+    let is_repository = marker.exists();
+    let is_worktree = marker.is_file();
+
     let display_name = root.file_name()?.to_string_lossy().to_string();
     let parent_name = root
         .parent()
@@ -25,10 +29,31 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
         .map(|parent| format!("{parent}/{display_name}"))
         .unwrap_or_else(|| display_name.clone());
 
+    let display_path = format_display_path(&root);
+
     let id = opaque_id("project", &root);
-    let repository_id =
-        is_repository.then(|| opaque_id("repository", &repository_identity_path(&root)));
-    let branch = is_repository.then(|| read_head_name(&root)).flatten();
+    let worktree_id = if is_worktree {
+        Some(opaque_id("worktree", &root))
+    } else {
+        None
+    };
+    let repository_id = if is_repository {
+        Some(opaque_id("repository", &repository_identity_path(&root)))
+    } else {
+        None
+    };
+
+    let (branch, is_detached) = if is_repository {
+        read_head_status(&root)
+    } else {
+        (None, false)
+    };
+
+    let is_dirty = if is_repository {
+        check_git_dirty(&root)
+    } else {
+        false
+    };
 
     Some((
         root,
@@ -36,11 +61,39 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
             id,
             display_name,
             location_hint,
+            display_path,
             repository_id,
+            worktree_id,
             is_worktree,
             branch,
+            is_dirty,
+            is_detached,
         },
     ))
+}
+
+fn format_display_path(path: &Path) -> String {
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Ok(rel) = path.strip_prefix(&home) {
+            return format!("~/{}", rel.display());
+        }
+    }
+    path.display().to_string()
+}
+
+fn check_git_dirty(root: &Path) -> bool {
+    let mut cmd = crate::tooling::command("git");
+    cmd.arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain=v1", "-z"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C");
+    if let Ok(output) = crate::tooling::run_with_timeout(cmd, Duration::from_millis(800)) {
+        if output.status.success() {
+            return !output.stdout.is_empty();
+        }
+    }
+    false
 }
 
 fn repository_identity_path(root: &Path) -> PathBuf {
@@ -48,7 +101,7 @@ fn repository_identity_path(root: &Path) -> PathBuf {
     if marker.is_dir() {
         return marker;
     }
-    let Ok(contents) = std::fs::read_to_string(marker) else {
+    let Ok(contents) = std::fs::read_to_string(&marker) else {
         return root.to_path_buf();
     };
     let Some(value) = contents.trim().strip_prefix("gitdir:") else {
@@ -68,25 +121,68 @@ fn repository_identity_path(root: &Path) -> PathBuf {
         .unwrap_or(absolute)
 }
 
-fn read_head_name(root: &Path) -> Option<String> {
+fn read_head_status(root: &Path) -> (Option<String>, bool) {
     let marker = root.join(".git");
     let git_dir = if marker.is_dir() {
         marker
     } else {
-        let value = std::fs::read_to_string(marker).ok()?;
-        let value = value.trim().strip_prefix("gitdir:")?.trim();
-        let path = PathBuf::from(value);
+        let Ok(value) = std::fs::read_to_string(&marker) else {
+            return (None, false);
+        };
+        let Some(gitdir_val) = value.trim().strip_prefix("gitdir:") else {
+            return (None, false);
+        };
+        let path = PathBuf::from(gitdir_val.trim());
         if path.is_absolute() {
             path
         } else {
             root.join(path)
         }
     };
-    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    head.trim()
-        .strip_prefix("ref: refs/heads/")
-        .map(str::to_string)
-        .or_else(|| Some("Detached HEAD".to_string()))
+    let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) else {
+        return (None, false);
+    };
+    let trimmed = head.trim();
+    if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+        (Some(branch.to_string()), false)
+    } else if !trimmed.is_empty() {
+        let short_sha = if trimmed.len() >= 7 {
+            &trimmed[..7]
+        } else {
+            trimmed
+        };
+        (Some(format!("Detached ({short_sha})")), true)
+    } else {
+        (None, false)
+    }
+}
+
+pub fn candidate_project_roots(
+    agent_cwds: &[PathBuf],
+    dev_listeners: &[crate::models::DevelopmentListener],
+    registered_workspaces: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut candidates = HashSet::new();
+    for cwd in agent_cwds {
+        if let Some((root, _)) = resolve_project(cwd) {
+            candidates.insert(root);
+        }
+    }
+    for listener in dev_listeners {
+        if let Some(dir) = listener.working_directory.as_deref() {
+            if let Some((root, _)) = resolve_project(Path::new(dir)) {
+                candidates.insert(root);
+            }
+        }
+    }
+    for ws in registered_workspaces {
+        if let Some((root, _)) = resolve_project(ws) {
+            candidates.insert(root);
+        }
+    }
+    let mut list: Vec<_> = candidates.into_iter().collect();
+    list.sort();
+    list
 }
 
 pub fn opaque_id(namespace: &str, value: &Path) -> String {
