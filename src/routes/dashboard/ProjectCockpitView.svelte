@@ -8,15 +8,17 @@
   import ProjectsPanel from '../../lib/components/ai-activity/ProjectsPanel.svelte';
   import ToolAdaptersPanel from '../../lib/components/ai-activity/ToolAdaptersPanel.svelte';
   import UsagePanel from '../../lib/components/ai-activity/UsagePanel.svelte';
+  import {
+    AI_ACTIVITY_TAB_ORDER,
+    nextAiActivityTab,
+    type AiActivitySubTab,
+  } from '../../lib/utils/aiActivityTabs';
   import ProjectDetailPanel from './ProjectDetailPanel.svelte';
 
   interface Props {
     onNavigateTab?: (tab: string) => void;
   }
 
-  type AiActivitySubTab = 'usage' | 'projects' | 'adapters';
-
-  const tabOrder: readonly AiActivitySubTab[] = ['usage', 'projects', 'adapters'];
   const tabLabels: Record<AiActivitySubTab, string> = {
     usage: 'Usage',
     projects: 'Projects',
@@ -107,17 +109,10 @@
   }
 
   function handleTabKeydown(event: KeyboardEvent, currentTab: AiActivitySubTab) {
-    const currentIndex = tabOrder.indexOf(currentTab);
-    let nextIndex = currentIndex;
-
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabOrder.length;
-    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabOrder.length) % tabOrder.length;
-    else if (event.key === 'Home') nextIndex = 0;
-    else if (event.key === 'End') nextIndex = tabOrder.length - 1;
-    else return;
+    const nextTab = nextAiActivityTab(currentTab, event.key);
+    if (!nextTab) return;
 
     event.preventDefault();
-    const nextTab = tabOrder[nextIndex];
     selectSubTab(nextTab);
     queueMicrotask(() => document.getElementById(tabId(nextTab))?.focus());
   }
@@ -159,10 +154,11 @@
 
   <div
     role="tablist"
+    aria-orientation="horizontal"
     aria-label="AI Activity sections"
     class="flex items-center gap-1 overflow-x-auto border-b border-border/60"
   >
-    {#each tabOrder as tab}
+    {#each AI_ACTIVITY_TAB_ORDER as tab}
       {@const isSelected = visibleSubTab === tab}
       <button
         type="button"

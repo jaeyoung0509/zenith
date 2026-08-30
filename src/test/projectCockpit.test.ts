@@ -4,6 +4,7 @@ import { render } from 'svelte/server';
 import type { AgentActivitySnapshot, AgentIntegrationInfo } from '../lib/models/types';
 import { AgentActivityStore, agentActivityStore } from '../lib/stores/agentActivity.svelte';
 import { usageStore } from '../lib/stores/usage.svelte';
+import { nextAiActivityTab } from '../lib/utils/aiActivityTabs';
 import ProjectsPanel from '../lib/components/ai-activity/ProjectsPanel.svelte';
 import ToolAdaptersPanel from '../lib/components/ai-activity/ToolAdaptersPanel.svelte';
 import ProjectCockpitView from '../routes/dashboard/ProjectCockpitView.svelte';
@@ -117,12 +118,23 @@ describe('Project Cockpit', () => {
 
     expect(rendered.body.match(/role="tab"/g)).toHaveLength(3);
     expect(rendered.body).toContain('role="tablist"');
+    expect(rendered.body).toContain('aria-orientation="horizontal"');
     expect(rendered.body).toContain('id="ai-activity-tab-usage" role="tab" aria-selected="true"');
     expect(rendered.body).toContain('Usage');
     expect(rendered.body).toContain('Projects');
     expect(rendered.body).toContain('Tool Adapters');
     expect(rendered.body).not.toContain('Canonical projects');
     expect(rendered.body).not.toContain('Verified projects');
+  });
+
+  it('supports automatic Arrow, Home, and End tab activation', () => {
+    expect(nextAiActivityTab('usage', 'ArrowRight')).toBe('projects');
+    expect(nextAiActivityTab('projects', 'ArrowRight')).toBe('adapters');
+    expect(nextAiActivityTab('adapters', 'ArrowRight')).toBe('usage');
+    expect(nextAiActivityTab('usage', 'ArrowLeft')).toBe('adapters');
+    expect(nextAiActivityTab('projects', 'Home')).toBe('usage');
+    expect(nextAiActivityTab('usage', 'End')).toBe('adapters');
+    expect(nextAiActivityTab('usage', 'Enter')).toBeNull();
   });
 
   it('keeps the adapter matrix isolated from projects and usage content', () => {
