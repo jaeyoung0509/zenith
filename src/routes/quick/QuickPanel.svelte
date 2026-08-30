@@ -19,6 +19,7 @@
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
+  import QuickUsageGauges from '../../lib/components/QuickUsageGauges.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
@@ -176,40 +177,12 @@
     void tauriHideCurrentWindow();
   }
 
-  function formatCompactTime(timeUntil: string): string {
-    if (timeUntil.includes('d')) {
-      const match = timeUntil.match(/(\d+)d/);
-      return match ? `${match[1]}d` : timeUntil;
-    }
-    if (timeUntil.includes('h')) {
-      const match = timeUntil.match(/(\d+)h/);
-      return match ? `${match[1]}h` : timeUntil;
-    }
-    return timeUntil;
-  }
-
   function providerValue(provider: AiProviderUsage) {
     if (usageStore.isProviderLoading(provider.id)) {
       return '';
     }
 
     if (provider.windows.length > 0) {
-      const w5h = provider.windows.find(
-        (w) => w.label.toLowerCase().includes('5h') || w.label.toLowerCase().includes('5 hour')
-      );
-      const wWeekly = provider.windows.find((w) => w.label.toLowerCase().includes('week'));
-
-      if (w5h && wWeekly) {
-        const p5h = Math.round(w5h.used_percent ?? 0);
-        const pWk = Math.round(wWeekly.used_percent ?? 0);
-        const t5h = w5h.resets_at ? formatCompactTime(formatTimeUntil(w5h.resets_at)) : '';
-        const tWk = wWeekly.resets_at ? formatCompactTime(formatTimeUntil(wWeekly.resets_at)) : '';
-
-        const s5h = t5h ? `5h ${p5h}% (${t5h})` : `5h ${p5h}%`;
-        const sWk = tWk ? `Wk ${pWk}% (${tWk})` : `Wk ${pWk}%`;
-        return `${s5h} · ${sWk}`;
-      }
-
       const window = provider.windows[0];
       const percent = Math.round(window.used_percent ?? 0);
       if (window.resets_at) {
@@ -382,14 +355,20 @@
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}
               <div
-                class="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                class="flex items-center justify-between gap-2 rounded-lg px-1.5 py-1.5 text-xs hover:bg-secondary/40 transition-colors"
                 title={providerTitle(provider)}
               >
                 <div class="flex min-w-0 items-center gap-2">
                   <Bot size={13} class={provider.connected ? 'text-success' : 'text-muted-foreground'} />
                   <span class="truncate font-medium">{provider.name}</span>
                 </div>
-                <span class="ml-2 shrink-0 font-mono text-caption text-muted-foreground">{providerValue(provider)}</span>
+                {#if usageStore.isProviderLoading(provider.id)}
+                  <span class="shrink-0 inline-flex items-center text-muted-foreground/70" title="Loading live quota...">
+                    <RotateCw size={11} class="animate-spin" />
+                  </span>
+                {:else}
+                  <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
+                {/if}
               </div>
             {/each}
           {:else}
@@ -462,7 +441,7 @@
                       <RotateCw size={11} class="animate-spin" />
                     </span>
                   {:else}
-                    <span class="shrink-0 font-mono text-caption font-medium text-foreground">{providerValue(provider)}</span>
+                    <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
                   {/if}
                 </div>
               {/each}
