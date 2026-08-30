@@ -450,7 +450,7 @@
           </div>
           {#if usageSnapshot}
             <span class="shrink-0 text-caption text-muted-foreground">
-              {usageSnapshot.providers.filter((provider) => provider.connected).length} connected
+              {usageStore.providers.filter((provider) => provider.connected).length} connected
             </span>
           {/if}
         </div>

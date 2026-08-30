@@ -135,7 +135,14 @@ export type RecommendationPreview = RecommendationPreview_Serialize;
 export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize;
 
 // Frontend-specific helper types and aliases
-export type AiProviderId = 'codex' | 'claude' | 'opencode' | 'openrouter' | 'antigravity';
+export type AiProviderId =
+  | 'codex'
+  | 'claude'
+  | 'opencode'
+  | 'openrouter'
+  | 'antigravity'
+  | 'cursor'
+  | 'grok';
 
 export type CleanStrategy =
   | 'delete_contents'

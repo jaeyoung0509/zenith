@@ -256,9 +256,7 @@ export const mockApi = {
     _force = false,
     onProvider?: (provider: AiProviderUsage) => void
   ): Promise<AiUsageSnapshot> {
-    const snapshot: AiUsageSnapshot = {
-      fetched_at: Math.floor(Date.now() / 1000),
-      providers: [
+    const providers: AiProviderUsage[] = [
         {
           id: 'codex',
           name: 'Codex',
@@ -388,7 +386,66 @@ export const mockApi = {
           },
           action_url: null,
         },
-      ],
+        {
+          id: 'cursor',
+          name: 'Cursor',
+          installed: true,
+          connected: false,
+          auth_label: 'Cursor account',
+          status_message: 'Cursor does not expose account quota to Zenith; check usage in Cursor settings.',
+          support: 'manual',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+        {
+          id: 'grok',
+          name: 'Grok Build',
+          installed: true,
+          connected: false,
+          auth_label: 'xAI account',
+          status_message: 'Grok Build does not expose account quota to Zenith; check usage in the provider client.',
+          support: 'manual',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+    ];
+    const defaultProviderIds = ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'];
+    let selectedProviderIds = defaultProviderIds;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const saved = JSON.parse(localStorage.getItem('zenith.settings') ?? '{}');
+        if (Array.isArray(saved.ai_accounts_quota_providers)) {
+          selectedProviderIds = saved.ai_accounts_quota_providers;
+        }
+      } catch {
+        // Keep deterministic defaults for malformed preview settings.
+      }
+    }
+    const snapshot: AiUsageSnapshot = {
+      fetched_at: Math.floor(Date.now() / 1000),
+      providers: selectedProviderIds
+        .map((id) => providers.find((provider) => provider.id === id))
+        .filter((provider): provider is AiProviderUsage => Boolean(provider)),
     };
     if (onProvider) {
       for (const provider of snapshot.providers) {
@@ -966,6 +1023,7 @@ export const mockApi = {
       excluded_signatures: [],
       quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+      ai_accounts_quota_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
       dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
       dashboard_tabs_revision: 5,
       sidebar_collapsed: false,

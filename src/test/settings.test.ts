@@ -17,6 +17,7 @@ describe('serializeSettingsSnapshot', () => {
     excluded_signatures: ['sig1', 'sig2'],
     quick_panel_sections: ['cleanup', 'storage', 'memory'],
     quick_panel_ai_providers: ['codex', 'claude'],
+    ai_accounts_quota_providers: ['codex', 'claude'],
     dashboard_tabs: ['storage', 'memory', 'docker'],
     dashboard_tabs_revision: 1,
     sidebar_collapsed: false,
@@ -172,6 +173,24 @@ describe('SettingsStore persistence and lifecycle', () => {
     expect(store.settings.sidebar_collapsed).toBe(false);
     expect(store.settings.ai_control.autopilot?.keep_awake_for_verified_sessions).toBe(false);
     expect(store.settings.ai_control.autopilot?.notify_on_battery).toBe(false);
+    expect(store.settings.ai_accounts_quota_providers).toEqual([
+      'codex',
+      'claude',
+      'opencode',
+      'openrouter',
+      'antigravity',
+    ]);
+  });
+
+  it('keeps one Accounts & Quota provider enabled and preserves configured order', async () => {
+    await store.load();
+    await store.save({ ai_accounts_quota_providers: ['cursor'] });
+    await store.toggleAccountsQuotaProvider('cursor');
+    expect(store.settings.ai_accounts_quota_providers).toEqual(['cursor']);
+
+    await store.toggleAccountsQuotaProvider('grok');
+    await store.moveAccountsQuotaProvider('grok', -1);
+    expect(store.settings.ai_accounts_quota_providers).toEqual(['grok', 'cursor']);
   });
 
   it('persists the sidebar collapse preference with the rest of the settings', async () => {

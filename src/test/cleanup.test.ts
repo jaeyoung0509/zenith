@@ -146,6 +146,7 @@ describe('quick clean eligibility and predicate consistency', () => {
       excluded_signatures: [],
       quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'] as any,
       quick_panel_ai_providers: [],
+      ai_accounts_quota_providers: ['codex'],
       dashboard_tabs: ['storage'] as any,
       dashboard_tabs_revision: 1,
       sidebar_collapsed: false,
