@@ -17,16 +17,71 @@ pub struct AiUsageCollector;
 
 impl AiUsageCollector {
     pub fn collect(openrouter_key: Option<String>) -> AiUsageSnapshot {
+        Self::collect_parallel(openrouter_key, |_| {})
+    }
+
+    pub fn collect_parallel<F>(openrouter_key: Option<String>, on_provider: F) -> AiUsageSnapshot
+    where
+        F: Fn(AiProviderUsage) + Send + Sync,
+    {
+        let on_p = &on_provider;
+        let (codex, claude, opencode, openrouter, antigravity) = std::thread::scope(|s| {
+            let h_codex = s.spawn(move || {
+                let p = Self::collect_codex();
+                on_p(p.clone());
+                p
+            });
+            let h_claude = s.spawn(move || {
+                let p = Self::collect_claude();
+                on_p(p.clone());
+                p
+            });
+            let h_opencode = s.spawn(move || {
+                let p = Self::collect_opencode();
+                on_p(p.clone());
+                p
+            });
+            let h_openrouter = s.spawn(move || {
+                let p = Self::collect_openrouter(openrouter_key.as_deref());
+                on_p(p.clone());
+                p
+            });
+            let h_antigravity = s.spawn(move || {
+                let p = Self::collect_antigravity();
+                on_p(p.clone());
+                p
+            });
+
+            (
+                h_codex
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("codex", "Codex")),
+                h_claude
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("claude", "Claude Code")),
+                h_opencode
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("opencode", "OpenCode")),
+                h_openrouter
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("openrouter", "OpenRouter")),
+                h_antigravity
+                    .join()
+                    .unwrap_or_else(|_| Self::failed_provider("antigravity", "Antigravity")),
+            )
+        });
+
         AiUsageSnapshot {
-            providers: vec![
-                Self::collect_codex(),
-                Self::collect_claude(),
-                Self::collect_opencode(),
-                Self::collect_openrouter(openrouter_key.as_deref()),
-                Self::collect_antigravity(),
-            ],
+            providers: vec![codex, claude, opencode, openrouter, antigravity],
             fetched_at: now_secs(),
         }
+    }
+
+    fn failed_provider(id: &str, name: &str) -> AiProviderUsage {
+        let mut provider = base_provider(id, name, "Unknown");
+        provider.support = UsageSupport::Manual;
+        provider.status_message = "Collector thread failed.".into();
+        provider
     }
 
     fn collect_codex() -> AiProviderUsage {
@@ -259,20 +314,62 @@ impl AiUsageCollector {
     }
 
     fn collect_antigravity() -> AiProviderUsage {
-        let installed = Path::new("/Applications/Antigravity.app").exists();
-        AiProviderUsage {
-            id: "antigravity".into(),
-            name: "Antigravity".into(),
-            installed,
-            connected: false,
-            auth_label: "Google OAuth".into(),
-            status_message: "Google does not currently publish an Antigravity account-usage API."
-                .into(),
-            support: UsageSupport::Manual,
-            windows: vec![],
-            summary: UsageSummary::default(),
-            action_url: None,
+        let has_cli = command_exists("agy") || command_exists("antigravity");
+        let installed = has_cli || Path::new("/Applications/Antigravity.app").exists();
+        let mut provider = base_provider("antigravity", "Antigravity", "Google OAuth");
+        provider.installed = installed;
+        provider.action_url = None;
+
+        if !installed {
+            provider.support = UsageSupport::Manual;
+            provider.status_message = "Antigravity is not installed.".into();
+            return provider;
         }
+
+        if !has_cli {
+            provider.support = UsageSupport::Manual;
+            provider.status_message = "Antigravity CLI (agy) is not available in PATH.".into();
+            return provider;
+        }
+
+        let bin = if command_exists("agy") {
+            "agy"
+        } else {
+            "antigravity"
+        };
+        let mut cmd = tooling::command(bin);
+        cmd.args(["-p", "/usage", "--output-format", "json"]);
+        let output = match tooling::run_with_timeout(cmd, Duration::from_secs(8)) {
+            Ok(output) => output,
+            Err(error) => {
+                provider.support = UsageSupport::Manual;
+                provider.status_message = format!("Could not inspect Antigravity: {error}");
+                return provider;
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            provider.support = UsageSupport::Manual;
+            provider.status_message = if stderr.contains("login") || stderr.contains("auth") {
+                "Sign in to Antigravity using `agy`.".into()
+            } else {
+                format!("Antigravity /usage exited with status {}", output.status)
+            };
+            return provider;
+        }
+
+        match serde_json::from_slice::<Value>(&output.stdout) {
+            Ok(json_value) => {
+                parse_antigravity_usage_json(&json_value, &mut provider);
+            }
+            Err(error) => {
+                provider.support = UsageSupport::Manual;
+                provider.status_message = format!("Failed to parse Antigravity output: {error}");
+            }
+        }
+
+        provider
     }
 }
 
@@ -480,4 +577,307 @@ fn now_secs() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn parse_antigravity_usage_json(value: &Value, provider: &mut AiProviderUsage) {
+    let Some(groups) = value
+        .pointer("/command/data/groups")
+        .and_then(Value::as_array)
+    else {
+        provider.support = UsageSupport::Manual;
+        provider.status_message = "Antigravity returned unexpected usage format.".into();
+        return;
+    };
+
+    let mut windows = Vec::new();
+    for group in groups {
+        let group_name = group.get("name").and_then(Value::as_str).unwrap_or("");
+        let group_prefix = if group_name.contains("Gemini") {
+            "Gemini"
+        } else if group_name.contains("Claude") || group_name.contains("GPT") {
+            "Claude/GPT"
+        } else if !group_name.is_empty() {
+            group_name
+        } else {
+            "Models"
+        };
+
+        if let Some(buckets) = group.get("buckets").and_then(Value::as_array) {
+            for bucket in buckets {
+                let window_type = bucket.get("window").and_then(Value::as_str).unwrap_or("");
+                let window_label = match window_type {
+                    "weekly" => "Weekly",
+                    "5h" => "5h",
+                    _ => bucket
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Limit"),
+                };
+                let label = format!("{group_prefix} · {window_label}");
+                let Some(remaining) = bucket.get("remaining_fraction").and_then(Value::as_f64)
+                else {
+                    continue;
+                };
+                let used_percent = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+                let resets_at = bucket
+                    .get("reset_time")
+                    .and_then(Value::as_str)
+                    .and_then(parse_rfc3339_to_unix_secs);
+
+                windows.push(UsageWindow {
+                    label,
+                    used_percent,
+                    resets_at,
+                });
+            }
+        }
+    }
+
+    // Sort windows so shorter windows (5h) appear before longer ones (Weekly)
+    windows.sort_by_key(|w| {
+        let is_gemini = w.label.contains("Gemini");
+        let group_order = if is_gemini { 0 } else { 1 };
+        let window_order = if w.label.contains("5h") { 0 } else { 1 };
+        (group_order, window_order)
+    });
+
+    if !windows.is_empty() {
+        provider.connected = true;
+        provider.support = UsageSupport::Live;
+        provider.status_message = "Live limits from Antigravity CLI (/usage).".into();
+        provider.windows = windows;
+    } else {
+        provider.support = UsageSupport::Manual;
+        provider.status_message = "No rate limit buckets found in Antigravity response.".into();
+    }
+}
+
+pub(crate) fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.len() < 20 {
+        return None;
+    }
+    let year: u64 = s.get(0..4)?.parse().ok()?;
+    if s.as_bytes().get(4) != Some(&b'-') {
+        return None;
+    }
+    let month: u64 = s.get(5..7)?.parse().ok()?;
+    if s.as_bytes().get(7) != Some(&b'-') {
+        return None;
+    }
+    let day: u64 = s.get(8..10)?.parse().ok()?;
+    let sep = *s.as_bytes().get(10)?;
+    if sep != b'T' && sep != b't' {
+        return None;
+    }
+    let hour: u64 = s.get(11..13)?.parse().ok()?;
+    if s.as_bytes().get(13) != Some(&b':') {
+        return None;
+    }
+    let min: u64 = s.get(14..16)?.parse().ok()?;
+    if s.as_bytes().get(16) != Some(&b':') {
+        return None;
+    }
+    let sec: u64 = s.get(17..19)?.parse().ok()?;
+
+    if year < 1970
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || min > 59
+        || sec > 60
+    {
+        return None;
+    }
+
+    let is_leap = is_leap_year(year);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => return None,
+    };
+    if day > days_in_month {
+        return None;
+    }
+
+    let mut days = 0u64;
+    for y in 1970..year {
+        let y_leap = is_leap_year(y);
+        days += if y_leap { 366 } else { 365 };
+    }
+    let month_days = [
+        31,
+        if is_leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    for m in 1..month {
+        days += month_days[(m - 1) as usize];
+    }
+    days += day - 1;
+
+    let epoch_secs = days * 86400 + hour * 3600 + min * 60 + sec;
+
+    let mut rest = &s[19..];
+    if rest.starts_with('.') {
+        let fraction = &rest[1..];
+        let end_digits = fraction
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|idx| idx + 1)
+            .unwrap_or(rest.len());
+        if end_digits == 1 {
+            return None;
+        }
+        rest = &rest[end_digits..];
+    }
+
+    if rest == "Z" || rest == "z" {
+        return Some(epoch_secs);
+    }
+
+    if rest.len() == 6
+        && (rest.starts_with('+') || rest.starts_with('-'))
+        && rest.as_bytes().get(3) == Some(&b':')
+    {
+        let sign = if rest.starts_with('+') { -1i64 } else { 1i64 };
+        let off_h = rest.get(1..3)?.parse::<i64>().ok()?;
+        let off_m = rest.get(4..6)?.parse::<i64>().ok()?;
+        if off_h > 23 || off_m > 59 {
+            return None;
+        }
+        let offset_secs = sign * (off_h * 3600 + off_m * 60);
+        let adjusted = epoch_secs as i64 + offset_secs;
+        if adjusted < 0 {
+            return None;
+        }
+        return Some(adjusted as u64);
+    }
+
+    None
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_rfc3339_correctly() {
+        assert_eq!(
+            parse_rfc3339_to_unix_secs("2026-09-02T03:13:59Z"),
+            Some(1788318839)
+        );
+        assert_eq!(
+            parse_rfc3339_to_unix_secs("2026-08-29T17:05:20Z"),
+            Some(1788023120)
+        );
+        assert_eq!(
+            parse_rfc3339_to_unix_secs("2026-09-02T03:13:59.123456Z"),
+            Some(1788318839)
+        );
+        assert_eq!(parse_rfc3339_to_unix_secs("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            parse_rfc3339_to_unix_secs("2026-09-02T12:13:59+09:00"),
+            Some(1788318839)
+        );
+        assert_eq!(parse_rfc3339_to_unix_secs("invalid"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-13-01T00:00:00Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-02-29T00:00:00Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02 03:13:59Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59.Z"), None);
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59Zjunk"), None);
+        assert_eq!(
+            parse_rfc3339_to_unix_secs("2026-09-02T03:13:59+24:00"),
+            None
+        );
+        assert_eq!(parse_rfc3339_to_unix_secs("2026-09-02T03:13:59+09"), None);
+    }
+
+    #[test]
+    fn parses_antigravity_usage_json_buckets() {
+        let sample = json!({
+            "status": "SUCCESS",
+            "command": {
+                "name": "usage",
+                "data": {
+                    "groups": [
+                        {
+                            "name": "Gemini Models",
+                            "buckets": [
+                                {
+                                    "id": "gemini-weekly",
+                                    "name": "Weekly Limit Remaining",
+                                    "window": "weekly",
+                                    "remaining_fraction": 0.792,
+                                    "reset_time": "2026-09-02T03:13:59Z"
+                                },
+                                {
+                                    "id": "gemini-5h",
+                                    "name": "Five Hour Limit Remaining",
+                                    "window": "5h",
+                                    "remaining_fraction": 0.988,
+                                    "reset_time": "2026-08-29T17:05:20Z"
+                                },
+                                {
+                                    "id": "malformed",
+                                    "name": "Bucket without remaining fraction",
+                                    "window": "5h",
+                                    "reset_time": "2026-08-29T17:05:20Z"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Claude and GPT models",
+                            "buckets": [
+                                {
+                                    "id": "3p-weekly",
+                                    "name": "Weekly Limit Remaining",
+                                    "window": "weekly",
+                                    "remaining_fraction": 1.0,
+                                    "reset_time": "2026-09-05T12:07:16Z"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        });
+
+        let mut provider = base_provider("antigravity", "Antigravity", "Google OAuth");
+        parse_antigravity_usage_json(&sample, &mut provider);
+
+        assert!(provider.connected);
+        assert!(matches!(provider.support, UsageSupport::Live));
+        assert_eq!(provider.windows.len(), 3);
+        assert_eq!(provider.windows[0].label, "Gemini · 5h");
+        assert!((provider.windows[0].used_percent - 1.2).abs() < 0.1);
+        assert_eq!(provider.windows[0].resets_at, Some(1788023120));
+
+        assert_eq!(provider.windows[1].label, "Gemini · Weekly");
+        assert!((provider.windows[1].used_percent - 20.8).abs() < 0.1);
+        assert_eq!(provider.windows[1].resets_at, Some(1788318839));
+
+        assert_eq!(provider.windows[2].label, "Claude/GPT · Weekly");
+        assert_eq!(provider.windows[2].used_percent, 0.0);
+    }
 }

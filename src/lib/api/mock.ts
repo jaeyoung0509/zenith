@@ -2,6 +2,7 @@ import type {
   AgentActivitySnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
+  AiProviderUsage,
   AiUsageSnapshot,
   AwakeBehavior,
   AwakeRule,
@@ -251,8 +252,11 @@ export const mockApi = {
     // Mock open in terminal
   },
 
-  async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
-    return {
+  async getAiUsage(
+    _force = false,
+    onProvider?: (provider: AiProviderUsage) => void
+  ): Promise<AiUsageSnapshot> {
+    const snapshot: AiUsageSnapshot = {
       fetched_at: Math.floor(Date.now() / 1000),
       providers: [
         {
@@ -263,7 +267,10 @@ export const mockApi = {
           auth_label: 'plus · OAuth',
           status_message: 'Live account limits from the official Codex app-server.',
           support: 'live',
-          windows: [{ label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 }],
+          windows: [
+            { label: '5h', used_percent: 0, resets_at: Math.floor(Date.now() / 1000) + 17940 },
+            { label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 },
+          ],
           summary: {
             lifetime_tokens: 7111812241,
             last_7d_tokens: 452818756,
@@ -343,11 +350,32 @@ export const mockApi = {
           id: 'antigravity',
           name: 'Antigravity',
           installed: true,
-          connected: false,
+          connected: true,
           auth_label: 'Google OAuth',
-          status_message: 'Google does not publish an account-usage API.',
-          support: 'manual',
-          windows: [],
+          status_message: 'Live limits from Antigravity CLI (/usage).',
+          support: 'live',
+          windows: [
+            {
+              label: 'Gemini · Weekly',
+              used_percent: 21,
+              resets_at: Math.floor(Date.now() / 1000) + 316800,
+            },
+            {
+              label: 'Gemini · 5h',
+              used_percent: 1,
+              resets_at: Math.floor(Date.now() / 1000) + 18000,
+            },
+            {
+              label: 'Claude/GPT · Weekly',
+              used_percent: 0,
+              resets_at: Math.floor(Date.now() / 1000) + 604800,
+            },
+            {
+              label: 'Claude/GPT · 5h',
+              used_percent: 0,
+              resets_at: Math.floor(Date.now() / 1000) + 18000,
+            },
+          ],
           summary: {
             lifetime_tokens: null,
             last_7d_tokens: null,
@@ -362,6 +390,12 @@ export const mockApi = {
         },
       ],
     };
+    if (onProvider) {
+      for (const provider of snapshot.providers) {
+        onProvider(provider);
+      }
+    }
+    return snapshot;
   },
 
   async getAiControlCenter(_force = false): Promise<AiControlCenterSnapshot> {

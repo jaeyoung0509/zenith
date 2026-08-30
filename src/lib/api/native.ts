@@ -1,6 +1,7 @@
 import { Channel } from '@tauri-apps/api/core';
 import { commands } from '../bindings/tauri';
 import type {
+  AiProviderUsage,
   AiUsageSnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
@@ -68,7 +69,7 @@ export const nativeApi = {
   },
 
   async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
-    return await commands.getAgentQuickSummary();
+    return await unwrap(commands.getAgentQuickSummary());
   },
 
   async postAgentEvent(event: IngestedAgentEvent): Promise<void> {
@@ -79,8 +80,15 @@ export const nativeApi = {
     await unwrap(commands.openInTerminal(path));
   },
 
-  async getAiUsage(force = false): Promise<AiUsageSnapshot> {
-    return await unwrap(commands.getAiUsage(force));
+  async getAiUsage(
+    force = false,
+    onProvider?: (provider: AiProviderUsage) => void
+  ): Promise<AiUsageSnapshot> {
+    const channel = new Channel<AiProviderUsage>();
+    channel.onmessage = (provider) => {
+      onProvider?.(provider);
+    };
+    return await unwrap(commands.getAiUsage(channel, force));
   },
 
   async getAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {

@@ -458,14 +458,10 @@
           <div role="alert" class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">
             {usageStore.error}
           </div>
-        {:else if usageStore.isLoading && !usageSnapshot}
-          <div class="grid grid-cols-1 gap-3 md:grid-cols-2" aria-label="Loading AI account usage">
-            <div class="h-[190px] animate-pulse rounded-xl border border-border/60 bg-secondary/30"></div>
-            <div class="h-[190px] animate-pulse rounded-xl border border-border/60 bg-secondary/30"></div>
-          </div>
-        {:else if usageSnapshot && usageSnapshot.providers.length > 0}
+        {:else if usageStore.providers.length > 0}
           <AiUsageCards
-            providers={usageSnapshot.providers}
+            providers={usageStore.providers}
+            isProviderLoading={(id) => usageStore.isProviderLoading(id)}
             connectingProvider={usageStore.connectingProvider}
             onConnectOpenRouter={() => usageStore.connectOpenRouter()}
           />

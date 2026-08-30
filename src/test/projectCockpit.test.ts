@@ -68,6 +68,8 @@ afterEach(() => {
   agentActivityStore.error = null;
   agentActivityStore.isLoading = false;
   usageStore.snapshot = null;
+  usageStore.loadingProviders = [];
+  usageStore.isLoading = false;
 });
 
 describe('Project Cockpit', () => {
@@ -175,5 +177,24 @@ describe('Project Cockpit', () => {
     expect(rendered.body).toContain('Lifetime');
     expect(rendered.body).toContain('Recent 7 days');
     expect(rendered.body).toContain('Resets');
+  });
+
+  it('renders stable provider card shells before streamed values arrive', () => {
+    agentActivityStore.snapshot = snapshot;
+    usageStore.isLoading = true;
+    usageStore.loadingProviders = ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'];
+
+    const rendered = render(ProjectCockpitView);
+    const providerNames = ['Codex', 'Claude Code', 'OpenCode', 'OpenRouter', 'Antigravity'];
+
+    for (const name of providerNames) {
+      expect(rendered.body).toContain(`Loading ${name} usage`);
+    }
+    expect(rendered.body.indexOf('Loading Codex usage')).toBeLessThan(
+      rendered.body.indexOf('Loading Claude Code usage')
+    );
+    expect(rendered.body.indexOf('Loading Claude Code usage')).toBeLessThan(
+      rendered.body.indexOf('Loading OpenCode usage')
+    );
   });
 });

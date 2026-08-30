@@ -29,12 +29,51 @@ export function isQuickPanelDismissShortcut(key: string, metaKey: boolean): bool
   return key === 'Escape' || (metaKey && key.toLowerCase() === 'w');
 }
 
+const KNOWN_PROVIDER_NAMES: Record<string, string> = {
+  codex: 'Codex',
+  antigravity: 'Antigravity',
+  claude: 'Claude Code',
+  opencode: 'OpenCode',
+  openrouter: 'OpenRouter',
+};
+
 export function projectAiProviders(
   configuredIds: readonly string[],
-  providers: readonly AiProviderUsage[] | undefined
+  providers: readonly AiProviderUsage[] | undefined,
+  isLoading = false
 ): AiProviderUsage[] {
-  if (!configuredIds.length || !providers) return [];
+  if (!configuredIds.length) return [];
+  if (!providers && !isLoading) return [];
+
+  if (isLoading) {
+    return configuredIds.map((id) => {
+      const existing = providers?.find((provider) => provider.id === id);
+      if (existing) return existing;
+      return {
+        id,
+        name: KNOWN_PROVIDER_NAMES[id] || id,
+        installed: true,
+        connected: false,
+        auth_label: '',
+        status_message: 'Loading live usage...',
+        support: 'live',
+        windows: [],
+        summary: {
+          lifetime_tokens: null,
+          last_7d_tokens: null,
+          peak_daily_tokens: null,
+          current_streak_days: null,
+          local_sessions: null,
+          local_cost_usd: null,
+          usage_usd: null,
+          limit_remaining_usd: null,
+        },
+        action_url: null,
+      };
+    });
+  }
+
   return configuredIds
-    .map((id) => providers.find((provider) => provider.id === id))
+    .map((id) => providers?.find((provider) => provider.id === id))
     .filter((provider): provider is AiProviderUsage => Boolean(provider));
 }

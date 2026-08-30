@@ -1,12 +1,63 @@
-import type { AiUsageSnapshot } from '../models/types';
+import type { AiProviderUsage, AiUsageSnapshot } from '../models/types';
 import { tauriConnectOpenRouter, tauriGetAiUsage } from '../utils/tauri';
+
+const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
+  providerShell('codex', 'Codex', 'ChatGPT OAuth'),
+  providerShell('claude', 'Claude Code', 'Claude.ai OAuth'),
+  providerShell('opencode', 'OpenCode', 'Local providers'),
+  providerShell('openrouter', 'OpenRouter', 'OAuth PKCE'),
+  providerShell('antigravity', 'Antigravity', 'Google OAuth'),
+];
+
+function providerShell(id: string, name: string, authLabel: string): AiProviderUsage {
+  return {
+    id,
+    name,
+    installed: false,
+    connected: false,
+    auth_label: authLabel,
+    status_message: 'Loading usage metadata…',
+    support: 'manual',
+    windows: [],
+    summary: {
+      lifetime_tokens: null,
+      last_7d_tokens: null,
+      peak_daily_tokens: null,
+      current_streak_days: null,
+      local_sessions: null,
+      local_cost_usd: null,
+      usage_usd: null,
+      limit_remaining_usd: null,
+    },
+    action_url: null,
+  };
+}
+
+export function projectProviderSlots(
+  providers: readonly AiProviderUsage[],
+  isLoading: boolean
+): AiProviderUsage[] {
+  if (!isLoading) return [...providers];
+  return PROVIDER_SHELLS.map(
+    (shell) => providers.find((provider) => provider.id === shell.id) ?? shell
+  );
+}
 
 class UsageStore {
   snapshot = $state<AiUsageSnapshot | null>(null);
+  loadingProviders = $state<string[]>([]);
   isLoading = $state(false);
   error = $state<string | null>(null);
   connectingProvider = $state<string | null>(null);
   private refreshPromise: Promise<void> | null = null;
+
+  get providers(): AiProviderUsage[] {
+    return projectProviderSlots(this.snapshot?.providers ?? [], this.isLoading);
+  }
+
+  isProviderLoading(id: string): boolean {
+    return this.isLoading && this.loadingProviders.includes(id);
+  }
 
   async refresh(force = false) {
     if (this.refreshPromise) return this.refreshPromise;
@@ -27,11 +78,28 @@ class UsageStore {
   private async performRefresh(force: boolean) {
     this.isLoading = true;
     this.error = null;
+    this.loadingProviders = ['codex', 'antigravity', 'opencode', 'openrouter', 'claude'];
     try {
-      this.snapshot = await tauriGetAiUsage(force);
+      this.snapshot = await tauriGetAiUsage(force, (provider) => {
+        this.loadingProviders = this.loadingProviders.filter((id) => id !== provider.id);
+        if (!this.snapshot) {
+          this.snapshot = {
+            fetched_at: Math.floor(Date.now() / 1000),
+            providers: [provider],
+          };
+        } else {
+          const index = this.snapshot.providers.findIndex((p) => p.id === provider.id);
+          if (index >= 0) {
+            this.snapshot.providers[index] = provider;
+          } else {
+            this.snapshot.providers.push(provider);
+          }
+        }
+      });
     } catch (error: any) {
       this.error = error?.toString() || 'Could not load AI usage';
     } finally {
+      this.loadingProviders = [];
       this.isLoading = false;
     }
   }

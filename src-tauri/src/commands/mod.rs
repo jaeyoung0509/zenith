@@ -5,11 +5,11 @@ use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AgentActivitySnapshot, AgentActivityStatus, AgentIntegrationInfo, AgentIntegrationResult,
     AgentQuickSessionRow, AgentQuickSummary, AiControlCenterSnapshot, AiControlPreferences,
-    AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent, CleanResult,
-    ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, IngestedAgentEvent, LocalModelItem, MemoryMetrics, PlanPreview,
-    RecommendationPreview, ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent, ScanResult,
-    SelectedApplication, ZenithSettings,
+    AiProviderUsage, AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent,
+    CleanResult, ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot,
+    DiskMetrics, DiskVolume, DockerStatus, IngestedAgentEvent, LocalModelItem, MemoryMetrics,
+    PlanPreview, RecommendationPreview, ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent,
+    ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
@@ -51,6 +51,7 @@ fn unix_timestamp() -> u64 {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_ai_usage(
+    on_event: Channel<AiProviderUsage>,
     force: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<AiUsageSnapshot, String> {
@@ -63,6 +64,9 @@ pub async fn get_ai_usage(
             .as_ref()
         {
             if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                for p in &snapshot.providers {
+                    let _ = on_event.send(p.clone());
+                }
                 return Ok(snapshot.clone());
             }
         }
@@ -80,11 +84,16 @@ pub async fn get_ai_usage(
         if !force.unwrap_or(false) {
             if let Some(snapshot) = cache.lock().expect("ai_usage_cache poisoned").as_ref() {
                 if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                    for p in &snapshot.providers {
+                        let _ = on_event.send(p.clone());
+                    }
                     return snapshot.clone();
                 }
             }
         }
-        let snapshot = AiUsageCollector::collect(openrouter_key);
+        let snapshot = AiUsageCollector::collect_parallel(openrouter_key, |provider| {
+            let _ = on_event.send(provider);
+        });
         *cache.lock().expect("ai_usage_cache poisoned") = Some(snapshot.clone());
         snapshot
     })
@@ -244,9 +253,29 @@ pub fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResul
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_agent_quick_summary(state: State<'_, AppState>) -> Option<AgentQuickSummary> {
-    let guard = state.agent_activity_cache.lock().ok()?;
-    let registry = guard.as_ref()?;
+pub async fn get_agent_quick_summary(
+    state: State<'_, AppState>,
+) -> Result<Option<AgentQuickSummary>, String> {
+    let cached = state
+        .agent_activity_cache
+        .lock()
+        .map_err(|_| "Agent activity cache is unavailable.".to_string())?
+        .clone();
+    let registry = if let Some(registry) = cached {
+        registry
+    } else {
+        let cache = state.agent_activity_cache.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let fresh = crate::agent_activity::collect_registry();
+            *cache
+                .lock()
+                .map_err(|_| "Agent activity cache is unavailable.".to_string())? =
+                Some(fresh.clone());
+            Ok::<_, String>(fresh)
+        })
+        .await
+        .map_err(|error| format!("Agent activity refresh failed: {error}"))??
+    };
     let mut active_count = 0;
     let mut attention_count = 0;
     let mut rows = Vec::new();
@@ -299,11 +328,11 @@ pub fn get_agent_quick_summary(state: State<'_, AppState>) -> Option<AgentQuickS
     rows.sort_by_key(|b| std::cmp::Reverse(b.elapsed_seconds));
     rows.truncate(3);
 
-    Some(AgentQuickSummary {
+    Ok(Some(AgentQuickSummary {
         active_count,
         attention_count,
         sessions: rows,
-    })
+    }))
 }
 
 #[tauri::command]

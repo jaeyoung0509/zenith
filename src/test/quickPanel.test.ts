@@ -124,4 +124,50 @@ describe('quick panel AI provider projection', () => {
     expect(source).toContain('{#each selectedProviders as provider (provider.id)}');
     expect(source).not.toContain('providerValue(selectedProviders[0])');
   });
+
+  it('renders selectedProviders outside agentSummary condition so quota is visible without active sessions', () => {
+    const source = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    const agentSection = source.substring(source.indexOf("section === 'agent_activity'"));
+    const providerLoopIndex = agentSection.indexOf('{#each selectedProviders as provider');
+    const agentSummaryIndex = agentSection.indexOf('agentSummary && agentSummary.active_count > 0');
+    expect(providerLoopIndex).toBeGreaterThan(0);
+    expect(agentSummaryIndex).toBeGreaterThan(0);
+    // Verify provider loop appears before agentSummary condition and is not nested inside it
+    expect(providerLoopIndex).toBeLessThan(agentSummaryIndex);
+  });
+
+  it('projects antigravity provider when present in snapshot', () => {
+    const snapshotWithAntigravity = [
+      ...mockSnapshot.providers,
+      createMockProvider({
+        id: 'antigravity',
+        name: 'Antigravity',
+        windows: [{ label: 'Gemini · Weekly', used_percent: 21, resets_at: Date.now() + 10000 }],
+      }),
+    ];
+    const result = projectAiProviders(['antigravity', 'codex'], snapshotWithAntigravity);
+    expect(result.map((p) => p.id)).toEqual(['antigravity', 'codex']);
+    expect(result[0].windows[0].label).toBe('Gemini · Weekly');
+  });
+
+  it('projects placeholder entries when isLoading is true and providers are still in flight', () => {
+    const result = projectAiProviders(['codex', 'antigravity'], undefined, true);
+    expect(result).toHaveLength(2);
+    expect(result.map((p) => p.id)).toEqual(['codex', 'antigravity']);
+    expect(result[0].name).toBe('Codex');
+    expect(result[1].name).toBe('Antigravity');
+  });
+
+  it('renders spinning loader and dual 5h/Weekly window support in QuickPanel.svelte', () => {
+    const source = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    expect(source).toContain('usageStore.isProviderLoading(provider.id)');
+    expect(source).toContain('RotateCw size={11}');
+    expect(source).toContain('w5h && wWeekly');
+  });
 });
