@@ -48,6 +48,15 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
+fn usage_snapshot_matches_selection(snapshot: &AiUsageSnapshot, provider_ids: &[String]) -> bool {
+    snapshot.providers.len() == provider_ids.len()
+        && snapshot
+            .providers
+            .iter()
+            .zip(provider_ids)
+            .all(|(provider, selected_id)| provider.id == *selected_id)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_ai_usage(
@@ -56,6 +65,12 @@ pub async fn get_ai_usage(
     state: State<'_, AppState>,
 ) -> Result<AiUsageSnapshot, String> {
     const CACHE_TTL_SECS: u64 = 60;
+    let provider_ids = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_accounts_quota_providers
+        .clone();
     if !force.unwrap_or(false) {
         if let Some(snapshot) = state
             .ai_usage_cache
@@ -63,7 +78,9 @@ pub async fn get_ai_usage(
             .expect("ai_usage_cache poisoned")
             .as_ref()
         {
-            if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+            if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS)
+                && usage_snapshot_matches_selection(snapshot, &provider_ids)
+            {
                 for p in &snapshot.providers {
                     let _ = on_event.send(p.clone());
                 }
@@ -83,7 +100,9 @@ pub async fn get_ai_usage(
         let _refresh_guard = refresh_lock.lock().expect("ai_usage_refresh_lock poisoned");
         if !force.unwrap_or(false) {
             if let Some(snapshot) = cache.lock().expect("ai_usage_cache poisoned").as_ref() {
-                if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS) {
+                if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS)
+                    && usage_snapshot_matches_selection(snapshot, &provider_ids)
+                {
                     for p in &snapshot.providers {
                         let _ = on_event.send(p.clone());
                     }
@@ -91,9 +110,10 @@ pub async fn get_ai_usage(
                 }
             }
         }
-        let snapshot = AiUsageCollector::collect_parallel(openrouter_key, |provider| {
-            let _ = on_event.send(provider);
-        });
+        let snapshot =
+            AiUsageCollector::collect_parallel(openrouter_key, &provider_ids, |provider| {
+                let _ = on_event.send(provider);
+            });
         *cache.lock().expect("ai_usage_cache poisoned") = Some(snapshot.clone());
         snapshot
     })
@@ -383,12 +403,13 @@ pub async fn get_ai_control_center(
     let memory_sampler = state.memory_sampler.clone();
     let awake = state.awake_manager.clone();
     let dev_store = state.dev_port_store.clone();
-    let preferences = state
-        .settings
-        .lock()
-        .expect("settings poisoned")
-        .ai_control
-        .clone();
+    let (preferences, provider_ids) = {
+        let settings = state.settings.lock().expect("settings poisoned");
+        (
+            settings.ai_control.clone(),
+            settings.ai_accounts_quota_providers.clone(),
+        )
+    };
     let config_dir = app_handle
         .path()
         .app_config_dir()
@@ -414,10 +435,12 @@ pub async fn get_ai_control_center(
         };
         let usage = {
             let cached = usage_cache.lock().expect("usage cache poisoned").clone();
-            if let Some(value) = cached.filter(|value| value.is_fresh_at(now, 60)) {
+            if let Some(value) = cached.filter(|value| {
+                value.is_fresh_at(now, 60) && usage_snapshot_matches_selection(value, &provider_ids)
+            }) {
                 value
             } else {
-                let value = AiUsageCollector::collect(openrouter_key);
+                let value = AiUsageCollector::collect(openrouter_key, &provider_ids);
                 *usage_cache.lock().expect("usage cache poisoned") = Some(value.clone());
                 value
             }
@@ -1093,6 +1116,12 @@ pub fn save_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let settings = settings.sanitize();
+    let provider_selection_changed = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_accounts_quota_providers
+        != settings.ai_accounts_quota_providers;
     if settings.agent_notifications.enabled {
         crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
     }
@@ -1104,6 +1133,18 @@ pub fn save_settings(
     state.awake_manager.set_rules(settings.awake_rules.clone());
     let mut s = state.settings.lock().expect("settings poisoned");
     *s = settings;
+    drop(s);
+    if provider_selection_changed {
+        *state
+            .ai_usage_cache
+            .lock()
+            .expect("ai_usage_cache poisoned") = None;
+        state
+            .ai_control_state
+            .lock()
+            .expect("ai control poisoned")
+            .last_snapshot = None;
+    }
     Ok(())
 }
 

@@ -15,65 +15,80 @@ use uuid::Uuid;
 
 pub struct AiUsageCollector;
 
+const ANTIGRAVITY_USAGE_TIMEOUT: Duration = Duration::from_secs(20);
+
 impl AiUsageCollector {
-    pub fn collect(openrouter_key: Option<String>) -> AiUsageSnapshot {
-        Self::collect_parallel(openrouter_key, |_| {})
+    pub fn collect(openrouter_key: Option<String>, provider_ids: &[String]) -> AiUsageSnapshot {
+        Self::collect_parallel(openrouter_key, provider_ids, |_| {})
     }
 
-    pub fn collect_parallel<F>(openrouter_key: Option<String>, on_provider: F) -> AiUsageSnapshot
+    pub fn collect_parallel<F>(
+        openrouter_key: Option<String>,
+        provider_ids: &[String],
+        on_provider: F,
+    ) -> AiUsageSnapshot
     where
         F: Fn(AiProviderUsage) + Send + Sync,
     {
         let on_p = &on_provider;
-        let (codex, claude, opencode, openrouter, antigravity) = std::thread::scope(|s| {
-            let h_codex = s.spawn(move || {
-                let p = Self::collect_codex();
-                on_p(p.clone());
-                p
-            });
-            let h_claude = s.spawn(move || {
-                let p = Self::collect_claude();
-                on_p(p.clone());
-                p
-            });
-            let h_opencode = s.spawn(move || {
-                let p = Self::collect_opencode();
-                on_p(p.clone());
-                p
-            });
-            let h_openrouter = s.spawn(move || {
-                let p = Self::collect_openrouter(openrouter_key.as_deref());
-                on_p(p.clone());
-                p
-            });
-            let h_antigravity = s.spawn(move || {
-                let p = Self::collect_antigravity();
-                on_p(p.clone());
-                p
-            });
+        let providers = std::thread::scope(|scope| {
+            let handles = provider_ids
+                .iter()
+                .map(|provider_id| {
+                    let provider_id = provider_id.clone();
+                    let failed_id = provider_id.clone();
+                    let openrouter_key = openrouter_key.as_deref();
+                    (
+                        failed_id,
+                        scope.spawn(move || {
+                            let provider = Self::collect_provider(&provider_id, openrouter_key);
+                            on_p(provider.clone());
+                            provider
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>();
 
-            (
-                h_codex
-                    .join()
-                    .unwrap_or_else(|_| Self::failed_provider("codex", "Codex")),
-                h_claude
-                    .join()
-                    .unwrap_or_else(|_| Self::failed_provider("claude", "Claude Code")),
-                h_opencode
-                    .join()
-                    .unwrap_or_else(|_| Self::failed_provider("opencode", "OpenCode")),
-                h_openrouter
-                    .join()
-                    .unwrap_or_else(|_| Self::failed_provider("openrouter", "OpenRouter")),
-                h_antigravity
-                    .join()
-                    .unwrap_or_else(|_| Self::failed_provider("antigravity", "Antigravity")),
-            )
+            handles
+                .into_iter()
+                .map(|(provider_id, handle)| match handle.join() {
+                    Ok(provider) => provider,
+                    Err(_) => {
+                        Self::failed_provider(&provider_id, Self::provider_name(&provider_id))
+                    }
+                })
+                .collect()
         });
 
         AiUsageSnapshot {
-            providers: vec![codex, claude, opencode, openrouter, antigravity],
+            providers,
             fetched_at: now_secs(),
+        }
+    }
+
+    fn collect_provider(provider_id: &str, openrouter_key: Option<&str>) -> AiProviderUsage {
+        match provider_id {
+            "codex" => Self::collect_codex(),
+            "claude" => Self::collect_claude(),
+            "opencode" => Self::collect_opencode(),
+            "openrouter" => Self::collect_openrouter(openrouter_key),
+            "antigravity" => Self::collect_antigravity(),
+            "cursor" => Self::collect_cursor(),
+            "grok" => Self::collect_grok(),
+            other => Self::failed_provider(other, "Unknown provider"),
+        }
+    }
+
+    fn provider_name(provider_id: &str) -> &str {
+        match provider_id {
+            "codex" => "Codex",
+            "claude" => "Claude Code",
+            "opencode" => "OpenCode",
+            "openrouter" => "OpenRouter",
+            "antigravity" => "Antigravity",
+            "cursor" => "Cursor",
+            "grok" => "Grok Build",
+            _ => "Unknown provider",
         }
     }
 
@@ -212,6 +227,48 @@ impl AiUsageCollector {
         }
     }
 
+    fn collect_cursor() -> AiProviderUsage {
+        let installed =
+            command_exists("cursor-agent") || Path::new("/Applications/Cursor.app").exists();
+        AiProviderUsage {
+            id: "cursor".into(),
+            name: "Cursor".into(),
+            installed,
+            connected: false,
+            auth_label: "Cursor account".into(),
+            status_message: if installed {
+                "Cursor does not expose account quota to Zenith; check usage in Cursor settings."
+                    .into()
+            } else {
+                "Cursor is not installed.".into()
+            },
+            support: UsageSupport::Manual,
+            windows: vec![],
+            summary: UsageSummary::default(),
+            action_url: None,
+        }
+    }
+
+    fn collect_grok() -> AiProviderUsage {
+        let installed = command_exists("grok");
+        AiProviderUsage {
+            id: "grok".into(),
+            name: "Grok Build".into(),
+            installed,
+            connected: false,
+            auth_label: "xAI account".into(),
+            status_message: if installed {
+                "Grok Build does not expose account quota to Zenith; check usage in the provider client.".into()
+            } else {
+                "Grok Build is not installed.".into()
+            },
+            support: UsageSupport::Manual,
+            windows: vec![],
+            summary: UsageSummary::default(),
+            action_url: None,
+        }
+    }
+
     fn collect_opencode() -> AiProviderUsage {
         let mut provider = base_provider("opencode", "OpenCode", "Provider OAuth");
         provider.support = UsageSupport::Local;
@@ -339,7 +396,7 @@ impl AiUsageCollector {
         };
         let mut cmd = tooling::command(bin);
         cmd.args(["-p", "/usage", "--output-format", "json"]);
-        let output = match tooling::run_with_timeout(cmd, Duration::from_secs(8)) {
+        let output = match tooling::run_with_timeout(cmd, ANTIGRAVITY_USAGE_TIMEOUT) {
             Ok(output) => output,
             Err(error) => {
                 provider.support = UsageSupport::Manual;
@@ -779,6 +836,26 @@ fn is_leap_year(year: u64) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn antigravity_timeout_stays_within_the_supported_range() {
+        assert!(ANTIGRAVITY_USAGE_TIMEOUT >= Duration::from_secs(15));
+        assert!(ANTIGRAVITY_USAGE_TIMEOUT <= Duration::from_secs(30));
+    }
+
+    #[test]
+    fn collection_runs_only_selected_providers_in_configured_order() {
+        let selected = vec!["cursor".to_string(), "grok".to_string()];
+        let snapshot = AiUsageCollector::collect(None, &selected);
+        assert_eq!(
+            snapshot
+                .providers
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cursor", "grok"]
+        );
+    }
 
     #[test]
     fn parses_rfc3339_correctly() {

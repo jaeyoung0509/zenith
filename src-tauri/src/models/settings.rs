@@ -111,6 +111,7 @@ pub struct ZenithSettings {
     pub awake_rules: Vec<AwakeRule>,
     pub quick_panel_sections: Vec<QuickPanelSection>,
     pub quick_panel_ai_providers: Vec<String>,
+    pub ai_accounts_quota_providers: Vec<String>,
     pub dashboard_tabs: Vec<DashboardTab>,
     #[serde(default = "legacy_dashboard_tabs_revision")]
     pub dashboard_tabs_revision: u8,
@@ -208,6 +209,13 @@ impl Default for ZenithSettings {
             ],
             quick_panel_sections: QuickPanelSection::DEFAULTS.to_vec(),
             quick_panel_ai_providers: vec![
+                "codex".to_string(),
+                "claude".to_string(),
+                "opencode".to_string(),
+                "openrouter".to_string(),
+                "antigravity".to_string(),
+            ],
+            ai_accounts_quota_providers: vec![
                 "codex".to_string(),
                 "claude".to_string(),
                 "opencode".to_string(),
@@ -370,6 +378,23 @@ impl ZenithSettings {
         self.quick_panel_ai_providers.retain(|provider| {
             SUPPORTED_PROVIDERS.contains(&provider.as_str()) && providers.insert(provider.clone())
         });
+        const SUPPORTED_ACCOUNT_PROVIDERS: [&str; 7] = [
+            "codex",
+            "claude",
+            "opencode",
+            "openrouter",
+            "antigravity",
+            "cursor",
+            "grok",
+        ];
+        let mut account_providers = HashSet::new();
+        self.ai_accounts_quota_providers.retain(|provider| {
+            SUPPORTED_ACCOUNT_PROVIDERS.contains(&provider.as_str())
+                && account_providers.insert(provider.clone())
+        });
+        if self.ai_accounts_quota_providers.is_empty() {
+            self.ai_accounts_quota_providers.push("codex".into());
+        }
         self.agent_notifications.inactivity_threshold_minutes = self
             .agent_notifications
             .inactivity_threshold_minutes
@@ -393,6 +418,7 @@ mod tests {
             quick_panel_sections: Vec::new(),
             dashboard_tabs: Vec::new(),
             quick_panel_ai_providers: Vec::new(),
+            ai_accounts_quota_providers: Vec::new(),
             ..ZenithSettings::default()
         };
 
@@ -402,6 +428,7 @@ mod tests {
             vec![QuickPanelSection::Storage]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
+        assert_eq!(sanitized.ai_accounts_quota_providers, vec!["codex"]);
     }
 
     #[test]
@@ -414,6 +441,12 @@ mod tests {
             ],
             dashboard_tabs: vec![DashboardTab::Usage, DashboardTab::Usage, DashboardTab::Disk],
             quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
+            ai_accounts_quota_providers: vec![
+                "cursor".into(),
+                "unknown".into(),
+                "grok".into(),
+                "cursor".into(),
+            ],
             ..ZenithSettings::default()
         };
 
@@ -424,6 +457,10 @@ mod tests {
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
         assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
+        assert_eq!(
+            sanitized.ai_accounts_quota_providers,
+            vec!["cursor", "grok"]
+        );
     }
 
     #[test]
@@ -437,6 +474,10 @@ mod tests {
         assert_eq!(parsed.quick_panel_sections.len(), 4);
         assert_eq!(parsed.dashboard_tabs.len(), 7);
         assert_eq!(parsed.dashboard_tabs_revision, 0);
+        assert_eq!(
+            parsed.ai_accounts_quota_providers,
+            vec!["codex", "claude", "opencode", "openrouter", "antigravity"]
+        );
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
         assert!(!parsed.intensive_cleanup);

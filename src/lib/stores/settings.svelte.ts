@@ -16,6 +16,7 @@ export class SettingsStore {
     excluded_signatures: [],
     quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+    ai_accounts_quota_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
     dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
     dashboard_tabs_revision: 5,
     sidebar_collapsed: false,
@@ -117,6 +118,7 @@ export class SettingsStore {
         intensive_cleanup: fetched.intensive_cleanup ?? false,
         quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
         quick_panel_ai_providers: fetched.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+        ai_accounts_quota_providers: fetched.ai_accounts_quota_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
         dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
         dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 3,
         sidebar_collapsed: fetched.sidebar_collapsed ?? false,
@@ -224,6 +226,22 @@ export class SettingsStore {
   async reorderQuickPanelProviders(dragged: AiProviderId, target: AiProviderId) {
     const next = reorderOrdered(this.settings.quick_panel_ai_providers, dragged, target);
     await this.save({ quick_panel_ai_providers: next });
+  }
+
+  async toggleAccountsQuotaProvider(provider: AiProviderId) {
+    const current = this.settings.ai_accounts_quota_providers;
+    const next = toggleOrdered(current, provider, true);
+    await this.save({ ai_accounts_quota_providers: next });
+  }
+
+  async moveAccountsQuotaProvider(provider: AiProviderId, direction: -1 | 1) {
+    const next = moveOrdered(this.settings.ai_accounts_quota_providers, provider, direction);
+    await this.save({ ai_accounts_quota_providers: next });
+  }
+
+  async reorderAccountsQuotaProviders(dragged: AiProviderId, target: AiProviderId) {
+    const next = reorderOrdered(this.settings.ai_accounts_quota_providers, dragged, target);
+    await this.save({ ai_accounts_quota_providers: next });
   }
 
   applyTheme(theme: string) {

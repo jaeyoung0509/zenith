@@ -1,5 +1,6 @@
 import type { AiProviderUsage, AiUsageSnapshot } from '../models/types';
 import { tauriConnectOpenRouter, tauriGetAiUsage } from '../utils/tauri';
+import { settingsStore } from './settings.svelte';
 
 const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('codex', 'Codex', 'ChatGPT OAuth'),
@@ -7,6 +8,8 @@ const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('opencode', 'OpenCode', 'Local providers'),
   providerShell('openrouter', 'OpenRouter', 'OAuth PKCE'),
   providerShell('antigravity', 'Antigravity', 'Google OAuth'),
+  providerShell('cursor', 'Cursor', 'Cursor account'),
+  providerShell('grok', 'Grok Build', 'xAI account'),
 ];
 
 function providerShell(id: string, name: string, authLabel: string): AiProviderUsage {
@@ -35,12 +38,16 @@ function providerShell(id: string, name: string, authLabel: string): AiProviderU
 
 export function projectProviderSlots(
   providers: readonly AiProviderUsage[],
-  isLoading: boolean
+  isLoading: boolean,
+  providerIds: readonly string[] = PROVIDER_SHELLS.map((provider) => provider.id)
 ): AiProviderUsage[] {
-  if (!isLoading) return [...providers];
-  return PROVIDER_SHELLS.map(
-    (shell) => providers.find((provider) => provider.id === shell.id) ?? shell
-  );
+  return providerIds
+    .map((id) => {
+      const provider = providers.find((candidate) => candidate.id === id);
+      if (provider || !isLoading) return provider;
+      return PROVIDER_SHELLS.find((shell) => shell.id === id);
+    })
+    .filter((provider): provider is AiProviderUsage => Boolean(provider));
 }
 
 class UsageStore {
@@ -52,7 +59,11 @@ class UsageStore {
   private refreshPromise: Promise<void> | null = null;
 
   get providers(): AiProviderUsage[] {
-    return projectProviderSlots(this.snapshot?.providers ?? [], this.isLoading);
+    return projectProviderSlots(
+      this.snapshot?.providers ?? [],
+      this.isLoading,
+      settingsStore.settings.ai_accounts_quota_providers
+    );
   }
 
   isProviderLoading(id: string): boolean {
@@ -71,14 +82,18 @@ class UsageStore {
 
   async refreshIfStale(ttlMs = 60_000) {
     const fetchedAt = (this.snapshot?.fetched_at ?? 0) * 1000;
-    if (this.snapshot && Date.now() - fetchedAt < ttlMs) return;
+    const selectedIds = settingsStore.settings.ai_accounts_quota_providers;
+    const snapshotMatchesSelection =
+      this.snapshot?.providers.length === selectedIds.length &&
+      this.snapshot.providers.every((provider, index) => provider.id === selectedIds[index]);
+    if (this.snapshot && snapshotMatchesSelection && Date.now() - fetchedAt < ttlMs) return;
     await this.refresh(false);
   }
 
   private async performRefresh(force: boolean) {
     this.isLoading = true;
     this.error = null;
-    this.loadingProviders = ['codex', 'antigravity', 'opencode', 'openrouter', 'claude'];
+    this.loadingProviders = [...settingsStore.settings.ai_accounts_quota_providers];
     try {
       this.snapshot = await tauriGetAiUsage(force, (provider) => {
         this.loadingProviders = this.loadingProviders.filter((id) => id !== provider.id);

@@ -110,6 +110,7 @@ mod tests {
         let settings = ZenithSettings {
             quick_panel_sections: vec![QuickPanelSection::AgentActivity],
             quick_panel_ai_providers: vec!["opencode".into()],
+            ai_accounts_quota_providers: vec!["cursor".into(), "grok".into()],
             ..ZenithSettings::default()
         };
 
