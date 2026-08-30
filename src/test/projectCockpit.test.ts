@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
-import type { AgentActivitySnapshot } from '../lib/models/types';
+import type { AgentActivitySnapshot, AgentIntegrationInfo } from '../lib/models/types';
 import { AgentActivityStore, agentActivityStore } from '../lib/stores/agentActivity.svelte';
 import { usageStore } from '../lib/stores/usage.svelte';
+import ProjectsPanel from '../lib/components/ai-activity/ProjectsPanel.svelte';
+import ToolAdaptersPanel from '../lib/components/ai-activity/ToolAdaptersPanel.svelte';
 import ProjectCockpitView from '../routes/dashboard/ProjectCockpitView.svelte';
 
 const snapshot: AgentActivitySnapshot = {
@@ -67,24 +69,27 @@ afterEach(() => {
   agentActivityStore.selectedProjectId = null;
   agentActivityStore.error = null;
   agentActivityStore.isLoading = false;
+  agentActivityStore.integrations = [];
+  agentActivityStore.integrationsError = null;
+  agentActivityStore.isIntegrationsLoading = false;
   usageStore.snapshot = null;
   usageStore.loadingProviders = [];
   usageStore.isLoading = false;
+  usageStore.error = null;
 });
 
 describe('Project Cockpit', () => {
   it('renders worktree identity, dev ports, and evidence in project list', () => {
     agentActivityStore.snapshot = snapshot;
-    const rendered = render(ProjectCockpitView);
+    const rendered = render(ProjectsPanel);
     const source = readFileSync(
-      new URL('../routes/dashboard/ProjectCockpitView.svelte', import.meta.url),
+      new URL('../lib/components/ai-activity/ProjectsPanel.svelte', import.meta.url),
       'utf8'
     );
 
     expect(rendered.body).toContain('same-name');
     expect(rendered.body).toContain('Worktree');
     expect(rendered.body).toContain('Process observed');
-    expect(rendered.body).toContain('Local only');
     expect(rendered.body).toContain(':5173');
     // Never calls raw arbitrary process kill
     expect(source).not.toContain('terminate_process_group');
@@ -104,6 +109,31 @@ describe('Project Cockpit', () => {
     expect(rendered.body).toContain('Reveal in Finder');
     expect(rendered.body).toContain('Open in Terminal');
     expect(rendered.body).toContain('Stop');
+  });
+
+  it('defaults to Usage and exposes exactly three accessible sub-tabs', () => {
+    agentActivityStore.snapshot = snapshot;
+    const rendered = render(ProjectCockpitView);
+
+    expect(rendered.body.match(/role="tab"/g)).toHaveLength(3);
+    expect(rendered.body).toContain('role="tablist"');
+    expect(rendered.body).toContain('id="ai-activity-tab-usage" role="tab" aria-selected="true"');
+    expect(rendered.body).toContain('Usage');
+    expect(rendered.body).toContain('Projects');
+    expect(rendered.body).toContain('Tool Adapters');
+    expect(rendered.body).not.toContain('Canonical projects');
+    expect(rendered.body).not.toContain('Verified projects');
+  });
+
+  it('keeps the adapter matrix isolated from projects and usage content', () => {
+    agentActivityStore.snapshot = snapshot;
+    const rendered = render(ToolAdaptersPanel);
+
+    expect(rendered.body).toContain('Tool Adapters');
+    expect(rendered.body).toContain('Codex CLI');
+    expect(rendered.body).toContain('Process observed');
+    expect(rendered.body).not.toContain('AI Accounts &amp; Quota');
+    expect(rendered.body).not.toContain('Canonical projects');
   });
 
   it('keeps the last successful snapshot when refresh fails', async () => {
@@ -127,6 +157,20 @@ describe('Project Cockpit', () => {
     resolve(snapshot);
     await Promise.all([first, second]);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces concurrent integration lookups', async () => {
+    let resolve!: (value: AgentIntegrationInfo[]) => void;
+    const getIntegrations = vi.fn(
+      () => new Promise<AgentIntegrationInfo[]>((done) => (resolve = done))
+    );
+    const store = new AgentActivityStore(vi.fn().mockResolvedValue(snapshot), getIntegrations);
+    const first = store.fetchIntegrations();
+    const second = store.fetchIntegrations();
+    resolve([]);
+    await Promise.all([first, second]);
+
+    expect(getIntegrations).toHaveBeenCalledTimes(1);
   });
 
   it('handles graceful stop session delegation', async () => {
