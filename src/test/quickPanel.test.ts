@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { render } from 'svelte/server';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
+import QuickUsageGauges from '../lib/components/QuickUsageGauges.svelte';
 import { isQuickPanelDismissShortcut, moveOrdered, projectAiProviders, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
 
 describe('quick panel customization', () => {
@@ -161,13 +163,45 @@ describe('quick panel AI provider projection', () => {
     expect(result[1].name).toBe('Antigravity');
   });
 
-  it('renders spinning loader and dual 5h/Weekly window support in QuickPanel.svelte', () => {
+  it('renders spinning loader and the shared quota gauge in QuickPanel.svelte', () => {
     const source = readFileSync(
       new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
       'utf8'
     );
     expect(source).toContain('usageStore.isProviderLoading(provider.id)');
     expect(source).toContain('RotateCw size={11}');
-    expect(source).toContain('w5h && wWeekly');
+    expect(source.match(/<QuickUsageGauges/g)).toHaveLength(2);
+  });
+
+  it('renders separate 5-hour and weekly gauge bars with accessible values', () => {
+    const rendered = render(QuickUsageGauges, {
+      props: {
+        windows: [
+          { label: '5h limit', used_percent: 45, resets_at: null },
+          { label: 'Weekly limit', used_percent: 21, resets_at: null },
+        ],
+        fallback: 'unused fallback',
+      },
+    });
+
+    expect(rendered.body).toContain('5 hours');
+    expect(rendered.body).toContain('1 week');
+    expect(rendered.body).toContain('aria-label="5 hours: 45% used"');
+    expect(rendered.body).toContain('aria-label="1 week: 21% used"');
+    expect(rendered.body).toContain('width: 45%');
+    expect(rendered.body).toContain('width: 21%');
+    expect(rendered.body).not.toContain('unused fallback');
+  });
+
+  it('keeps the compact fallback when both quota windows are not available', () => {
+    const rendered = render(QuickUsageGauges, {
+      props: {
+        windows: [{ label: '5h limit', used_percent: 45, resets_at: null }],
+        fallback: '45% used',
+      },
+    });
+
+    expect(rendered.body).toContain('45% used');
+    expect(rendered.body).not.toContain('Usage limit windows');
   });
 });
