@@ -173,6 +173,15 @@ pixel utilities for those sizes.
 
 ### Projects
 
+- Keep AI Activity Level 1 focused with three compact sub-tabs directly below
+  the header: `Usage` (default), `Projects`, and `Tool Adapters`. Each tab
+  should show only its own domain and use an obvious active indicator plus a
+  visible keyboard focus ring; the tab state must not rely on color alone.
+- Scope loading and refresh feedback to the selected sub-tab. Usage displays
+  provider cards, Projects displays project/session summaries, and Tool
+  Adapters displays the supported adapter matrix. Preserve successful stale
+  data beside an inline error and load agent integrations only when the
+  adapter tab is first opened.
 - Group rows by canonical repository/worktree identity and use the compact
   parent/name hint plus branch to distinguish same-name projects without showing
   an absolute path. Worktrees receive a text badge.

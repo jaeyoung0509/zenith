@@ -18,12 +18,19 @@ export class AgentActivityStore {
   isLoading = $state(false);
   isIntegrationsLoading = $state(false);
   error = $state<string | null>(null);
+  integrationsError = $state<string | null>(null);
   selectedProjectId = $state<string | null>(null);
   private refreshPromise: Promise<void> | null = null;
+  private integrationsPromise: Promise<void> | null = null;
   private getProjectContextFn: typeof tauriGetProjectContext;
+  private getAgentIntegrationsFn: typeof tauriGetAgentIntegrations;
 
-  constructor(getProjectContextFn: typeof tauriGetProjectContext = tauriGetProjectContext) {
+  constructor(
+    getProjectContextFn: typeof tauriGetProjectContext = tauriGetProjectContext,
+    getAgentIntegrationsFn: typeof tauriGetAgentIntegrations = tauriGetAgentIntegrations,
+  ) {
     this.getProjectContextFn = getProjectContextFn;
+    this.getAgentIntegrationsFn = getAgentIntegrationsFn;
   }
 
   get activeSessionCount() {
@@ -101,11 +108,23 @@ export class AgentActivityStore {
   }
 
   async fetchIntegrations() {
-    this.isIntegrationsLoading = true;
+    if (this.integrationsPromise) return this.integrationsPromise;
+    this.integrationsPromise = this.performFetchIntegrations();
     try {
-      this.integrations = await tauriGetAgentIntegrations();
-    } catch {
-      // Best-effort in browser/mock mode
+      await this.integrationsPromise;
+    } finally {
+      this.integrationsPromise = null;
+    }
+  }
+
+  private async performFetchIntegrations() {
+    this.isIntegrationsLoading = true;
+    this.integrationsError = null;
+    try {
+      this.integrations = await this.getAgentIntegrationsFn();
+    } catch (error) {
+      // Keep the last successful integration state visible and expose a scoped error.
+      this.integrationsError = error instanceof Error ? error.message : String(error);
     } finally {
       this.isIntegrationsLoading = false;
     }

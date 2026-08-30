@@ -6,8 +6,25 @@ canonical project view.
 
 ## Core Features & Two-Level UX
 
-### Level 1: Project List
-- **Connected AI Accounts & Quota**: Glanceable horizontal strip displaying connected AI provider status, weekly quota usage percentages, and reset countdowns (Codex, Claude, OpenRouter, Antigravity).
+The Level 1 view is organized into three top-level sub-tabs directly below the
+page header. `Usage` is the default entry point; `Projects` contains the
+verified workspace/session view; and `Tool Adapters` contains the supported
+adapter matrix. The outer sidebar route remains `projects` for compatibility.
+
+Each sub-tab owns its loading and error boundary. Usage loads the cached quota
+snapshot on first activation, Projects loads the local agent snapshot on first
+activation, and Tool Adapters reuses that snapshot while loading integration
+metadata only when opened. Returning to a visited tab reuses its successful
+data. The header refresh action is scoped to the active tab (`Refresh usage`,
+`Refresh projects`, or `Refresh tool adapters`), and a failed refresh never
+removes another domain's last successful data.
+
+The sub-tabs use the ARIA tablist pattern. Arrow keys move between adjacent
+tabs, while Home and End move to the first and last tab. Selecting a project
+opens the existing Level 2 cockpit in the Projects context; `Back to Projects`
+returns to the Projects list.
+
+### Level 1: Project List (`Projects` sub-tab)
 - **Canonical Projects**: Groups running agent processes, development listeners, and
   project storage by verified Git repository or worktree root.
 - **Git State**: Displays branch name or detached HEAD indicator, worktree badge, and
@@ -18,9 +35,23 @@ canonical project view.
   `:5173`) and developer artifact storage sizes (e.g. `50 MB`).
 - **Unassigned Sessions Card**: Clearly presents verified agent processes whose working
   directory could not be correlated to a known project root without guessing.
-- **Tool Adapters**: Displays the truthful process-observation status of all 8 supported
-  AI tool adapters. Legacy Zenith hook markers can be removed, but new hook installation
-  remains disabled until a protocol-specific event bridge is shipped and verified.
+
+### Level 1: Usage (`Usage` sub-tab)
+
+- **Connected AI Accounts & Quota**: Shows only provider usage cards and the
+  connected-provider count. Provider provenance remains explicit (live, local,
+  or manual), and OAuth token files never reach the UI.
+- **Scoped refresh**: Refreshing Usage calls only the usage store and preserves
+  the last successful cards beside an inline error when a refresh fails.
+
+### Level 1: Tool Adapters (`Tool Adapters` sub-tab)
+
+- **Adapter matrix**: Shows the eight supported local process adapters and
+  their evidence/state messages. Project cards and account cards are not
+  duplicated here.
+- **Lazy integration metadata**: Integration status is fetched on first entry
+  to this sub-tab, with legacy-marker removal retaining its existing safe store
+  path. Process-only observations never claim detailed agent state.
 
 ### Level 2: Project Cockpit
 - **Repository Actions**: Open in Terminal and Reveal in Finder controls.
