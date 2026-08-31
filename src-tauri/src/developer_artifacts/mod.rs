@@ -404,7 +404,7 @@ pub fn workspace_snapshot(ids: &[String]) -> Result<Vec<DeveloperWorkspaceRecord
             .ok_or_else(|| "The selected workspace is unknown. Add it again.".to_string())?;
         let current = FileIdentity::from_path(&record.path)
             .ok_or_else(|| "The selected workspace disappeared or became a symlink.".to_string())?;
-        if current != record.identity {
+        if !record.path.is_dir() || !same_workspace_directory_identity(&current, &record.identity) {
             return Err(
                 "The selected workspace changed. Add it again before scanning.".to_string(),
             );
@@ -415,6 +415,10 @@ pub fn workspace_snapshot(ids: &[String]) -> Result<Vec<DeveloperWorkspaceRecord
         return Err("Select at least one workspace to scan.".to_string());
     }
     Ok(result)
+}
+
+fn same_workspace_directory_identity(current: &FileIdentity, expected: &FileIdentity) -> bool {
+    current.device == expected.device && current.inode == expected.inode
 }
 
 pub fn pick_workspace() -> Result<Option<DeveloperWorkspace>, String> {
@@ -1658,6 +1662,32 @@ mod tests {
         assert!(record.whole_home);
         assert_eq!(workspace.name, "This Mac");
         workspaces.remove(&workspace.id);
+    }
+
+    #[test]
+    fn workspace_identity_ignores_normal_directory_metadata_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut registered = FileIdentity::from_path(temp.path()).unwrap();
+        registered.size = registered.size.saturating_add(1);
+        registered.modified = registered.modified.map(|value| value.saturating_sub(1));
+
+        let current = FileIdentity::from_path(temp.path()).unwrap();
+        assert!(same_workspace_directory_identity(&current, &registered));
+    }
+
+    #[test]
+    fn workspace_identity_rejects_a_replaced_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let original = temp.path().join("original-workspace");
+        fs::create_dir(&workspace).unwrap();
+        let registered = FileIdentity::from_path(&workspace).unwrap();
+
+        fs::rename(&workspace, &original).unwrap();
+        fs::create_dir(&workspace).unwrap();
+
+        let current = FileIdentity::from_path(&workspace).unwrap();
+        assert!(!same_workspace_directory_identity(&current, &registered));
     }
 
     #[cfg(unix)]
