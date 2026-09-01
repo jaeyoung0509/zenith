@@ -26,7 +26,6 @@ impl ToctouGuard {
 
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt;
             let (mtime_secs, mtime_nanos) = meta
                 .modified()
                 .ok()
@@ -34,8 +33,25 @@ impl ToctouGuard {
                 .map(|d| (d.as_secs(), d.subsec_nanos()))
                 .unwrap_or((0, 0));
 
-            let device = meta.volume_serial_number().map(|v| v as u64).unwrap_or(0);
-            let inode = meta.file_index().unwrap_or(0);
+            let (device, inode) = if let Ok(file) = std::fs::File::open(path) {
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Storage::FileSystem::{
+                    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+                };
+                unsafe {
+                    let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+                    if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0 {
+                        let dev = info.dwVolumeSerialNumber as u64;
+                        let ino =
+                            ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+                        (dev, ino)
+                    } else {
+                        (0, 0)
+                    }
+                }
+            } else {
+                (0, 0)
+            };
 
             Some(FileIdentity {
                 device,

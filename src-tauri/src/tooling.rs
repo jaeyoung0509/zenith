@@ -47,7 +47,7 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     let job_handle = unsafe {
         use windows_sys::Win32::System::JobObjects::*;
         let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if handle != 0 {
+        if !handle.is_null() {
             let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
                 BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
                     LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -75,8 +75,8 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     unsafe {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-        if job_handle != 0 {
-            AssignProcessToJobObject(job_handle, child.as_raw_handle() as isize);
+        if !job_handle.is_null() {
+            AssignProcessToJobObject(job_handle, child.as_raw_handle() as _);
         }
     }
 
@@ -167,7 +167,7 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
         unsafe {
             use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::JobObjects::TerminateJobObject;
-            if job_handle != 0 {
+            if !job_handle.is_null() {
                 if _kill_tree {
                     TerminateJobObject(job_handle, 1);
                 }
