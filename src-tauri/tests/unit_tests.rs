@@ -192,7 +192,7 @@ fn test_size_calculator_recursive_and_exclusions() {
     assert_eq!(filtered_size.logical, 10000);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn test_power_assertion_raii_lifecycle() {
     {
@@ -226,7 +226,7 @@ fn test_power_assertion_raii_lifecycle() {
     assert!(!state_after.is_active);
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[test]
 fn test_power_assertion_fails_closed_without_native_adapter() {
     let assertion = PowerAssertion::acquire(
@@ -283,4 +283,41 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
     );
     assert!(!state.rule_evaluations[0].is_power_eligible);
     assert!(state.rule_evaluations[1].is_power_eligible);
+}
+
+#[test]
+fn test_windows_blacklist_and_path_defense() {
+    use std::path::Path;
+    use zenith_lib::safety::Blacklist;
+
+    // Drive root
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\")));
+    assert!(Blacklist::is_blacklisted(Path::new("D:/")));
+
+    // Windows System directories
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "C:\\Windows\\System32"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\Program Files")));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "C:\\Program Files (x86)"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\Users")));
+
+    // Alternate Data Streams and trailing aliases
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "C:\\safe\\file.txt:stream"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder.")));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder ")));
+}
+
+#[test]
+fn test_windows_reparse_point_symlink_defense() {
+    use std::path::Path;
+    use zenith_lib::safety::SymlinkGuard;
+
+    let non_existent = Path::new("C:\\path\\does\\not\\exist\\123");
+    assert!(!SymlinkGuard::is_symlink(non_existent));
 }

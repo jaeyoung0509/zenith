@@ -34,7 +34,7 @@ pub fn command(name: &str) -> Command {
 use std::os::unix::process::CommandExt;
 use std::sync::mpsc;
 
-/// Runs a command in an isolated process group with a strict timeout and pipe draining to prevent deadlock.
+/// Runs a command in an isolated process group or Windows Job Object with a strict timeout and pipe draining to prevent deadlock.
 pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, SubprocessError> {
     let program = cmd.get_program().to_string_lossy().to_string();
     cmd.stdout(Stdio::piped());
@@ -43,11 +43,42 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     #[cfg(unix)]
     cmd.process_group(0);
 
+    #[cfg(target_os = "windows")]
+    let job_handle = unsafe {
+        use windows_sys::Win32::System::JobObjects::*;
+        let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if !handle.is_null() {
+            let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+                BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                    LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                    ..std::mem::zeroed()
+                },
+                ..std::mem::zeroed()
+            };
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+        }
+        handle
+    };
+
     let mut child = cmd.spawn().map_err(|e| {
         let err = SubprocessError::SpawnFailed(program.clone(), e);
         crate::diagnostics::log_error("subprocess", &err.to_string());
         err
     })?;
+
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        if !job_handle.is_null() {
+            AssignProcessToJobObject(job_handle, child.as_raw_handle() as _);
+        }
+    }
 
     #[cfg(unix)]
     let pid = child.id() as i32;
@@ -132,6 +163,18 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
             }
         }
 
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+            if !job_handle.is_null() {
+                if _kill_tree {
+                    TerminateJobObject(job_handle, 1);
+                }
+                CloseHandle(job_handle);
+            }
+        }
+
         let stdout = drain_stream(&rx_out, stdout_handle, Duration::from_millis(200));
         let stderr = drain_stream(&rx_err, stderr_handle, Duration::from_millis(200));
 
@@ -177,32 +220,82 @@ pub fn resolve(name: &str) -> Option<PathBuf> {
         .map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .unwrap_or_default();
 
-    candidates.extend([
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/usr/bin"),
-    ]);
-
-    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+    #[cfg(target_os = "macos")]
+    {
         candidates.extend([
-            home.join(".local/bin"),
-            home.join(".cargo/bin"),
-            home.join(".npm-global/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
         ]);
+
+        if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+            candidates.extend([
+                home.join(".local/bin"),
+                home.join(".cargo/bin"),
+                home.join(".npm-global/bin"),
+            ]);
+        }
+
+        match name {
+            "docker" => candidates.push(PathBuf::from(
+                "/Applications/Docker.app/Contents/Resources/bin",
+            )),
+            "ollama" => {
+                candidates.push(PathBuf::from("/Applications/Ollama.app/Contents/Resources"))
+            }
+            _ => {}
+        }
     }
 
-    match name {
-        "docker" => candidates.push(PathBuf::from(
-            "/Applications/Docker.app/Contents/Resources/bin",
-        )),
-        "ollama" => candidates.push(PathBuf::from("/Applications/Ollama.app/Contents/Resources")),
-        _ => {}
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(prog_files) = env::var_os("ProgramFiles").map(PathBuf::from) {
+            candidates.extend([
+                prog_files.join("Docker\\Docker\\resources\\bin"),
+                prog_files.join("Git\\cmd"),
+                prog_files.join("Git\\bin"),
+                prog_files.join("nodejs"),
+            ]);
+        }
+
+        if let Some(local_appdata) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            candidates.extend([
+                local_appdata.join("Programs\\Ollama"),
+                local_appdata.join("Programs\\Python\\Launcher"),
+            ]);
+        }
+
+        if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
+            candidates.extend([
+                user_profile.join(".cargo\\bin"),
+                user_profile.join("AppData\\Roaming\\npm"),
+                user_profile.join(".gemini\\antigravity-cli\\bin"),
+            ]);
+        }
     }
 
-    candidates
-        .into_iter()
-        .map(|directory| directory.join(name))
-        .find(|candidate| is_executable(candidate))
+    // Direct match or with standard extensions on Windows
+    let name_variations: Vec<String> = if cfg!(windows) && !name.contains('.') {
+        vec![
+            format!("{name}.exe"),
+            format!("{name}.cmd"),
+            format!("{name}.bat"),
+            name.to_string(),
+        ]
+    } else {
+        vec![name.to_string()]
+    };
+
+    for directory in candidates {
+        for variation in &name_variations {
+            let candidate = directory.join(variation);
+            if is_executable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(unix)]
@@ -215,7 +308,15 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable(path: &Path) -> bool {
-    path.is_file()
+    if !path.is_file() {
+        return false;
+    }
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        matches!(ext_lower.as_str(), "exe" | "cmd" | "bat" | "com")
+    } else {
+        true
+    }
 }
 
 #[cfg(all(test, unix))]

@@ -5,18 +5,33 @@ use std::path::{Path, PathBuf};
 pub struct SymlinkGuard;
 
 impl SymlinkGuard {
-    /// Checks whether the path is a symbolic link without following it.
+    /// Checks whether the path is a symbolic link or reparse point (junction, mount point) without following it.
     pub fn is_symlink(path: &Path) -> bool {
         match fs::symlink_metadata(path) {
-            Ok(meta) => meta.file_type().is_symlink(),
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return true;
+                }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if meta.file_attributes() & 0x400 != 0 {
+                        return true;
+                    }
+                }
+                false
+            }
             Err(_) => false,
         }
     }
 
     /// Resolves the trusted base anchor for a given target path.
-    /// E.g., user home directory (`/Users/username`), `/tmp`, or `/private/tmp`.
+    /// E.g., user home directory (`/Users/username` or `C:\Users\username`), `/tmp`, or temp dir.
     pub fn resolve_trusted_anchor(target: &Path) -> PathBuf {
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Some(home) = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+        {
             if target.starts_with(&home) {
                 return home;
             }
@@ -53,15 +68,14 @@ impl SymlinkGuard {
         let mut current = base.to_path_buf();
         for component in relative.components() {
             current.push(component);
-            if let Ok(meta) = fs::symlink_metadata(&current) {
-                if meta.file_type().is_symlink() {
-                    return Err(ZenithError::SymlinkEscape(format!(
-                        "Path component is a symlink escape: {}",
-                        current.display()
-                    )));
-                }
+            if Self::is_symlink(&current) {
+                return Err(ZenithError::SymlinkEscape(format!(
+                    "Path component is a symlink or reparse escape: {}",
+                    current.display()
+                )));
             }
         }
+
         Ok(())
     }
 

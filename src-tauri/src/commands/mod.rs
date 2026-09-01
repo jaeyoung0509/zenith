@@ -1036,13 +1036,8 @@ pub fn get_disk_volumes() -> Vec<DiskVolume> {
 #[tauri::command]
 #[specta::specta]
 pub fn open_disk_utility() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    std::process::Command::new("open")
-        .args(["-a", "Disk Utility"])
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    use crate::platform::SystemActionProvider;
+    crate::platform::NativeSystemActions::new().open_storage_settings()
 }
 
 #[tauri::command]
@@ -1152,52 +1147,25 @@ pub fn save_settings(
 #[tauri::command]
 #[specta::specta]
 pub fn reveal_in_finder(path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let path = expand_display_path(&path)?;
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn()
-            .map_err(|error| format!("Could not open Finder: {error}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        Err("Reveal in Finder is unavailable on this platform.".to_string())
-    }
+    use crate::platform::SystemActionProvider;
+    let path_buf = expand_display_path(&path)?;
+    crate::platform::NativeSystemActions::new().reveal_path(&path_buf)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn open_in_terminal(path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let path = expand_display_path(&path)?;
-        if !path.is_dir() {
-            return Err("Project folder is no longer available.".to_string());
-        }
-        std::process::Command::new("open")
-            .args(["-a", "Terminal"])
-            .arg(path)
-            .spawn()
-            .map_err(|error| format!("Could not open Terminal: {error}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        Err("Opening a terminal is unavailable on this platform.".to_string())
-    }
+    use crate::platform::SystemActionProvider;
+    let path_buf = expand_display_path(&path)?;
+    crate::platform::NativeSystemActions::new().open_terminal(&path_buf)
 }
 
-#[cfg(target_os = "macos")]
 fn expand_display_path(path: &str) -> Result<PathBuf, String> {
     let expanded = if let Some(relative) = path.strip_prefix("~/") {
         let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
-            .ok_or_else(|| "HOME environment variable is not set.".to_string())?;
+            .ok_or_else(|| "Home environment variable is not set.".to_string())?;
         home.join(relative)
     } else {
         PathBuf::from(path)

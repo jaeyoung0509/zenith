@@ -1,8 +1,12 @@
 use crate::models::PlatformCapabilities;
-use std::path::Path;
 
 pub mod capabilities;
+pub mod paths;
+pub mod system_actions;
+
 pub use capabilities::NativePlatformCapabilities;
+pub use paths::{NativePlatformPaths, PlatformPathsProvider};
+pub use system_actions::{NativeSystemActions, SystemActionProvider};
 
 /// Narrow provider boundary for platform capability discovery.
 ///
@@ -12,15 +16,6 @@ pub use capabilities::NativePlatformCapabilities;
 /// abstraction and gives tests a deterministic injection point now.
 pub trait PlatformCapabilitiesProvider: Send + Sync {
     fn capabilities(&self) -> PlatformCapabilities;
-}
-
-/// Boundary for opening a validated path in a native file manager.
-///
-/// Implementations must validate the path before launching a native action;
-/// callers must not pass shell command strings through this trait.
-pub trait SystemActionProvider: Send + Sync {
-    fn reveal_path(&self, path: &Path) -> Result<(), String>;
-    fn open_terminal(&self, path: &Path) -> Result<(), String>;
 }
 
 #[cfg(test)]
