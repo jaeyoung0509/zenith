@@ -4,7 +4,7 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	getAiUsage: (onEvent: Channel<AiProviderUsage>, force: boolean | null) => typedError<AiUsageSnapshot, string>(__TAURI_INVOKE("get_ai_usage", { onEvent, force })),
+	getAiUsage: (onEvent: Channel<AiProviderUsage_Deserialize>, force: boolean | null) => typedError<AiUsageSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_usage", { onEvent, force })),
 	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot_Serialize, string>(__TAURI_INVOKE("get_project_context", { force })),
 	requestStopAgentSession: (sessionId: string, leaseId: string) => typedError<null, string>(__TAURI_INVOKE("request_stop_agent_session", { sessionId, leaseId })),
 	getAgentIntegrations: () => typedError<AgentIntegrationInfo[], string>(__TAURI_INVOKE("get_agent_integrations")),
@@ -15,7 +15,7 @@ export const commands = {
 	attention_count: number,
 	sessions: AgentQuickSessionRow_Serialize[],
 } | null, string>(__TAURI_INVOKE("get_agent_quick_summary")),
-	postAgentEvent: (event: IngestedAgentEvent) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
+	postAgentEvent: (event: IngestedAgentEvent_Deserialize) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
 	openInTerminal: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_in_terminal", { path })),
 	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
 	getAiControlQuickSummary: () => __TAURI_INVOKE<{
@@ -25,41 +25,41 @@ export const commands = {
 	safety_findings: number,
 	quality: ObservationQuality,
 } | null>("get_ai_control_quick_summary"),
-	saveAiControlPreferences: (preferences: AiControlPreferences) => typedError<null, string>(__TAURI_INVOKE("save_ai_control_preferences", { preferences })),
-	runAiSafetyScan: () => typedError<SafetySnapshot, string>(__TAURI_INVOKE("run_ai_safety_scan")),
+	saveAiControlPreferences: (preferences: AiControlPreferences_Deserialize) => typedError<null, string>(__TAURI_INVOKE("save_ai_control_preferences", { preferences })),
+	runAiSafetyScan: () => typedError<SafetySnapshot_Serialize, string>(__TAURI_INVOKE("run_ai_safety_scan")),
 	dismissAiSafetyFinding: (findingId: string) => typedError<null, string>(__TAURI_INVOKE("dismiss_ai_safety_finding", { findingId })),
 	previewAiRecommendation: (recommendationId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("preview_ai_recommendation", { recommendationId })),
 	consumeAiRecommendationPreview: (previewId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("consume_ai_recommendation_preview", { previewId })),
 	getAiControlGitDiff: (projectId: string) => typedError<string, string>(__TAURI_INVOKE("get_ai_control_git_diff", { projectId })),
 	connectOpenrouterOauth: () => typedError<null, string>(__TAURI_INVOKE("connect_openrouter_oauth")),
-	startScan: (onEvent: Channel<ScanEvent>, categories: Category[] | null) => typedError<ScanResult, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
+	startScan: (onEvent: Channel<ScanEvent_Deserialize>, categories: Category[] | null) => typedError<ScanResult_Serialize, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
 	getLastScan: () => __TAURI_INVOKE<{
 	scan_id: string,
 	started_at: number,
 	finished_at: number,
-	categories: CategoryResult[],
+	categories: CategoryResult_Serialize[],
 	total_bytes: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
 } | null>("get_last_scan"),
-	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
-	executeClean: (planId: string, onEvent: Channel<CleanEvent>) => typedError<CleanResult, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
-	getMemoryMetrics: () => typedError<MemoryMetrics, string>(__TAURI_INVOKE("get_memory_metrics")),
+	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
+	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
+	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
 	terminateProcessGroup: (name: string, force: boolean) => typedError<number, string>(__TAURI_INVOKE("terminate_process_group", { name, force })),
 	pickKeepAwakeApplication: () => typedError<{
 	name: string,
 	executable_pattern: string,
 	path: string,
 } | null, string>(__TAURI_INVOKE("pick_keep_awake_application")),
-	getDiskMetrics: () => typedError<DiskMetrics, string>(__TAURI_INVOKE("get_disk_metrics")),
-	getDiskVolumes: () => typedError<DiskVolume[], string>(__TAURI_INVOKE("get_disk_volumes")),
+	getDiskMetrics: () => typedError<DiskMetrics_Serialize, string>(__TAURI_INVOKE("get_disk_metrics")),
+	getDiskVolumes: () => typedError<DiskVolume_Serialize[], string>(__TAURI_INVOKE("get_disk_volumes")),
 	openDiskUtility: () => typedError<null, string>(__TAURI_INVOKE("open_disk_utility")),
-	getDockerStatus: () => typedError<DockerStatus, string>(__TAURI_INVOKE("get_docker_status")),
+	getDockerStatus: () => typedError<DockerStatus_Serialize, string>(__TAURI_INVOKE("get_docker_status")),
 	pruneDockerTarget: (signatureId: string) => typedError<number, string>(__TAURI_INVOKE("prune_docker_target", { signatureId })),
-	getLocalModels: () => typedError<LocalModelItem[], string>(__TAURI_INVOKE("get_local_models")),
+	getLocalModels: () => typedError<LocalModelItem_Serialize[], string>(__TAURI_INVOKE("get_local_models")),
 	deleteLocalModel: (modelId: string) => typedError<number, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
-	getAwakeState: () => typedError<AwakeState, string>(__TAURI_INVOKE("get_awake_state")),
+	getAwakeState: () => typedError<AwakeState_Serialize, string>(__TAURI_INVOKE("get_awake_state")),
 	setAwakeRules: (rules: AwakeRule_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_awake_rules", { rules })),
 	setManualAwake: (durationSecs: number | null, behavior: AwakeBehavior) => typedError<null, string>(__TAURI_INVOKE("set_manual_awake", { durationSecs, behavior })),
 	disableManualAwake: () => typedError<null, string>(__TAURI_INVOKE("disable_manual_awake")),
@@ -72,24 +72,24 @@ export const commands = {
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
 	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
-	listDevelopmentListeners: () => typedError<DevelopmentListener[], string>(__TAURI_INVOKE("list_development_listeners")),
-	releaseDevelopmentListener: (id: string, mode: ReleaseMode) => typedError<ReleaseDevelopmentListenerResult, string>(__TAURI_INVOKE("release_development_listener", { id, mode })),
-	startLargeFileScan: (request: LargeFileScanRequest, onEvent: Channel<LargeFileScanEvent>) => typedError<LargeFileScanResult, string>(__TAURI_INVOKE("start_large_file_scan", { request, onEvent })),
+	listDevelopmentListeners: () => typedError<DevelopmentListener_Serialize[], string>(__TAURI_INVOKE("list_development_listeners")),
+	releaseDevelopmentListener: (id: string, mode: ReleaseMode) => typedError<ReleaseDevelopmentListenerResult_Serialize, string>(__TAURI_INVOKE("release_development_listener", { id, mode })),
+	startLargeFileScan: (request: LargeFileScanRequest_Deserialize, onEvent: Channel<LargeFileScanEvent_Deserialize>) => typedError<LargeFileScanResult_Serialize, string>(__TAURI_INVOKE("start_large_file_scan", { request, onEvent })),
 	cancelLargeFileScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_large_file_scan", { scanId })),
-	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
+	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
 	pickDeveloperWorkspace: () => typedError<{
 	id: string,
 	name: string,
 	display_path: string,
 } | null, string>(__TAURI_INVOKE("pick_developer_workspace")),
 	registerDeveloperHomeWorkspace: () => typedError<DeveloperWorkspace, string>(__TAURI_INVOKE("register_developer_home_workspace")),
-	startDeveloperArtifactScan: (workspaceIds: string[], onEvent: Channel<DeveloperArtifactScanEvent>) => typedError<DeveloperArtifactScanResult, string>(__TAURI_INVOKE("start_developer_artifact_scan", { workspaceIds, onEvent })),
+	startDeveloperArtifactScan: (workspaceIds: string[], onEvent: Channel<DeveloperArtifactScanEvent_Deserialize>) => typedError<DeveloperArtifactScanResult_Serialize, string>(__TAURI_INVOKE("start_developer_artifact_scan", { workspaceIds, onEvent })),
 	cancelDeveloperArtifactScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_developer_artifact_scan", { scanId })),
-	prepareDeveloperArtifactCleanup: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_developer_artifact_cleanup", { scanId, selectedItemIds })),
-	getInstalledApps: () => typedError<InstalledApp[], string>(__TAURI_INVOKE("get_installed_apps")),
-	inspectAppUninstall: (appId: string) => typedError<AppUninstallInspection, string>(__TAURI_INVOKE("inspect_app_uninstall", { appId })),
-	prepareAppUninstall: (inspectionId: string, selectedRelatedIds: string[]) => typedError<TrashPlanPreview, string>(__TAURI_INVOKE("prepare_app_uninstall", { inspectionId, selectedRelatedIds })),
-	executeTrashPlan: (planId: string) => typedError<TrashResult, string>(__TAURI_INVOKE("execute_trash_plan", { planId })),
+	prepareDeveloperArtifactCleanup: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_developer_artifact_cleanup", { scanId, selectedItemIds })),
+	getInstalledApps: () => typedError<InstalledApp_Serialize[], string>(__TAURI_INVOKE("get_installed_apps")),
+	inspectAppUninstall: (appId: string) => typedError<AppUninstallInspection_Serialize, string>(__TAURI_INVOKE("inspect_app_uninstall", { appId })),
+	prepareAppUninstall: (inspectionId: string, selectedRelatedIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_app_uninstall", { inspectionId, selectedRelatedIds })),
+	executeTrashPlan: (planId: string) => typedError<TrashResult_Serialize, string>(__TAURI_INVOKE("execute_trash_plan", { planId })),
 };
 
 /* Types */
@@ -254,41 +254,53 @@ export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize | AiCont
 
 export type AiControlCenterSnapshot_Deserialize = {
 	observed_at: number,
-	providers: ProviderObservation[],
+	providers: ProviderObservation_Deserialize[],
 	budget_statuses: BudgetStatus[],
-	resources: ResourceAttribution[],
+	resources: ResourceAttribution_Deserialize[],
 	recommendations: Recommendation_Deserialize[],
-	safety: SafetySnapshot,
-	git_summaries: GitChangeSummary[],
-	audit: AuditEntry[],
-	quick_summary: ControlCenterQuickSummary,
+	safety: SafetySnapshot_Deserialize,
+	git_summaries: GitChangeSummary_Deserialize[],
+	audit: AuditEntry_Deserialize[],
+	quick_summary: ControlCenterQuickSummary_Deserialize,
 	keep_awake_active: boolean,
 	partial_errors: string[],
 };
 
 export type AiControlCenterSnapshot_Serialize = {
 	observed_at: number,
-	providers: ProviderObservation[],
+	providers: ProviderObservation_Serialize[],
 	budget_statuses: BudgetStatus[],
-	resources: ResourceAttribution[],
+	resources: ResourceAttribution_Serialize[],
 	recommendations: Recommendation_Serialize[],
-	safety: SafetySnapshot,
-	git_summaries: GitChangeSummary[],
-	audit: AuditEntry[],
-	quick_summary: ControlCenterQuickSummary,
+	safety: SafetySnapshot_Serialize,
+	git_summaries: GitChangeSummary_Serialize[],
+	audit: AuditEntry_Serialize[],
+	quick_summary: ControlCenterQuickSummary_Serialize,
 	keep_awake_active: boolean,
 	partial_errors: string[],
 };
 
-export type AiControlPreferences = {
+export type AiControlPreferences = AiControlPreferences_Serialize | AiControlPreferences_Deserialize;
+
+export type AiControlPreferences_Deserialize = {
 	budgets?: LocalAlertBudget[],
-	manual_usage?: ManualProviderUsage[],
-	autopilot?: AutopilotPreferences,
+	manual_usage?: ManualProviderUsage_Deserialize[],
+	autopilot?: AutopilotPreferences_Deserialize,
 	dismissed_findings?: string[],
 	audit_retention_days?: number,
 };
 
-export type AiProviderUsage = {
+export type AiControlPreferences_Serialize = {
+	budgets: LocalAlertBudget[],
+	manual_usage: ManualProviderUsage_Serialize[],
+	autopilot: AutopilotPreferences_Serialize,
+	dismissed_findings: string[],
+	audit_retention_days: number,
+};
+
+export type AiProviderUsage = AiProviderUsage_Serialize | AiProviderUsage_Deserialize;
+
+export type AiProviderUsage_Deserialize = {
 	id: string,
 	name: string,
 	installed: boolean,
@@ -296,13 +308,33 @@ export type AiProviderUsage = {
 	auth_label: string,
 	status_message: string,
 	support: UsageSupport,
-	windows: UsageWindow[],
-	summary: UsageSummary,
+	windows: UsageWindow_Deserialize[],
+	summary: UsageSummary_Deserialize,
 	action_url: string | null,
 };
 
-export type AiUsageSnapshot = {
-	providers: AiProviderUsage[],
+export type AiProviderUsage_Serialize = {
+	id: string,
+	name: string,
+	installed: boolean,
+	connected: boolean,
+	auth_label: string,
+	status_message: string,
+	support: UsageSupport,
+	windows: UsageWindow_Serialize[],
+	summary: UsageSummary_Serialize,
+	action_url: string | null,
+};
+
+export type AiUsageSnapshot = AiUsageSnapshot_Serialize | AiUsageSnapshot_Deserialize;
+
+export type AiUsageSnapshot_Deserialize = {
+	providers: AiProviderUsage_Deserialize[],
+	fetched_at: number,
+};
+
+export type AiUsageSnapshot_Serialize = {
+	providers: AiProviderUsage_Serialize[],
 	fetched_at: number,
 };
 
@@ -310,7 +342,21 @@ export type AppInstallSource = "application_bundle" | "homebrew_cask" | "install
 
 export type AppRelatedConfidence = "high" | "medium" | "shared";
 
-export type AppRelatedItem = {
+export type AppRelatedItem = AppRelatedItem_Serialize | AppRelatedItem_Deserialize;
+
+export type AppRelatedItem_Deserialize = {
+	id: string,
+	name: string,
+	display_path: string,
+	kind: AppRelatedKind,
+	confidence: AppRelatedConfidence,
+	evidence: string,
+	logical_size: number,
+	allocated_size: number,
+	selected_by_default: boolean,
+};
+
+export type AppRelatedItem_Serialize = {
 	id: string,
 	name: string,
 	display_path: string,
@@ -324,17 +370,29 @@ export type AppRelatedItem = {
 
 export type AppRelatedKind = "app_bundle" | "application_support" | "cache" | "log" | "preference" | "saved_state" | "container" | "group_container" | "application_scripts" | "http_storage" | "web_kit";
 
-export type AppUninstallInspection = {
+export type AppUninstallInspection = AppUninstallInspection_Serialize | AppUninstallInspection_Deserialize;
+
+export type AppUninstallInspection_Deserialize = {
 	inspection_id: string,
-	app: InstalledApp,
-	related_items: AppRelatedItem[],
+	app: InstalledApp_Deserialize,
+	related_items: AppRelatedItem_Deserialize[],
+	incomplete: boolean,
+	warnings: string[],
+};
+
+export type AppUninstallInspection_Serialize = {
+	inspection_id: string,
+	app: InstalledApp_Serialize,
+	related_items: AppRelatedItem_Serialize[],
 	incomplete: boolean,
 	warnings: string[],
 };
 
 export type AttentionReason = "approval" | "input" | "turn_complete" | "inactivity";
 
-export type AuditEntry = {
+export type AuditEntry = AuditEntry_Serialize | AuditEntry_Deserialize;
+
+export type AuditEntry_Deserialize = {
 	id: string,
 	timestamp: number,
 	event_kind: string,
@@ -343,13 +401,33 @@ export type AuditEntry = {
 	message: string,
 };
 
-export type AutopilotPreferences = {
+export type AuditEntry_Serialize = {
+	id: string,
+	timestamp: number,
+	event_kind: string,
+	outcome: string,
+	project_ref: string | null,
+	message: string,
+};
+
+export type AutopilotPreferences = AutopilotPreferences_Serialize | AutopilotPreferences_Deserialize;
+
+export type AutopilotPreferences_Deserialize = {
 	keep_awake_for_verified_sessions?: boolean,
 	keep_awake_ac_only?: boolean,
 	notify_on_battery?: boolean,
 	notify_on_memory_pressure?: boolean,
 	notify_on_session_completion?: boolean,
 	recommendation_cooldown_seconds?: number,
+};
+
+export type AutopilotPreferences_Serialize = {
+	keep_awake_for_verified_sessions: boolean,
+	keep_awake_ac_only: boolean,
+	notify_on_battery: boolean,
+	notify_on_memory_pressure: boolean,
+	notify_on_session_completion: boolean,
+	recommendation_cooldown_seconds: number,
 };
 
 export type AwakeBehavior = "prevent_system_sleep" | "keep_display_awake";
@@ -385,7 +463,22 @@ export type AwakeRule_Serialize = {
 	enabled: boolean,
 };
 
-export type AwakeState = {
+export type AwakeState = AwakeState_Serialize | AwakeState_Deserialize;
+
+export type AwakeState_Deserialize = {
+	is_active: boolean,
+	behavior: AwakeBehavior | null,
+	trigger_source: string | null,
+	active_process_name: string | null,
+	active_rule_id: string | null,
+	manual_expires_at: number | null,
+	active_rules_count: number,
+	power_source: PowerSourceType,
+	last_error: string | null,
+	rule_evaluations: AwakeRuleEvaluation[],
+};
+
+export type AwakeState_Serialize = {
 	is_active: boolean,
 	behavior: AwakeBehavior | null,
 	trigger_source: string | null,
@@ -413,21 +506,39 @@ export type BudgetStatus = {
 
 export type Category = "ai" | "developer" | "container" | "model" | "system";
 
-export type CategoryResult = {
+export type CategoryResult = CategoryResult_Serialize | CategoryResult_Deserialize;
+
+export type CategoryResult_Deserialize = {
 	category: Category,
 	display_name: string,
-	items: ScanItem[],
+	items: ScanItem_Deserialize[],
 	total_bytes: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
 };
 
-export type CleanEvent = { type: "Started"; plan_id: string; total_targets: number; expected_bytes: number } | { type: "ItemStarted"; item_id: string; name: string; index: number; total: number } | { type: "ItemFinished"; item_id: string; name: string; success: boolean; reclaimed_bytes: number; error: string | null } | { type: "Finished"; result: CleanResult } | { type: "Error"; message: string };
+export type CategoryResult_Serialize = {
+	category: Category,
+	display_name: string,
+	items: ScanItem_Serialize[],
+	total_bytes: number,
+	safe_bytes: number,
+	rebuild_bytes: number,
+	manual_bytes: number,
+};
+
+export type CleanEvent = CleanEvent_Serialize | CleanEvent_Deserialize;
+
+export type CleanEvent_Deserialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Deserialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never; total_targets?: never };
+
+export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Serialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never; total_targets?: never };
 
 export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "not_found" | "in_use" | "blacklisted" | "external_command_failed" | "unknown";
 
-export type CleanItemResult = {
+export type CleanItemResult = CleanItemResult_Serialize | CleanItemResult_Deserialize;
+
+export type CleanItemResult_Deserialize = {
 	item_id: string,
 	name: string,
 	path: string,
@@ -438,19 +549,52 @@ export type CleanItemResult = {
 	error_message: string | null,
 };
 
-export type CleanResult = {
+export type CleanItemResult_Serialize = {
+	item_id: string,
+	name: string,
+	path: string,
+	status: CleanStatus,
+	success: boolean,
+	bytes_reclaimed: number,
+	failure_reason: CleanFailureReason | null,
+	error_message: string | null,
+};
+
+export type CleanResult = CleanResult_Serialize | CleanResult_Deserialize;
+
+export type CleanResult_Deserialize = {
 	plan_id: string,
 	started_at: number,
 	finished_at: number,
 	total_reclaimed_bytes: number,
 	total_failed_bytes: number,
-	items: CleanItemResult[],
+	items: CleanItemResult_Deserialize[],
+	actual_disk_free_delta: number | null,
+};
+
+export type CleanResult_Serialize = {
+	plan_id: string,
+	started_at: number,
+	finished_at: number,
+	total_reclaimed_bytes: number,
+	total_failed_bytes: number,
+	items: CleanItemResult_Serialize[],
 	actual_disk_free_delta: number | null,
 };
 
 export type CleanStatus = "success" | "partial" | "failed";
 
-export type ControlCenterQuickSummary = {
+export type ControlCenterQuickSummary = ControlCenterQuickSummary_Serialize | ControlCenterQuickSummary_Deserialize;
+
+export type ControlCenterQuickSummary_Deserialize = {
+	observed_at: number,
+	active_sessions: number,
+	budget_alerts: number,
+	safety_findings: number,
+	quality: ObservationQuality,
+};
+
+export type ControlCenterQuickSummary_Serialize = {
 	observed_at: number,
 	active_sessions: number,
 	budget_alerts: number,
@@ -470,31 +614,31 @@ export type DashboardTab_Deserialize = "disk" | "storage" | "docker" | "models" 
 
 export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | "memory" | "projects" | "development_servers" | "usage" | "ai_control" | "awake";
 
-export type DeveloperArtifact = {
-	id: string,
-	workspace_id: string,
-	project_name: string,
-	ecosystem: DeveloperEcosystem,
-	kind: DeveloperArtifactKind,
-	path: string,
-	logical_bytes: number,
-	allocated_bytes: number,
-	file_count: number,
-	newest_mtime: number | null,
-	rebuild_hint: string | null,
-	evidence: string[],
-	status: DeveloperArtifactStatus,
-	incomplete_reason: string | null,
-	selected_by_default: boolean,
-};
+export type DeveloperArtifact = DeveloperArtifact_Serialize | DeveloperArtifact_Deserialize;
 
 export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_venv" | "go_module_cache" | "maven_target" | "gradle_build" | "gradle_cache" | "composer_vendor" | "ruby_bundle" | "dotnet_bin" | "dotnet_obj" | "c_make_build" | "swift_build" | "flutter_tooling" | "elixir_build" | "elixir_deps" | "terraform_cache";
 
-export type DeveloperArtifactScanEvent = { type: "started"; scan_id: string; workspace_count: number } | { type: "workspace_started"; workspace: DeveloperWorkspace } | { type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem } | { type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind } | { type: "artifact_found"; artifact: DeveloperArtifact } | { type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number } | { type: "workspace_finished"; workspace_id: string } | { type: "finished"; result: DeveloperArtifactScanResult } | { type: "cancelled"; scan_id: string };
+export type DeveloperArtifactScanEvent = DeveloperArtifactScanEvent_Serialize | DeveloperArtifactScanEvent_Deserialize;
 
-export type DeveloperArtifactScanResult = {
+export type DeveloperArtifactScanEvent_Deserialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Deserialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; project_name?: never; result?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Deserialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
+
+export type DeveloperArtifactScanEvent_Serialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Serialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; project_name?: never; result?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Serialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
+
+export type DeveloperArtifactScanResult = DeveloperArtifactScanResult_Serialize | DeveloperArtifactScanResult_Deserialize;
+
+export type DeveloperArtifactScanResult_Deserialize = {
 	scan_id: string,
-	items: DeveloperArtifact[],
+	items: DeveloperArtifact_Deserialize[],
+	discovered_count: number,
+	measured_count: number,
+	skipped_entries: number,
+	cancelled: boolean,
+	truncated: boolean,
+};
+
+export type DeveloperArtifactScanResult_Serialize = {
+	scan_id: string,
+	items: DeveloperArtifact_Serialize[],
 	discovered_count: number,
 	measured_count: number,
 	skipped_entries: number,
@@ -519,6 +663,42 @@ export type DeveloperArtifactStatus =
 /**  The scan was cancelled before this artifact could be fully validated. */
 "scan_cancelled";
 
+export type DeveloperArtifact_Deserialize = {
+	id: string,
+	workspace_id: string,
+	project_name: string,
+	ecosystem: DeveloperEcosystem,
+	kind: DeveloperArtifactKind,
+	path: string,
+	logical_bytes: number,
+	allocated_bytes: number,
+	file_count: number,
+	newest_mtime: number | null,
+	rebuild_hint: string | null,
+	evidence: string[],
+	status: DeveloperArtifactStatus,
+	incomplete_reason: string | null,
+	selected_by_default: boolean,
+};
+
+export type DeveloperArtifact_Serialize = {
+	id: string,
+	workspace_id: string,
+	project_name: string,
+	ecosystem: DeveloperEcosystem,
+	kind: DeveloperArtifactKind,
+	path: string,
+	logical_bytes: number,
+	allocated_bytes: number,
+	file_count: number,
+	newest_mtime: number | null,
+	rebuild_hint: string | null,
+	evidence: string[],
+	status: DeveloperArtifactStatus,
+	incomplete_reason: string | null,
+	selected_by_default: boolean,
+};
+
 export type DeveloperEcosystem = "rust" | "node" | "python" | "go" | "java" | "kotlin" | "php" | "ruby" | "dotnet" | "cpp" | "swift" | "dart" | "elixir" | "terraform";
 
 export type DeveloperWorkspace = {
@@ -527,7 +707,24 @@ export type DeveloperWorkspace = {
 	display_path: string,
 };
 
-export type DevelopmentListener = {
+export type DevelopmentListener = DevelopmentListener_Serialize | DevelopmentListener_Deserialize;
+
+export type DevelopmentListener_Deserialize = {
+	id: string,
+	port: number,
+	protocol: ListenerProtocol,
+	bind_address: string,
+	exposure: ListenerExposure,
+	pid: number,
+	server_name: string,
+	project_name: string | null,
+	working_directory: string | null,
+	started_at: number | null,
+	can_release: boolean,
+	blocked_reason: string | null,
+};
+
+export type DevelopmentListener_Serialize = {
 	id: string,
 	port: number,
 	protocol: ListenerProtocol,
@@ -552,7 +749,9 @@ export type DiagnosticsSnapshot = {
 	settings_corrupt_recovered: boolean,
 };
 
-export type DiskMetrics = {
+export type DiskMetrics = DiskMetrics_Serialize | DiskMetrics_Deserialize;
+
+export type DiskMetrics_Deserialize = {
 	mount_point: string,
 	total_bytes: number,
 	used_bytes: number,
@@ -561,7 +760,18 @@ export type DiskMetrics = {
 	percent_used: number | null,
 };
 
-export type DiskVolume = {
+export type DiskMetrics_Serialize = {
+	mount_point: string,
+	total_bytes: number,
+	used_bytes: number,
+	free_bytes: number,
+	available_bytes: number,
+	percent_used: number | null,
+};
+
+export type DiskVolume = DiskVolume_Serialize | DiskVolume_Deserialize;
+
+export type DiskVolume_Deserialize = {
 	name: string,
 	mount_point: string,
 	file_system: string,
@@ -574,7 +784,22 @@ export type DiskVolume = {
 	is_primary: boolean,
 };
 
-export type DockerContainerItem = {
+export type DiskVolume_Serialize = {
+	name: string,
+	mount_point: string,
+	file_system: string,
+	disk_type: string,
+	total_bytes: number,
+	used_bytes: number,
+	available_bytes: number,
+	percent_used: number | null,
+	is_removable: boolean,
+	is_primary: boolean,
+};
+
+export type DockerContainerItem = DockerContainerItem_Serialize | DockerContainerItem_Deserialize;
+
+export type DockerContainerItem_Deserialize = {
 	id: string,
 	name: string,
 	image: string,
@@ -583,7 +808,18 @@ export type DockerContainerItem = {
 	is_running: boolean,
 };
 
-export type DockerImageItem = {
+export type DockerContainerItem_Serialize = {
+	id: string,
+	name: string,
+	image: string,
+	state: string,
+	size_bytes: number,
+	is_running: boolean,
+};
+
+export type DockerImageItem = DockerImageItem_Serialize | DockerImageItem_Deserialize;
+
+export type DockerImageItem_Deserialize = {
 	id: string,
 	repository: string,
 	tag: string,
@@ -592,47 +828,106 @@ export type DockerImageItem = {
 	is_in_use: boolean,
 };
 
-export type DockerOverview = {
-	images: DockerResourceUsage,
-	containers: DockerResourceUsage,
-	volumes: DockerResourceUsage,
-	build_cache: DockerResourceUsage,
+export type DockerImageItem_Serialize = {
+	id: string,
+	repository: string,
+	tag: string,
+	size_bytes: number,
+	is_dangling: boolean,
+	is_in_use: boolean,
+};
+
+export type DockerOverview = DockerOverview_Serialize | DockerOverview_Deserialize;
+
+export type DockerOverview_Deserialize = {
+	images: DockerResourceUsage_Deserialize,
+	containers: DockerResourceUsage_Deserialize,
+	volumes: DockerResourceUsage_Deserialize,
+	build_cache: DockerResourceUsage_Deserialize,
 	total_bytes: number,
 	total_reclaimable_bytes: number,
 	safe_cleanable_bytes: number,
 };
 
-export type DockerResourceUsage = {
+export type DockerOverview_Serialize = {
+	images: DockerResourceUsage_Serialize,
+	containers: DockerResourceUsage_Serialize,
+	volumes: DockerResourceUsage_Serialize,
+	build_cache: DockerResourceUsage_Serialize,
+	total_bytes: number,
+	total_reclaimable_bytes: number,
+	safe_cleanable_bytes: number,
+};
+
+export type DockerResourceUsage = DockerResourceUsage_Serialize | DockerResourceUsage_Deserialize;
+
+export type DockerResourceUsage_Deserialize = {
 	total_bytes: number,
 	reclaimable_bytes: number,
 };
 
-export type DockerStatus = {
+export type DockerResourceUsage_Serialize = {
+	total_bytes: number,
+	reclaimable_bytes: number,
+};
+
+export type DockerStatus = DockerStatus_Serialize | DockerStatus_Deserialize;
+
+export type DockerStatus_Deserialize = {
 	is_available: boolean,
 	is_running: boolean,
 	version: string | null,
 	error_message: string | null,
-	overview: DockerOverview | null,
-	images: DockerImageItem[],
-	containers: DockerContainerItem[],
-	volumes: DockerVolumeItem[],
+	overview: DockerOverview_Deserialize | null,
+	images: DockerImageItem_Deserialize[],
+	containers: DockerContainerItem_Deserialize[],
+	volumes: DockerVolumeItem_Deserialize[],
 };
 
-export type DockerVolumeItem = {
+export type DockerStatus_Serialize = {
+	is_available: boolean,
+	is_running: boolean,
+	version: string | null,
+	error_message: string | null,
+	overview: DockerOverview_Serialize | null,
+	images: DockerImageItem_Serialize[],
+	containers: DockerContainerItem_Serialize[],
+	volumes: DockerVolumeItem_Serialize[],
+};
+
+export type DockerVolumeItem = DockerVolumeItem_Serialize | DockerVolumeItem_Deserialize;
+
+export type DockerVolumeItem_Deserialize = {
 	name: string,
 	driver: string,
 	size_bytes: number,
 	is_in_use: boolean,
 };
 
-export type FileSize = {
+export type DockerVolumeItem_Serialize = {
+	name: string,
+	driver: string,
+	size_bytes: number,
+	is_in_use: boolean,
+};
+
+export type FileSize = FileSize_Serialize | FileSize_Deserialize;
+
+export type FileSize_Deserialize = {
+	logical: number,
+	allocated: number | null,
+};
+
+export type FileSize_Serialize = {
 	logical: number,
 	allocated: number | null,
 };
 
 export type FindingSeverity = "info" | "warning" | "critical";
 
-export type GitChangeSummary = {
+export type GitChangeSummary = GitChangeSummary_Serialize | GitChangeSummary_Deserialize;
+
+export type GitChangeSummary_Deserialize = {
 	project_id: string,
 	baseline_head: string | null,
 	current_head: string | null,
@@ -647,7 +942,24 @@ export type GitChangeSummary = {
 	status_message: string,
 };
 
-export type IngestedAgentEvent = {
+export type GitChangeSummary_Serialize = {
+	project_id: string,
+	baseline_head: string | null,
+	current_head: string | null,
+	baseline_at: number,
+	added: number,
+	modified: number,
+	deleted: number,
+	renamed: number,
+	untracked: number,
+	changed_paths: string[],
+	available: boolean,
+	status_message: string,
+};
+
+export type IngestedAgentEvent = IngestedAgentEvent_Serialize | IngestedAgentEvent_Deserialize;
+
+export type IngestedAgentEvent_Deserialize = {
 	tool_id: string,
 	vendor_session_id: string,
 	cwd: string | null,
@@ -657,7 +969,34 @@ export type IngestedAgentEvent = {
 	attention_reason: AttentionReason | null,
 };
 
-export type InstalledApp = {
+export type IngestedAgentEvent_Serialize = {
+	tool_id: string,
+	vendor_session_id: string,
+	cwd: string | null,
+	lifecycle: AgentLifecycleEvent,
+	timestamp: number,
+	turn_id: string | null,
+	attention_reason: AttentionReason | null,
+};
+
+export type InstalledApp = InstalledApp_Serialize | InstalledApp_Deserialize;
+
+export type InstalledApp_Deserialize = {
+	id: string,
+	name: string,
+	bundle_id: string | null,
+	version: string | null,
+	display_path: string,
+	executable_name: string | null,
+	logical_size: number,
+	allocated_size: number,
+	modified_at: number | null,
+	install_source: AppInstallSource,
+	is_running: boolean,
+	is_system_protected: boolean,
+};
+
+export type InstalledApp_Serialize = {
 	id: string,
 	name: string,
 	bundle_id: string | null,
@@ -674,7 +1013,20 @@ export type InstalledApp = {
 
 export type LargeFileFilter = "all" | "installers";
 
-export type LargeFileItem = {
+export type LargeFileItem = LargeFileItem_Serialize | LargeFileItem_Deserialize;
+
+export type LargeFileItem_Deserialize = {
+	id: string,
+	name: string,
+	display_parent: string,
+	logical_size: number,
+	allocated_size: number,
+	modified_at: number | null,
+	kind: LargeFileKind,
+	extension: string | null,
+};
+
+export type LargeFileItem_Serialize = {
 	id: string,
 	name: string,
 	display_parent: string,
@@ -687,17 +1039,40 @@ export type LargeFileItem = {
 
 export type LargeFileKind = "video" | "archive" | "disk_image" | "installer" | "vm_image" | "ai_model" | "database" | "developer_artifact" | "other";
 
-export type LargeFileScanEvent = { type: "started"; scan_id: string } | { type: "root_started"; root: string } | { type: "progress"; root: string; entries_scanned: number; matches_found: number } | { type: "item_found"; item: LargeFileItem } | { type: "root_finished"; root: string } | { type: "finished"; result: LargeFileScanResult } | { type: "cancelled"; scan_id: string };
+export type LargeFileScanEvent = LargeFileScanEvent_Serialize | LargeFileScanEvent_Deserialize;
 
-export type LargeFileScanRequest = {
+export type LargeFileScanEvent_Deserialize = ({ type: "started"; scan_id: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; root?: never } | ({ type: "root_started"; root: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; scan_id?: never } | ({ type: "progress"; root: string; entries_scanned: number; matches_found: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "item_found"; item: LargeFileItem_Deserialize }) & { entries_scanned?: never; matches_found?: never; result?: never; root?: never; scan_id?: never } | ({ type: "root_finished"; root: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; scan_id?: never } | ({ type: "finished"; result: LargeFileScanResult_Deserialize }) & { entries_scanned?: never; item?: never; matches_found?: never; root?: never; scan_id?: never } | ({ type: "cancelled"; scan_id: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; root?: never };
+
+export type LargeFileScanEvent_Serialize = ({ type: "started"; scan_id: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; root?: never } | ({ type: "root_started"; root: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; scan_id?: never } | ({ type: "progress"; root: string; entries_scanned: number; matches_found: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "item_found"; item: LargeFileItem_Serialize }) & { entries_scanned?: never; matches_found?: never; result?: never; root?: never; scan_id?: never } | ({ type: "root_finished"; root: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; scan_id?: never } | ({ type: "finished"; result: LargeFileScanResult_Serialize }) & { entries_scanned?: never; item?: never; matches_found?: never; root?: never; scan_id?: never } | ({ type: "cancelled"; scan_id: string }) & { entries_scanned?: never; item?: never; matches_found?: never; result?: never; root?: never };
+
+export type LargeFileScanRequest = LargeFileScanRequest_Serialize | LargeFileScanRequest_Deserialize;
+
+export type LargeFileScanRequest_Deserialize = {
 	roots: string[],
 	min_size_bytes: number,
 	filter?: LargeFileFilter,
 };
 
-export type LargeFileScanResult = {
+export type LargeFileScanRequest_Serialize = {
+	roots: string[],
+	min_size_bytes: number,
+	filter: LargeFileFilter,
+};
+
+export type LargeFileScanResult = LargeFileScanResult_Serialize | LargeFileScanResult_Deserialize;
+
+export type LargeFileScanResult_Deserialize = {
 	scan_id: string,
-	items: LargeFileItem[],
+	items: LargeFileItem_Deserialize[],
+	entries_scanned: number,
+	skipped_entries: number,
+	cancelled: boolean,
+	truncated: boolean,
+};
+
+export type LargeFileScanResult_Serialize = {
+	scan_id: string,
+	items: LargeFileItem_Serialize[],
 	entries_scanned: number,
 	skipped_entries: number,
 	cancelled: boolean,
@@ -717,7 +1092,9 @@ export type LocalAlertBudget = {
 	enabled?: boolean,
 };
 
-export type LocalModelItem = {
+export type LocalModelItem = LocalModelItem_Serialize | LocalModelItem_Deserialize;
+
+export type LocalModelItem_Deserialize = {
 	id: string,
 	name: string,
 	source: ModelSource,
@@ -729,7 +1106,21 @@ export type LocalModelItem = {
 	last_modified: number | null,
 };
 
-export type ManualProviderUsage = {
+export type LocalModelItem_Serialize = {
+	id: string,
+	name: string,
+	source: ModelSource,
+	path: string,
+	size_bytes: number,
+	format: string | null,
+	parameter_size: string | null,
+	quantization: string | null,
+	last_modified: number | null,
+};
+
+export type ManualProviderUsage = ManualProviderUsage_Serialize | ManualProviderUsage_Deserialize;
+
+export type ManualProviderUsage_Deserialize = {
 	provider_id?: string,
 	spent?: MoneyMicros,
 	limit?: MoneyMicros | null,
@@ -737,7 +1128,17 @@ export type ManualProviderUsage = {
 	entered_at?: number,
 };
 
-export type MemoryMetrics = {
+export type ManualProviderUsage_Serialize = {
+	provider_id: string,
+	spent: MoneyMicros,
+	limit: MoneyMicros | null,
+	resets_at: number | null,
+	entered_at: number,
+};
+
+export type MemoryMetrics = MemoryMetrics_Serialize | MemoryMetrics_Deserialize;
+
+export type MemoryMetrics_Deserialize = {
 	total_bytes: number,
 	used_bytes: number,
 	available_bytes: number,
@@ -746,7 +1147,20 @@ export type MemoryMetrics = {
 	swap_used_bytes: number,
 	swap_total_bytes: number,
 	pressure: MemoryPressure,
-	top_processes: ProcessMemory[],
+	top_processes: ProcessMemory_Deserialize[],
+	timestamp: number,
+};
+
+export type MemoryMetrics_Serialize = {
+	total_bytes: number,
+	used_bytes: number,
+	available_bytes: number,
+	free_bytes: number,
+	compressed_bytes: number,
+	swap_used_bytes: number,
+	swap_total_bytes: number,
+	pressure: MemoryPressure,
+	top_processes: ProcessMemory_Serialize[],
 	timestamp: number,
 };
 
@@ -769,7 +1183,16 @@ export type NormalizedSafetyEvidence = {
 	domain: string | null,
 };
 
-export type ObservationPeriod = {
+export type ObservationPeriod = ObservationPeriod_Serialize | ObservationPeriod_Deserialize;
+
+export type ObservationPeriod_Deserialize = {
+	starts_at: number | null,
+	ends_at: number | null,
+	resets_at: number | null,
+	label: string,
+};
+
+export type ObservationPeriod_Serialize = {
 	starts_at: number | null,
 	ends_at: number | null,
 	resets_at: number | null,
@@ -782,15 +1205,34 @@ export type ObservationScope = "subscription" | "api_key" | "project" | "organiz
 
 export type ObservationSourceKind = "live_authoritative" | "live_quota" | "local_estimate" | "manual";
 
-export type PlanPreview = {
+export type PlanPreview = PlanPreview_Serialize | PlanPreview_Deserialize;
+
+export type PlanPreview_Deserialize = {
 	id: string,
-	targets: PlanTargetPreview[],
+	targets: PlanTargetPreview_Deserialize[],
 	expected_reclaim_bytes: number,
-	risk: RiskSummary,
+	risk: RiskSummary_Deserialize,
 	expires_at: number,
 };
 
-export type PlanTargetPreview = {
+export type PlanPreview_Serialize = {
+	id: string,
+	targets: PlanTargetPreview_Serialize[],
+	expected_reclaim_bytes: number,
+	risk: RiskSummary_Serialize,
+	expires_at: number,
+};
+
+export type PlanTargetPreview = PlanTargetPreview_Serialize | PlanTargetPreview_Deserialize;
+
+export type PlanTargetPreview_Deserialize = {
+	item_id: string,
+	name: string,
+	expected_bytes: number,
+	risk: RiskTier,
+};
+
+export type PlanTargetPreview_Serialize = {
 	item_id: string,
 	name: string,
 	expected_bytes: number,
@@ -858,9 +1300,20 @@ export type PowerCondition = "always" | "ac_power_only";
 
 export type PowerSourceType = "ac" | "battery" | "unknown";
 
-export type ProcessMemory = {
+export type ProcessMemory = ProcessMemory_Serialize | ProcessMemory_Deserialize;
+
+export type ProcessMemory_Deserialize = {
 	pid: number,
 	pids?: number[],
+	name: string,
+	memory_bytes: number,
+	process_count: number,
+	can_terminate: boolean,
+};
+
+export type ProcessMemory_Serialize = {
+	pid: number,
+	pids: number[],
 	name: string,
 	memory_bytes: number,
 	process_count: number,
@@ -901,27 +1354,56 @@ export type ProjectIdentity = {
 	is_detached: boolean,
 };
 
-export type ProviderMetric = {
+export type ProviderMetric = ProviderMetric_Serialize | ProviderMetric_Deserialize;
+
+export type ProviderMetric_Deserialize = {
 	label: string,
 	tokens: number | null,
 	cost: MoneyMicros | null,
 	used_basis_points: number | null,
 };
 
-export type ProviderObservation = {
+export type ProviderMetric_Serialize = {
+	label: string,
+	tokens: number | null,
+	cost: MoneyMicros | null,
+	used_basis_points: number | null,
+};
+
+export type ProviderObservation = ProviderObservation_Serialize | ProviderObservation_Deserialize;
+
+export type ProviderObservation_Deserialize = {
 	provider_id: string,
 	display_name: string,
 	source_kind: ObservationSourceKind,
 	source_id: string,
 	scope: ObservationScope,
 	observed_at: number,
-	period: ObservationPeriod,
+	period: ObservationPeriod_Deserialize,
 	fresh_for_seconds: number,
 	quality: ObservationQuality,
 	installed: boolean,
 	connected: boolean,
 	status_message: string,
-	metrics: ProviderMetric[],
+	metrics: ProviderMetric_Deserialize[],
+	action_url: string | null,
+	partial_error: string | null,
+};
+
+export type ProviderObservation_Serialize = {
+	provider_id: string,
+	display_name: string,
+	source_kind: ObservationSourceKind,
+	source_id: string,
+	scope: ObservationScope,
+	observed_at: number,
+	period: ObservationPeriod_Serialize,
+	fresh_for_seconds: number,
+	quality: ObservationQuality,
+	installed: boolean,
+	connected: boolean,
+	status_message: string,
+	metrics: ProviderMetric_Serialize[],
 	action_url: string | null,
 	partial_error: string | null,
 };
@@ -980,17 +1462,27 @@ export type Recommendation_Serialize = {
 	destination: DashboardRoute_Serialize,
 };
 
-export type ReleaseDevelopmentListenerResult = {
+export type ReleaseDevelopmentListenerResult = ReleaseDevelopmentListenerResult_Serialize | ReleaseDevelopmentListenerResult_Deserialize;
+
+export type ReleaseDevelopmentListenerResult_Deserialize = {
 	port: number,
 	outcome: ReleaseOutcome,
-	listener: DevelopmentListener | null,
+	listener: DevelopmentListener_Deserialize | null,
+};
+
+export type ReleaseDevelopmentListenerResult_Serialize = {
+	port: number,
+	outcome: ReleaseOutcome,
+	listener: DevelopmentListener_Serialize | null,
 };
 
 export type ReleaseMode = "graceful" | "force";
 
 export type ReleaseOutcome = "released" | "still_listening" | "ownership_changed";
 
-export type ResourceAttribution = {
+export type ResourceAttribution = ResourceAttribution_Serialize | ResourceAttribution_Deserialize;
+
+export type ResourceAttribution_Deserialize = {
 	session_id: string,
 	project_id: string | null,
 	tool_name: string,
@@ -1005,7 +1497,33 @@ export type ResourceAttribution = {
 	mutable_actions_allowed: boolean,
 };
 
-export type RiskSummary = {
+export type ResourceAttribution_Serialize = {
+	session_id: string,
+	project_id: string | null,
+	tool_name: string,
+	cpu_percent: number | null,
+	memory_bytes: number,
+	process_count: number,
+	duration_seconds: number,
+	open_dev_ports: number,
+	power_eligible: boolean,
+	confidence: string,
+	reason: string,
+	mutable_actions_allowed: boolean,
+};
+
+export type RiskSummary = RiskSummary_Serialize | RiskSummary_Deserialize;
+
+export type RiskSummary_Deserialize = {
+	safe_count: number,
+	rebuild_count: number,
+	manual_count: number,
+	safe_bytes: number,
+	rebuild_bytes: number,
+	manual_bytes: number,
+};
+
+export type RiskSummary_Serialize = {
 	safe_count: number,
 	rebuild_count: number,
 	manual_count: number,
@@ -1016,7 +1534,11 @@ export type RiskSummary = {
 
 export type RiskTier = "safe" | "rebuild" | "manual";
 
-export type SafetyFinding = {
+export type SafetyFinding = SafetyFinding_Serialize | SafetyFinding_Deserialize;
+
+export type SafetyFindingKind = "secrets_exposure" | "tool_permissions" | "mcp_servers" | "protected_paths" | "git_changes";
+
+export type SafetyFinding_Deserialize = {
 	id: string,
 	project_id: string,
 	kind: SafetyFindingKind,
@@ -1032,27 +1554,58 @@ export type SafetyFinding = {
 	normalized_evidence: NormalizedSafetyEvidence | null,
 };
 
-export type SafetyFindingKind = "secrets_exposure" | "tool_permissions" | "mcp_servers" | "protected_paths" | "git_changes";
+export type SafetyFinding_Serialize = {
+	id: string,
+	project_id: string,
+	kind: SafetyFindingKind,
+	severity: FindingSeverity,
+	evidence_type: string,
+	adapter: string,
+	relative_path: string | null,
+	line_start: number | null,
+	line_end: number | null,
+	observed_at: number,
+	remediation: string,
+	dismissed: boolean,
+	normalized_evidence: NormalizedSafetyEvidence | null,
+};
 
-export type SafetySnapshot = {
+export type SafetySnapshot = SafetySnapshot_Serialize | SafetySnapshot_Deserialize;
+
+export type SafetySnapshot_Deserialize = {
 	observed_at: number,
 	quality: ObservationQuality,
-	findings: SafetyFinding[],
+	findings: SafetyFinding_Deserialize[],
 	scanned_files: number,
 	skipped_files: number,
 	status_message: string,
 };
 
-export type ScanEvent = { type: "Started"; scan_id: string } | { type: "CategoryStarted"; category: Category } | { type: "ItemFound"; item: ScanItem } | { type: "CategoryFinished"; category: Category; bytes: number; item_count: number } | { type: "Finished"; result: ScanResult } | { type: "Error"; message: string };
+export type SafetySnapshot_Serialize = {
+	observed_at: number,
+	quality: ObservationQuality,
+	findings: SafetyFinding_Serialize[],
+	scanned_files: number,
+	skipped_files: number,
+	status_message: string,
+};
 
-export type ScanItem = {
+export type ScanEvent = ScanEvent_Serialize | ScanEvent_Deserialize;
+
+export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; message?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; scan_id?: never } | ({ type: "Error"; message: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never; scan_id?: never };
+
+export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; message?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; scan_id?: never } | ({ type: "Error"; message: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never; scan_id?: never };
+
+export type ScanItem = ScanItem_Serialize | ScanItem_Deserialize;
+
+export type ScanItem_Deserialize = {
 	id: string,
 	signature_id: string,
 	name: string,
 	category: Category,
 	risk: RiskTier,
 	path: string,
-	size: FileSize,
+	size: FileSize_Deserialize,
 	file_count: number,
 	description: string,
 	is_selected: boolean,
@@ -1060,11 +1613,39 @@ export type ScanItem = {
 	exists: boolean,
 };
 
-export type ScanResult = {
+export type ScanItem_Serialize = {
+	id: string,
+	signature_id: string,
+	name: string,
+	category: Category,
+	risk: RiskTier,
+	path: string,
+	size: FileSize_Serialize,
+	file_count: number,
+	description: string,
+	is_selected: boolean,
+	last_modified: number | null,
+	exists: boolean,
+};
+
+export type ScanResult = ScanResult_Serialize | ScanResult_Deserialize;
+
+export type ScanResult_Deserialize = {
 	scan_id: string,
 	started_at: number,
 	finished_at: number,
-	categories: CategoryResult[],
+	categories: CategoryResult_Deserialize[],
+	total_bytes: number,
+	safe_bytes: number,
+	rebuild_bytes: number,
+	manual_bytes: number,
+};
+
+export type ScanResult_Serialize = {
+	scan_id: string,
+	started_at: number,
+	finished_at: number,
+	categories: CategoryResult_Serialize[],
 	total_bytes: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
@@ -1085,7 +1666,9 @@ export type TrashItemResult = {
 	message: string,
 };
 
-export type TrashPlanPreview = {
+export type TrashPlanPreview = TrashPlanPreview_Serialize | TrashPlanPreview_Deserialize;
+
+export type TrashPlanPreview_Deserialize = {
 	id: string,
 	item_count: number,
 	logical_size: number,
@@ -1093,7 +1676,17 @@ export type TrashPlanPreview = {
 	expires_at: number,
 };
 
-export type TrashResult = {
+export type TrashPlanPreview_Serialize = {
+	id: string,
+	item_count: number,
+	logical_size: number,
+	allocated_size: number,
+	expires_at: number,
+};
+
+export type TrashResult = TrashResult_Serialize | TrashResult_Deserialize;
+
+export type TrashResult_Deserialize = {
 	moved_count: number,
 	failed_count: number,
 	skipped_count: number,
@@ -1101,7 +1694,28 @@ export type TrashResult = {
 	items: TrashItemResult[],
 };
 
-export type UsageSummary = {
+export type TrashResult_Serialize = {
+	moved_count: number,
+	failed_count: number,
+	skipped_count: number,
+	moved_allocated_size: number,
+	items: TrashItemResult[],
+};
+
+export type UsageSummary = UsageSummary_Serialize | UsageSummary_Deserialize;
+
+export type UsageSummary_Deserialize = {
+	lifetime_tokens: number | null,
+	last_7d_tokens: number | null,
+	peak_daily_tokens: number | null,
+	current_streak_days: number | null,
+	local_sessions: number | null,
+	local_cost_usd: number | null,
+	usage_usd: number | null,
+	limit_remaining_usd: number | null,
+};
+
+export type UsageSummary_Serialize = {
 	lifetime_tokens: number | null,
 	last_7d_tokens: number | null,
 	peak_daily_tokens: number | null,
@@ -1114,7 +1728,15 @@ export type UsageSummary = {
 
 export type UsageSupport = "live" | "local" | "manual";
 
-export type UsageWindow = {
+export type UsageWindow = UsageWindow_Serialize | UsageWindow_Deserialize;
+
+export type UsageWindow_Deserialize = {
+	label: string,
+	used_percent: number | null,
+	resets_at: number | null,
+};
+
+export type UsageWindow_Serialize = {
 	label: string,
 	used_percent: number | null,
 	resets_at: number | null,
@@ -1139,7 +1761,7 @@ export type ZenithSettings_Deserialize = {
 	dashboard_tabs?: DashboardTab_Deserialize[],
 	dashboard_tabs_revision?: number,
 	sidebar_collapsed?: boolean,
-	ai_control?: AiControlPreferences,
+	ai_control?: AiControlPreferences_Deserialize,
 	agent_notifications?: AgentNotificationPreferences,
 };
 
@@ -1160,7 +1782,7 @@ export type ZenithSettings_Serialize = {
 	dashboard_tabs: DashboardTab_Serialize[],
 	dashboard_tabs_revision: number,
 	sidebar_collapsed: boolean,
-	ai_control: AiControlPreferences,
+	ai_control: AiControlPreferences_Serialize,
 	agent_notifications: AgentNotificationPreferences,
 };
 

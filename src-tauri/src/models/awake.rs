@@ -100,6 +100,8 @@ pub struct AwakeState {
     pub trigger_source: Option<String>,
     pub active_process_name: Option<String>,
     pub active_rule_id: Option<String>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub manual_expires_at: Option<u64>,
     pub active_rules_count: usize,
     pub power_source: PowerSourceType,

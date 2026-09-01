@@ -5,6 +5,8 @@ pub struct DockerImageItem {
     pub id: String,
     pub repository: String,
     pub tag: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub size_bytes: u64,
     pub is_dangling: bool,
     pub is_in_use: bool,
@@ -16,6 +18,8 @@ pub struct DockerContainerItem {
     pub name: String,
     pub image: String,
     pub state: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub size_bytes: u64,
     pub is_running: bool,
 }
@@ -24,6 +28,8 @@ pub struct DockerContainerItem {
 pub struct DockerVolumeItem {
     pub name: String,
     pub driver: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub size_bytes: u64,
     pub is_in_use: bool,
 }
@@ -32,13 +38,19 @@ pub struct DockerVolumeItem {
 pub struct DockerBuildCacheItem {
     pub id: String,
     pub cache_type: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub size_bytes: u64,
     pub is_in_use: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 pub struct DockerResourceUsage {
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub reclaimable_bytes: u64,
 }
 
@@ -48,8 +60,14 @@ pub struct DockerOverview {
     pub containers: DockerResourceUsage,
     pub volumes: DockerResourceUsage,
     pub build_cache: DockerResourceUsage,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_reclaimable_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub safe_cleanable_bytes: u64,
 }
 

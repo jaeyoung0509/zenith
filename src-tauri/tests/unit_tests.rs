@@ -2,7 +2,9 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 use zenith_lib::docker::DockerAdapter;
-use zenith_lib::models::{AwakeBehavior, Category, CleanStrategy, RiskTier, Signature};
+use zenith_lib::models::{
+    AwakeBehavior, Category, CleanStrategy, DiskMetrics, RiskTier, Signature,
+};
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
@@ -403,21 +405,16 @@ fn test_windows_dev_ports_classification_defense() {
 }
 
 #[test]
-fn test_u64_ipc_fields_within_safe_integer_bounds() {
-    // JavaScript Number.MAX_SAFE_INTEGER is (2^53 - 1) = 9_007_199_254_740_991.
-    // Tauri Specta converts u64 to TypeScript `number` via `dangerously_cast_bigints_to_number()`.
-    // All Zenith byte counts, epoch timestamps, and item counts must fit within this range.
-    const MAX_SAFE_INTEGER: u64 = (1u64 << 53) - 1;
+fn test_real_ipc_model_rejects_unsafe_u64_values() {
+    let metrics = DiskMetrics {
+        mount_point: "/".into(),
+        total_bytes: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        used_bytes: 0,
+        free_bytes: 0,
+        available_bytes: 0,
+        percent_used: 0.0,
+    };
 
-    // 100 Terabytes in bytes (realistic upper bound for large files / developer artifacts on workstation)
-    let hundred_terabytes: u64 = 100 * 1024 * 1024 * 1024 * 1024;
-    assert!(hundred_terabytes < MAX_SAFE_INTEGER);
-
-    // Unix epoch seconds up to year 3000
-    let year_3000_seconds: u64 = 32_503_680_000;
-    assert!(year_3000_seconds < MAX_SAFE_INTEGER);
-
-    // 10 million filesystem entries
-    let ten_million_entries: u64 = 10_000_000;
-    assert!(ten_million_entries < MAX_SAFE_INTEGER);
+    let error = serde_json::to_string(&metrics).unwrap_err().to_string();
+    assert!(error.contains("Number.MAX_SAFE_INTEGER"));
 }

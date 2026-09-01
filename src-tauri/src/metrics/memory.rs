@@ -24,6 +24,14 @@ impl MemorySampler {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.system
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
     /// Captures current system memory metrics and top resource-consuming developer processes.
     pub fn sample(&self) -> MemoryMetrics {
         let (

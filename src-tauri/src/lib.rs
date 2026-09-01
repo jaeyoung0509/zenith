@@ -8,6 +8,7 @@ pub mod dev_ports;
 pub mod developer_artifacts;
 pub mod diagnostics;
 pub mod docker;
+pub mod ipc_numeric;
 pub mod large_files;
 pub mod metrics;
 pub mod models;

@@ -45,8 +45,10 @@ macOS menu bar / Windows system tray
 
 The windows have separate frontend runtimes and stores. Shared authority and
 coordination therefore live in Rust `AppState`, backend-owned workflow states, or
-Rust process state rather than in a browser singleton. Lock acquisitions recover
-from poisoning (`unwrap_or_else(|p| p.into_inner())`) to guarantee reliability.
+Rust process state rather than in a browser singleton. Lifecycle-owned storage
+state uses poison recovery for bounded inventories, plans, workspace
+registrations, and cancellation handles. Other domain locks fail closed when
+their state cannot be trusted.
 
 ## Platform capability contract
 
@@ -59,12 +61,21 @@ that are unavailable on the current platform. A `read_only` capability may
 continue to expose inspection metrics, but mutating controls require an
 `available` capability.
 
-Both macOS and Windows x64 implement the full capability contract across all
-eleven core features, providing safe, native implementations tailored to each OS.
+Both macOS and Windows x64 implement the capability contract across all thirteen
+core features. Platform-specific actions, including workspace selection, use
+native adapters tailored to each OS; unsupported platforms report unavailable
+capabilities instead of exposing nonfunctional controls.
+
+Workspace selection uses `NSOpenPanel` on macOS and the Windows Shell COM folder
+picker through a static PowerShell script on Windows. The Windows adapter never
+interpolates user-controlled text into the script, requests UTF-8 output, and
+maps picker cancellation to `None` just like the macOS adapter.
 
 ## Repository map
 
-- `src-tauri/src/commands`: narrow IPC boundary and shared application state.
+- `src-tauri/src/commands`: narrow generic IPC boundary. `mod.rs` only composes
+  domain exports; `ai.rs`, `cleanup.rs`, and `system.rs` own handlers, while
+  `state.rs` and `support.rs` own shared state and helpers.
 - `src-tauri/src/platform`: platform capability contract and native provider
   composition seams.
 - `src-tauri/src/scanner`: signature-driven discovery and size measurement.
@@ -83,7 +94,7 @@ eleven core features, providing safe, native implementations tailored to each OS
   for user-reviewed files and apps.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
   for resources that must not be treated as arbitrary files.
-- `src-tauri/src/metrics` and `src-tauri/src/power`: macOS system integration.
+- `src-tauri/src/metrics` and `src-tauri/src/power`: platform system integration.
 - `src-tauri/src/dev_ports`: bounded TCP-listener discovery, conservative
   development/testing-tool classification, opaque lease storage, TOCTOU validation,
   and exact-process graceful/force signaling.
@@ -283,6 +294,13 @@ The quick window is persistent but inactive while hidden:
 Store constructors do not start I/O. A route or an explicit activation event
 owns refresh and cleanup of recurring work.
 
+Polling stores use reference-counted subscribers: the first subscriber starts
+the timer and the last subscriber stops it. Repeated starts are idempotent, one
+consumer cannot stop another consumer's polling, and fake-timer tests verify
+the lifecycle without wall-clock sleeps. Backend cancellation registries are
+similarly lifecycle-owned: entries expire after a TTL, are capped at 64, and
+are removed after success, cancellation, or scanner failure.
+
 Development-port discovery runs independently from the 2.5-second memory
 sampler. The standalone Development Servers route refreshes development and
 verified local testing-tool listeners at a
@@ -372,12 +390,31 @@ capability entry.
 ### IPC numeric safety contract
 
 Zenith binds Rust structs to TypeScript via Tauri Specta using
-`dangerously_cast_bigints_to_number()`. All exposed `u64` values—including
-filesystem byte capacities, allocated sizes, Unix epoch timestamps, file counts,
-and port numbers—are strictly bounded within JavaScript `Number.MAX_SAFE_INTEGER`
-($2^{53} - 1 \approx 9.007 \times 10^{15}$). Even high-capacity workstation
-storage (e.g. 100 TB = $1.099 \times 10^{14}$ bytes) and timestamps into the year
-3000 remain safely within range without floating-point precision loss.
+`dangerously_cast_bigints_to_number()`. Every serialized `u64` and `Option<u64>`
+field uses the shared `ipc_numeric` serde boundary. Values up to JavaScript
+`Number.MAX_SAFE_INTEGER` ($2^{53} - 1$) round-trip as numbers; larger values are
+rejected during serialization or deserialization instead of being rounded.
+The paired Specta annotation tells binding generation that the wire type remains
+TypeScript `number`. Boundary tests exercise both the shared serializer and real
+IPC model payloads.
+
+### Browser-preview contract
+
+Browser preview is an alternate transport for the same typed frontend API, not
+a second implementation of backend policy. Domain fixtures live under
+`src/lib/api/mocks`, return fresh value copies, and preserve native response and
+error shapes. Contract tests compare the exact top-level keys of native and mock
+APIs, including the dedicated storage workflow surface, so adding a native
+method requires an intentional mock decision.
+
+### CI dependency graph
+
+The shared Linux frontend job exports Specta bindings, checks binding and lock
+file drift, runs Svelte/Vitest, builds `dist`, and uploads that verified frontend
+artifact. macOS and Windows x64 run Rust format, Clippy, tests, and check in
+parallel. Each packaging smoke job depends on the shared frontend artifact and
+its matching Rust job, proving that the platform bundle embeds the exact tested
+frontend without rerunning the same frontend suite on every OS.
 
 ## External tools
 

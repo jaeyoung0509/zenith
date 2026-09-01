@@ -21,9 +21,20 @@ safety conventions below when changing Zenith.
 
 - Keep Tauri commands thin. Put scanning, cleanup, metrics, power management,
   and provider integrations in dedicated Rust modules and expose typed results.
+- Keep `src-tauri/src/commands/mod.rs` as composition only. Add handlers to the
+  closest domain module (`ai.rs`, `cleanup.rs`, or `system.rs`); dedicated
+  storage workflows remain in `storage_commands.rs`. Shared command state and
+  helpers belong in `state.rs` and `support.rs`, not in the composition root.
 - Run blocking filesystem, process, and HTTP work through
   `tauri::async_runtime::spawn_blocking`. Use Tauri channels for operations that
   report progress over time.
+- Every serialized `u64` or `Option<u64>` that crosses IPC must use the shared
+  `ipc_numeric` serde adapter plus a matching explicit Specta type annotation.
+  Add a real model serialization regression test; never justify an unguarded
+  integer with an assumed workstation-size bound.
+- Lifecycle-owned registries such as cancellation handles must have a TTL and
+  hard entry cap, recover poisoned locks where their state is disposable, and
+  remove entries on success, cancellation, and error paths.
 - Keep all `invoke` calls in `src/lib/utils/tauri.ts`. Dedicated storage-management workflows (Large Files Inspector and App Uninstaller) are the sanctioned exception: their native/browser-preview split lives in `src/lib/api/storage.ts` with selection via the shared `isTauri()` from `src/lib/api/index.ts`. Every other browser-previewed feature must have a deterministic mock guarded by `isTauri()`. See `docs/ARCHITECTURE.md` for the exact extension path.
 - Register every application command in `src-tauri/build.rs` and grant it only to the windows that need it through `src-tauri/capabilities`. Destructive adapters belong to the main-window capability, not the quick panel.
 - Never read or expose OAuth credential files directly. Prefer an official CLI
@@ -53,6 +64,9 @@ safety conventions below when changing Zenith.
 - Native app selection for Keep Awake starts in `/Applications`, reads
   `CFBundleExecutable`, and returns only the display name, executable name, and
   bundle path. Cancellation is a normal empty result, not an error.
+- Windows native pickers must use static, non-interpolated PowerShell/COM
+  scripts, explicitly decode UTF-8 output, and treat user cancellation as an
+  empty result rather than an error.
 
 ## Svelte conventions
 
@@ -68,6 +82,18 @@ safety conventions below when changing Zenith.
   loading, empty, error, disabled, hover, and focus states.
 - Do not duplicate backend business rules in the UI. Browser mocks should match
   the real command response shape, not become a second implementation.
+- Keep browser-preview fixtures in domain files under `src/lib/api/mocks` and
+  preserve exact top-level key parity with the native API via contract tests.
+- Recurring store work must be owned by explicit subscribers. Use reference
+  counting so one consumer cannot stop another, start no timer in constructors,
+  and cover start/stop/idempotency with fake-timer tests.
+
+## CI boundaries
+
+- Keep frontend typecheck, Vitest, binding drift, and Vite build in the shared
+  frontend job. macOS and Windows Rust jobs run in parallel; packaging jobs may
+  consume the verified frontend artifact only after their platform Rust job
+  succeeds. Do not duplicate the frontend test suite in each platform job.
 
 ## Cleanup safety invariants
 

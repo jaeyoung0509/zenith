@@ -21,13 +21,21 @@ use tauri::State;
 
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
 const PLAN_TTL_SECS: u64 = 5 * 60;
+const CANCELLATION_TTL_SECS: u64 = 15 * 60;
+const MAX_ACTIVE_CANCELLATIONS: usize = 64;
+
+#[derive(Clone)]
+struct CancellationEntry {
+    signal: Arc<AtomicBool>,
+    created_at: u64,
+}
 
 #[derive(Default)]
 pub struct StorageWorkflowState {
     pub large_file_inventory: Mutex<Option<LargeFileInventory>>,
-    pub large_file_cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    large_file_cancel: Mutex<HashMap<String, CancellationEntry>>,
     pub developer_artifact_inventory: Mutex<Option<DeveloperArtifactInventory>>,
-    pub developer_artifact_cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    developer_artifact_cancel: Mutex<HashMap<String, CancellationEntry>>,
     pub app_inventory: Mutex<Option<AppInventory>>,
     pub app_inspection: Mutex<Option<AppInspectionRecord>>,
     pub trash_plans: Mutex<HashMap<uuid::Uuid, TrashPlan>>,
@@ -74,6 +82,73 @@ impl StorageWorkflowState {
         }
         plans.insert(plan.id, plan);
     }
+
+    fn register_large_file_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
+        store_cancellation(&self.large_file_cancel, scan_id, signal);
+    }
+
+    fn register_developer_artifact_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
+        store_cancellation(&self.developer_artifact_cancel, scan_id, signal);
+    }
+
+    fn remove_large_file_cancel(&self, scan_id: &str) {
+        remove_cancellation(&self.large_file_cancel, scan_id);
+    }
+
+    fn remove_developer_artifact_cancel(&self, scan_id: &str) {
+        remove_cancellation(&self.developer_artifact_cancel, scan_id);
+    }
+
+    fn large_file_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
+        cancellation_signal(&self.large_file_cancel, scan_id)
+    }
+
+    fn developer_artifact_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
+        cancellation_signal(&self.developer_artifact_cancel, scan_id)
+    }
+}
+
+fn store_cancellation(
+    store: &Mutex<HashMap<String, CancellationEntry>>,
+    scan_id: String,
+    signal: Arc<AtomicBool>,
+) {
+    let now = unix_timestamp();
+    let mut entries = store.lock().unwrap_or_else(|p| p.into_inner());
+    entries.retain(|_, entry| is_fresh_at(entry.created_at, CANCELLATION_TTL_SECS, now));
+    if entries.len() >= MAX_ACTIVE_CANCELLATIONS {
+        if let Some(oldest_id) = entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.created_at)
+            .map(|(id, _)| id.clone())
+        {
+            entries.remove(&oldest_id);
+        }
+    }
+    entries.insert(
+        scan_id,
+        CancellationEntry {
+            signal,
+            created_at: now,
+        },
+    );
+}
+
+fn remove_cancellation(store: &Mutex<HashMap<String, CancellationEntry>>, scan_id: &str) {
+    store
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(scan_id);
+}
+
+fn cancellation_signal(
+    store: &Mutex<HashMap<String, CancellationEntry>>,
+    scan_id: &str,
+) -> Option<Arc<AtomicBool>> {
+    let now = unix_timestamp();
+    let mut entries = store.lock().unwrap_or_else(|p| p.into_inner());
+    entries.retain(|_, entry| is_fresh_at(entry.created_at, CANCELLATION_TTL_SECS, now));
+    entries.get(scan_id).map(|entry| entry.signal.clone())
 }
 
 fn is_fresh_at(created_at: u64, ttl_secs: u64, now: u64) -> bool {
@@ -95,25 +170,23 @@ pub async fn start_large_file_scan(
     let result = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run(|| {
             let mut emitted_result: Option<LargeFileScanResult> = None;
+            let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
-            let inventory = LargeFileScanner::scan(&request, cancel_for_worker, |event| {
+            let inventory_result = LargeFileScanner::scan(&request, cancel_for_worker, |event| {
                 if let LargeFileScanEvent::Started { scan_id } = &event {
+                    active_scan_id = Some(scan_id.clone());
                     worker_storage_state
-                        .large_file_cancel
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .insert(scan_id.clone(), cancel_for_event.clone());
+                        .register_large_file_cancel(scan_id.clone(), cancel_for_event.clone());
                 }
                 if let LargeFileScanEvent::Finished { result } = &event {
                     emitted_result = Some(result.clone());
                 }
                 let _ = on_event.send(event);
-            })?;
-            worker_storage_state
-                .large_file_cancel
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&inventory.scan_id);
+            });
+            if let Some(scan_id) = active_scan_id.as_deref() {
+                worker_storage_state.remove_large_file_cancel(scan_id);
+            }
+            let inventory = inventory_result?;
             let result = emitted_result.unwrap_or_else(|| {
                 let mut items = inventory
                     .records
@@ -189,30 +262,30 @@ pub async fn start_developer_artifact_scan(
     let result = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run(|| {
             let mut emitted_result: Option<DeveloperArtifactScanResult> = None;
+            let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
-            let inventory = DeveloperArtifactScanner::scan(
+            let inventory_result = DeveloperArtifactScanner::scan(
                 &workspace_ids,
                 &worker_storage_state.workspaces,
                 cancel_for_worker,
                 |event| {
                     if let DeveloperArtifactScanEvent::Started { scan_id, .. } = &event {
-                        worker_storage_state
-                            .developer_artifact_cancel
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .insert(scan_id.clone(), cancel_for_event.clone());
+                        active_scan_id = Some(scan_id.clone());
+                        worker_storage_state.register_developer_artifact_cancel(
+                            scan_id.clone(),
+                            cancel_for_event.clone(),
+                        );
                     }
                     if let DeveloperArtifactScanEvent::Finished { result } = &event {
                         emitted_result = Some(result.clone());
                     }
                     let _ = on_event.send(event);
                 },
-            )?;
-            worker_storage_state
-                .developer_artifact_cancel
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&inventory.scan_id);
+            );
+            if let Some(scan_id) = active_scan_id.as_deref() {
+                worker_storage_state.remove_developer_artifact_cancel(scan_id);
+            }
+            let inventory = inventory_result?;
             let result = emitted_result.unwrap_or_else(|| result_from_inventory(&inventory));
             *worker_storage_state
                 .developer_artifact_inventory
@@ -234,11 +307,7 @@ pub fn cancel_developer_artifact_scan(
 ) -> Result<(), String> {
     let cancel = state
         .storage_state
-        .developer_artifact_cancel
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(&scan_id)
-        .cloned()
+        .developer_artifact_cancel_signal(&scan_id)
         .ok_or_else(|| "Developer artifact scan is no longer running".to_string())?;
     cancel.store(true, Ordering::Relaxed);
     Ok(())
@@ -271,11 +340,7 @@ pub fn prepare_developer_artifact_cleanup(
 pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let cancel = state
         .storage_state
-        .large_file_cancel
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(&scan_id)
-        .cloned()
+        .large_file_cancel_signal(&scan_id)
         .ok_or_else(|| "Large-file scan is no longer running".to_string())?;
     cancel.store(true, Ordering::Relaxed);
     Ok(())
@@ -423,7 +488,12 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_fresh_at, INVENTORY_TTL_SECS, PLAN_TTL_SECS};
+    use super::{
+        is_fresh_at, StorageWorkflowState, INVENTORY_TTL_SECS, MAX_ACTIVE_CANCELLATIONS,
+        PLAN_TTL_SECS,
+    };
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     #[test]
     fn inventory_and_plan_ttl_boundaries_fail_closed() {
@@ -448,5 +518,36 @@ mod tests {
         assert!(is_fresh_at(now - (PLAN_TTL_SECS - 1), PLAN_TTL_SECS, now));
         assert!(!is_fresh_at(now - PLAN_TTL_SECS, PLAN_TTL_SECS, now));
         assert!(!is_fresh_at(now - (PLAN_TTL_SECS + 1), PLAN_TTL_SECS, now));
+    }
+
+    #[test]
+    fn cancellation_registries_are_bounded_and_removable() {
+        let storage = StorageWorkflowState::new();
+        for index in 0..=MAX_ACTIVE_CANCELLATIONS {
+            storage.register_large_file_cancel(
+                format!("scan-{index}"),
+                Arc::new(AtomicBool::new(false)),
+            );
+        }
+
+        assert_eq!(
+            storage
+                .large_file_cancel
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .len(),
+            MAX_ACTIVE_CANCELLATIONS
+        );
+        storage.register_large_file_cancel(
+            "explicit-removal".into(),
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(storage
+            .large_file_cancel_signal("explicit-removal")
+            .is_some());
+        storage.remove_large_file_cancel("explicit-removal");
+        assert!(storage
+            .large_file_cancel_signal("explicit-removal")
+            .is_none());
     }
 }

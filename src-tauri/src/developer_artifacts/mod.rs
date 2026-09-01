@@ -1372,6 +1372,17 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_WORKSPACE_PICKER_SCRIPT: &str = r#"
+    $ErrorActionPreference = 'Stop'
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $shell = New-Object -ComObject Shell.Application
+    $folder = $shell.BrowseForFolder(0, 'Choose a developer workspace', 0, 0)
+    if ($null -ne $folder) {
+        [Console]::Write($folder.Self.Path)
+    }
+"#;
+
 fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -1396,9 +1407,38 @@ fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
         }
         Ok(Some(PathBuf::from(path)))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        Err("Developer workspace selection is currently available on macOS only".to_string())
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-STA",
+                "-Command",
+                WINDOWS_WORKSPACE_PICKER_SCRIPT,
+            ])
+            .output()
+            .map_err(|error| format!("Could not open the workspace picker: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if detail.is_empty() {
+                "Could not open the workspace picker".to_string()
+            } else {
+                detail
+            });
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(PathBuf::from(path)))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err(
+            "Developer workspace selection is currently available on macOS and Windows only"
+                .to_string(),
+        )
     }
 }
 
@@ -1413,6 +1453,13 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn windows_workspace_picker_script_is_static_and_utf8_safe() {
+        assert!(WINDOWS_WORKSPACE_PICKER_SCRIPT.contains("BrowseForFolder"));
+        assert!(WINDOWS_WORKSPACE_PICKER_SCRIPT.contains("UTF8Encoding"));
+        assert!(!WINDOWS_WORKSPACE_PICKER_SCRIPT.contains("Invoke-Expression"));
+    }
 
     fn workspace_record(root: &Path) -> DeveloperWorkspaceRecord {
         let identity = FileIdentity::from_path(root).unwrap();

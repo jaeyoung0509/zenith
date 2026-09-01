@@ -174,6 +174,23 @@ fn background_advisories_enabled(preferences: &crate::models::AutopilotPreferenc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{mpsc, Barrier};
+
+    fn test_runtime(
+        memory_sampler: Arc<crate::metrics::MemorySampler>,
+        agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+    ) -> Arc<AiControlRuntime> {
+        Arc::new(AiControlRuntime::new(
+            memory_sampler,
+            Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
+            agent_activity_cache,
+            Arc::new(Mutex::new(
+                crate::ai_control_center::state::AiControlCenterState::default(),
+            )),
+            Arc::new(crate::power::KeepAwakeManager::new()),
+            Arc::new(Mutex::new(crate::models::ZenithSettings::default())),
+        ))
+    }
 
     #[test]
     fn background_sampling_is_disabled_until_an_advisory_is_enabled() {
@@ -199,27 +216,39 @@ mod tests {
     }
 
     #[test]
+    fn disabled_runtime_performs_zero_background_observations() {
+        let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
+        let agent_activity_cache = Arc::new(Mutex::new(None));
+        let runtime = test_runtime(memory_sampler.clone(), agent_activity_cache.clone());
+
+        assert!(runtime.tick(None).is_empty());
+        assert!(!memory_sampler.is_initialized());
+        assert!(agent_activity_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_none());
+    }
+
+    #[test]
     fn notify_wake_unblocks_waiting_runtime_immediately() {
-        let runtime = Arc::new(AiControlRuntime::new(
+        let runtime = test_runtime(
             Arc::new(crate::metrics::MemorySampler::new()),
-            Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
             Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(
-                crate::ai_control_center::state::AiControlCenterState::default(),
-            )),
-            Arc::new(crate::power::KeepAwakeManager::new()),
-            Arc::new(Mutex::new(crate::models::ZenithSettings::default())),
-        ));
+        );
+        let barrier = Arc::new(Barrier::new(2));
+        let (done_tx, done_rx) = mpsc::channel();
 
         let runtime_bg = runtime.clone();
-        let start = std::time::Instant::now();
+        let barrier_bg = barrier.clone();
         let handle = std::thread::spawn(move || {
+            barrier_bg.wait();
             runtime_bg.wait_next_tick(Duration::from_secs(10));
+            done_tx.send(()).unwrap();
         });
 
-        std::thread::sleep(Duration::from_millis(50));
+        barrier.wait();
         runtime.notify_wake();
+        done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         handle.join().unwrap();
-        assert!(start.elapsed() < Duration::from_secs(5));
     }
 }

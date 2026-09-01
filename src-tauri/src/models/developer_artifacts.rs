@@ -78,9 +78,17 @@ pub struct DeveloperArtifact {
     pub ecosystem: DeveloperEcosystem,
     pub kind: DeveloperArtifactKind,
     pub path: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub logical_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub allocated_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub file_count: u64,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub newest_mtime: Option<u64>,
     pub rebuild_hint: Option<String>,
     pub evidence: Vec<String>,
@@ -93,8 +101,14 @@ pub struct DeveloperArtifact {
 pub struct DeveloperArtifactScanResult {
     pub scan_id: String,
     pub items: Vec<DeveloperArtifact>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub discovered_count: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub measured_count: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub skipped_entries: u64,
     pub cancelled: bool,
     pub truncated: bool,
@@ -105,6 +119,8 @@ pub struct DeveloperArtifactScanResult {
 pub enum DeveloperArtifactScanEvent {
     Started {
         scan_id: String,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         workspace_count: u64,
     },
     WorkspaceStarted {
@@ -125,8 +141,14 @@ pub enum DeveloperArtifactScanEvent {
     },
     Progress {
         workspace_id: String,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         discovered_count: u64,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         measured_count: u64,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         skipped_entries: u64,
     },
     WorkspaceFinished {

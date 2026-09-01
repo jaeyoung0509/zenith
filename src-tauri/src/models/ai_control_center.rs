@@ -54,8 +54,14 @@ impl MoneyMicros {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ObservationPeriod {
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub starts_at: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub ends_at: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub resets_at: Option<u64>,
     pub label: String,
 }
@@ -63,6 +69,8 @@ pub struct ObservationPeriod {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ProviderMetric {
     pub label: String,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub tokens: Option<u64>,
     pub cost: Option<MoneyMicros>,
     pub used_basis_points: Option<u16>,
@@ -75,8 +83,12 @@ pub struct ProviderObservation {
     pub source_kind: ObservationSourceKind,
     pub source_id: String,
     pub scope: ObservationScope,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
     pub period: ObservationPeriod,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub fresh_for_seconds: u64,
     pub quality: ObservationQuality,
     pub installed: bool,
@@ -136,7 +148,11 @@ pub struct ManualProviderUsage {
     pub provider_id: String,
     pub spent: MoneyMicros,
     pub limit: Option<MoneyMicros>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub resets_at: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub entered_at: u64,
 }
 impl Default for ManualProviderUsage {
@@ -159,6 +175,8 @@ pub struct AutopilotPreferences {
     pub notify_on_battery: bool,
     pub notify_on_memory_pressure: bool,
     pub notify_on_session_completion: bool,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub recommendation_cooldown_seconds: u64,
 }
 impl Default for AutopilotPreferences {
@@ -201,8 +219,12 @@ pub struct ResourceAttribution {
     pub project_id: Option<String>,
     pub tool_name: String,
     pub cpu_percent: f32,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub memory_bytes: u64,
     pub process_count: u32,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub duration_seconds: u64,
     pub open_dev_ports: u32,
     pub power_eligible: bool,
@@ -228,7 +250,11 @@ pub struct Recommendation {
     pub kind: RecommendationKind,
     pub title: String,
     pub message: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub created_at: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub cooldown_until: u64,
     pub session_id: Option<String>,
     pub project_id: Option<String>,
@@ -265,6 +291,8 @@ pub struct SafetyFinding {
     pub relative_path: Option<String>,
     pub line_start: Option<u32>,
     pub line_end: Option<u32>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
     pub remediation: String,
     pub dismissed: bool,
@@ -284,6 +312,8 @@ pub struct NormalizedSafetyEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct SafetySnapshot {
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
     pub quality: ObservationQuality,
     pub findings: Vec<SafetyFinding>,
@@ -297,6 +327,8 @@ pub struct GitChangeSummary {
     pub project_id: String,
     pub baseline_head: Option<String>,
     pub current_head: Option<String>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub baseline_at: u64,
     pub added: u32,
     pub modified: u32,
@@ -311,6 +343,8 @@ pub struct GitChangeSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct AuditEntry {
     pub id: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub timestamp: u64,
     pub event_kind: String,
     pub outcome: String,
@@ -320,6 +354,8 @@ pub struct AuditEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ControlCenterQuickSummary {
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
     pub active_sessions: u32,
     pub budget_alerts: u32,
@@ -329,6 +365,8 @@ pub struct ControlCenterQuickSummary {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct AiControlCenterSnapshot {
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
     pub providers: Vec<ProviderObservation>,
     pub budget_statuses: Vec<BudgetStatus>,
@@ -350,6 +388,8 @@ pub struct RecommendationPreview {
     pub explanation: String,
     pub destination: DashboardRoute,
     pub action_label: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub expires_at: u64,
 }
 
