@@ -166,8 +166,8 @@ impl Drop for PowerAssertion {
     }
 }
 
-#[cfg(all(test, not(target_os = "macos")))]
-mod tests {
+#[cfg(all(test, not(any(target_os = "macos", target_os = "windows"))))]
+mod unsupported_tests {
     use super::PowerAssertion;
     use crate::models::{AwakeBehavior, ZenithError};
 
@@ -178,6 +178,18 @@ mod tests {
             result,
             Err(ZenithError::ToolUnavailable(message)) if message.contains("unavailable")
         ));
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+mod native_tests {
+    use super::PowerAssertion;
+    use crate::models::AwakeBehavior;
+
+    #[test]
+    fn native_assertion_succeeds_with_adapter() {
+        let result = PowerAssertion::acquire(AwakeBehavior::PreventSystemSleep, "test");
+        assert!(result.is_ok());
     }
 }
 

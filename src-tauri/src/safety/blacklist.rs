@@ -118,7 +118,13 @@ impl Blacklist {
             return false;
         }
 
-        // 5. System critical prefixes outside user home and temp
+        // 5. Exact users root directory
+        let normalized_path_str = path.to_string_lossy().replace('\\', "/");
+        if normalized_path_str == "C:/Users" || path == Path::new("/Users") {
+            return true;
+        }
+
+        // 6. System critical prefixes outside user home and temp
         let system_prefixes = [
             "/System",
             "/bin",
@@ -137,10 +143,8 @@ impl Blacklist {
             "C:/Program Files",
             "C:/Program Files (x86)",
             "C:/ProgramData",
-            "C:/Users",
         ];
 
-        let normalized_path_str = path.to_string_lossy().replace('\\', "/");
         for sys in &system_prefixes {
             let sys_path = Path::new(sys);
             if path == sys_path

@@ -170,7 +170,7 @@ mod tests {
             PowerSourceType::Ac | PowerSourceType::Battery | PowerSourceType::Unknown
         ));
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(source, PowerSourceType::Unknown);
     }
 }

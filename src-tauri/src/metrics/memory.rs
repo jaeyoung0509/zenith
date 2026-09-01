@@ -449,28 +449,56 @@ mod tests {
         assert!(MemoryInspector::can_terminate_process("ChatGPT", None));
         assert!(MemoryInspector::can_terminate_process("Claude", None));
         assert!(MemoryInspector::can_terminate_process("Anytype", None));
-        assert!(MemoryInspector::can_terminate_process(
-            "KakaoTalk",
-            Some(Path::new(
-                "/Applications/KakaoTalk.app/Contents/MacOS/KakaoTalk"
-            ))
-        ));
-        assert!(MemoryInspector::can_terminate_process(
-            "Acme",
-            Some(Path::new(
-                "/Users/test/Applications/Acme.app/Contents/MacOS/Acme"
-            ))
-        ));
-        assert!(!MemoryInspector::can_terminate_process(
-            "spotlightknowledged",
-            Some(Path::new("/System/Library/Frameworks/spotlightknowledged"))
-        ));
-        assert!(!MemoryInspector::can_terminate_process(
-            "Terminal",
-            Some(Path::new(
-                "/Applications/Terminal.app/Contents/MacOS/Terminal"
-            ))
-        ));
+        #[cfg(target_os = "macos")]
+        {
+            assert!(MemoryInspector::can_terminate_process(
+                "KakaoTalk",
+                Some(Path::new(
+                    "/Applications/KakaoTalk.app/Contents/MacOS/KakaoTalk"
+                ))
+            ));
+            assert!(MemoryInspector::can_terminate_process(
+                "Acme",
+                Some(Path::new(
+                    "/Users/test/Applications/Acme.app/Contents/MacOS/Acme"
+                ))
+            ));
+            assert!(!MemoryInspector::can_terminate_process(
+                "spotlightknowledged",
+                Some(Path::new("/System/Library/Frameworks/spotlightknowledged"))
+            ));
+            assert!(!MemoryInspector::can_terminate_process(
+                "Terminal",
+                Some(Path::new(
+                    "/Applications/Terminal.app/Contents/MacOS/Terminal"
+                ))
+            ));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(MemoryInspector::can_terminate_process(
+                "KakaoTalk",
+                Some(Path::new(
+                    "C:\\Program Files\\Kakao\\KakaoTalk\\KakaoTalk.exe"
+                ))
+            ));
+            assert!(MemoryInspector::can_terminate_process(
+                "Acme",
+                Some(Path::new(
+                    "C:\\Users\\test\\AppData\\Local\\Programs\\Acme\\Acme.exe"
+                ))
+            ));
+            assert!(!MemoryInspector::can_terminate_process(
+                "csrss",
+                Some(Path::new("C:\\Windows\\System32\\csrss.exe"))
+            ));
+            assert!(!MemoryInspector::can_terminate_process(
+                "Terminal",
+                Some(Path::new("C:\\Program Files\\WindowsApps\\wt.exe"))
+            ));
+        }
+
         assert!(!MemoryInspector::can_terminate_process("Zenith", None));
     }
 
