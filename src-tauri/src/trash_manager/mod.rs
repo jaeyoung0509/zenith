@@ -946,10 +946,8 @@ mod tests {
 
     #[test]
     fn store_plan_caps_at_64_and_evicts_oldest() {
-        use crate::storage_commands::{
-            clear_trash_plans_for_test, store_plan, trash_plans_len_for_test, TRASH_PLANS,
-        };
-        clear_trash_plans_for_test();
+        use crate::storage_commands::StorageWorkflowState;
+        let storage_state = StorageWorkflowState::new();
         let now = unix_timestamp();
         for i in 0..65 {
             let plan = TrashPlan {
@@ -958,16 +956,14 @@ mod tests {
                 inventory_id: format!("inv-{i}"),
                 targets: vec![],
             };
-            store_plan(plan);
+            storage_state.store_plan(plan);
         }
-        assert_eq!(trash_plans_len_for_test(), 64);
-        let plans = TRASH_PLANS.lock().expect("TRASH_PLANS poisoned");
+        let plans = storage_state.trash_plans.lock().unwrap();
+        assert_eq!(plans.len(), 64);
         assert!(
             !plans.values().any(|p| p.inventory_id == "inv-0"),
             "oldest plan should have been evicted"
         );
         assert!(plans.values().any(|p| p.inventory_id == "inv-64"));
-        drop(plans);
-        clear_trash_plans_for_test();
     }
 }

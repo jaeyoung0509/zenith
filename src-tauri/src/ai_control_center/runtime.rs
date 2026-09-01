@@ -1,7 +1,7 @@
 use crate::ai_control_center::{notifications, resources};
 use crate::models::Recommendation;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime};
 use tauri::AppHandle;
 
 fn unix_timestamp() -> u64 {
@@ -18,6 +18,7 @@ pub struct AiControlRuntime {
     ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     awake_manager: Arc<crate::power::KeepAwakeManager>,
     settings: Arc<Mutex<crate::models::ZenithSettings>>,
+    wake_signal: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl AiControlRuntime {
@@ -36,7 +37,36 @@ impl AiControlRuntime {
             ai_control_state,
             awake_manager,
             settings,
+            wake_signal: Arc::new((Mutex::new(false), Condvar::new())),
         }
+    }
+
+    pub fn notify_wake(&self) {
+        let (lock, cvar) = &*self.wake_signal;
+        let mut wake = lock.lock().unwrap_or_else(|p| p.into_inner());
+        *wake = true;
+        cvar.notify_all();
+    }
+
+    pub fn are_advisories_enabled(&self) -> bool {
+        let preferences = self
+            .settings
+            .lock()
+            .map(|s| s.ai_control.clone())
+            .unwrap_or_default();
+        background_advisories_enabled(&preferences.autopilot)
+    }
+
+    pub fn wait_next_tick(&self, timeout: Duration) {
+        let (lock, cvar) = &*self.wake_signal;
+        let mut wake = lock.lock().unwrap_or_else(|p| p.into_inner());
+        if !*wake {
+            let (guard, _) = cvar
+                .wait_timeout(wake, timeout)
+                .unwrap_or_else(|p| p.into_inner());
+            wake = guard;
+        }
+        *wake = false;
     }
 
     /// Evaluates local background signals: active agent activity, dev ports, memory pressure,
@@ -166,5 +196,30 @@ mod tests {
         ] {
             assert!(background_advisories_enabled(&enabled));
         }
+    }
+
+    #[test]
+    fn notify_wake_unblocks_waiting_runtime_immediately() {
+        let runtime = Arc::new(AiControlRuntime::new(
+            Arc::new(crate::metrics::MemorySampler::new()),
+            Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(
+                crate::ai_control_center::state::AiControlCenterState::default(),
+            )),
+            Arc::new(crate::power::KeepAwakeManager::new()),
+            Arc::new(Mutex::new(crate::models::ZenithSettings::default())),
+        ));
+
+        let runtime_bg = runtime.clone();
+        let start = std::time::Instant::now();
+        let handle = std::thread::spawn(move || {
+            runtime_bg.wait_next_tick(Duration::from_secs(10));
+        });
+
+        std::thread::sleep(Duration::from_millis(50));
+        runtime.notify_wake();
+        handle.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 }

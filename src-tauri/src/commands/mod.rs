@@ -34,11 +34,13 @@ pub struct AppState {
     pub ai_usage_refresh_lock: Arc<Mutex<()>>,
     pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
     pub storage_operation_gate: StorageOperationGate,
+    pub storage_state: Arc<crate::storage_commands::StorageWorkflowState>,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
     pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
     pub agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
     pub ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     pub ai_control_refresh_lock: Arc<Mutex<()>>,
+    pub ai_control_runtime: Arc<crate::ai_control_center::runtime::AiControlRuntime>,
     pub platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider>,
 }
 
@@ -167,6 +169,7 @@ pub async fn get_project_context(
 
     let cache = state.agent_activity_cache.clone();
     let dev_store = state.dev_port_store.clone();
+    let storage_state = state.storage_state.clone();
     let notification_preferences = state
         .settings
         .lock()
@@ -182,7 +185,7 @@ pub async fn get_project_context(
             &crate::dev_ports::RealDevPortSystem::default(),
         )
         .unwrap_or_default();
-        let artifact_sizes = crate::storage_commands::cached_developer_artifact_sizes();
+        let artifact_sizes = storage_state.cached_developer_artifact_sizes();
         for project in &mut registry.snapshot.projects {
             if let Some(root) = registry.project_roots.get(&project.identity.id) {
                 project.artifact_size_bytes = artifact_sizes.get(root).copied();
@@ -228,13 +231,14 @@ pub async fn request_stop_agent_session(
     let now = unix_timestamp();
     let lease = {
         let store = crate::agent_activity::global_store();
-        let mut guard = store.lock().unwrap();
+        let mut guard = store.lock().unwrap_or_else(|p| p.into_inner());
         guard
             .stop_leases
             .consume_lease(&session_id, &lease_id, now)?
     };
 
     let cache = state.agent_activity_cache.clone();
+    let runtime = state.ai_control_runtime.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let system = crate::agent_activity::termination::RealTerminationSystem;
         let result = crate::agent_activity::termination::execute_graceful_stop(&lease, &system);
@@ -242,6 +246,7 @@ pub async fn request_stop_agent_session(
             if let Ok(mut cache_guard) = cache.lock() {
                 *cache_guard = None;
             }
+            runtime.notify_wake();
         }
         result
     })
@@ -641,7 +646,9 @@ pub async fn save_ai_control_preferences(
         },
         "AI Control preference worker panicked",
     )
-    .await
+    .await?;
+    state.ai_control_runtime.notify_wake();
+    Ok(())
 }
 
 #[tauri::command]
@@ -1274,7 +1281,9 @@ pub async fn save_settings(
         },
         "Settings save worker panicked",
     )
-    .await
+    .await?;
+    state.ai_control_runtime.notify_wake();
+    Ok(())
 }
 
 #[tauri::command]

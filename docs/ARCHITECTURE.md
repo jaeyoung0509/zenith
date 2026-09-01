@@ -1,13 +1,15 @@
 # Architecture
 
-Zenith is a macOS menu-bar application built with Tauri 2, Rust, and Svelte 5.
-Rust owns system access and destructive decisions. Svelte renders typed state and
-submits user intent; it does not construct filesystem operations.
+Zenith is a cross-platform desktop application built with Tauri 2, Rust, Svelte 5,
+and TypeScript, supporting macOS and Windows x64.
+Rust owns system access, security boundaries, and destructive decisions. Svelte
+renders typed state and submits user intent; it never constructs or coordinates
+raw filesystem operations.
 
 ## Runtime shape
 
 ```text
-macOS menu bar
+macOS menu bar / Windows system tray
      |
      +-- quick WebView (hidden until requested)
      |      read metrics, scan, execute a backend-owned safe plan
@@ -15,31 +17,36 @@ macOS menu bar
      +-- main WebView
             dashboard, settings, reviewed destructive adapters
                     |
-                    | typed Tauri IPC
+                    | typed Tauri IPC (specta bindings, async spawn_blocking)
                     v
-              Rust application core
+              Rust application core (AppState)
         +-----------+-----------+-------------+
         |           |           |             |
      scanner      safety      adapters      metrics/power
         |        planner +     Docker,       memory, disk,
    signatures    plan store    models, AI    Keep Awake
         |
-        +-- dedicated storage management
+        +-- dedicated storage management (StorageWorkflowState)
             large-file inventory, app inventory,
             one-shot Trash plans
 
-        +-- developer artifact review
+        +-- developer artifact review (StorageWorkflowState)
             picker-owned workspace roots, marker discovery,
             bounded candidate measurement, one-shot Trash plans
 
-        +-- development-port management
+        +-- development-port management (DevelopmentPortStore)
             listener discovery + classification,
             one-shot leases, exact-process signaling
+
+        +-- AI control plane (AiControlRuntime)
+            event-driven condvar wake loop, process activity,
+            advisories, safety audit, git baselines
 ```
 
 The windows have separate frontend runtimes and stores. Shared authority and
-coordination therefore live in Rust `AppState`, backend-owned inventories, or
-Rust process state rather than in a browser singleton.
+coordination therefore live in Rust `AppState`, backend-owned workflow states, or
+Rust process state rather than in a browser singleton. Lock acquisitions recover
+from poisoning (`unwrap_or_else(|p| p.into_inner())`) to guarantee reliability.
 
 ## Platform capability contract
 
@@ -52,11 +59,8 @@ that are unavailable on the current platform. A `read_only` capability may
 continue to expose inspection metrics, but mutating controls require an
 `available` capability.
 
-The macOS provider currently reports the existing feature set. The Windows
-provider starts as an explicit baseline: metrics and Docker inspection can be
-read-only while native actions remain unavailable until their owning adapter is
-implemented. This keeps unsupported controls truthful during the incremental
-Windows port and gives each follow-up adapter a stable seam for registration.
+Both macOS and Windows x64 implement the full capability contract across all
+eleven core features, providing safe, native implementations tailored to each OS.
 
 ## Repository map
 
@@ -365,9 +369,20 @@ applied in development and production. Adding a command requires all three:
 registration in `lib.rs`, declaration in `build.rs`, and an intentional window
 capability entry.
 
+### IPC numeric safety contract
+
+Zenith binds Rust structs to TypeScript via Tauri Specta using
+`dangerously_cast_bigints_to_number()`. All exposed `u64` values—including
+filesystem byte capacities, allocated sizes, Unix epoch timestamps, file counts,
+and port numbers—are strictly bounded within JavaScript `Number.MAX_SAFE_INTEGER`
+($2^{53} - 1 \approx 9.007 \times 10^{15}$). Even high-capacity workstation
+storage (e.g. 100 TB = $1.099 \times 10^{14}$ bytes) and timestamps into the year
+3000 remain safely within range without floating-point precision loss.
+
 ## External tools
 
-Finder-launched macOS applications often receive a smaller `PATH` than an
-interactive shell. `tooling.rs` resolves CLIs through the inherited path and
-common Homebrew, local-user, Docker, and Ollama locations before spawning them.
-Adapters still fail closed when a required tool is unavailable.
+On macOS and Windows, applications launched from the desktop shell receive a
+distinct `PATH` compared to an interactive shell. `tooling.rs` resolves CLIs
+through inherited paths and standard platform locations (Homebrew, local AppData,
+Program Files, Docker, and Ollama) before spawning processes. Adapters fail closed
+when a required tool is unavailable.

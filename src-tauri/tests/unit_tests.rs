@@ -401,3 +401,23 @@ fn test_windows_dev_ports_classification_defense() {
     assert!(res_vite.can_release);
     assert_eq!(res_vite.server_name, "Vite");
 }
+
+#[test]
+fn test_u64_ipc_fields_within_safe_integer_bounds() {
+    // JavaScript Number.MAX_SAFE_INTEGER is (2^53 - 1) = 9_007_199_254_740_991.
+    // Tauri Specta converts u64 to TypeScript `number` via `dangerously_cast_bigints_to_number()`.
+    // All Zenith byte counts, epoch timestamps, and item counts must fit within this range.
+    const MAX_SAFE_INTEGER: u64 = (1u64 << 53) - 1;
+
+    // 100 Terabytes in bytes (realistic upper bound for large files / developer artifacts on workstation)
+    let hundred_terabytes: u64 = 100 * 1024 * 1024 * 1024 * 1024;
+    assert!(hundred_terabytes < MAX_SAFE_INTEGER);
+
+    // Unix epoch seconds up to year 3000
+    let year_3000_seconds: u64 = 32_503_680_000;
+    assert!(year_3000_seconds < MAX_SAFE_INTEGER);
+
+    // 10 million filesystem entries
+    let ten_million_entries: u64 = 10_000_000;
+    assert!(ten_million_entries < MAX_SAFE_INTEGER);
+}

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, LazyLock, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -22,11 +22,6 @@ const MAX_DISCOVERY_DEPTH: usize = 64;
 const MAX_MEASUREMENT_DEPTH: usize = 64;
 const MAX_DISCOVERY_ENTRIES: u64 = 250_000;
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
-
-/// Workspace roots are process-local on purpose for the MVP. They are bounded
-/// and the scan revalidates every root before doing any filesystem work.
-pub(crate) static WORKSPACES: LazyLock<Mutex<HashMap<String, DeveloperWorkspaceRecord>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone)]
 pub struct DeveloperWorkspaceRecord {
@@ -141,13 +136,29 @@ pub struct DeveloperArtifactScanner;
 impl DeveloperArtifactScanner {
     pub fn scan<F>(
         workspace_ids: &[String],
+        workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+        cancel: Arc<AtomicBool>,
+        on_event: F,
+    ) -> Result<DeveloperArtifactInventory, String>
+    where
+        F: FnMut(DeveloperArtifactScanEvent),
+    {
+        let workspaces = workspace_snapshot(workspace_ids, workspaces_store)?;
+        Self::scan_workspaces(&workspaces, cancel, on_event)
+    }
+
+    pub fn scan_workspaces<F>(
+        workspaces: &[DeveloperWorkspaceRecord],
         cancel: Arc<AtomicBool>,
         mut on_event: F,
     ) -> Result<DeveloperArtifactInventory, String>
     where
         F: FnMut(DeveloperArtifactScanEvent),
     {
-        let workspaces = workspace_snapshot(workspace_ids)?;
+        let workspace_ids = workspaces
+            .iter()
+            .map(|w| w.workspace.id.clone())
+            .collect::<Vec<_>>();
         let scan_id = Uuid::new_v4().to_string();
         on_event(DeveloperArtifactScanEvent::Started {
             scan_id: scan_id.clone(),
@@ -163,7 +174,7 @@ impl DeveloperArtifactScanner {
             if cancel.load(Ordering::Relaxed) {
                 return Self::finish(
                     scan_id,
-                    workspace_ids,
+                    &workspace_ids,
                     HashMap::new(),
                     ScanProgress {
                         discovered_count,
@@ -181,7 +192,7 @@ impl DeveloperArtifactScanner {
             });
 
             let mut seen_paths = HashSet::new();
-            if let Some(candidate) = global_go_module_candidate(&workspace, &mut seen_paths) {
+            if let Some(candidate) = global_go_module_candidate(workspace, &mut seen_paths) {
                 if candidates.len() < MAX_CANDIDATES {
                     on_event(DeveloperArtifactScanEvent::ProjectDiscovered {
                         workspace_id: workspace.workspace.id.clone(),
@@ -196,7 +207,7 @@ impl DeveloperArtifactScanner {
             }
 
             discover_workspace(
-                &workspace,
+                workspace,
                 &cancel,
                 &mut candidates,
                 &mut discovered_count,
@@ -212,7 +223,7 @@ impl DeveloperArtifactScanner {
             if cancel.load(Ordering::Relaxed) {
                 return Self::finish(
                     scan_id,
-                    workspace_ids,
+                    &workspace_ids,
                     HashMap::new(),
                     ScanProgress {
                         discovered_count,
@@ -305,7 +316,7 @@ impl DeveloperArtifactScanner {
         let cancelled = cancel.load(Ordering::Relaxed);
         Self::finish(
             scan_id,
-            workspace_ids,
+            &workspace_ids,
             records,
             ScanProgress {
                 discovered_count,
@@ -387,11 +398,16 @@ pub fn result_from_inventory(
     }
 }
 
-pub fn workspace_snapshot(ids: &[String]) -> Result<Vec<DeveloperWorkspaceRecord>, String> {
+pub fn workspace_snapshot(
+    ids: &[String],
+    workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+) -> Result<Vec<DeveloperWorkspaceRecord>, String> {
     if ids.is_empty() {
         return Err("Select at least one workspace to scan.".to_string());
     }
-    let records = WORKSPACES.lock().expect("WORKSPACES poisoned");
+    let records = workspaces_store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut result = Vec::with_capacity(ids.len());
     let mut seen = HashSet::new();
     for id in ids {
@@ -421,14 +437,20 @@ fn same_workspace_directory_identity(current: &FileIdentity, expected: &FileIden
     current.device == expected.device && current.inode == expected.inode
 }
 
-pub fn pick_workspace() -> Result<Option<DeveloperWorkspace>, String> {
+pub fn pick_workspace(
+    workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+) -> Result<Option<DeveloperWorkspace>, String> {
     let Some(path) = native_pick_workspace_path()? else {
         return Ok(None);
     };
-    Ok(Some(register_workspace_path(&path)?.workspace))
+    Ok(Some(
+        register_workspace_path(&path, workspaces_store)?.workspace,
+    ))
 }
 
-pub fn register_home_workspace() -> Result<DeveloperWorkspace, String> {
+pub fn register_home_workspace(
+    workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+) -> Result<DeveloperWorkspace, String> {
     let home = crate::platform::paths::NativePlatformPaths::new()
         .home()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
@@ -449,10 +471,13 @@ pub fn register_home_workspace() -> Result<DeveloperWorkspace, String> {
     } else {
         "This PC".to_string()
     };
-    Ok(store_workspace(canonical, name, true)?.workspace)
+    Ok(store_workspace(canonical, name, true, workspaces_store)?.workspace)
 }
 
-pub fn register_workspace_path(path: &Path) -> Result<DeveloperWorkspaceRecord, String> {
+pub fn register_workspace_path(
+    path: &Path,
+    workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+) -> Result<DeveloperWorkspaceRecord, String> {
     let home = crate::platform::paths::NativePlatformPaths::new()
         .home()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
@@ -463,18 +488,21 @@ pub fn register_workspace_path(path: &Path) -> Result<DeveloperWorkspaceRecord, 
         .and_then(|value| value.to_str())
         .unwrap_or("Workspace")
         .to_string();
-    store_workspace(canonical, name, false)
+    store_workspace(canonical, name, false, workspaces_store)
 }
 
 fn store_workspace(
     canonical: PathBuf,
     name: String,
     whole_home: bool,
+    workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
 ) -> Result<DeveloperWorkspaceRecord, String> {
     let identity = FileIdentity::from_path(&canonical)
         .ok_or_else(|| "The selected workspace is not a stable directory.".to_string())?;
 
-    let mut workspaces = WORKSPACES.lock().expect("WORKSPACES poisoned");
+    let mut workspaces = workspaces_store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(existing) = workspaces.values().find(|record| record.path == canonical) {
         return Ok(existing.clone());
     }
@@ -1463,21 +1491,13 @@ mod tests {
         fs::write(node_project.join("package.json"), "{}\n").unwrap();
         fs::write(node_project.join("node_modules/package.json"), "{}\n").unwrap();
         let workspace = workspace_record(&workspace_path);
-        WORKSPACES
-            .lock()
-            .expect("WORKSPACES poisoned")
-            .insert(workspace.workspace.id.clone(), workspace.clone());
         let mut events = Vec::new();
-        let inventory = DeveloperArtifactScanner::scan(
-            std::slice::from_ref(&workspace.workspace.id),
+        let inventory = DeveloperArtifactScanner::scan_workspaces(
+            std::slice::from_ref(&workspace),
             Arc::new(AtomicBool::new(false)),
             |event| events.push(event),
         )
         .unwrap();
-        WORKSPACES
-            .lock()
-            .expect("WORKSPACES poisoned")
-            .remove(&workspace.workspace.id);
 
         assert_eq!(inventory.records.len(), 2);
         assert!(events
@@ -1511,20 +1531,12 @@ mod tests {
 
         let mut workspace = workspace_record(temp.path());
         workspace.whole_home = true;
-        WORKSPACES
-            .lock()
-            .expect("WORKSPACES poisoned")
-            .insert(workspace.workspace.id.clone(), workspace.clone());
-        let inventory = DeveloperArtifactScanner::scan(
-            std::slice::from_ref(&workspace.workspace.id),
+        let inventory = DeveloperArtifactScanner::scan_workspaces(
+            std::slice::from_ref(&workspace),
             Arc::new(AtomicBool::new(false)),
             |_| {},
         )
         .unwrap();
-        WORKSPACES
-            .lock()
-            .expect("WORKSPACES poisoned")
-            .remove(&workspace.workspace.id);
 
         assert_eq!(inventory.records.len(), 1);
         let artifact = &inventory.records.values().next().unwrap().artifact;
@@ -1665,15 +1677,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn backend_owned_home_scope_registers_without_the_folder_picker() {
-        let workspace = register_home_workspace().unwrap();
+        let store = Mutex::new(HashMap::new());
+        let workspace = register_home_workspace(&store).unwrap();
         let canonical_home = fs::canonicalize(std::env::var_os("HOME").unwrap()).unwrap();
-        let mut workspaces = WORKSPACES.lock().expect("WORKSPACES poisoned");
+        let workspaces = store.lock().expect("store poisoned");
         let record = workspaces.get(&workspace.id).unwrap();
 
         assert_eq!(record.path, canonical_home);
         assert!(record.whole_home);
         assert_eq!(workspace.name, "This Mac");
-        workspaces.remove(&workspace.id);
     }
 
     #[test]
