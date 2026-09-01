@@ -127,6 +127,34 @@ impl PlatformCapabilities {
         }
     }
 
+    /// Returns the active capability snapshot for the Windows platform after Batch 1.
+    pub fn windows_foundation() -> Self {
+        let unavailable = || {
+            PlatformFeatureCapability::unavailable(
+                "Windows domain feature is scheduled for Batch 2.",
+            )
+        };
+
+        Self {
+            platform: PlatformKind::Windows,
+            system_actions: PlatformFeatureCapability::available(),
+            cleanup: unavailable(),
+            large_files: unavailable(),
+            developer_artifacts: unavailable(),
+            installed_apps: unavailable(),
+            app_uninstall: unavailable(),
+            memory_metrics: PlatformFeatureCapability::available(),
+            process_termination: PlatformFeatureCapability::available(),
+            development_ports: unavailable(),
+            keep_awake: PlatformFeatureCapability::available(),
+            local_models: unavailable(),
+            docker: PlatformFeatureCapability::read_only(
+                "Docker inspection is not yet ported to Windows.",
+            ),
+            ai_integrations: unavailable(),
+        }
+    }
+
     pub fn unsupported(kind: PlatformKind) -> Self {
         let unavailable = || {
             PlatformFeatureCapability::unavailable(
@@ -160,7 +188,7 @@ impl PlatformCapabilities {
 
         #[cfg(target_os = "windows")]
         {
-            Self::windows_baseline()
+            Self::windows_foundation()
         }
 
         #[cfg(target_os = "linux")]

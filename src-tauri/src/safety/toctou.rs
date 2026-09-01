@@ -24,7 +24,30 @@ impl ToctouGuard {
             })
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            let (mtime_secs, mtime_nanos) = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| (d.as_secs(), d.subsec_nanos()))
+                .unwrap_or((0, 0));
+
+            let device = meta.volume_serial_number().map(|v| v as u64).unwrap_or(0);
+            let inode = meta.file_index().unwrap_or(0);
+
+            Some(FileIdentity {
+                device,
+                inode,
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+                mtime_secs,
+                mtime_nanos,
+            })
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let (mtime_secs, mtime_nanos) = meta
                 .modified()
@@ -63,12 +86,14 @@ impl ToctouGuard {
             }
         };
 
-        // Inode and device must match on Unix
-        #[cfg(unix)]
+        // Inode/FileId and device/volume must match on Unix and Windows
+        #[cfg(any(unix, windows))]
         {
-            if current.device != expected.device || current.inode != expected.inode {
+            if (expected.device != 0 || expected.inode != 0)
+                && (current.device != expected.device || current.inode != expected.inode)
+            {
                 return Err(ZenithError::ChangedSinceScan(format!(
-                    "Inode or device mismatch for {}: expected (dev={}, ino={}), found (dev={}, ino={})",
+                    "Identity mismatch for {}: expected (dev={}, ino={}), found (dev={}, ino={})",
                     path.display(),
                     expected.device,
                     expected.inode,

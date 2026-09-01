@@ -101,7 +101,27 @@ impl PowerAssertion {
             }
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::System::Power::*;
+            let _ = reason;
+            let flags = match behavior {
+                AwakeBehavior::PreventSystemSleep => ES_CONTINUOUS | ES_SYSTEM_REQUIRED,
+                AwakeBehavior::KeepDisplayAwake => {
+                    ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+                }
+            };
+            let prev = unsafe { SetThreadExecutionState(flags) };
+            if prev == 0 {
+                Err(ZenithError::Io(
+                    "SetThreadExecutionState failed on Windows".to_string(),
+                ))
+            } else {
+                Ok(PowerAssertion { behavior })
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (behavior, reason);
             Err(ZenithError::ToolUnavailable(
@@ -133,6 +153,14 @@ impl Drop for PowerAssertion {
                         self.id, status
                     );
                 }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::System::Power::*;
+            unsafe {
+                SetThreadExecutionState(ES_CONTINUOUS);
             }
         }
     }

@@ -178,10 +178,14 @@ impl MemoryInspector {
         if let Some(app_name) = Self::installed_app_name(executable) {
             return app_name;
         }
-        let lower = raw.to_lowercase();
+        let clean_raw = raw
+            .strip_suffix(".exe")
+            .or_else(|| raw.strip_suffix(".EXE"))
+            .unwrap_or(raw);
+        let lower = clean_raw.to_lowercase();
         if lower.contains("cursor") {
             "Cursor".to_string()
-        } else if lower.contains("brave browser") {
+        } else if lower.contains("brave") {
             "Brave Browser".to_string()
         } else if lower.contains("chrome") {
             "Google Chrome".to_string()
@@ -216,29 +220,84 @@ impl MemoryInspector {
             "agy".to_string()
         } else if lower.contains("kakaotalk") || lower.contains("kakao talk") {
             "KakaoTalk".to_string()
-        } else if lower.contains("iterm") || lower.contains("terminal") || lower.contains("ghostty")
+        } else if lower.contains("iterm")
+            || lower.contains("terminal")
+            || lower.contains("ghostty")
+            || lower == "powershell"
+            || lower == "cmd"
+            || lower == "wt"
         {
             "Terminal".to_string()
         } else {
-            raw.to_string()
+            clean_raw.to_string()
         }
     }
 
     fn installed_app_name(executable: Option<&Path>) -> Option<String> {
         let path = executable?.to_str()?;
-        let is_user_application = path.starts_with("/Applications/")
-            || (path.starts_with("/Users/") && path.contains("/Applications/"));
-        if !is_user_application {
-            return None;
+        #[cfg(target_os = "macos")]
+        {
+            let is_user_application = path.starts_with("/Applications/")
+                || (path.starts_with("/Users/") && path.contains("/Applications/"));
+            if !is_user_application {
+                return None;
+            }
+            let bundle_prefix = path.split_once(".app/")?.0;
+            bundle_prefix.rsplit('/').next().map(str::to_string)
         }
-        let bundle_prefix = path.split_once(".app/")?.0;
-        bundle_prefix.rsplit('/').next().map(str::to_string)
+        #[cfg(target_os = "windows")]
+        {
+            let normalized = path.replace('/', "\\");
+            let is_user_application = normalized.contains("\\AppData\\Local\\Programs\\")
+                || normalized.contains("\\AppData\\Roaming\\")
+                || normalized.starts_with("C:\\Program Files\\")
+                || normalized.starts_with("C:\\Program Files (x86)\\");
+            if !is_user_application {
+                return None;
+            }
+            let file_stem = executable?.file_stem()?.to_str()?;
+            Some(file_stem.to_string())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            None
+        }
     }
 
     fn can_terminate_process(name: &str, executable: Option<&Path>) -> bool {
-        if matches!(name, "Zenith" | "Terminal") {
+        let lower = name.to_lowercase();
+        let protected = matches!(
+            lower.as_str(),
+            "zenith"
+                | "zenith.exe"
+                | "terminal"
+                | "terminal.exe"
+                | "powershell"
+                | "powershell.exe"
+                | "cmd"
+                | "cmd.exe"
+                | "wt"
+                | "wt.exe"
+                | "explorer"
+                | "explorer.exe"
+                | "svchost"
+                | "svchost.exe"
+                | "csrss"
+                | "csrss.exe"
+                | "services"
+                | "services.exe"
+                | "lsass"
+                | "lsass.exe"
+                | "taskmgr"
+                | "taskmgr.exe"
+                | "msmpeng"
+                | "msmpeng.exe"
+                | "system"
+        );
+        if protected {
             return false;
         }
+
         let explicitly_supported = matches!(
             name,
             "Google Chrome"
@@ -256,11 +315,28 @@ impl MemoryInspector {
                 | "ChatGPT"
                 | "Anytype"
         );
+
         let installed_user_app = executable.and_then(Path::to_str).is_some_and(|path| {
-            (path.starts_with("/Applications/")
-                || (path.starts_with("/Users/") && path.contains("/Applications/")))
-                && path.contains(".app/Contents/")
+            #[cfg(target_os = "macos")]
+            {
+                (path.starts_with("/Applications/")
+                    || (path.starts_with("/Users/") && path.contains("/Applications/")))
+                    && path.contains(".app/Contents/")
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let p = path.replace('/', "\\");
+                p.contains("\\AppData\\Local\\Programs\\")
+                    || p.contains("\\AppData\\Roaming\\")
+                    || p.starts_with("C:\\Program Files\\")
+                    || p.starts_with("C:\\Program Files (x86)\\")
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                false
+            }
         });
+
         explicitly_supported || installed_user_app
     }
 
@@ -291,7 +367,9 @@ impl MemoryInspector {
             return Err(format!("{name} is no longer running"));
         }
         if signaled == 0 {
-            return Err(format!("macOS did not allow Zenith to terminate {name}"));
+            return Err(format!(
+                "The operating system did not allow Zenith to terminate {name}"
+            ));
         }
         Ok(signaled)
     }
