@@ -418,6 +418,36 @@ frontend without rerunning the same frontend suite on every OS. Both packaging
 jobs pass the checked-in `.github/tauri.package-ci.json` override by path; this
 avoids shell-specific inline JSON quoting and disables `beforeBuildCommand`.
 
+### Release dependency graph
+
+The release workflow is intentionally a fan-out/fan-in pipeline:
+
+```text
+version + binding + frontend verification
+              |
+       +------+------+
+       |             |
+ macOS ARM64     Windows x64
+ unsigned DMG    current-user NSIS
+       |             |
+       +------+------+
+              |
+     one tagged prerelease
+```
+
+Only the final job has `contents: write`; platform jobs can build and upload
+workflow artifacts but cannot create competing GitHub Releases. Public filenames
+are stable, while their download URLs remain immutable because the version is
+part of the tag path. Each platform emits separate build metadata and checksums,
+and the publisher also emits their combined checksum file.
+
+The Windows job generates a WinGet community-repository multi-file manifest
+from the exact NSIS bytes and computed SHA256 hash. v0.2.0 is the explicitly
+unsigned transition release. After SignPath Foundation approval, signing must
+be inserted between build and checksum generation and must follow
+`CODE_SIGNING_POLICY.md`; WinGet submission remains a post-publication gate so
+its immutable URL can be validated in Windows Sandbox.
+
 ## External tools
 
 On macOS and Windows, applications launched from the desktop shell receive a

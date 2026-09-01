@@ -7,15 +7,85 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  verify-release:
+    name: Verify Release Source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Linux dependencies for Tauri binding export
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release versions
+        env:
+          RELEASE_REF: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: node scripts/bump_version.cjs check "$RELEASE_REF"
+
+      - name: Generate Tauri bindings
+        run: |
+          mkdir -p dist
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+
+      - name: Verify generated bindings and Cargo.lock
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts Cargo.lock
+
+      - name: Run frontend checks and tests
+        run: |
+          pnpm check
+          pnpm test -- --run
+          pnpm build
+
+      - name: Upload verified frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-frontend-dist
+          path: dist
+          if-no-files-found: error
+
   release-mac:
     name: Build Unsigned Public Beta (macOS ARM64)
+    needs: verify-release
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -23,111 +93,209 @@ jobs:
           targets: aarch64-apple-darwin
           components: rustfmt, clippy
 
-      - name: Rust Cache
+      - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: '. -> target'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify release tag matches versions
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Download verified frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: release-frontend-dist
+          path: dist
+
+      - name: Run macOS Rust checks
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          CARGO_VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
-
-          echo "Tag version:        $TAG_VERSION"
-          echo "package.json:       $PKG_VERSION"
-          echo "Cargo.toml:         $CARGO_VERSION"
-          echo "tauri.conf.json:    $TAURI_VERSION"
-
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ] || [ "$TAG_VERSION" != "$CARGO_VERSION" ] || [ "$TAG_VERSION" != "$TAURI_VERSION" ]; then
-            echo "❌ Version mismatch detected! Tag and all manifests must be identical."
-            exit 1
-          fi
-          echo "✅ Release tag matches all manifest versions: $TAG_VERSION"
-
-      - name: Generate Tauri bindings & verify drift
-        run: |
-          mkdir -p dist
-          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
-          git diff --exit-code -- src/lib/bindings/tauri.ts
-
-      - name: Run checks & tests
-        run: |
-          pnpm check
-          pnpm test
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml
+          cargo check --manifest-path src-tauri/Cargo.toml
 
-      - name: Build frontend
-        run: pnpm build
+      - name: Build macOS DMG bundle (ARM64)
+        run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg --config .github/tauri.package-ci.json
 
-      - name: Build macOS DMG Bundle (ARM64)
-        run: pnpm tauri build --target aarch64-apple-darwin
-
-      - name: Prepare Release Artifacts, Checksums, and Metadata
+      - name: Prepare macOS release artifacts
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p artifacts
 
-          DMG_PATH=$(find target/aarch64-apple-darwin/release/bundle/dmg src-tauri/target/aarch64-apple-darwin/release/bundle/dmg target/release/bundle/dmg src-tauri/target/release/bundle/dmg -name "*.dmg" 2>/dev/null | head -n 1)
-
-          if [ -z "$DMG_PATH" ] || [ ! -f "$DMG_PATH" ]; then
-            echo "❌ Failed to locate built DMG package!"
+          DMG_PATHS=$(find target src-tauri/target -path '*/release/bundle/dmg/*.dmg' -type f 2>/dev/null || true)
+          DMG_COUNT=$(printf '%s\n' "$DMG_PATHS" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$DMG_COUNT" -ne 1 ]; then
+            echo "Expected exactly one macOS DMG, found $DMG_COUNT"
             exit 1
           fi
+          DMG_PATH="$DMG_PATHS"
 
-          echo "Found DMG at: $DMG_PATH"
-          cp "$DMG_PATH" artifacts/
-
-          cat <<EOF > artifacts/BUILD_INFO.txt
+          cp "$DMG_PATH" artifacts/Zenith-macos-arm64.dmg
+          cat > artifacts/BUILD_INFO-macos-arm64.txt <<EOF
           Zenith macOS Public Beta
           Target: aarch64-apple-darwin (Apple Silicon)
           Version: $(node -p "require('./package.json').version")
           Commit: ${GITHUB_SHA}
           Ref: ${GITHUB_REF_NAME}
+          Signed: no
+          Notarized: no
           Build Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
+          (cd artifacts && shasum -a 256 Zenith-macos-arm64.dmg > SHA256SUMS-macos-arm64.txt)
 
-          cd artifacts
-          shasum -a 256 *.dmg > SHA256SUMS
-          cat SHA256SUMS
-          echo "--- BUILD INFO ---"
-          cat BUILD_INFO.txt
-
-      - name: Upload Artifacts
+      - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zenith-macos-arm64
+          name: zenith-release-macos-arm64
           path: |
-            artifacts/*.dmg
-            artifacts/SHA256SUMS
-            artifacts/BUILD_INFO.txt
+            artifacts/Zenith-macos-arm64.dmg
+            artifacts/SHA256SUMS-macos-arm64.txt
+            artifacts/BUILD_INFO-macos-arm64.txt
           if-no-files-found: error
 
-      - name: Create GitHub Release
+  release-windows:
+    name: Build Unsigned Public Beta (Windows x64 NSIS)
+    needs: verify-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download verified frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: release-frontend-dist
+          path: dist
+
+      - name: Run Windows Rust checks
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml
+          cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Windows NSIS bundle (x64 current user)
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --config .github/tauri.package-ci.json
+
+      - name: Prepare Windows release artifacts and WinGet manifests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $searchRoots = @('target', 'src-tauri/target') | Where-Object { Test-Path $_ }
+          $installers = @(Get-ChildItem -Path $searchRoots -Filter '*.exe' -File -Recurse |
+            Where-Object { $_.FullName -match '[\\/]release[\\/]bundle[\\/]nsis[\\/]' })
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+
+          $artifactName = 'Zenith-windows-x64-setup.exe'
+          $artifactPath = Join-Path artifacts $artifactName
+          Copy-Item -Path $installers[0].FullName -Destination $artifactPath
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $buildDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          @"
+          Zenith Windows Public Beta
+          Target: x86_64-pc-windows-msvc
+          Package: NSIS current-user installer
+          WebView2: download bootstrapper
+          Version: $version
+          Commit: $env:GITHUB_SHA
+          Ref: $env:GITHUB_REF_NAME
+          Signed: no
+          Build Date: $buildDate
+          "@ | Set-Content -Path artifacts/BUILD_INFO-windows-x64.txt -Encoding utf8
+
+          $hash = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash
+          "$hash  $artifactName" | Set-Content -Path artifacts/SHA256SUMS-windows-x64.txt -Encoding ascii
+          node scripts/generate_winget_manifest.cjs `
+            --version $version `
+            --installer $artifactPath `
+            --output artifacts/winget
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenith-release-windows-x64
+          path: |
+            artifacts/Zenith-windows-x64-setup.exe
+            artifacts/SHA256SUMS-windows-x64.txt
+            artifacts/BUILD_INFO-windows-x64.txt
+            artifacts/winget/**
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Combined GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-mac, release-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: zenith-release-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Combine platform checksums
+        run: cat artifacts/SHA256SUMS-*.txt > artifacts/SHA256SUMS.txt
+
+      - name: Create one prerelease with macOS and Windows assets
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
           files: |
-            artifacts/*.dmg
-            artifacts/SHA256SUMS
-            artifacts/BUILD_INFO.txt
+            artifacts/Zenith-macos-arm64.dmg
+            artifacts/Zenith-windows-x64-setup.exe
+            artifacts/SHA256SUMS.txt
+            artifacts/SHA256SUMS-macos-arm64.txt
+            artifacts/SHA256SUMS-windows-x64.txt
+            artifacts/BUILD_INFO-macos-arm64.txt
+            artifacts/BUILD_INFO-windows-x64.txt
+            artifacts/winget/**/*.yaml
           prerelease: true
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ## Public beta signing notice
+
+            The macOS ARM64 build is not notarized and the Windows x64 NSIS installer is not yet code signed. Windows users should expect Microsoft Defender SmartScreen to show an unknown-publisher warning. Verify the published SHA256 checksum before running the installer.
+
+            Zenith is applying for SignPath Foundation open-source code signing after this first Windows release. A future release will replace the transition build with a verified, timestamped signature; immutable assets for this version will not be overwritten.
