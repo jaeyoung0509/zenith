@@ -142,8 +142,11 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
     let matches_any = |targets: &[&str]| {
         targets.iter().any(|t| {
             name_lower == *t
+                || name_lower == format!("{t}.exe")
                 || cmd_lower == *t
+                || cmd_lower == format!("{t}.exe")
                 || exe_name == *t
+                || exe_name == format!("{t}.exe")
                 || name_lower.starts_with(&format!("{t}."))
         })
     };
@@ -159,6 +162,9 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
         "dash",
         "nu",
         "xonsh",
+        "powershell",
+        "pwsh",
+        "cmd",
         "ssh",
         "sshd",
         "mosh-server",
@@ -183,12 +189,15 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
         "warp",
         "hyper",
         "rio",
+        "wt",
+        "conhost",
+        "mintty",
     ];
     if matches_any(TERMINALS) {
         return true;
     }
 
-    // System daemons & macOS services
+    // System daemons & OS services
     const SYSTEM_DAEMONS: &[&str] = &[
         "launchd",
         "systemd",
@@ -214,6 +223,17 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
         "finder",
         "dock",
         "systemsettings",
+        "svchost",
+        "csrss",
+        "services",
+        "lsass",
+        "smss",
+        "wininit",
+        "winlogon",
+        "taskmgr",
+        "explorer",
+        "msmpeng",
+        "securityhealthservice",
     ];
     if matches_any(SYSTEM_DAEMONS) {
         return true;

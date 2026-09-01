@@ -429,8 +429,9 @@ pub fn pick_workspace() -> Result<Option<DeveloperWorkspace>, String> {
 }
 
 pub fn register_home_workspace() -> Result<DeveloperWorkspace, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     let canonical = fs::canonicalize(&home)
         .map_err(|_| "Could not resolve the user home directory".to_string())?;
@@ -443,12 +444,18 @@ pub fn register_home_workspace() -> Result<DeveloperWorkspace, String> {
     if metadata.uid() != unsafe { libc::geteuid() } {
         return Err("The user home directory must be owned by the current user.".to_string());
     }
-    Ok(store_workspace(canonical, "This Mac".to_string(), true)?.workspace)
+    let name = if cfg!(target_os = "macos") {
+        "This Mac".to_string()
+    } else {
+        "This PC".to_string()
+    };
+    Ok(store_workspace(canonical, name, true)?.workspace)
 }
 
 pub fn register_workspace_path(path: &Path) -> Result<DeveloperWorkspaceRecord, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     let canonical = validate_workspace_root(path, &home)?;
     let name = canonical
@@ -678,7 +685,9 @@ fn global_go_module_candidate(
     workspace: &DeveloperWorkspaceRecord,
     seen_paths: &mut HashSet<PathBuf>,
 ) -> Option<Candidate> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
     let canonical_home = fs::canonicalize(&home).ok()?;
     let expected_root = fs::canonicalize(home.join("go")).ok()?;
     if workspace.path != expected_root && workspace.path != canonical_home {

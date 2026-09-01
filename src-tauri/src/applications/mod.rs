@@ -50,10 +50,25 @@ pub struct ApplicationScanner;
 impl ApplicationScanner {
     pub fn scan() -> AppInventory {
         let mut records = HashMap::new();
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = crate::platform::paths::NativePlatformPaths::new()
+            .home()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+
+        #[cfg(not(target_os = "windows"))]
         let mut roots = vec![PathBuf::from("/Applications")];
+        #[cfg(not(target_os = "windows"))]
         if let Some(home) = &home {
             roots.push(home.join("Applications"));
+        }
+
+        #[cfg(target_os = "windows")]
+        let mut roots = vec![
+            PathBuf::from("C:\\Program Files"),
+            PathBuf::from("C:\\Program Files (x86)"),
+        ];
+        #[cfg(target_os = "windows")]
+        if let Some(home) = &home {
+            roots.push(home.join("AppData\\Local\\Programs"));
         }
 
         let mut system = System::new_all();
@@ -76,22 +91,59 @@ impl ApplicationScanner {
             };
             for entry in entries.flatten() {
                 let path = entry.path();
+                #[cfg(not(target_os = "windows"))]
                 if path.extension().and_then(|value| value.to_str()) != Some("app") {
                     continue;
                 }
+                #[cfg(target_os = "windows")]
+                if !path.is_dir() {
+                    continue;
+                }
+
                 let Some(identity) = FileIdentity::from_path(&path) else {
                     continue;
                 };
-                let metadata = read_bundle_metadata(&path);
+
+                #[cfg(not(target_os = "windows"))]
+                let (metadata, name) = {
+                    let metadata = read_bundle_metadata(&path);
+                    let name = metadata
+                        .display_name
+                        .clone()
+                        .or_else(|| {
+                            path.file_stem()
+                                .and_then(|value| value.to_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| "Unknown App".to_string());
+                    (metadata, name)
+                };
+
+                #[cfg(target_os = "windows")]
+                let (metadata, name) = {
+                    let name = path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("Unknown App")
+                        .to_string();
+                    if name.eq_ignore_ascii_case("WindowsApps")
+                        || name.eq_ignore_ascii_case("Common Files")
+                        || name.eq_ignore_ascii_case("Internet Explorer")
+                    {
+                        continue;
+                    }
+                    (
+                        BundleMetadata {
+                            display_name: Some(name.clone()),
+                            bundle_id: None,
+                            version: None,
+                            executable: Some(format!("{name}.exe")),
+                        },
+                        name,
+                    )
+                };
+
                 let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
-                let name = metadata
-                    .display_name
-                    .or_else(|| {
-                        path.file_stem()
-                            .and_then(|value| value.to_str())
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_else(|| "Unknown App".to_string());
                 let is_system_protected = is_zenith_identity(&name, metadata.bundle_id.as_deref());
                 let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
                 let is_running = running_paths.iter().any(|exe| exe.starts_with(&canonical));
@@ -152,8 +204,9 @@ impl ApplicationScanner {
             );
         }
 
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
+        let home = crate::platform::paths::NativePlatformPaths::new()
+            .home()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
         let bundle_id = record.app.bundle_id.clone();
         let normalized_name = record.app.name.trim().to_string();
@@ -161,6 +214,7 @@ impl ApplicationScanner {
         let mut incomplete = false;
         let mut warnings = Vec::new();
 
+        #[cfg(not(target_os = "windows"))]
         let roots = [
             (
                 "Library/Application Support",
@@ -181,6 +235,12 @@ impl ApplicationScanner {
             ),
             ("Library/HTTPStorages", AppRelatedKind::HttpStorage),
             ("Library/WebKit", AppRelatedKind::WebKit),
+        ];
+
+        #[cfg(target_os = "windows")]
+        let roots = [
+            ("AppData/Local", AppRelatedKind::Cache),
+            ("AppData/Roaming", AppRelatedKind::ApplicationSupport),
         ];
 
         for (relative, kind) in roots {

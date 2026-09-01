@@ -321,3 +321,83 @@ fn test_windows_reparse_point_symlink_defense() {
     let non_existent = Path::new("C:\\path\\does\\not\\exist\\123");
     assert!(!SymlinkGuard::is_symlink(non_existent));
 }
+
+#[test]
+fn test_windows_platform_capabilities_batch2() {
+    use zenith_lib::models::{PlatformCapabilities, PlatformFeatureStatus, PlatformKind};
+
+    let caps = PlatformCapabilities::windows();
+    assert_eq!(caps.platform, PlatformKind::Windows);
+    assert_eq!(caps.system_actions.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.cleanup.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.large_files.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.developer_artifacts.status,
+        PlatformFeatureStatus::Available
+    );
+    assert_eq!(caps.installed_apps.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.app_uninstall.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.memory_metrics.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.process_termination.status,
+        PlatformFeatureStatus::Available
+    );
+    assert_eq!(
+        caps.development_ports.status,
+        PlatformFeatureStatus::Available
+    );
+    assert_eq!(caps.keep_awake.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.local_models.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.docker.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.ai_integrations.status,
+        PlatformFeatureStatus::Available
+    );
+}
+
+#[test]
+fn test_windows_dev_ports_classification_defense() {
+    use std::path::Path;
+    use zenith_lib::dev_ports::{classify_listener, ProcessClassificationInput};
+
+    // Protected PowerShell / Windows Terminal
+    let input_ps = ProcessClassificationInput {
+        pid: 4500,
+        uid: Some(1000),
+        current_user_uid: 1000,
+        zenith_pid: 9999,
+        port: 8080,
+        raw_command: "powershell.exe",
+        process_name: "powershell.exe",
+        exe_path: Some(Path::new(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        )),
+        cwd: Some(Path::new("C:\\Users\\test")),
+        argv: &["powershell.exe".to_string()],
+        started_at: Some(100),
+    };
+    let res_ps = classify_listener(&input_ps);
+    assert!(!res_ps.can_release);
+    assert!(res_ps.blocked_reason.is_some());
+
+    // Allowlisted Vite dev server on Windows
+    let input_vite = ProcessClassificationInput {
+        pid: 5600,
+        uid: Some(1000),
+        current_user_uid: 1000,
+        zenith_pid: 9999,
+        port: 5173,
+        raw_command: "node.exe",
+        process_name: "node.exe",
+        exe_path: Some(Path::new("C:\\Program Files\\nodejs\\node.exe")),
+        cwd: Some(Path::new("C:\\Users\\test\\projects\\my-app")),
+        argv: &[
+            "node.exe".to_string(),
+            "C:\\Users\\test\\projects\\my-app\\node_modules\\vite\\bin\\vite.js".to_string(),
+        ],
+        started_at: Some(200),
+    };
+    let res_vite = classify_listener(&input_vite);
+    assert!(res_vite.can_release);
+    assert_eq!(res_vite.server_name, "Vite");
+}

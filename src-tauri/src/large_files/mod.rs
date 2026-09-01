@@ -49,7 +49,26 @@ impl FileIdentity {
         }
         #[cfg(unix)]
         let (device, inode) = (meta.dev(), meta.ino());
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let (device, inode) = if let Ok(file) = std::fs::File::open(path) {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+            };
+            unsafe {
+                let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+                if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0 {
+                    let dev = info.dwVolumeSerialNumber as u64;
+                    let ino = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+                    (dev, ino)
+                } else {
+                    (0, 0)
+                }
+            }
+        } else {
+            (0, 0)
+        };
+        #[cfg(not(any(unix, windows)))]
         let (device, inode) = (0, 0);
         Some(Self {
             device,
@@ -73,7 +92,9 @@ pub fn is_allowed_large_file_path(path: &Path) -> bool {
 }
 
 pub fn allowed_large_file_root(path: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
     LARGE_FILE_ROOTS
         .iter()
         .map(|root| home.join(root))
@@ -343,8 +364,9 @@ fn inventory_from_retained(
 }
 
 fn resolve_roots(tokens: &[String]) -> Result<Vec<PathBuf>, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     resolve_roots_for_home(tokens, &home)
 }

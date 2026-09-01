@@ -1,5 +1,7 @@
 use super::classifier::{classify_listener, ProcessClassificationInput};
-use super::discovery::{parse_lsof_output, RawListenerRecord};
+#[cfg(unix)]
+use super::discovery::parse_lsof_output;
+use super::discovery::RawListenerRecord;
 use super::store::{CreateLeaseParams, DevelopmentPortStore};
 use crate::models::{
     DevelopmentListener, ReleaseDevelopmentListenerResult, ReleaseMode, ReleaseOutcome,
@@ -78,23 +80,36 @@ impl DevPortSystem for RealDevPortSystem {
     }
 
     fn discover_listeners(&self) -> Result<Vec<RawListenerRecord>, String> {
-        let mut cmd = std::process::Command::new("/usr/sbin/lsof");
-        cmd.args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-F0pcuLn"]);
+        #[cfg(unix)]
+        {
+            let mut cmd = std::process::Command::new("/usr/sbin/lsof");
+            cmd.args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-F0pcuLn"]);
 
-        let output =
-            crate::tooling::run_with_timeout(cmd, Duration::from_secs(2)).map_err(|e| {
-                crate::diagnostics::log_error(
-                    "dev_ports",
-                    "Listener inspection timed out or failed",
-                );
-                format!("Listener inspection timed out or failed: {e}")
-            })?;
+            let output =
+                crate::tooling::run_with_timeout(cmd, Duration::from_secs(2)).map_err(|e| {
+                    crate::diagnostics::log_error(
+                        "dev_ports",
+                        "Listener inspection timed out or failed",
+                    );
+                    format!("Listener inspection timed out or failed: {e}")
+                })?;
 
-        if !output.status.success() && output.stdout.is_empty() {
-            return Ok(Vec::new());
+            if !output.status.success() && output.stdout.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            Ok(parse_lsof_output(&output.stdout))
         }
 
-        Ok(parse_lsof_output(&output.stdout))
+        #[cfg(target_os = "windows")]
+        {
+            discover_windows_tcp_listeners()
+        }
+
+        #[cfg(not(any(unix, target_os = "windows")))]
+        {
+            Ok(Vec::new())
+        }
     }
 
     fn get_process_info(&self, pid: u32) -> Option<ProcessSnapshot> {
@@ -120,10 +135,23 @@ impl DevPortSystem for RealDevPortSystem {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         let start_time = process.start_time();
-        let uid = process
-            .effective_user_id()
-            .or_else(|| process.user_id())
-            .and_then(|u| u.to_string().parse::<u32>().ok());
+        let uid = {
+            #[cfg(unix)]
+            {
+                process
+                    .effective_user_id()
+                    .or_else(|| process.user_id())
+                    .and_then(|u| u.to_string().parse::<u32>().ok())
+            }
+            #[cfg(target_os = "windows")]
+            {
+                Some(1000)
+            }
+            #[cfg(not(any(unix, target_os = "windows")))]
+            {
+                None
+            }
+        };
 
         Some(ProcessSnapshot {
             pid,
@@ -158,10 +186,37 @@ impl DevPortSystem for RealDevPortSystem {
             }
             Ok(())
         }
-        #[cfg(not(unix))]
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+            };
+
+            unsafe {
+                let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+                if handle.is_null() {
+                    let errno = std::io::Error::last_os_error();
+                    if errno.raw_os_error() == Some(5) {
+                        return Err("Access denied terminating process".to_string());
+                    }
+                    return Ok(()); // Process already exited
+                }
+
+                let exit_code = if signal == 9 { 1 } else { 0 };
+                let success = TerminateProcess(handle, exit_code);
+                CloseHandle(handle);
+
+                if success == 0 {
+                    return Err("Failed to terminate process on Windows".to_string());
+                }
+            }
+            Ok(())
+        }
+        #[cfg(not(any(unix, target_os = "windows")))]
         {
             let _ = signal;
-            Err("Termination is only supported on Unix systems".to_string())
+            Err("Termination is only supported on Unix or Windows systems".to_string())
         }
     }
 
@@ -172,6 +227,134 @@ impl DevPortSystem for RealDevPortSystem {
     fn now(&self) -> Instant {
         Instant::now()
     }
+}
+
+#[cfg(target_os = "windows")]
+fn discover_windows_tcp_listeners() -> Result<Vec<RawListenerRecord>, String> {
+    use crate::models::{ListenerExposure, ListenerProtocol};
+    use windows_sys::Win32::NetworkManagement::IpHelper::*;
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+
+    let mut records = Vec::new();
+
+    // 1. IPv4 TCP Table
+    unsafe {
+        let mut size = 0u32;
+        let _ = GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET as u32,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        );
+
+        if size > 0 {
+            let mut buffer = vec![0u8; size as usize];
+            if GetExtendedTcpTable(
+                buffer.as_mut_ptr() as *mut _,
+                &mut size,
+                0,
+                AF_INET as u32,
+                TCP_TABLE_OWNER_PID_ALL,
+                0,
+            ) == 0
+            {
+                let table = &*(buffer.as_ptr() as *const MIB_TCPTABLE_OWNER_PID);
+                let num_entries = table.dwNumEntries as usize;
+                let rows_ptr = table.table.as_ptr();
+
+                for i in 0..num_entries {
+                    let row = &*rows_ptr.add(i);
+                    // 2 = MIB_TCP_STATE_LISTEN
+                    if row.dwState == 2 {
+                        let port = u16::from_be((row.dwLocalPort & 0xFFFF) as u16);
+                        let ip_bytes = row.dwLocalAddr.to_ne_bytes();
+                        let ip_str = format!(
+                            "{}.{}.{}.{}",
+                            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]
+                        );
+                        let exposure = if ip_str == "127.0.0.1" || ip_str.starts_with("127.") {
+                            ListenerExposure::Loopback
+                        } else if ip_str == "0.0.0.0" {
+                            ListenerExposure::AllInterfaces
+                        } else {
+                            ListenerExposure::Network
+                        };
+
+                        records.push(RawListenerRecord {
+                            pid: row.dwOwningPid,
+                            command: String::new(),
+                            uid: Some(1000),
+                            port,
+                            bind_address: ip_str,
+                            exposure,
+                            protocol: ListenerProtocol::Tcp,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. IPv6 TCP Table
+    unsafe {
+        let mut size = 0u32;
+        let _ = GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET6 as u32,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        );
+
+        if size > 0 {
+            let mut buffer = vec![0u8; size as usize];
+            if GetExtendedTcpTable(
+                buffer.as_mut_ptr() as *mut _,
+                &mut size,
+                0,
+                AF_INET6 as u32,
+                TCP_TABLE_OWNER_PID_ALL,
+                0,
+            ) == 0
+            {
+                let table = &*(buffer.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID);
+                let num_entries = table.dwNumEntries as usize;
+                let rows_ptr = table.table.as_ptr();
+
+                for i in 0..num_entries {
+                    let row = &*rows_ptr.add(i);
+                    // 2 = MIB_TCP_STATE_LISTEN
+                    if row.dwState == 2 {
+                        let port = u16::from_be((row.dwLocalPort & 0xFFFF) as u16);
+                        let addr = std::net::Ipv6Addr::from(row.ucLocalAddr);
+                        let ip_str = addr.to_string();
+                        let exposure = if addr.is_loopback() {
+                            ListenerExposure::Loopback
+                        } else if addr.is_unspecified() {
+                            ListenerExposure::AllInterfaces
+                        } else {
+                            ListenerExposure::Network
+                        };
+
+                        records.push(RawListenerRecord {
+                            pid: row.dwOwningPid,
+                            command: String::new(),
+                            uid: Some(1000),
+                            port,
+                            bind_address: ip_str,
+                            exposure,
+                            protocol: ListenerProtocol::Tcp,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(crate::dev_ports::discovery::deduplicate_listeners(records))
 }
 
 /// Lists all current TCP listeners, classifies each process, and stores short-lived leases.
