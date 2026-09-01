@@ -1439,6 +1439,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn scanner_streams_measured_candidates_from_an_explicit_workspace() {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
@@ -1630,6 +1631,7 @@ mod tests {
         assert!(record.artifact.status.allows_manual_cleanup());
     }
 
+    #[cfg(unix)]
     #[test]
     fn workspace_validation_requires_a_real_child_of_the_selected_home() {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
@@ -1651,6 +1653,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn backend_owned_home_scope_registers_without_the_folder_picker() {
         let workspace = register_home_workspace().unwrap();
@@ -1675,6 +1678,7 @@ mod tests {
         assert!(same_workspace_directory_identity(&current, &registered));
     }
 
+    #[cfg(unix)]
     #[test]
     fn workspace_identity_rejects_a_replaced_directory() {
         let temp = tempfile::tempdir().unwrap();

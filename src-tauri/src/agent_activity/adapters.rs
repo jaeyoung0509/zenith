@@ -177,7 +177,7 @@ pub fn health_with_integrations(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

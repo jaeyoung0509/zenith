@@ -427,6 +427,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn record_with_pid(
         pid: u32,
         executable: &str,
@@ -463,6 +464,7 @@ mod tests {
         assert!(registry.snapshot.unassigned_sessions.is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn groups_exact_processes_by_canonical_project_without_exposing_pid() {
         let temp = tempfile::tempdir().unwrap();
@@ -500,6 +502,7 @@ mod tests {
             .is_some());
     }
 
+    #[cfg(unix)]
     #[test]
     fn vendor_event_is_assigned_only_to_the_unique_matching_process() {
         let temp = tempfile::tempdir().unwrap();
@@ -551,6 +554,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn process_lifetime_is_not_mistaken_for_observed_inactivity() {
         let temp = tempfile::tempdir().unwrap();
@@ -590,6 +594,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn retains_a_naturally_exited_session_with_its_project_context() {
         let temp = tempfile::tempdir().unwrap();
