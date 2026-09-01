@@ -16,30 +16,36 @@ export class PlatformCapabilitiesStore {
   isLoading = $state(false);
   error = $state<string | null>(null);
   private loadPromise: Promise<void> | null = null;
+  private loadGeneration = 0;
 
   constructor(private readonly loadCapabilities: PlatformCapabilitiesLoader = tauriGetPlatformCapabilities) {}
 
   async load(force = false): Promise<void> {
     if (this.loadPromise && !force) return this.loadPromise;
-    this.loadPromise = this.performLoad();
+    const generation = ++this.loadGeneration;
+    const promise = this.performLoad(generation);
+    this.loadPromise = promise;
     try {
-      await this.loadPromise;
+      await promise;
     } finally {
-      this.loadPromise = null;
+      if (this.loadPromise === promise) this.loadPromise = null;
     }
   }
 
-  private async performLoad(): Promise<void> {
+  private async performLoad(generation: number): Promise<void> {
     this.isLoading = true;
     try {
-      this.capabilities = await this.loadCapabilities();
+      const capabilities = await this.loadCapabilities();
+      if (generation !== this.loadGeneration) return;
+      this.capabilities = capabilities;
       this.error = null;
     } catch (error) {
+      if (generation !== this.loadGeneration) return;
       // Keep the null state: action gates fail closed while the UI can surface
       // this error through the store if a platform query cannot be completed.
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
-      this.isLoading = false;
+      if (generation === this.loadGeneration) this.isLoading = false;
     }
   }
 

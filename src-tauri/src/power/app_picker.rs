@@ -1,5 +1,7 @@
 use crate::models::SelectedApplication;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::process::Command;
 
 pub struct ApplicationPicker;

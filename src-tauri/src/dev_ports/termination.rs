@@ -8,6 +8,18 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+const GRACEFUL_TERMINATION_SIGNAL: i32 = libc::SIGTERM;
+#[cfg(unix)]
+const FORCE_TERMINATION_SIGNAL: i32 = libc::SIGKILL;
+
+// Unsupported platforms still compile deterministic fake-system tests, but
+// the real adapter rejects these opaque requests before any process operation.
+#[cfg(not(unix))]
+const GRACEFUL_TERMINATION_SIGNAL: i32 = 15;
+#[cfg(not(unix))]
+const FORCE_TERMINATION_SIGNAL: i32 = 9;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessSnapshot {
     pub pid: u32,
@@ -389,8 +401,8 @@ pub fn release_listener(
 
     // 5. Send Signal
     let sig = match mode {
-        ReleaseMode::Graceful => libc::SIGTERM,
-        ReleaseMode::Force => libc::SIGKILL,
+        ReleaseMode::Graceful => GRACEFUL_TERMINATION_SIGNAL,
+        ReleaseMode::Force => FORCE_TERMINATION_SIGNAL,
     };
 
     system.send_signal(lease.pid, sig)?;
@@ -631,7 +643,7 @@ mod tests {
         // Verify SIGTERM was sent to the exact PID
         let signals = fake.signaled_pids.lock().unwrap();
         assert_eq!(signals.len(), 1);
-        assert_eq!(signals[0], (32892, libc::SIGTERM));
+        assert_eq!(signals[0], (32892, GRACEFUL_TERMINATION_SIGNAL));
     }
 
     #[test]
@@ -707,8 +719,8 @@ mod tests {
 
         let signals = fake.signaled_pids.lock().unwrap();
         assert_eq!(signals.len(), 2);
-        assert_eq!(signals[0], (40000, libc::SIGTERM));
-        assert_eq!(signals[1], (40000, libc::SIGKILL));
+        assert_eq!(signals[0], (40000, GRACEFUL_TERMINATION_SIGNAL));
+        assert_eq!(signals[1], (40000, FORCE_TERMINATION_SIGNAL));
     }
 
     #[test]
@@ -819,7 +831,7 @@ mod tests {
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert_eq!(
             fake.signaled_pids.lock().unwrap().as_slice(),
-            &[(11111, libc::SIGTERM)]
+            &[(11111, GRACEFUL_TERMINATION_SIGNAL)]
         );
     }
 

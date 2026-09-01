@@ -125,14 +125,12 @@ impl LargeFileScanner {
                 root: display_root.clone(),
             });
 
-            let Some(root_meta) = safe_scan_root_metadata(&root) else {
+            let Some(_root_meta) = safe_scan_root_metadata(&root) else {
                 skipped_entries += 1;
                 continue;
             };
             #[cfg(unix)]
-            let root_device = root_meta.dev();
-            #[cfg(not(unix))]
-            let root_device = 0u64;
+            let root_device = _root_meta.dev();
 
             let mut stack = vec![root.clone()];
             while let Some(dir) = stack.pop() {

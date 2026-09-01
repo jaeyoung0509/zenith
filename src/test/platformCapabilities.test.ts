@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mockApi } from '../lib/api/mock';
+import type { PlatformCapabilities } from '../lib/models/types';
 import { PlatformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+
+const windowsCapabilities: PlatformCapabilities = {
+  platform: 'windows',
+  system_actions: { status: 'unavailable', reason: 'Not ported' },
+  cleanup: { status: 'unavailable', reason: 'Not ported' },
+  large_files: { status: 'unavailable', reason: 'Not ported' },
+  developer_artifacts: { status: 'unavailable', reason: 'Not ported' },
+  installed_apps: { status: 'unavailable', reason: 'Not ported' },
+  app_uninstall: { status: 'unavailable', reason: 'Not ported' },
+  memory_metrics: { status: 'read_only', reason: 'Inspection only' },
+  process_termination: { status: 'unavailable', reason: 'Not ported' },
+  development_ports: { status: 'unavailable', reason: 'Not ported' },
+  keep_awake: { status: 'unavailable', reason: 'Not ported' },
+  local_models: { status: 'unavailable', reason: 'Not ported' },
+  docker: { status: 'read_only', reason: 'Inspection only' },
+  ai_integrations: { status: 'unavailable', reason: 'Not ported' },
+};
 
 describe('platform capability contract', () => {
   it('keeps the browser preview payload aligned with the native shape', async () => {
@@ -14,22 +32,7 @@ describe('platform capability contract', () => {
   });
 
   it('distinguishes available, read-only, and unavailable actions', async () => {
-    const store = new PlatformCapabilitiesStore(async () => ({
-      platform: 'windows',
-      system_actions: { status: 'unavailable', reason: 'Not ported' },
-      cleanup: { status: 'unavailable', reason: 'Not ported' },
-      large_files: { status: 'unavailable', reason: 'Not ported' },
-      developer_artifacts: { status: 'unavailable', reason: 'Not ported' },
-      installed_apps: { status: 'unavailable', reason: 'Not ported' },
-      app_uninstall: { status: 'unavailable', reason: 'Not ported' },
-      memory_metrics: { status: 'read_only', reason: 'Inspection only' },
-      process_termination: { status: 'unavailable', reason: 'Not ported' },
-      development_ports: { status: 'unavailable', reason: 'Not ported' },
-      keep_awake: { status: 'unavailable', reason: 'Not ported' },
-      local_models: { status: 'unavailable', reason: 'Not ported' },
-      docker: { status: 'read_only', reason: 'Inspection only' },
-      ai_integrations: { status: 'unavailable', reason: 'Not ported' },
-    }));
+    const store = new PlatformCapabilitiesStore(async () => windowsCapabilities);
 
     await store.load();
 
@@ -38,6 +41,24 @@ describe('platform capability contract', () => {
     expect(store.isAvailable('memory_metrics')).toBe(false);
     expect(store.feature('cleanup')?.reason).toBe('Not ported');
     expect(store.isInspectable('docker')).toBe(true);
+  });
+
+  it('keeps the newest forced refresh when an older request finishes last', async () => {
+    const resolvers: Array<(value: PlatformCapabilities) => void> = [];
+    const store = new PlatformCapabilitiesStore(
+      () => new Promise((resolve) => resolvers.push(resolve))
+    );
+
+    const firstLoad = store.load();
+    const forcedLoad = store.load(true);
+
+    resolvers[1](windowsCapabilities);
+    await forcedLoad;
+    resolvers[0]({ ...windowsCapabilities, platform: 'macos' });
+    await firstLoad;
+
+    expect(store.capabilities?.platform).toBe('windows');
+    expect(store.isLoading).toBe(false);
   });
 
   it('keeps native surfaces wired to backend capability gates', () => {
