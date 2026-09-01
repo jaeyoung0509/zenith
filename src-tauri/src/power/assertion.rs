@@ -40,8 +40,6 @@ mod macos_iokit {
 pub struct PowerAssertion {
     #[cfg(target_os = "macos")]
     id: macos_iokit::IOPMAssertionID,
-    #[cfg(not(target_os = "macos"))]
-    id: u32,
     pub behavior: AwakeBehavior,
 }
 
@@ -114,7 +112,11 @@ impl PowerAssertion {
 
     #[cfg(test)]
     pub(crate) fn mock(behavior: AwakeBehavior) -> Self {
-        Self { id: 1, behavior }
+        Self {
+            #[cfg(target_os = "macos")]
+            id: 1,
+            behavior,
+        }
     }
 }
 
