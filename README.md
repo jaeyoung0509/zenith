@@ -4,7 +4,7 @@
 
 <h1 align="center">Zenith</h1>
 
-<p align="center">A macOS utility for developer storage, processes, local services, AI usage, and sleep control.</p>
+<p align="center">A cross-platform utility for developer storage, processes, local services, AI usage, and sleep control.</p>
 
 Zenith helps identify reclaimable caches created by AI tools, compilers, package
 managers, containers, and local model runtimes. Cleanup candidates are classified
@@ -51,18 +51,38 @@ The menu-bar panel stops recurring metrics and provider work while hidden. Disk
 metrics refresh when the panel opens, memory polling runs only while visible,
 and AI usage snapshots use a short backend cache.
 
-## Public Beta Installation (macOS)
+## Public Beta Installation
 
-Zenith is currently distributed as an unsigned public beta for Apple Silicon (ARM64) Macs. Pre-built `.dmg` disk images and SHA256 checksums are available under [GitHub Releases](https://github.com/jaeyoung0509/zenith/releases).
+Zenith is distributed as a public beta for Apple Silicon (ARM64) Macs and
+Windows x64. Pre-built `.dmg` and NSIS `.exe` installers, build metadata, and
+SHA256 checksums are available under
+[GitHub Releases](https://github.com/jaeyoung0509/zenith/releases).
 
-### Local release recipes
+### Windows x64
+
+Download `Zenith-windows-x64-setup.exe`. It installs for the current user under
+`%LOCALAPPDATA%`, so normal installation does not require administrator access.
+The installer downloads Microsoft's WebView2 bootstrapper if the runtime is not
+already available.
+
+The first Windows beta is intentionally unsigned while Zenith completes the
+[SignPath Foundation](https://signpath.org/) open-source onboarding process.
+Microsoft Defender SmartScreen will therefore identify it as an unknown
+publisher. Confirm that the installer came from this repository's GitHub
+Release and verify its SHA256 value against `SHA256SUMS.txt` before choosing
+**More info → Run anyway**. See the [Windows guide](docs/WINDOWS.md) and
+[code signing policy](CODE_SIGNING_POLICY.md) for the exact transition plan.
+
+### macOS ARM64
+
+#### Local release recipes
 
 - `just distribute` only creates fresh `.app` and `.dmg` package artifacts under `target/release`; it never changes `/Applications`.
 - `just release` packages the app, validates its bundle identity and version, then replaces the exact `/Applications/Zenith.app`. The previous installed bundle is restored if activation or verification fails.
 - `just release-and-run` performs the same verified replacement and opens the installed copy rather than the build-tree bundle.
 - `just install-release` installs an already-built release bundle using the same transaction. It reports a clear error if the current user cannot write to `/Applications` and does not use `sudo` automatically.
 
-### Opening Unsigned Beta Builds on macOS
+#### Opening unsigned beta builds on macOS
 
 Because beta builds are not notarized with a paid Apple Developer ID, macOS Gatekeeper will display a security warning on first launch (*"cannot be opened because the developer cannot be verified"* or *"is damaged and can't be opened"*).
 
@@ -155,6 +175,11 @@ cleanup, metrics, provider integrations, and power management. See
 [`docs/SAFETY.md`](docs/SAFETY.md) for the deletion trust boundaries.
 Windows contributors can follow [`docs/WINDOWS.md`](docs/WINDOWS.md) for the
 MSVC, Tauri, and NSIS development workflow.
+
+## License
+
+Zenith is available under the [MIT License](LICENSE). Official Windows release
+signing follows the project's [code signing policy](CODE_SIGNING_POLICY.md).
 
 ## Development
 

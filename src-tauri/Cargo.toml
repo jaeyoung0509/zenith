@@ -1,9 +1,11 @@
 [package]
 name = "zenith-core"
-version = "0.1.23"
+version = "0.2.0"
 description = "Zenith - cross-platform AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/jaeyoung0509/zenith"
 
 [lib]
 name = "zenith_lib"

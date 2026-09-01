@@ -97,6 +97,12 @@ safety conventions below when changing Zenith.
 - Packaging jobs use `.github/tauri.package-ci.json` to disable Tauri's frontend
   rebuild. Pass the file path to `--config`; do not inline JSON in workflow
   commands because PowerShell command forwarding strips nested quotes.
+- Release jobs fan out from one verified frontend artifact and fan in to one
+  GitHub Release publisher. Only that publisher receives `contents: write`.
+  Keep public artifact names stable and compute WinGet hashes from the final
+  installer bytes. Never claim an unsigned build is signed; after SignPath
+  approval, follow `CODE_SIGNING_POLICY.md` and verify Authenticode before
+  checksum generation or publication.
 
 ## Cleanup safety invariants
 
