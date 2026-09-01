@@ -48,7 +48,7 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
         use windows_sys::Win32::System::JobObjects::*;
         let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if !handle.is_null() {
-            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
                 BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
                     LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                     ..std::mem::zeroed()
