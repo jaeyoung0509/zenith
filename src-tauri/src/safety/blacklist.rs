@@ -6,7 +6,9 @@ pub struct Blacklist;
 impl Blacklist {
     /// System and user directory paths that must NEVER be deleted under any circumstances.
     pub fn is_blacklisted(path: &Path) -> bool {
-        let home = std::env::var("HOME").map(PathBuf::from).ok();
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from);
 
         // 1. Exact forbidden root & home
         if path == Path::new("/") {

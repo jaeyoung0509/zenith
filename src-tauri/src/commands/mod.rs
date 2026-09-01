@@ -8,8 +8,8 @@ use crate::models::{
     AiProviderUsage, AiUsageSnapshot, AwakeBehavior, AwakeRule, AwakeState, Category, CleanEvent,
     CleanResult, ControlCenterQuickSummary, DeletePlan, DevelopmentListener, DiagnosticsSnapshot,
     DiskMetrics, DiskVolume, DockerStatus, IngestedAgentEvent, LocalModelItem, MemoryMetrics,
-    PlanPreview, RecommendationPreview, ReleaseDevelopmentListenerResult, ReleaseMode, ScanEvent,
-    ScanResult, SelectedApplication, ZenithSettings,
+    PlanPreview, PlatformCapabilities, RecommendationPreview, ReleaseDevelopmentListenerResult,
+    ReleaseMode, ScanEvent, ScanResult, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::operation_gate::StorageOperationGate;
@@ -39,6 +39,7 @@ pub struct AppState {
     pub agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
     pub ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     pub ai_control_refresh_lock: Arc<Mutex<()>>,
+    pub platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider>,
 }
 
 fn unix_timestamp() -> u64 {
@@ -1159,12 +1160,13 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
             .arg(path)
             .spawn()
             .map_err(|error| format!("Could not open Finder: {error}"))?;
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
+        Err("Reveal in Finder is unavailable on this platform.".to_string())
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -1181,12 +1183,13 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
             .arg(path)
             .spawn()
             .map_err(|error| format!("Could not open Terminal: {error}"))?;
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
+        Err("Opening a terminal is unavailable on this platform.".to_string())
     }
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1215,6 +1218,12 @@ pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
 #[specta::specta]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_platform_capabilities(state: State<'_, AppState>) -> PlatformCapabilities {
+    state.platform_capabilities.capabilities()
 }
 
 #[tauri::command]

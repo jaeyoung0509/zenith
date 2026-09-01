@@ -45,6 +45,7 @@
     "allow-disable-manual-awake",
     "allow-get-settings",
     "allow-save-settings",
+    "allow-get-platform-capabilities",
     "allow-reveal-in-finder",
     "allow-open-dashboard-window",
     "allow-toggle-quick-panel",

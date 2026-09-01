@@ -3,6 +3,7 @@
   import type { Component } from 'svelte';
 
   import { settingsStore } from './lib/stores/settings.svelte';
+  import { platformCapabilitiesStore } from './lib/stores/platformCapabilities.svelte';
   import { isTauri } from './lib/utils/tauri';
   import { isQuickPanelDismissShortcut } from './lib/utils/quickPanel';
 
@@ -36,6 +37,7 @@
     let removeHashListener: (() => void) | undefined;
 
     settingsStore.load();
+    void platformCapabilitiesStore.load();
 
     async function activateView(view: View) {
       const generation = ++loadGeneration;

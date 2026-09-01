@@ -153,6 +153,8 @@ dashboard. Both use typed IPC commands backed by Rust modules for scanning,
 cleanup, metrics, provider integrations, and power management. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the runtime and data flow, and
 [`docs/SAFETY.md`](docs/SAFETY.md) for the deletion trust boundaries.
+Windows contributors can follow [`docs/WINDOWS.md`](docs/WINDOWS.md) for the
+MSVC, Tauri, and NSIS development workflow.
 
 ## Development
 

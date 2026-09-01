@@ -25,6 +25,7 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  PlatformCapabilities,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -247,6 +248,10 @@ export const nativeApi = {
     } catch {
       return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
     }
+  },
+
+  async getPlatformCapabilities(): Promise<PlatformCapabilities> {
+    return await commands.getPlatformCapabilities();
   },
 
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {

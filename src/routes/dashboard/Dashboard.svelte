@@ -8,6 +8,7 @@
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import StorageView from './StorageView.svelte';
   import StorageTools from './StorageTools.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
@@ -45,36 +46,86 @@
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
+  // SSR has no side effects, so render the existing dashboard shape for
+  // snapshot tests. Browser mounts wait for the backend capability response
+  // before mounting any platform-sensitive child route.
+  let capabilitiesReady = $state(typeof window === 'undefined');
   let settings = $derived(settingsStore.settings);
   let sidebarCollapsed = $derived(settings.sidebar_collapsed ?? false);
   let fadeDuration = $derived(prefersReducedMotion.current ? 0 : 140);
 
-  const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any }>> = {
-    storage: { label: 'Storage', icon: HardDrive },
-    docker: { label: 'Containers', icon: Container },
-    models: { label: 'Local Models', icon: Boxes },
-    memory: { label: 'Memory', icon: Activity },
-    development_servers: { label: 'Dev Servers', icon: Server },
-    projects: { label: 'AI Activity', icon: Sparkles },
-    awake: { label: 'Keep Awake', icon: Moon },
+  type DashboardCapability =
+    | 'cleanup'
+    | 'docker'
+    | 'local_models'
+    | 'memory_metrics'
+    | 'development_ports'
+    | 'ai_integrations'
+    | 'keep_awake';
+
+  const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any; capability?: DashboardCapability }>> = {
+    storage: { label: 'Storage', icon: HardDrive, capability: 'cleanup' },
+    docker: { label: 'Containers', icon: Container, capability: 'docker' },
+    models: { label: 'Local Models', icon: Boxes, capability: 'local_models' },
+    memory: { label: 'Memory', icon: Activity, capability: 'memory_metrics' },
+    development_servers: { label: 'Dev Servers', icon: Server, capability: 'development_ports' },
+    projects: { label: 'AI Activity', icon: Sparkles, capability: 'ai_integrations' },
+    ai_control: { label: 'AI Control', icon: Sparkles, capability: 'ai_integrations' },
+    usage: { label: 'AI Usage', icon: ChartNoAxesCombined, capability: 'ai_integrations' },
+    awake: { label: 'Keep Awake', icon: Moon, capability: 'keep_awake' },
   };
 
   onMount(() => {
-    memoryStore.refreshDisk();
-    awakeStore.refresh();
-    void scanStore.init().then(() => {
-      if (scanStore.isStale()) {
-        // Defer background revalidation so initial dashboard render is immediate
-        if (typeof requestIdleCallback !== 'undefined') {
-          requestIdleCallback(() => void scanStore.runScan(), { timeout: 1500 });
-        } else {
-          setTimeout(() => void scanStore.runScan(), 600);
-        }
+    let disposed = false;
+
+    void platformCapabilitiesStore.load().then(() => {
+      if (disposed) return;
+
+      capabilitiesReady = true;
+      const cleanupAvailable = platformCapabilitiesStore.isAvailable('cleanup');
+      const awakeAvailable = platformCapabilitiesStore.isAvailable('keep_awake');
+
+      // Do not mount or invoke platform-sensitive workflows until the backend
+      // has told us that the corresponding adapter is available.
+      if (cleanupAvailable) {
+        void memoryStore.refreshDisk();
+        void scanStore.init().then(() => {
+          if (disposed || !scanStore.isStale()) return;
+          // Defer background revalidation so initial dashboard render is immediate
+          if (typeof requestIdleCallback !== 'undefined') {
+            requestIdleCallback(() => {
+              if (!disposed) void scanStore.runScan();
+            }, { timeout: 1500 });
+          } else {
+            setTimeout(() => {
+              if (!disposed) void scanStore.runScan();
+            }, 600);
+          }
+        });
       }
+      if (awakeAvailable) void awakeStore.refresh();
+
+      // A persisted tab may have become unavailable after an upgrade or on a
+      // different platform. Start on the first available tab instead of
+      // mounting an unsupported route.
+      const preferredTabs = settingsStore.settings.dashboard_tabs ?? [];
+      const firstAvailable = preferredTabs.find((tab) => {
+        const definition = tabDefs[tab as DashboardTab];
+        return !!definition && (!definition.capability || platformCapabilitiesStore.isAvailable(definition.capability));
+      });
+      currentTab = (firstAvailable as Tab | undefined) ?? 'settings';
     });
+
+    return () => {
+      disposed = true;
+    };
   });
 
   function selectTab(tab: Tab | string) {
+    if (!capabilitiesReady) return;
+    const capability = tabDefs[tab as DashboardTab]?.capability;
+    if (capability && !platformCapabilitiesStore.isAvailable(capability)) return;
+
     if (tab === 'developer_artifacts' || tab === 'developer-artifacts') {
       currentTab = 'developer-artifacts';
     } else if (tab === 'large_files' || tab === 'large-files') {
@@ -157,17 +208,22 @@
         {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'] as tabId}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
+            {@const capability = def.capability ? platformCapabilitiesStore.feature(def.capability) : null}
+            {@const tabAvailable = capabilitiesReady && (!capability || platformCapabilitiesStore.isAvailable(def.capability!))}
             <button
               type="button"
               onclick={() => selectTab(tabId as Tab)}
+              disabled={!tabAvailable}
               aria-label={tabId === 'storage' && scanStore.reclaimableBytes > 0
                 ? `${def.label}, ${formatBytes(scanStore.reclaimableBytes)} reclaimable`
                 : def.label}
-              title={sidebarCollapsed ? def.label : undefined}
+              title={tabAvailable ? (sidebarCollapsed ? def.label : undefined) : (capability?.reason ?? `${def.label} is unavailable`)}
               class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
               tabId
                 ? 'bg-secondary text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+                : tabAvailable
+                  ? 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                  : 'text-muted-foreground/40 cursor-not-allowed'}"
             >
               <def.icon size={15} />
               {#if !sidebarCollapsed}
@@ -233,48 +289,52 @@
 
   <!-- Main Content Area with fluid native transition -->
   <main class="flex-1 h-full overflow-y-auto p-8 pt-10">
-    {#key selectedCategory ? selectedCategory.category : currentTab}
-      <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>
-        {#if selectedCategory}
-          <CategoryDetailView
-            categoryResult={selectedCategory}
-            onBack={() => (selectedCategory = null)}
-            onNavigateTab={(tab) => selectTab(tab)}
-          />
-        {:else if currentTab === 'storage'}
-          <div class="space-y-6">
-            <StorageTools
-              onOpenLargeFiles={() => selectTab('large-files')}
-              onOpenApplications={() => selectTab('applications')}
-              onOpenDeveloperArtifacts={() => selectTab('developer-artifacts')}
-              onScanStorage={() => scanStore.runScan()}
-              isScanning={scanStore.isScanning}
-              isCleaning={scanStore.isCleaning}
+    {#if !capabilitiesReady}
+      <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Loading platform capabilities…</div>
+    {:else}
+      {#key selectedCategory ? selectedCategory.category : currentTab}
+        <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>
+          {#if selectedCategory}
+            <CategoryDetailView
+              categoryResult={selectedCategory}
+              onBack={() => (selectedCategory = null)}
+              onNavigateTab={(tab) => selectTab(tab)}
             />
-            <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
-          </div>
-        {:else if currentTab === 'large-files'}
-          <LargeFilesView onBack={() => selectTab('storage')} />
-        {:else if currentTab === 'applications'}
-          <ApplicationsView onBack={() => selectTab('storage')} />
-        {:else if currentTab === 'developer-artifacts'}
-          <DeveloperArtifactsView onBack={() => selectTab('storage')} />
-        {:else if currentTab === 'docker'}
-          <DockerView />
-        {:else if currentTab === 'models'}
-          <ModelsView />
-        {:else if currentTab === 'memory'}
-          <MemoryView />
-        {:else if currentTab === 'projects' || currentTab === 'usage' || currentTab === 'ai_control'}
-          <ProjectCockpitView onNavigateTab={(tab) => selectTab(tab)} />
-        {:else if currentTab === 'development_servers'}
-          <DevelopmentServersView />
-        {:else if currentTab === 'awake'}
-          <AwakeView />
-        {:else if currentTab === 'settings'}
-          <SettingsView />
-        {/if}
-      </div>
-    {/key}
+          {:else if currentTab === 'storage'}
+            <div class="space-y-6">
+              <StorageTools
+                onOpenLargeFiles={() => selectTab('large-files')}
+                onOpenApplications={() => selectTab('applications')}
+                onOpenDeveloperArtifacts={() => selectTab('developer-artifacts')}
+                onScanStorage={() => scanStore.runScan()}
+                isScanning={scanStore.isScanning}
+                isCleaning={scanStore.isCleaning}
+              />
+              <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
+            </div>
+          {:else if currentTab === 'large-files'}
+            <LargeFilesView onBack={() => selectTab('storage')} />
+          {:else if currentTab === 'applications'}
+            <ApplicationsView onBack={() => selectTab('storage')} />
+          {:else if currentTab === 'developer-artifacts'}
+            <DeveloperArtifactsView onBack={() => selectTab('storage')} />
+          {:else if currentTab === 'docker'}
+            <DockerView />
+          {:else if currentTab === 'models'}
+            <ModelsView />
+          {:else if currentTab === 'memory'}
+            <MemoryView />
+          {:else if currentTab === 'projects' || currentTab === 'usage' || currentTab === 'ai_control'}
+            <ProjectCockpitView onNavigateTab={(tab) => selectTab(tab)} />
+          {:else if currentTab === 'development_servers'}
+            <DevelopmentServersView />
+          {:else if currentTab === 'awake'}
+            <AwakeView />
+          {:else if currentTab === 'settings'}
+            <SettingsView />
+          {/if}
+        </div>
+      {/key}
+    {/if}
   </main>
 </div>

@@ -93,3 +93,85 @@ jobs:
       # CI only needs to prove that the current frontend is embedded in a macOS app bundle.
       - name: Build debug app bundle (embedded frontend check)
         run: just build-fast
+
+  ci-windows:
+    name: Full CI Pipeline (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        id: node-cache
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Tauri bindings
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+
+      - name: Verify generated bindings (drift check)
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts
+
+      - name: Verify Cargo.lock (drift check)
+        run: git diff --exit-code -- Cargo.lock
+
+      - name: Svelte Typecheck
+        run: pnpm check
+
+      - name: Vitest Frontend Tests
+        run: pnpm test -- --run
+
+      - name: Vite Production Build
+        run: pnpm build
+
+      - name: Rust Format Check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust Clippy Linter
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust Unit & Safety Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust Cargo Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      # Keep the first Windows packaging check to NSIS. MSI requires the
+      # optional VBSCRIPT feature and is intentionally covered by the release
+      # issue after the Windows adapter work is complete.
+      - name: Build debug NSIS installer (embedded frontend check)
+        run: pnpm tauri build --debug --bundles nsis
+
+      - name: Upload Windows packaging smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenith-windows-x64-nsis-debug
+          path: |
+            target/debug/bundle/nsis/*-setup.exe
+            src-tauri/target/debug/bundle/nsis/*-setup.exe
+          if-no-files-found: error

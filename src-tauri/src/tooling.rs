@@ -49,6 +49,7 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
         err
     })?;
 
+    #[cfg(unix)]
     let pid = child.id() as i32;
 
     let mut stdout_stream = child.stdout.take();
@@ -122,9 +123,9 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
         collected
     };
 
-    let cleanup_and_drain = |kill_tree: bool| -> (Vec<u8>, Vec<u8>) {
+    let cleanup_and_drain = |_kill_tree: bool| -> (Vec<u8>, Vec<u8>) {
         #[cfg(unix)]
-        if kill_tree && pid > 1 {
+        if _kill_tree && pid > 1 {
             unsafe {
                 libc::kill(-pid, libc::SIGKILL);
                 libc::kill(pid, libc::SIGKILL);
@@ -217,7 +218,7 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::is_executable;
     use std::fs;

@@ -1,5 +1,7 @@
 use crate::models::SelectedApplication;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::process::Command;
 
 pub struct ApplicationPicker;
@@ -35,6 +37,7 @@ impl ApplicationPicker {
         Err("Application selection is currently available on macOS only".into())
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn selection_from_app(path: &Path) -> Result<SelectedApplication, String> {
         if path.extension().and_then(|extension| extension.to_str()) != Some("app") {
             return Err("Please choose a macOS .app bundle".into());

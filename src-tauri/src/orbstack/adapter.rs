@@ -70,8 +70,11 @@ impl OrbStackAdapter {
 #[cfg(test)]
 mod tests {
     use super::{OrbStackAdapter, ORBSTACK_STORAGE_PATH};
+    #[cfg(unix)]
     use crate::models::{Category, RiskTier};
+    #[cfg(unix)]
     use std::fs::OpenOptions;
+    #[cfg(unix)]
     use std::io::{Seek, SeekFrom, Write};
 
     #[test]
@@ -94,6 +97,7 @@ mod tests {
         assert!(OrbStackAdapter::scan_path(&empty).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn sparse_storage_reports_allocated_bytes_as_manual() {
         let fixture = tempfile::tempdir().unwrap();

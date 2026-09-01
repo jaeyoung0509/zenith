@@ -68,6 +68,7 @@ export const commands = {
 	revealInFinder: (path: string) => typedError<null, string>(__TAURI_INVOKE("reveal_in_finder", { path })),
 	openDashboardWindow: () => typedError<null, string>(__TAURI_INVOKE("open_dashboard_window")),
 	getAppVersion: () => __TAURI_INVOKE<string>("get_app_version"),
+	getPlatformCapabilities: () => __TAURI_INVOKE<PlatformCapabilities_Serialize>("get_platform_capabilities"),
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
 	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
@@ -795,6 +796,63 @@ export type PlanTargetPreview = {
 	expected_bytes: number,
 	risk: RiskTier,
 };
+
+export type PlatformCapabilities = PlatformCapabilities_Serialize | PlatformCapabilities_Deserialize;
+
+export type PlatformCapabilities_Deserialize = {
+	platform: PlatformKind,
+	system_actions: PlatformFeatureCapability_Deserialize,
+	cleanup: PlatformFeatureCapability_Deserialize,
+	large_files: PlatformFeatureCapability_Deserialize,
+	developer_artifacts: PlatformFeatureCapability_Deserialize,
+	installed_apps: PlatformFeatureCapability_Deserialize,
+	app_uninstall: PlatformFeatureCapability_Deserialize,
+	memory_metrics: PlatformFeatureCapability_Deserialize,
+	process_termination: PlatformFeatureCapability_Deserialize,
+	development_ports: PlatformFeatureCapability_Deserialize,
+	keep_awake: PlatformFeatureCapability_Deserialize,
+	local_models: PlatformFeatureCapability_Deserialize,
+	docker: PlatformFeatureCapability_Deserialize,
+	ai_integrations: PlatformFeatureCapability_Deserialize,
+};
+
+export type PlatformCapabilities_Serialize = {
+	platform: PlatformKind,
+	system_actions: PlatformFeatureCapability_Serialize,
+	cleanup: PlatformFeatureCapability_Serialize,
+	large_files: PlatformFeatureCapability_Serialize,
+	developer_artifacts: PlatformFeatureCapability_Serialize,
+	installed_apps: PlatformFeatureCapability_Serialize,
+	app_uninstall: PlatformFeatureCapability_Serialize,
+	memory_metrics: PlatformFeatureCapability_Serialize,
+	process_termination: PlatformFeatureCapability_Serialize,
+	development_ports: PlatformFeatureCapability_Serialize,
+	keep_awake: PlatformFeatureCapability_Serialize,
+	local_models: PlatformFeatureCapability_Serialize,
+	docker: PlatformFeatureCapability_Serialize,
+	ai_integrations: PlatformFeatureCapability_Serialize,
+};
+
+export type PlatformFeatureCapability = PlatformFeatureCapability_Serialize | PlatformFeatureCapability_Deserialize;
+
+export type PlatformFeatureCapability_Deserialize = {
+	status: PlatformFeatureStatus,
+	reason?: string | null,
+};
+
+export type PlatformFeatureCapability_Serialize = {
+	status: PlatformFeatureStatus,
+	reason?: string | null,
+};
+
+/**
+ *  Describes whether a platform-sensitive feature can be used safely.
+ *  `ReadOnly` is intentionally distinct from `Available`: a platform can
+ *  expose inspection while withholding the destructive or mutating action.
+ */
+export type PlatformFeatureStatus = "available" | "read_only" | "unavailable";
+
+export type PlatformKind = "macos" | "windows" | "linux" | "other";
 
 export type PowerCondition = "always" | "ac_power_only";
 

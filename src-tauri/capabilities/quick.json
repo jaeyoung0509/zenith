@@ -18,6 +18,7 @@
     "allow-get-disk-metrics",
     "allow-get-awake-state",
     "allow-get-settings",
+    "allow-get-platform-capabilities",
     "allow-open-dashboard-window",
     "allow-toggle-quick-panel",
     "allow-get-app-version"

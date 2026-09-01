@@ -192,6 +192,7 @@ fn test_size_calculator_recursive_and_exclusions() {
     assert_eq!(filtered_size.logical, 10000);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn test_power_assertion_raii_lifecycle() {
     {
@@ -223,6 +224,22 @@ fn test_power_assertion_raii_lifecycle() {
     manager.disable_manual();
     let state_after = manager.get_state();
     assert!(!state_after.is_active);
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn test_power_assertion_fails_closed_without_native_adapter() {
+    let assertion = PowerAssertion::acquire(
+        AwakeBehavior::PreventSystemSleep,
+        "Zenith Rust Test Assertion",
+    );
+    assert!(assertion.is_err());
+
+    let manager = KeepAwakeManager::new();
+    assert!(manager
+        .set_manual(Some(3600), AwakeBehavior::PreventSystemSleep)
+        .is_err());
+    assert!(!manager.get_state().is_active);
 }
 
 #[test]

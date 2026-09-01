@@ -285,6 +285,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn succeeds_on_exact_matching_eligible_process() {
         let system = FakeSystem {
@@ -355,6 +356,7 @@ mod tests {
         assert!(res.unwrap_err().contains("UID mismatch"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn protects_terminal_ancestry() {
         let system = FakeSystem {
@@ -430,6 +432,7 @@ mod tests {
         assert!(store.consume_lease("session-1", &lease_id, 16).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_when_a_leased_cwd_becomes_unavailable() {
         let system = FakeSystem {

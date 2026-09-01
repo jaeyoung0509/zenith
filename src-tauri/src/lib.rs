@@ -14,6 +14,7 @@ pub mod models;
 pub mod models_inventory;
 pub mod operation_gate;
 pub mod orbstack;
+pub mod platform;
 pub mod power;
 pub mod safety;
 pub mod scanner;
@@ -24,6 +25,7 @@ pub mod tooling;
 pub mod trash_manager;
 
 use commands::AppState;
+use platform::{NativePlatformCapabilities, PlatformCapabilitiesProvider};
 use power::KeepAwakeManager;
 use signatures::SignatureRegistry;
 use std::collections::HashMap;
@@ -133,6 +135,8 @@ pub fn run() {
         crate::ai_control_center::state::AiControlCenterState::default(),
     ));
     let ai_control_refresh_lock = Arc::new(Mutex::new(()));
+    let platform_capabilities: Arc<dyn PlatformCapabilitiesProvider> =
+        Arc::new(NativePlatformCapabilities::new());
 
     let app_state = AppState {
         registry,
@@ -149,6 +153,7 @@ pub fn run() {
         agent_activity_cache: agent_activity_cache.clone(),
         ai_control_state: ai_control_state.clone(),
         ai_control_refresh_lock,
+        platform_capabilities,
     };
 
     tauri::Builder::default()
@@ -328,6 +333,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::reveal_in_finder,
             commands::open_dashboard_window,
             commands::get_app_version,
+            commands::get_platform_capabilities,
             commands::toggle_quick_panel,
             commands::get_diagnostics,
             commands::open_logs_folder,

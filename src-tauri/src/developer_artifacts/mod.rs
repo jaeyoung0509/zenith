@@ -1152,7 +1152,7 @@ fn should_skip_protected_discovery_path(
     )
 }
 
-fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize) -> TreeStats {
+fn measure_tree(path: &Path, _root_device: u64, cancel: &AtomicBool, depth: usize) -> TreeStats {
     let mut stats = TreeStats::new();
     if cancel.load(Ordering::Relaxed) {
         stats.complete = false;
@@ -1171,7 +1171,7 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
         }
     };
     #[cfg(unix)]
-    if metadata.dev() != root_device {
+    if metadata.dev() != _root_device {
         stats.complete = false;
         stats.safety_blocked = true;
         return stats;
@@ -1219,7 +1219,7 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
         if child.file_name().and_then(|value| value.to_str()) == Some(".git") {
             continue;
         }
-        let child_stats = measure_tree(&child, root_device, cancel, depth + 1);
+        let child_stats = measure_tree(&child, _root_device, cancel, depth + 1);
         stats.logical_bytes = stats
             .logical_bytes
             .saturating_add(child_stats.logical_bytes);
@@ -1439,6 +1439,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn scanner_streams_measured_candidates_from_an_explicit_workspace() {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
@@ -1630,6 +1631,7 @@ mod tests {
         assert!(record.artifact.status.allows_manual_cleanup());
     }
 
+    #[cfg(unix)]
     #[test]
     fn workspace_validation_requires_a_real_child_of_the_selected_home() {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
@@ -1651,6 +1653,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn backend_owned_home_scope_registers_without_the_folder_picker() {
         let workspace = register_home_workspace().unwrap();
@@ -1675,6 +1678,7 @@ mod tests {
         assert!(same_workspace_directory_identity(&current, &registered));
     }
 
+    #[cfg(unix)]
     #[test]
     fn workspace_identity_rejects_a_replaced_directory() {
         let temp = tempfile::tempdir().unwrap();
