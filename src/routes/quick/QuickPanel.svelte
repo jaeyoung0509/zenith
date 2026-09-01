@@ -5,6 +5,7 @@
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
   import { isQuickPanelDismissShortcut, projectAiProviders } from '../../lib/utils/quickPanel';
@@ -56,6 +57,13 @@
       usageStore.isLoading
     )
   );
+  let cleanupCapability = $derived(platformCapabilitiesStore.feature('cleanup'));
+  let awakeCapability = $derived(platformCapabilitiesStore.feature('keep_awake'));
+  let aiCapability = $derived(platformCapabilitiesStore.feature('ai_integrations'));
+  let cleanupAvailable = $derived(cleanupCapability?.status === 'available');
+  let memoryAvailable = $derived(platformCapabilitiesStore.isInspectable('memory_metrics'));
+  let awakeAvailable = $derived(awakeCapability?.status === 'available');
+  let aiAvailable = $derived(aiCapability?.status === 'available');
 
   let quickCleanableBytes = $derived.by(() =>
     scanStore.quickCleanableBytes(settings)
@@ -88,28 +96,30 @@
     if (panelActive) return;
     panelActive = true;
     await settingsStore.load(true);
+    await platformCapabilitiesStore.load(true);
     if (!panelActive) return;
-    void awakeStore.refresh();
-    if (hasSection('storage')) void memoryStore.refreshDisk();
-    if (hasSection('memory')) memoryStore.startPolling(3000);
+    if (awakeAvailable) void awakeStore.refresh();
+    if (hasSection('storage') && cleanupAvailable) void memoryStore.refreshDisk();
+    if (hasSection('memory') && memoryAvailable) memoryStore.startPolling(3000);
     if (
       (hasSection('ai_usage') || hasSection('agent_activity')) &&
+      aiAvailable &&
       settings.quick_panel_ai_providers.length > 0
     ) {
       void usageStore.refreshIfStale();
     }
-    if (hasSection('ai_control')) {
+    if (hasSection('ai_control') && aiAvailable) {
       // Cached backend projection only: no provider calls, scans, or hidden polling.
       void tauriGetAiControlQuickSummary().then((summary) => {
         if (panelActive) controlSummary = summary;
       });
     }
-    if (hasSection('agent_activity')) {
+    if (hasSection('agent_activity') && aiAvailable) {
       void tauriGetAgentQuickSummary().then((summary) => {
         if (panelActive) agentSummary = summary;
       });
     }
-    if (hasSection('cleanup') || hasSection('categories')) {
+    if ((hasSection('cleanup') || hasSection('categories')) && cleanupAvailable) {
       await scanStore.init();
       if (panelActive && scanStore.isStale()) void scanStore.runScan();
     }
@@ -291,7 +301,7 @@
           <Button
             variant="primary"
             size="sm"
-            disabled={scanStore.isScanning || scanStore.isCleaning || !scan || quickCleanableBytes === 0}
+            disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning || !scan || quickCleanableBytes === 0}
             onclick={handleCleanSafe}
             class="gap-1.5 min-w-[88px] text-xs font-semibold py-2 px-3"
           >
@@ -304,6 +314,11 @@
             {/if}
           </Button>
         </div>
+        {#if !cleanupAvailable}
+          <p class="mt-2 text-caption text-warning">
+            {cleanupCapability?.reason ?? 'Cleanup is unavailable on this platform.'}
+          </p>
+        {/if}
       {:else if section === 'storage' && disk}
         <!-- Storage Gauge -->
         <div class="space-y-1.5 p-2.5 rounded-xl border border-border/50 bg-card/40">
@@ -313,7 +328,7 @@
           </div>
           <ProgressBar value={disk.percent_used ?? 0} height="h-2" />
         </div>
-      {:else if section === 'memory' && memory}
+      {:else if section === 'memory' && memory && memoryAvailable}
         <!-- Memory Gauge -->
         <div class="space-y-1.5 p-2.5 rounded-xl border border-border/50 bg-card/40">
           <div class="flex justify-between text-xs font-medium">
@@ -341,8 +356,10 @@
             <button
               type="button"
               class="text-muted-foreground hover:text-foreground p-0.5"
-              disabled={usageStore.isLoading}
-              onclick={() => usageStore.refresh(true)}
+              disabled={!aiAvailable || usageStore.isLoading}
+              onclick={() => {
+                if (aiAvailable) void usageStore.refresh(true);
+              }}
               aria-label="Refresh AI usage"
             >
               <RotateCw size={12} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
@@ -488,10 +505,12 @@
       <span>Last scan {formatTimeAgo(scan?.finished_at)}</span>
       <button
         type="button"
-        disabled={scanStore.isScanning || scanStore.isCleaning}
-        onclick={() => scanStore.runScan()}
+        disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning}
+        onclick={() => {
+          if (cleanupAvailable) void scanStore.runScan();
+        }}
         class="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-        title="Rescan storage"
+        title={cleanupAvailable ? 'Rescan storage' : (cleanupCapability?.reason ?? 'Storage cleanup is unavailable on this platform.')}
       >
         <RotateCw size={11} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
       </button>

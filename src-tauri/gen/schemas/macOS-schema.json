@@ -333,6 +333,12 @@
           "markdownDescription": "Enables the get_memory_metrics command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_platform_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-platform-capabilities",
+          "markdownDescription": "Enables the get_platform_capabilities command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_project_context command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-project-context",
@@ -679,6 +685,12 @@
           "type": "string",
           "const": "deny-get-memory-metrics",
           "markdownDescription": "Denies the get_memory_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_platform_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-platform-capabilities",
+          "markdownDescription": "Denies the get_platform_capabilities command without any pre-configured scope."
         },
         {
           "description": "Denies the get_project_context command without any pre-configured scope.",

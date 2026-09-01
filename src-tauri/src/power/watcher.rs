@@ -604,7 +604,8 @@ mod tests {
             if self.should_fail.load(Ordering::SeqCst) {
                 Err(ZenithError::Io("Mock assertion acquisition failed".into()))
             } else {
-                PowerAssertion::acquire(behavior, reason)
+                let _ = reason;
+                Ok(PowerAssertion::mock(behavior))
             }
         }
     }

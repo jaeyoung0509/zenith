@@ -41,9 +41,28 @@ The windows have separate frontend runtimes and stores. Shared authority and
 coordination therefore live in Rust `AppState`, backend-owned inventories, or
 Rust process state rather than in a browser singleton.
 
+## Platform capability contract
+
+Platform-specific behavior is selected behind Rust service boundaries instead
+of being spread through route components. `src-tauri/src/platform` owns the
+runtime platform contract and `PlatformCapabilitiesProvider` exposes a typed,
+read-only snapshot through `get_platform_capabilities`. The frontend loads the
+snapshot independently in each WebView and uses it to hide or disable actions
+that are unavailable on the current platform. A `read_only` capability may
+continue to expose inspection metrics, but mutating controls require an
+`available` capability.
+
+The macOS provider currently reports the existing feature set. The Windows
+provider starts as an explicit baseline: metrics and Docker inspection can be
+read-only while native actions remain unavailable until their owning adapter is
+implemented. This keeps unsupported controls truthful during the incremental
+Windows port and gives each follow-up adapter a stable seam for registration.
+
 ## Repository map
 
 - `src-tauri/src/commands`: narrow IPC boundary and shared application state.
+- `src-tauri/src/platform`: platform capability contract and native provider
+  composition seams.
 - `src-tauri/src/scanner`: signature-driven discovery and size measurement.
 - `src-tauri/src/safety`: planning, blacklist checks, and guarded tree deletion.
 - `src-tauri/src/cleaner`: execution of verified generic filesystem plans.

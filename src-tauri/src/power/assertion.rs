@@ -105,9 +105,16 @@ impl PowerAssertion {
 
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = reason;
-            Ok(PowerAssertion { id: 1, behavior })
+            let _ = (behavior, reason);
+            Err(ZenithError::ToolUnavailable(
+                "Keep Awake is unavailable on this platform".to_string(),
+            ))
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mock(behavior: AwakeBehavior) -> Self {
+        Self { id: 1, behavior }
     }
 }
 
@@ -126,6 +133,21 @@ impl Drop for PowerAssertion {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    use super::PowerAssertion;
+    use crate::models::{AwakeBehavior, ZenithError};
+
+    #[test]
+    fn native_assertion_fails_closed_when_no_adapter_exists() {
+        let result = PowerAssertion::acquire(AwakeBehavior::PreventSystemSleep, "test");
+        assert!(matches!(
+            result,
+            Err(ZenithError::ToolUnavailable(message)) if message.contains("unavailable")
+        ));
     }
 }
 

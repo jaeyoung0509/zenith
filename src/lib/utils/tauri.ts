@@ -30,6 +30,7 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  PlatformCapabilities,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -238,6 +239,10 @@ export function tauriToggleQuick(): Promise<void> {
 
 export function tauriGetAppVersion(): Promise<string> {
   return api.getAppVersion();
+}
+
+export function tauriGetPlatformCapabilities(): Promise<PlatformCapabilities> {
+  return api.getPlatformCapabilities();
 }
 
 export function tauriGetDiagnostics(): Promise<DiagnosticsSnapshot> {

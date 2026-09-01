@@ -24,6 +24,7 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  PlatformCapabilities,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -98,6 +99,25 @@ function mockControlSnapshot(): AiControlCenterSnapshot {
 }
 
 export const mockApi = {
+  async getPlatformCapabilities(): Promise<PlatformCapabilities> {
+    return {
+      platform: 'macos',
+      system_actions: { status: 'available' },
+      cleanup: { status: 'available' },
+      large_files: { status: 'available' },
+      developer_artifacts: { status: 'available' },
+      installed_apps: { status: 'available' },
+      app_uninstall: { status: 'available' },
+      memory_metrics: { status: 'available' },
+      process_termination: { status: 'available' },
+      development_ports: { status: 'available' },
+      keep_awake: { status: 'available' },
+      local_models: { status: 'available' },
+      docker: { status: 'available' },
+      ai_integrations: { status: 'available' },
+    };
+  },
+
   async getProjectContext(_force = false): Promise<AgentActivitySnapshot> {
     const observedAt = Math.floor(Date.now() / 1000);
     return {

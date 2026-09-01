@@ -42,6 +42,7 @@ fn main() {
         "open_dashboard_window",
         "toggle_quick_panel",
         "get_app_version",
+        "get_platform_capabilities",
         "get_diagnostics",
         "open_logs_folder",
         "list_development_listeners",

@@ -78,7 +78,7 @@ impl PowerSourceProvider for SystemPowerSource {
 
         #[cfg(not(target_os = "macos"))]
         {
-            PowerSourceType::Ac
+            PowerSourceType::Unknown
         }
     }
 }
@@ -152,5 +152,8 @@ mod tests {
             source,
             PowerSourceType::Ac | PowerSourceType::Battery | PowerSourceType::Unknown
         ));
+
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(source, PowerSourceType::Unknown);
     }
 }
