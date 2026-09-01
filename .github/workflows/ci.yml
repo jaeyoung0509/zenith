@@ -178,7 +178,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build debug app bundle from verified frontend
-        run: pnpm tauri build --debug --bundles app --config '{"build":{"beforeBuildCommand":""}}'
+        run: pnpm tauri build --debug --bundles app --config .github/tauri.package-ci.json
 
   package-windows:
     name: Package Smoke (Windows x64 NSIS)
@@ -209,7 +209,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build debug NSIS installer from verified frontend
-        run: pnpm tauri build --debug --bundles nsis --config '{"build":{"beforeBuildCommand":""}}'
+        run: pnpm tauri build --debug --bundles nsis --config .github/tauri.package-ci.json
 
       - name: Upload Windows packaging smoke artifact
         uses: actions/upload-artifact@v4

@@ -414,7 +414,9 @@ file drift, runs Svelte/Vitest, builds `dist`, and uploads that verified fronten
 artifact. macOS and Windows x64 run Rust format, Clippy, tests, and check in
 parallel. Each packaging smoke job depends on the shared frontend artifact and
 its matching Rust job, proving that the platform bundle embeds the exact tested
-frontend without rerunning the same frontend suite on every OS.
+frontend without rerunning the same frontend suite on every OS. Both packaging
+jobs pass the checked-in `.github/tauri.package-ci.json` override by path; this
+avoids shell-specific inline JSON quoting and disables `beforeBuildCommand`.
 
 ## External tools
 

@@ -94,6 +94,9 @@ safety conventions below when changing Zenith.
   frontend job. macOS and Windows Rust jobs run in parallel; packaging jobs may
   consume the verified frontend artifact only after their platform Rust job
   succeeds. Do not duplicate the frontend test suite in each platform job.
+- Packaging jobs use `.github/tauri.package-ci.json` to disable Tauri's frontend
+  rebuild. Pass the file path to `--config`; do not inline JSON in workflow
+  commands because PowerShell command forwarding strips nested quotes.
 
 ## Cleanup safety invariants
 
