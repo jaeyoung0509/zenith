@@ -125,6 +125,9 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Vite Production Build
+        run: pnpm build
+
       - name: Rust Format Check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
@@ -136,9 +139,6 @@ jobs:
 
       - name: Rust Cargo Check
         run: cargo check --manifest-path src-tauri/Cargo.toml
-
-      - name: Vite Production Build
-        run: pnpm build
 
       # Keep the first Windows packaging check to NSIS. MSI requires the
       # optional VBSCRIPT feature and is intentionally covered by the release
