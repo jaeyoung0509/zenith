@@ -10,52 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    name: Frontend & Bindings Verification (Ubuntu)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 20
-          cache: 'pnpm'
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install Frontend Dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Tauri bindings
-        run: |
-          mkdir -p dist
-          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
-
-      - name: Verify generated bindings (drift check)
-        run: git diff --exit-code -- src/lib/bindings/tauri.ts
-
-      - name: Verify Cargo.lock (drift check)
-        run: git diff --exit-code -- Cargo.lock
-
-      - name: Svelte Typecheck
-        run: pnpm check
-
-      - name: Vitest Frontend Tests
-        run: pnpm test -- --run
-
-      - name: Vite Production Build
-        run: pnpm build
-
   ci-macos:
-    name: Native CI & Packaging (macOS)
+    name: Full CI Pipeline (macOS)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -92,6 +48,26 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Generate Tauri bindings
+        run: |
+          mkdir -p dist
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+
+      - name: Verify generated bindings (drift check)
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts
+
+      - name: Verify Cargo.lock (drift check)
+        run: git diff --exit-code -- Cargo.lock
+
+      - name: Svelte Typecheck
+        run: pnpm check
+
+      - name: Vitest Frontend Tests
+        run: pnpm test -- --run
+
+      - name: Vite Production Build
+        run: pnpm build
+
       - name: Rust Format Check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
@@ -110,16 +86,13 @@ jobs:
       - name: Release installer regression tests
         run: just test-release-installer
 
-      - name: Vite Production Build
-        run: pnpm build
-
       # The tagged/manual Release workflow owns optimized DMG packaging.
       # CI only needs to prove that the current frontend is embedded in a macOS app bundle.
       - name: Build debug app bundle (embedded frontend check)
         run: just build-fast
 
   ci-windows:
-    name: Native CI & Packaging (Windows x64)
+    name: Full CI Pipeline (Windows x64)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
