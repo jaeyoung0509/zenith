@@ -155,6 +155,26 @@ impl PlatformCapabilities {
         }
     }
 
+    /// Returns the full capability snapshot for the Windows platform after Batch 1 and Batch 2.
+    pub fn windows() -> Self {
+        Self {
+            platform: PlatformKind::Windows,
+            system_actions: PlatformFeatureCapability::available(),
+            cleanup: PlatformFeatureCapability::available(),
+            large_files: PlatformFeatureCapability::available(),
+            developer_artifacts: PlatformFeatureCapability::available(),
+            installed_apps: PlatformFeatureCapability::available(),
+            app_uninstall: PlatformFeatureCapability::available(),
+            memory_metrics: PlatformFeatureCapability::available(),
+            process_termination: PlatformFeatureCapability::available(),
+            development_ports: PlatformFeatureCapability::available(),
+            keep_awake: PlatformFeatureCapability::available(),
+            local_models: PlatformFeatureCapability::available(),
+            docker: PlatformFeatureCapability::available(),
+            ai_integrations: PlatformFeatureCapability::available(),
+        }
+    }
+
     pub fn unsupported(kind: PlatformKind) -> Self {
         let unavailable = || {
             PlatformFeatureCapability::unavailable(
@@ -188,7 +208,7 @@ impl PlatformCapabilities {
 
         #[cfg(target_os = "windows")]
         {
-            Self::windows_foundation()
+            Self::windows()
         }
 
         #[cfg(target_os = "linux")]

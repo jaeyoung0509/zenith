@@ -116,6 +116,10 @@ impl NativePlatformPaths {
     pub fn new() -> Self {
         Self
     }
+
+    pub fn home(&self) -> Option<PathBuf> {
+        self.user_home()
+    }
 }
 
 impl PlatformPathsProvider for NativePlatformPaths {

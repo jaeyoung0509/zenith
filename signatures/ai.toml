@@ -46,12 +46,18 @@ paths = [
     "~/Library/Caches/Cursor",
     "~/Library/Application Support/Cursor/Cache",
     "~/Library/Application Support/Cursor/Code Cache",
-    "~/Library/Application Support/Cursor/GPUCache"
+    "~/Library/Application Support/Cursor/GPUCache",
+    "${ROAMING_APP_DATA}/Cursor/Cache",
+    "${ROAMING_APP_DATA}/Cursor/Code Cache",
+    "${ROAMING_APP_DATA}/Cursor/GPUCache"
 ]
 exclusions = [
     "~/Library/Application Support/Cursor/User/settings.json",
     "~/Library/Application Support/Cursor/User/keybindings.json",
-    "~/Library/Application Support/Cursor/User/snippets"
+    "~/Library/Application Support/Cursor/User/snippets",
+    "${ROAMING_APP_DATA}/Cursor/User/settings.json",
+    "${ROAMING_APP_DATA}/Cursor/User/keybindings.json",
+    "${ROAMING_APP_DATA}/Cursor/User/snippets"
 ]
 description = "V8 code cache, GPU shader cache, and webview temporary storage for Cursor."
 
@@ -62,7 +68,8 @@ category = "ai"
 risk = "safe"
 strategy = "delete_contents"
 paths = [
-    "~/Library/Application Support/Cursor/logs"
+    "~/Library/Application Support/Cursor/logs",
+    "${ROAMING_APP_DATA}/Cursor/logs"
 ]
 description = "Log files from editor sessions and language server background tasks."
 
