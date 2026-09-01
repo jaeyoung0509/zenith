@@ -49,6 +49,26 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
+/// Run native or filesystem work away from Tauri's command executor.
+///
+/// Keeping the join/error handling in one place makes it harder for a new
+/// command to accidentally put blocking work back on the command thread.
+async fn run_blocking<T, F>(work: F, context: &'static str) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("{context}: {error}"))?
+}
+
+fn user_home() -> Result<PathBuf, String> {
+    crate::platform::NativePlatformPaths::new()
+        .home()
+        .ok_or_else(|| "User home directory is not available".to_string())
+}
+
 fn usage_snapshot_matches_selection(snapshot: &AiUsageSnapshot, provider_ids: &[String]) -> bool {
     snapshot.providers.len() == provider_ids.len()
         && snapshot
@@ -231,45 +251,57 @@ pub async fn request_stop_agent_session(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_agent_integrations() -> Result<Vec<AgentIntegrationInfo>, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME environment variable not set".to_string())?;
-    const TOOLS: &[&str] = &[
-        "antigravity",
-        "claude",
-        "cursor",
-        "grok",
-        "copilot",
-        "gemini",
-        "codex",
-        "opencode",
-    ];
-    let mut infos = Vec::new();
-    for tool in TOOLS {
-        infos.push(crate::agent_activity::hooks::get_integration_info(
-            tool, &home,
-        ));
-    }
-    Ok(infos)
+pub async fn get_agent_integrations() -> Result<Vec<AgentIntegrationInfo>, String> {
+    run_blocking(
+        || {
+            let home = user_home()?;
+            const TOOLS: &[&str] = &[
+                "antigravity",
+                "claude",
+                "cursor",
+                "grok",
+                "copilot",
+                "gemini",
+                "codex",
+                "opencode",
+            ];
+            let mut infos = Vec::new();
+            for tool in TOOLS {
+                infos.push(crate::agent_activity::hooks::get_integration_info(
+                    tool, &home,
+                ));
+            }
+            Ok(infos)
+        },
+        "Agent integration worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn setup_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME environment variable not set".to_string())?;
-    crate::agent_activity::hooks::install_integration(&tool_id, &home)
+pub async fn setup_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
+    run_blocking(
+        move || {
+            let home = user_home()?;
+            crate::agent_activity::hooks::install_integration(&tool_id, &home)
+        },
+        "Agent integration setup worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME environment variable not set".to_string())?;
-    crate::agent_activity::hooks::uninstall_integration(&tool_id, &home)
+pub async fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
+    run_blocking(
+        move || {
+            let home = user_home()?;
+            crate::agent_activity::hooks::uninstall_integration(&tool_id, &home)
+        },
+        "Agent integration removal worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -560,50 +592,56 @@ pub fn get_ai_control_quick_summary(
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_ai_control_preferences(
+pub async fn save_ai_control_preferences(
     preferences: AiControlPreferences,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let preferences = crate::ai_control_center::budgets::sanitize(preferences);
-    if preferences.autopilot.notify_on_battery
-        || preferences.autopilot.notify_on_memory_pressure
-        || preferences.autopilot.notify_on_session_completion
-    {
-        crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
-    }
     let retention = preferences.audit_retention_days;
-    let mut next_settings = state.settings.lock().expect("settings poisoned").clone();
-    next_settings.ai_control = preferences.clone();
-    settings_store::save(
-        &app_handle
-            .path()
-            .app_config_dir()
-            .map_err(|error| error.to_string())?,
-        &next_settings,
-    )?;
-    *state.settings.lock().expect("settings poisoned") = next_settings;
-    // Apply the native policy only after persistence succeeds, keeping the runtime
-    // and the settings file consistent if an atomic settings write is rejected.
-    state.awake_manager.set_control_center_awake_policy(
-        preferences.autopilot.keep_awake_for_verified_sessions,
-        preferences.autopilot.keep_awake_ac_only,
-    );
-    let config = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|error| error.to_string())?;
-    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
-    control.last_snapshot = None;
-    control.audit.append(
-        unix_timestamp(),
-        "preferences",
-        "saved",
-        None,
-        "AI Control preferences updated",
-        retention,
-    );
-    control.audit.save(&config)
+    let settings_store_state = state.settings.clone();
+    let awake_manager = state.awake_manager.clone();
+    let control_state = state.ai_control_state.clone();
+    run_blocking(
+        move || {
+            if preferences.autopilot.notify_on_battery
+                || preferences.autopilot.notify_on_memory_pressure
+                || preferences.autopilot.notify_on_session_completion
+            {
+                crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
+            }
+            let mut next_settings = settings_store_state
+                .lock()
+                .expect("settings poisoned")
+                .clone();
+            next_settings.ai_control = preferences.clone();
+            let config = app_handle
+                .path()
+                .app_config_dir()
+                .map_err(|error| error.to_string())?;
+            settings_store::save(&config, &next_settings)?;
+            *settings_store_state.lock().expect("settings poisoned") = next_settings;
+            // Apply the native policy only after persistence succeeds, keeping the runtime
+            // and the settings file consistent if an atomic settings write is rejected.
+            awake_manager.set_control_center_awake_policy(
+                preferences.autopilot.keep_awake_for_verified_sessions,
+                preferences.autopilot.keep_awake_ac_only,
+            );
+            let mut control = control_state.lock().expect("ai control poisoned");
+            control.last_snapshot = None;
+            control.audit.append(
+                unix_timestamp(),
+                "preferences",
+                "saved",
+                None,
+                "AI Control preferences updated",
+                retention,
+            );
+            control.audit.save(&config)
+        },
+        "AI Control preference worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -674,72 +712,78 @@ pub async fn run_ai_safety_scan(
 
 #[tauri::command]
 #[specta::specta]
-pub fn dismiss_ai_safety_finding(
+pub async fn dismiss_ai_safety_finding(
     finding_id: String,
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut settings = state.settings.lock().expect("settings poisoned");
-    if !settings.ai_control.dismissed_findings.contains(&finding_id) {
-        settings
-            .ai_control
-            .dismissed_findings
-            .push(finding_id.clone());
-    }
-    settings.ai_control = crate::ai_control_center::budgets::sanitize(settings.ai_control.clone());
-    settings_store::save(
-        &app_handle
-            .path()
-            .app_config_dir()
-            .map_err(|error| error.to_string())?,
-        &settings,
-    )?;
-    let retention = settings.ai_control.audit_retention_days;
-    drop(settings);
-    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
-    if let Some(item) = control
-        .safety
-        .findings
-        .iter_mut()
-        .find(|item| item.id == finding_id)
-    {
-        item.dismissed = true;
-    }
-    if let Some(last) = &mut control.last_snapshot {
-        if let Some(item) = last
-            .safety
-            .findings
-            .iter_mut()
-            .find(|item| item.id == finding_id)
-        {
-            item.dismissed = true;
-        }
-        last.quick_summary.safety_findings = last
-            .safety
-            .findings
-            .iter()
-            .filter(|item| !item.dismissed)
-            .count() as u32;
-    }
-    control.audit.append(
-        unix_timestamp(),
-        "finding_dismissed",
-        "ok",
-        None,
-        "Safety finding dismissed",
-        retention,
-    );
-    control.audit.save(
-        &app_handle
-            .path()
-            .app_config_dir()
-            .map_err(|error| error.to_string())?,
+    let settings_store_state = state.settings.clone();
+    let control_state = state.ai_control_state.clone();
+    run_blocking(
+        move || {
+            let mut settings = settings_store_state
+                .lock()
+                .expect("settings poisoned")
+                .clone();
+            if !settings.ai_control.dismissed_findings.contains(&finding_id) {
+                settings
+                    .ai_control
+                    .dismissed_findings
+                    .push(finding_id.clone());
+            }
+            settings.ai_control =
+                crate::ai_control_center::budgets::sanitize(settings.ai_control.clone());
+            let config = app_handle
+                .path()
+                .app_config_dir()
+                .map_err(|error| error.to_string())?;
+            settings_store::save(&config, &settings)?;
+            let retention = settings.ai_control.audit_retention_days;
+            *settings_store_state.lock().expect("settings poisoned") = settings;
+
+            let mut control = control_state.lock().expect("ai control poisoned");
+            if let Some(item) = control
+                .safety
+                .findings
+                .iter_mut()
+                .find(|item| item.id == finding_id)
+            {
+                item.dismissed = true;
+            }
+            if let Some(last) = &mut control.last_snapshot {
+                if let Some(item) = last
+                    .safety
+                    .findings
+                    .iter_mut()
+                    .find(|item| item.id == finding_id)
+                {
+                    item.dismissed = true;
+                }
+                last.quick_summary.safety_findings = last
+                    .safety
+                    .findings
+                    .iter()
+                    .filter(|item| !item.dismissed)
+                    .count() as u32;
+            }
+            control.audit.append(
+                unix_timestamp(),
+                "finding_dismissed",
+                "ok",
+                None,
+                "Safety finding dismissed",
+                retention,
+            );
+            control.audit.save(&config)
+        },
+        "Safety finding worker panicked",
     )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn preview_ai_recommendation(
+pub async fn preview_ai_recommendation(
     recommendation_id: String,
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -750,35 +794,41 @@ pub fn preview_ai_recommendation(
         .expect("settings poisoned")
         .ai_control
         .audit_retention_days;
-    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
-    let item = control
-        .recommendations
-        .iter()
-        .find(|item| item.id == recommendation_id)
-        .cloned()
-        .ok_or_else(|| "Recommendation is stale or unavailable".to_string())?;
-    let now = unix_timestamp();
-    let preview = control.previews.create(&item, now);
-    control.audit.append(
-        now,
-        "recommendation_preview",
-        "created",
-        item.project_id.clone(),
-        "One-shot recommendation preview created",
-        retention,
-    );
-    let _ = control.audit.save(
-        &app_handle
-            .path()
-            .app_config_dir()
-            .map_err(|error| error.to_string())?,
-    );
-    Ok(preview)
+    let control_state = state.ai_control_state.clone();
+    run_blocking(
+        move || {
+            let mut control = control_state.lock().expect("ai control poisoned");
+            let item = control
+                .recommendations
+                .iter()
+                .find(|item| item.id == recommendation_id)
+                .cloned()
+                .ok_or_else(|| "Recommendation is stale or unavailable".to_string())?;
+            let now = unix_timestamp();
+            let preview = control.previews.create(&item, now);
+            control.audit.append(
+                now,
+                "recommendation_preview",
+                "created",
+                item.project_id.clone(),
+                "One-shot recommendation preview created",
+                retention,
+            );
+            let config = app_handle
+                .path()
+                .app_config_dir()
+                .map_err(|error| error.to_string())?;
+            let _ = control.audit.save(&config);
+            Ok(preview)
+        },
+        "Recommendation preview worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn consume_ai_recommendation_preview(
+pub async fn consume_ai_recommendation_preview(
     preview_id: String,
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -790,23 +840,29 @@ pub fn consume_ai_recommendation_preview(
         .expect("settings poisoned")
         .ai_control
         .audit_retention_days;
-    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
-    let preview = control.previews.consume(&preview_id, now)?;
-    control.audit.append(
-        now,
-        "recommendation_preview",
-        "consumed",
-        None,
-        "One-shot recommendation preview consumed",
-        retention,
-    );
-    let _ = control.audit.save(
-        &app_handle
-            .path()
-            .app_config_dir()
-            .map_err(|error| error.to_string())?,
-    );
-    Ok(preview)
+    let control_state = state.ai_control_state.clone();
+    run_blocking(
+        move || {
+            let mut control = control_state.lock().expect("ai control poisoned");
+            let preview = control.previews.consume(&preview_id, now)?;
+            control.audit.append(
+                now,
+                "recommendation_preview",
+                "consumed",
+                None,
+                "One-shot recommendation preview consumed",
+                retention,
+            );
+            let config = app_handle
+                .path()
+                .app_config_dir()
+                .map_err(|error| error.to_string())?;
+            let _ = control.audit.save(&config);
+            Ok(preview)
+        },
+        "Recommendation preview worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -824,38 +880,39 @@ pub async fn get_ai_control_git_diff(
         .and_then(|value| value.project_roots.get(&project_id))
         .cloned()
         .ok_or_else(|| "Project identity is stale or unavailable".to_string())?;
-    let (baseline_head, paths) = state
-        .ai_control_state
-        .lock()
-        .expect("ai control poisoned")
-        .git
-        .diff_context(&project_id, &root, unix_timestamp())?;
-    let diff = tauri::async_runtime::spawn_blocking(move || {
-        crate::ai_control_center::git::explicit_diff(&root, baseline_head.as_deref(), &paths)
-    })
-    .await
-    .map_err(|error| error.to_string())??;
     let retention = state
         .settings
         .lock()
         .expect("settings poisoned")
         .ai_control
         .audit_retention_days;
-    let mut control = state.ai_control_state.lock().expect("ai control poisoned");
-    control.audit.append(
-        unix_timestamp(),
-        "git_diff",
-        "viewed",
-        Some(project_id),
-        "Ephemeral Git diff viewed",
-        retention,
-    );
-    let _ = control.audit.save(
-        &app_handle
+    let control_state = state.ai_control_state.clone();
+    let diff = tauri::async_runtime::spawn_blocking(move || {
+        let (baseline_head, paths) = control_state
+            .lock()
+            .expect("ai control poisoned")
+            .git
+            .diff_context(&project_id, &root, unix_timestamp())?;
+        let diff =
+            crate::ai_control_center::git::explicit_diff(&root, baseline_head.as_deref(), &paths)?;
+        let config = app_handle
             .path()
             .app_config_dir()
-            .map_err(|error| error.to_string())?,
-    );
+            .map_err(|error| error.to_string())?;
+        let mut control = control_state.lock().expect("ai control poisoned");
+        control.audit.append(
+            unix_timestamp(),
+            "git_diff",
+            "viewed",
+            Some(project_id),
+            "Ephemeral Git diff viewed",
+            retention,
+        );
+        let _ = control.audit.save(&config);
+        Ok::<_, String>(diff)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     Ok(diff)
 }
 
@@ -922,38 +979,52 @@ pub fn get_last_scan(state: State<'_, AppState>) -> Option<ScanResult> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_delete_plan(
+pub async fn create_delete_plan(
     scan_id: String,
     selected_item_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<PlanPreview, String> {
     const PLAN_TTL_SECS: u64 = 300;
-    let scan = state
-        .last_scan
-        .lock()
-        .expect("last_scan poisoned")
-        .clone()
-        .filter(|scan| scan.scan_id == scan_id)
-        .ok_or_else(|| "The scan is no longer current. Scan again before cleaning.".to_string())?;
+    let last_scan = state.last_scan.clone();
+    let registry = state.registry.clone();
+    let delete_plans = state.delete_plans.clone();
+    run_blocking(
+        move || {
+            let scan = last_scan
+                .lock()
+                .expect("last_scan poisoned")
+                .clone()
+                .filter(|scan| scan.scan_id == scan_id)
+                .ok_or_else(|| {
+                    "The scan is no longer current. Scan again before cleaning.".to_string()
+                })?;
 
-    let plan =
-        SafetyPlanner::create_plan_from_scan(&scan, &scan_id, &selected_item_ids, &state.registry)
-            .map_err(|e| e.to_string())?;
-    let preview = plan.preview(PLAN_TTL_SECS);
-    let now = unix_timestamp();
-    let mut plans = state.delete_plans.lock().expect("delete_plans poisoned");
-    plans.retain(|_, stored| now.saturating_sub(stored.created_at) < PLAN_TTL_SECS);
-    if plans.len() >= 64 {
-        if let Some(oldest_id) = plans
-            .iter()
-            .min_by_key(|(_, stored)| stored.created_at)
-            .map(|(id, _)| *id)
-        {
-            plans.remove(&oldest_id);
-        }
-    }
-    plans.insert(plan.id, plan);
-    Ok(preview)
+            let plan = SafetyPlanner::create_plan_from_scan(
+                &scan,
+                &scan_id,
+                &selected_item_ids,
+                &registry,
+            )
+            .map_err(|error| error.to_string())?;
+            let preview = plan.preview(PLAN_TTL_SECS);
+            let now = unix_timestamp();
+            let mut plans = delete_plans.lock().expect("delete_plans poisoned");
+            plans.retain(|_, stored| now.saturating_sub(stored.created_at) < PLAN_TTL_SECS);
+            if plans.len() >= 64 {
+                if let Some(oldest_id) = plans
+                    .iter()
+                    .min_by_key(|(_, stored)| stored.created_at)
+                    .map(|(id, _)| *id)
+                {
+                    plans.remove(&oldest_id);
+                }
+            }
+            plans.insert(plan.id, plan);
+            Ok(preview)
+        },
+        "Delete plan worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1009,8 +1080,12 @@ pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetr
 
 #[tauri::command]
 #[specta::specta]
-pub fn terminate_process_group(name: String, force: bool) -> Result<usize, String> {
-    MemoryInspector::terminate_group(&name, force)
+pub async fn terminate_process_group(name: String, force: bool) -> Result<usize, String> {
+    run_blocking(
+        move || MemoryInspector::terminate_group(&name, force),
+        "Process termination worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1023,45 +1098,75 @@ pub async fn pick_keep_awake_application() -> Result<Option<SelectedApplication>
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_disk_metrics() -> Result<DiskMetrics, String> {
-    DiskMetricsCollector::get_primary_disk().map_err(|e| e.to_string())
+pub async fn get_disk_metrics() -> Result<DiskMetrics, String> {
+    run_blocking(
+        || DiskMetricsCollector::get_primary_disk().map_err(|error| error.to_string()),
+        "Disk metrics worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_disk_volumes() -> Vec<DiskVolume> {
-    DiskMetricsCollector::get_volumes()
+pub async fn get_disk_volumes() -> Result<Vec<DiskVolume>, String> {
+    run_blocking(
+        || Ok(DiskMetricsCollector::get_volumes()),
+        "Disk volume worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_disk_utility() -> Result<(), String> {
-    use crate::platform::SystemActionProvider;
-    crate::platform::NativeSystemActions::new().open_storage_settings()
+pub async fn open_disk_utility() -> Result<(), String> {
+    run_blocking(
+        || {
+            use crate::platform::SystemActionProvider;
+            crate::platform::NativeSystemActions::new().open_storage_settings()
+        },
+        "Storage settings worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_docker_status() -> Result<DockerStatus, String> {
-    Ok(DockerAdapter::get_status())
+pub async fn get_docker_status() -> Result<DockerStatus, String> {
+    run_blocking(
+        || Ok(DockerAdapter::get_status()),
+        "Docker status worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn prune_docker_target(signature_id: String) -> Result<u64, String> {
-    DockerAdapter::prune_category(&signature_id).map_err(|e| e.to_string())
+pub async fn prune_docker_target(signature_id: String) -> Result<u64, String> {
+    run_blocking(
+        move || DockerAdapter::prune_category(&signature_id).map_err(|error| error.to_string()),
+        "Docker cleanup worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_local_models() -> Result<Vec<LocalModelItem>, String> {
-    Ok(LocalModelScanner::scan_all_models())
+pub async fn get_local_models() -> Result<Vec<LocalModelItem>, String> {
+    run_blocking(
+        || Ok(LocalModelScanner::scan_all_models()),
+        "Local model scan worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn delete_local_model(model_id: String) -> Result<u64, String> {
-    LocalModelManager::delete_by_id(&model_id).map_err(|e| e.to_string())
+pub async fn delete_local_model(model_id: String) -> Result<u64, String> {
+    run_blocking(
+        move || LocalModelManager::delete_by_id(&model_id).map_err(|error| error.to_string()),
+        "Local model deletion worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1072,29 +1177,52 @@ pub fn get_awake_state(state: State<'_, AppState>) -> Result<AwakeState, String>
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_awake_rules(rules: Vec<AwakeRule>, state: State<'_, AppState>) -> Result<(), String> {
-    state.awake_manager.set_rules(rules);
-    Ok(())
+pub async fn set_awake_rules(
+    rules: Vec<AwakeRule>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let awake_manager = state.awake_manager.clone();
+    run_blocking(
+        move || {
+            awake_manager.set_rules(rules);
+            Ok(())
+        },
+        "Keep Awake rule worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_manual_awake(
+pub async fn set_manual_awake(
     duration_secs: Option<u64>,
     behavior: AwakeBehavior,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    state
-        .awake_manager
-        .set_manual(duration_secs, behavior)
-        .map_err(|e| e.to_string())
+    let awake_manager = state.awake_manager.clone();
+    run_blocking(
+        move || {
+            awake_manager
+                .set_manual(duration_secs, behavior)
+                .map_err(|error| error.to_string())
+        },
+        "Manual Keep Awake worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), String> {
-    state.awake_manager.disable_manual();
-    Ok(())
+pub async fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), String> {
+    let awake_manager = state.awake_manager.clone();
+    run_blocking(
+        move || {
+            awake_manager.disable_manual();
+            Ok(())
+        },
+        "Manual Keep Awake worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1106,7 +1234,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_settings(
+pub async fn save_settings(
     settings: ZenithSettings,
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -1118,46 +1246,63 @@ pub fn save_settings(
         .expect("settings poisoned")
         .ai_accounts_quota_providers
         != settings.ai_accounts_quota_providers;
-    if settings.agent_notifications.enabled {
-        crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
-    }
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|error| error.to_string())?;
-    settings_store::save(&config_dir, &settings)?;
-    state.awake_manager.set_rules(settings.awake_rules.clone());
-    let mut s = state.settings.lock().expect("settings poisoned");
-    *s = settings;
-    drop(s);
-    if provider_selection_changed {
-        *state
-            .ai_usage_cache
-            .lock()
-            .expect("ai_usage_cache poisoned") = None;
-        state
-            .ai_control_state
-            .lock()
-            .expect("ai control poisoned")
-            .last_snapshot = None;
-    }
-    Ok(())
+    let awake_manager = state.awake_manager.clone();
+    let settings_store_state = state.settings.clone();
+    let ai_usage_cache = state.ai_usage_cache.clone();
+    let ai_control_state = state.ai_control_state.clone();
+
+    run_blocking(
+        move || {
+            if settings.agent_notifications.enabled {
+                crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
+            }
+            let config_dir = app_handle
+                .path()
+                .app_config_dir()
+                .map_err(|error| error.to_string())?;
+            settings_store::save(&config_dir, &settings)?;
+            awake_manager.set_rules(settings.awake_rules.clone());
+            *settings_store_state.lock().expect("settings poisoned") = settings;
+            if provider_selection_changed {
+                *ai_usage_cache.lock().expect("ai_usage_cache poisoned") = None;
+                ai_control_state
+                    .lock()
+                    .expect("ai control poisoned")
+                    .last_snapshot = None;
+            }
+            Ok(())
+        },
+        "Settings save worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn reveal_in_finder(path: String) -> Result<(), String> {
-    use crate::platform::SystemActionProvider;
-    let path_buf = expand_display_path(&path)?;
-    crate::platform::NativeSystemActions::new().reveal_path(&path_buf)
+pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+    run_blocking(
+        move || {
+            use crate::platform::SystemActionProvider;
+            let path_buf = expand_display_path(&path)?;
+            crate::platform::NativeSystemActions::new().reveal_path(&path_buf)
+        },
+        "File manager worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_in_terminal(path: String) -> Result<(), String> {
-    use crate::platform::SystemActionProvider;
-    let path_buf = expand_display_path(&path)?;
-    crate::platform::NativeSystemActions::new().open_terminal(&path_buf)
+pub async fn open_in_terminal(path: String) -> Result<(), String> {
+    run_blocking(
+        move || {
+            use crate::platform::SystemActionProvider;
+            let path_buf = expand_display_path(&path)?;
+            crate::platform::NativeSystemActions::new().open_terminal(&path_buf)
+        },
+        "Terminal worker panicked",
+    )
+    .await
 }
 
 fn expand_display_path(path: &str) -> Result<PathBuf, String> {
@@ -1210,22 +1355,33 @@ pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_diagnostics(
+pub async fn get_diagnostics(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<DiagnosticsSnapshot, String> {
-    let settings = state.settings.lock().expect("settings poisoned").clone();
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    Ok(crate::diagnostics::get_snapshot(&settings, &config_dir))
+    let settings = state.settings.clone();
+    run_blocking(
+        move || {
+            let settings = settings.lock().expect("settings poisoned").clone();
+            let config_dir = app_handle
+                .path()
+                .app_config_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            Ok(crate::diagnostics::get_snapshot(&settings, &config_dir))
+        },
+        "Diagnostics worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_logs_folder() -> Result<(), String> {
-    crate::diagnostics::open_logs_folder()
+pub async fn open_logs_folder() -> Result<(), String> {
+    run_blocking(
+        crate::diagnostics::open_logs_folder,
+        "Logs folder worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]

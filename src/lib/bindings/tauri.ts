@@ -53,7 +53,7 @@ export const commands = {
 	path: string,
 } | null, string>(__TAURI_INVOKE("pick_keep_awake_application")),
 	getDiskMetrics: () => typedError<DiskMetrics, string>(__TAURI_INVOKE("get_disk_metrics")),
-	getDiskVolumes: () => __TAURI_INVOKE<DiskVolume[]>("get_disk_volumes"),
+	getDiskVolumes: () => typedError<DiskVolume[], string>(__TAURI_INVOKE("get_disk_volumes")),
 	openDiskUtility: () => typedError<null, string>(__TAURI_INVOKE("open_disk_utility")),
 	getDockerStatus: () => typedError<DockerStatus, string>(__TAURI_INVOKE("get_docker_status")),
 	pruneDockerTarget: (signatureId: string) => typedError<number, string>(__TAURI_INVOKE("prune_docker_target", { signatureId })),
