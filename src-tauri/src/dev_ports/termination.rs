@@ -1,5 +1,7 @@
 use super::classifier::{classify_listener, ProcessClassificationInput};
-use super::discovery::{parse_lsof_output, RawListenerRecord};
+#[cfg(unix)]
+use super::discovery::parse_lsof_output;
+use super::discovery::RawListenerRecord;
 use super::store::{CreateLeaseParams, DevelopmentPortStore};
 use crate::models::{
     DevelopmentListener, ReleaseDevelopmentListenerResult, ReleaseMode, ReleaseOutcome,
@@ -325,7 +327,7 @@ fn discover_windows_tcp_listeners() -> Result<Vec<RawListenerRecord>, String> {
                 for i in 0..num_entries {
                     let row = &*rows_ptr.add(i);
                     // 2 = MIB_TCP_STATE_LISTEN
-                    if row.State == 2 {
+                    if row.dwState == 2 {
                         let port = u16::from_be((row.dwLocalPort & 0xFFFF) as u16);
                         let addr = std::net::Ipv6Addr::from(row.ucLocalAddr);
                         let ip_str = addr.to_string();
