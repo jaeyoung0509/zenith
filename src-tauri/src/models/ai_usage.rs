@@ -4,15 +4,27 @@ use serde::{Deserialize, Serialize};
 pub struct UsageWindow {
     pub label: String,
     pub used_percent: f64,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub resets_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 pub struct UsageSummary {
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub lifetime_tokens: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub last_7d_tokens: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub peak_daily_tokens: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub current_streak_days: Option<u64>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub local_sessions: Option<u64>,
     pub local_cost_usd: Option<f64>,
     pub usage_usd: Option<f64>,
@@ -44,6 +56,8 @@ pub struct AiProviderUsage {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct AiUsageSnapshot {
     pub providers: Vec<AiProviderUsage>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub fetched_at: u64,
 }
 

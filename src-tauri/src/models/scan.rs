@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 pub struct FileSize {
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub logical: u64,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub allocated: Option<u64>,
 }
 
@@ -29,6 +33,8 @@ pub struct ScanItem {
     pub file_count: usize,
     pub description: String,
     pub is_selected: bool,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub last_modified: Option<u64>,
     pub exists: bool,
 }
@@ -38,21 +44,41 @@ pub struct CategoryResult {
     pub category: Category,
     pub display_name: String,
     pub items: Vec<ScanItem>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub safe_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub rebuild_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub manual_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ScanResult {
     pub scan_id: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub started_at: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub finished_at: u64,
     pub categories: Vec<CategoryResult>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub safe_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub rebuild_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub manual_bytes: u64,
 }
 
@@ -70,6 +96,8 @@ pub enum ScanEvent {
     },
     CategoryFinished {
         category: Category,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         bytes: u64,
         item_count: usize,
     },

@@ -8,6 +8,7 @@ pub mod dev_ports;
 pub mod developer_artifacts;
 pub mod diagnostics;
 pub mod docker;
+pub mod ipc_numeric;
 pub mod large_files;
 pub mod metrics;
 pub mod models;
@@ -128,6 +129,7 @@ pub fn run() {
     let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
     let delete_plans = Arc::new(Mutex::new(HashMap::new()));
     let storage_operation_gate = operation_gate::StorageOperationGate::default();
+    let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
     let agent_activity_cache = Arc::new(Mutex::new(None));
@@ -135,6 +137,14 @@ pub fn run() {
         crate::ai_control_center::state::AiControlCenterState::default(),
     ));
     let ai_control_refresh_lock = Arc::new(Mutex::new(()));
+    let ai_control_runtime = Arc::new(crate::ai_control_center::runtime::AiControlRuntime::new(
+        memory_sampler.clone(),
+        dev_port_store.clone(),
+        agent_activity_cache.clone(),
+        ai_control_state.clone(),
+        awake_manager.clone(),
+        settings.clone(),
+    ));
     let platform_capabilities: Arc<dyn PlatformCapabilitiesProvider> =
         Arc::new(NativePlatformCapabilities::new());
 
@@ -148,11 +158,13 @@ pub fn run() {
         ai_usage_refresh_lock,
         delete_plans,
         storage_operation_gate,
+        storage_state,
         memory_sampler: memory_sampler.clone(),
         dev_port_store: dev_port_store.clone(),
         agent_activity_cache: agent_activity_cache.clone(),
         ai_control_state: ai_control_state.clone(),
         ai_control_refresh_lock,
+        ai_control_runtime: ai_control_runtime.clone(),
         platform_capabilities,
     };
 
@@ -258,17 +270,14 @@ pub fn run() {
             });
 
             let bg_app = app.handle().clone();
-            let bg_runtime = Arc::new(crate::ai_control_center::runtime::AiControlRuntime::new(
-                memory_sampler.clone(),
-                dev_port_store.clone(),
-                agent_activity_cache.clone(),
-                ai_control_state.clone(),
-                awake_manager.clone(),
-                settings.clone(),
-            ));
+            let bg_runtime = ai_control_runtime.clone();
             std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                bg_runtime.tick(Some(&bg_app));
+                if bg_runtime.are_advisories_enabled() {
+                    bg_runtime.tick(Some(&bg_app));
+                    bg_runtime.wait_next_tick(std::time::Duration::from_secs(5));
+                } else {
+                    bg_runtime.wait_next_tick(std::time::Duration::from_secs(60));
+                }
             });
 
             Ok(())

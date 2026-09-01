@@ -4,6 +4,7 @@ use crate::models::{
     InstalledApp,
 };
 use crate::safety::Blacklist;
+#[cfg(not(target_os = "windows"))]
 use plist::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -134,7 +135,6 @@ impl ApplicationScanner {
                     }
                     (
                         BundleMetadata {
-                            display_name: Some(name.clone()),
                             bundle_id: None,
                             version: None,
                             executable: Some(format!("{name}.exe")),
@@ -398,12 +398,14 @@ fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
 
 #[derive(Default)]
 struct BundleMetadata {
+    #[cfg(not(target_os = "windows"))]
     display_name: Option<String>,
     bundle_id: Option<String>,
     version: Option<String>,
     executable: Option<String>,
 }
 
+#[cfg(not(target_os = "windows"))]
 fn read_bundle_metadata(path: &Path) -> BundleMetadata {
     let plist_path = path.join("Contents/Info.plist");
     let Ok(value) = Value::from_file(plist_path) else {

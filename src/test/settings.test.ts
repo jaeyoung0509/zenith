@@ -31,7 +31,20 @@ describe('serializeSettingsSnapshot', () => {
         enabled: true,
       },
     ],
-    ai_control: {},
+    ai_control: {
+      budgets: [],
+      manual_usage: [],
+      autopilot: {
+        keep_awake_for_verified_sessions: false,
+        keep_awake_ac_only: true,
+        notify_on_battery: false,
+        notify_on_memory_pressure: false,
+        notify_on_session_completion: false,
+        recommendation_cooldown_seconds: 900,
+      },
+      dismissed_findings: [],
+      audit_retention_days: 30,
+    },
     agent_notifications: {
       enabled: false,
       notify_on_turn_completed: true,

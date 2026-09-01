@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DevelopmentPortsStore,
   filterDevelopmentListeners,
@@ -9,6 +9,30 @@ import { mockApi } from '../lib/api/mock';
 import type { DevelopmentListener } from '../lib/models/types';
 import fs from 'node:fs';
 import path from 'node:path';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('DevelopmentPortsStore polling lifecycle', () => {
+  it('deduplicates subscribers and stops at zero subscribers', async () => {
+    vi.useFakeTimers();
+    const store = new DevelopmentPortsStore();
+    const refresh = vi.spyOn(store, 'refresh').mockResolvedValue(undefined);
+
+    store.startPolling(1000);
+    store.startPolling(1000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    store.stopPolling();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    store.stopPolling();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('filterDevelopmentListeners utility', () => {
   const sampleListeners: DevelopmentListener[] = [

@@ -18,6 +18,7 @@ export class DevelopmentPortsStore {
 
   private inFlightRefresh: Promise<void> | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private subscriberCount = 0;
 
   async refresh(): Promise<void> {
     if (this.inFlightRefresh) {
@@ -91,15 +92,18 @@ export class DevelopmentPortsStore {
   }
 
   startPolling(intervalMs = 15000): void {
-    this.stopPolling();
-    void this.refresh();
-    this.pollInterval = setInterval(() => {
+    this.subscriberCount++;
+    if (this.subscriberCount === 1) {
       void this.refresh();
-    }, intervalMs);
+      this.pollInterval = setInterval(() => {
+        void this.refresh();
+      }, intervalMs);
+    }
   }
 
   stopPolling(): void {
-    if (this.pollInterval) {
+    this.subscriberCount = Math.max(0, this.subscriberCount - 1);
+    if (this.subscriberCount === 0 && this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }

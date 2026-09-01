@@ -26,9 +26,13 @@ pub struct LocalModelItem {
     pub name: String,
     pub source: ModelSource,
     pub path: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub size_bytes: u64,
     pub format: Option<String>,
     pub parameter_size: Option<String>,
     pub quantization: Option<String>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub last_modified: Option<u64>,
 }

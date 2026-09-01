@@ -1,7 +1,7 @@
 use crate::ai_control_center::{notifications, resources};
 use crate::models::Recommendation;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime};
 use tauri::AppHandle;
 
 fn unix_timestamp() -> u64 {
@@ -18,6 +18,7 @@ pub struct AiControlRuntime {
     ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     awake_manager: Arc<crate::power::KeepAwakeManager>,
     settings: Arc<Mutex<crate::models::ZenithSettings>>,
+    wake_signal: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl AiControlRuntime {
@@ -36,7 +37,36 @@ impl AiControlRuntime {
             ai_control_state,
             awake_manager,
             settings,
+            wake_signal: Arc::new((Mutex::new(false), Condvar::new())),
         }
+    }
+
+    pub fn notify_wake(&self) {
+        let (lock, cvar) = &*self.wake_signal;
+        let mut wake = lock.lock().unwrap_or_else(|p| p.into_inner());
+        *wake = true;
+        cvar.notify_all();
+    }
+
+    pub fn are_advisories_enabled(&self) -> bool {
+        let preferences = self
+            .settings
+            .lock()
+            .map(|s| s.ai_control.clone())
+            .unwrap_or_default();
+        background_advisories_enabled(&preferences.autopilot)
+    }
+
+    pub fn wait_next_tick(&self, timeout: Duration) {
+        let (lock, cvar) = &*self.wake_signal;
+        let mut wake = lock.lock().unwrap_or_else(|p| p.into_inner());
+        if !*wake {
+            let (guard, _) = cvar
+                .wait_timeout(wake, timeout)
+                .unwrap_or_else(|p| p.into_inner());
+            wake = guard;
+        }
+        *wake = false;
     }
 
     /// Evaluates local background signals: active agent activity, dev ports, memory pressure,
@@ -144,6 +174,23 @@ fn background_advisories_enabled(preferences: &crate::models::AutopilotPreferenc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{mpsc, Barrier};
+
+    fn test_runtime(
+        memory_sampler: Arc<crate::metrics::MemorySampler>,
+        agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+    ) -> Arc<AiControlRuntime> {
+        Arc::new(AiControlRuntime::new(
+            memory_sampler,
+            Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
+            agent_activity_cache,
+            Arc::new(Mutex::new(
+                crate::ai_control_center::state::AiControlCenterState::default(),
+            )),
+            Arc::new(crate::power::KeepAwakeManager::new()),
+            Arc::new(Mutex::new(crate::models::ZenithSettings::default())),
+        ))
+    }
 
     #[test]
     fn background_sampling_is_disabled_until_an_advisory_is_enabled() {
@@ -166,5 +213,42 @@ mod tests {
         ] {
             assert!(background_advisories_enabled(&enabled));
         }
+    }
+
+    #[test]
+    fn disabled_runtime_performs_zero_background_observations() {
+        let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
+        let agent_activity_cache = Arc::new(Mutex::new(None));
+        let runtime = test_runtime(memory_sampler.clone(), agent_activity_cache.clone());
+
+        assert!(runtime.tick(None).is_empty());
+        assert!(!memory_sampler.is_initialized());
+        assert!(agent_activity_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_none());
+    }
+
+    #[test]
+    fn notify_wake_unblocks_waiting_runtime_immediately() {
+        let runtime = test_runtime(
+            Arc::new(crate::metrics::MemorySampler::new()),
+            Arc::new(Mutex::new(None)),
+        );
+        let barrier = Arc::new(Barrier::new(2));
+        let (done_tx, done_rx) = mpsc::channel();
+
+        let runtime_bg = runtime.clone();
+        let barrier_bg = barrier.clone();
+        let handle = std::thread::spawn(move || {
+            barrier_bg.wait();
+            runtime_bg.wait_next_tick(Duration::from_secs(10));
+            done_tx.send(()).unwrap();
+        });
+
+        barrier.wait();
+        runtime.notify_wake();
+        done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        handle.join().unwrap();
     }
 }

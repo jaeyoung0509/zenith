@@ -180,7 +180,7 @@ export const nativeApi = {
   },
 
   async getDiskVolumes(): Promise<DiskVolume[]> {
-    return await commands.getDiskVolumes();
+    return await unwrap(commands.getDiskVolumes());
   },
 
   async openDiskUtility(): Promise<void> {

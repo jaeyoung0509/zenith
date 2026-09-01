@@ -1,13 +1,15 @@
 # Architecture
 
-Zenith is a macOS menu-bar application built with Tauri 2, Rust, and Svelte 5.
-Rust owns system access and destructive decisions. Svelte renders typed state and
-submits user intent; it does not construct filesystem operations.
+Zenith is a cross-platform desktop application built with Tauri 2, Rust, Svelte 5,
+and TypeScript, supporting macOS and Windows x64.
+Rust owns system access, security boundaries, and destructive decisions. Svelte
+renders typed state and submits user intent; it never constructs or coordinates
+raw filesystem operations.
 
 ## Runtime shape
 
 ```text
-macOS menu bar
+macOS menu bar / Windows system tray
      |
      +-- quick WebView (hidden until requested)
      |      read metrics, scan, execute a backend-owned safe plan
@@ -15,31 +17,38 @@ macOS menu bar
      +-- main WebView
             dashboard, settings, reviewed destructive adapters
                     |
-                    | typed Tauri IPC
+                    | typed Tauri IPC (specta bindings, async spawn_blocking)
                     v
-              Rust application core
+              Rust application core (AppState)
         +-----------+-----------+-------------+
         |           |           |             |
      scanner      safety      adapters      metrics/power
         |        planner +     Docker,       memory, disk,
    signatures    plan store    models, AI    Keep Awake
         |
-        +-- dedicated storage management
+        +-- dedicated storage management (StorageWorkflowState)
             large-file inventory, app inventory,
             one-shot Trash plans
 
-        +-- developer artifact review
+        +-- developer artifact review (StorageWorkflowState)
             picker-owned workspace roots, marker discovery,
             bounded candidate measurement, one-shot Trash plans
 
-        +-- development-port management
+        +-- development-port management (DevelopmentPortStore)
             listener discovery + classification,
             one-shot leases, exact-process signaling
+
+        +-- AI control plane (AiControlRuntime)
+            event-driven condvar wake loop, process activity,
+            advisories, safety audit, git baselines
 ```
 
 The windows have separate frontend runtimes and stores. Shared authority and
-coordination therefore live in Rust `AppState`, backend-owned inventories, or
-Rust process state rather than in a browser singleton.
+coordination therefore live in Rust `AppState`, backend-owned workflow states, or
+Rust process state rather than in a browser singleton. Lifecycle-owned storage
+state uses poison recovery for bounded inventories, plans, workspace
+registrations, and cancellation handles. Other domain locks fail closed when
+their state cannot be trusted.
 
 ## Platform capability contract
 
@@ -52,15 +61,21 @@ that are unavailable on the current platform. A `read_only` capability may
 continue to expose inspection metrics, but mutating controls require an
 `available` capability.
 
-The macOS provider currently reports the existing feature set. The Windows
-provider starts as an explicit baseline: metrics and Docker inspection can be
-read-only while native actions remain unavailable until their owning adapter is
-implemented. This keeps unsupported controls truthful during the incremental
-Windows port and gives each follow-up adapter a stable seam for registration.
+Both macOS and Windows x64 implement the capability contract across all thirteen
+core features. Platform-specific actions, including workspace selection, use
+native adapters tailored to each OS; unsupported platforms report unavailable
+capabilities instead of exposing nonfunctional controls.
+
+Workspace selection uses `NSOpenPanel` on macOS and the Windows Shell COM folder
+picker through a static PowerShell script on Windows. The Windows adapter never
+interpolates user-controlled text into the script, requests UTF-8 output, and
+maps picker cancellation to `None` just like the macOS adapter.
 
 ## Repository map
 
-- `src-tauri/src/commands`: narrow IPC boundary and shared application state.
+- `src-tauri/src/commands`: narrow generic IPC boundary. `mod.rs` only composes
+  domain exports; `ai.rs`, `cleanup.rs`, and `system.rs` own handlers, while
+  `state.rs` and `support.rs` own shared state and helpers.
 - `src-tauri/src/platform`: platform capability contract and native provider
   composition seams.
 - `src-tauri/src/scanner`: signature-driven discovery and size measurement.
@@ -79,7 +94,7 @@ Windows port and gives each follow-up adapter a stable seam for registration.
   for user-reviewed files and apps.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
   for resources that must not be treated as arbitrary files.
-- `src-tauri/src/metrics` and `src-tauri/src/power`: macOS system integration.
+- `src-tauri/src/metrics` and `src-tauri/src/power`: platform system integration.
 - `src-tauri/src/dev_ports`: bounded TCP-listener discovery, conservative
   development/testing-tool classification, opaque lease storage, TOCTOU validation,
   and exact-process graceful/force signaling.
@@ -279,6 +294,13 @@ The quick window is persistent but inactive while hidden:
 Store constructors do not start I/O. A route or an explicit activation event
 owns refresh and cleanup of recurring work.
 
+Polling stores use reference-counted subscribers: the first subscriber starts
+the timer and the last subscriber stops it. Repeated starts are idempotent, one
+consumer cannot stop another consumer's polling, and fake-timer tests verify
+the lifecycle without wall-clock sleeps. Backend cancellation registries are
+similarly lifecycle-owned: entries expire after a TTL, are capped at 64, and
+are removed after success, cancellation, or scanner failure.
+
 Development-port discovery runs independently from the 2.5-second memory
 sampler. The standalone Development Servers route refreshes development and
 verified local testing-tool listeners at a
@@ -365,9 +387,41 @@ applied in development and production. Adding a command requires all three:
 registration in `lib.rs`, declaration in `build.rs`, and an intentional window
 capability entry.
 
+### IPC numeric safety contract
+
+Zenith binds Rust structs to TypeScript via Tauri Specta using
+`dangerously_cast_bigints_to_number()`. Every serialized `u64` and `Option<u64>`
+field uses the shared `ipc_numeric` serde boundary. Values up to JavaScript
+`Number.MAX_SAFE_INTEGER` ($2^{53} - 1$) round-trip as numbers; larger values are
+rejected during serialization or deserialization instead of being rounded.
+The paired Specta annotation tells binding generation that the wire type remains
+TypeScript `number`. Boundary tests exercise both the shared serializer and real
+IPC model payloads.
+
+### Browser-preview contract
+
+Browser preview is an alternate transport for the same typed frontend API, not
+a second implementation of backend policy. Domain fixtures live under
+`src/lib/api/mocks`, return fresh value copies, and preserve native response and
+error shapes. Contract tests compare the exact top-level keys of native and mock
+APIs, including the dedicated storage workflow surface, so adding a native
+method requires an intentional mock decision.
+
+### CI dependency graph
+
+The shared Linux frontend job exports Specta bindings, checks binding and lock
+file drift, runs Svelte/Vitest, builds `dist`, and uploads that verified frontend
+artifact. macOS and Windows x64 run Rust format, Clippy, tests, and check in
+parallel. Each packaging smoke job depends on the shared frontend artifact and
+its matching Rust job, proving that the platform bundle embeds the exact tested
+frontend without rerunning the same frontend suite on every OS. Both packaging
+jobs pass the checked-in `.github/tauri.package-ci.json` override by path; this
+avoids shell-specific inline JSON quoting and disables `beforeBuildCommand`.
+
 ## External tools
 
-Finder-launched macOS applications often receive a smaller `PATH` than an
-interactive shell. `tooling.rs` resolves CLIs through the inherited path and
-common Homebrew, local-user, Docker, and Ollama locations before spawning them.
-Adapters still fail closed when a required tool is unavailable.
+On macOS and Windows, applications launched from the desktop shell receive a
+distinct `PATH` compared to an interactive shell. `tooling.rs` resolves CLIs
+through inherited paths and standard platform locations (Homebrew, local AppData,
+Program Files, Docker, and Ollama) before spawning processes. Adapters fail closed
+when a required tool is unavailable.

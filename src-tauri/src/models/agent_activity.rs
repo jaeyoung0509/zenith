@@ -68,10 +68,18 @@ pub struct AgentSession {
     pub status: AgentActivityStatus,
     pub attention_reason: Option<AttentionReason>,
     pub evidence: AgentEvidence,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub started_at: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub elapsed_seconds: u64,
     pub cpu_percent: f32,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub memory_bytes: u64,
     pub project_id: Option<String>,
     pub worktree_id: Option<String>,
@@ -101,8 +109,12 @@ pub struct ProjectIdentity {
 pub struct ProjectContext {
     pub identity: ProjectIdentity,
     pub sessions: Vec<AgentSession>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub last_seen_at: u64,
     pub dev_ports: Vec<u16>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub artifact_size_bytes: Option<u64>,
 }
 
@@ -118,6 +130,8 @@ pub struct AgentAdapterHealth {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct AgentActivitySnapshot {
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub observed_at: u64,
     pub quality: SnapshotQuality,
     pub projects: Vec<ProjectContext>,
@@ -179,6 +193,8 @@ pub struct AgentQuickSessionRow {
     pub project_name: String,
     pub status: AgentActivityStatus,
     pub evidence: AgentEvidence,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub elapsed_seconds: u64,
 }
 
@@ -206,6 +222,8 @@ pub struct IngestedAgentEvent {
     pub vendor_session_id: String,
     pub cwd: Option<String>,
     pub lifecycle: AgentLifecycleEvent,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub timestamp: u64,
     pub turn_id: Option<String>,
     pub attention_reason: Option<AttentionReason>,

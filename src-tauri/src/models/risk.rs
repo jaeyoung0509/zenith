@@ -44,8 +44,14 @@ pub struct RiskSummary {
     pub safe_count: usize,
     pub rebuild_count: usize,
     pub manual_count: usize,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub safe_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub rebuild_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub manual_bytes: u64,
 }
 

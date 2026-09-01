@@ -2,7 +2,9 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 use zenith_lib::docker::DockerAdapter;
-use zenith_lib::models::{AwakeBehavior, Category, CleanStrategy, RiskTier, Signature};
+use zenith_lib::models::{
+    AwakeBehavior, Category, CleanStrategy, DiskMetrics, RiskTier, Signature,
+};
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
@@ -400,4 +402,19 @@ fn test_windows_dev_ports_classification_defense() {
     let res_vite = classify_listener(&input_vite);
     assert!(res_vite.can_release);
     assert_eq!(res_vite.server_name, "Vite");
+}
+
+#[test]
+fn test_real_ipc_model_rejects_unsafe_u64_values() {
+    let metrics = DiskMetrics {
+        mount_point: "/".into(),
+        total_bytes: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        used_bytes: 0,
+        free_bytes: 0,
+        available_bytes: 0,
+        percent_used: 0.0,
+    };
+
+    let error = serde_json::to_string(&metrics).unwrap_err().to_string();
+    assert!(error.contains("Number.MAX_SAFE_INTEGER"));
 }

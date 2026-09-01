@@ -41,6 +41,8 @@ pub struct DeletePlan {
 pub struct PlanTargetPreview {
     pub item_id: String,
     pub name: String,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub expected_bytes: u64,
     pub risk: RiskTier,
 }
@@ -49,8 +51,12 @@ pub struct PlanTargetPreview {
 pub struct PlanPreview {
     pub id: Uuid,
     pub targets: Vec<PlanTargetPreview>,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub expected_reclaim_bytes: u64,
     pub risk: RiskSummary,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub expires_at: u64,
 }
 
@@ -142,6 +148,8 @@ pub struct CleanItemResult {
     pub path: String,
     pub status: CleanStatus,
     pub success: bool,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub bytes_reclaimed: u64,
     pub failure_reason: Option<CleanFailureReason>,
     pub error_message: Option<String>,
@@ -150,9 +158,17 @@ pub struct CleanItemResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct CleanResult {
     pub plan_id: Uuid,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub started_at: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub finished_at: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_reclaimed_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
     pub total_failed_bytes: u64,
     pub items: Vec<CleanItemResult>,
     pub actual_disk_free_delta: Option<i64>,
@@ -164,6 +180,8 @@ pub enum CleanEvent {
     Started {
         plan_id: Uuid,
         total_targets: usize,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         expected_bytes: u64,
     },
     ItemStarted {
@@ -176,6 +194,8 @@ pub enum CleanEvent {
         item_id: String,
         name: String,
         success: bool,
+        #[serde(with = "crate::ipc_numeric::u64")]
+        #[specta(type = u64)]
         reclaimed_bytes: u64,
         error: Option<String>,
     },

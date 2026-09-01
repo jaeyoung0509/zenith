@@ -1,7 +1,6 @@
 // Re-export generated types from Tauri Specta bindings
 export type {
   AiProviderUsage,
-  AiControlPreferences,
   AiUsageSnapshot,
   AgentActivitySnapshot,
   AgentActivityStatus,
@@ -122,6 +121,7 @@ export type {
 } from '../bindings/tauri';
 
 import type {
+  AiControlPreferences_Serialize,
   AiControlCenterSnapshot_Serialize,
   DashboardRoute_Serialize,
   DashboardTab_Serialize,
@@ -132,6 +132,7 @@ import type {
 
 // In the frontend runtime, settings and tabs are always fully resolved/serialized shapes
 export type ZenithSettings = ZenithSettings_Serialize;
+export type AiControlPreferences = AiControlPreferences_Serialize;
 export type DashboardTab = DashboardTab_Serialize;
 export type DashboardRoute = DashboardRoute_Serialize;
 export type Recommendation = Recommendation_Serialize;
