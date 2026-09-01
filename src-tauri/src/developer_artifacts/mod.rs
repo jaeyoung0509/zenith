@@ -1152,7 +1152,7 @@ fn should_skip_protected_discovery_path(
     )
 }
 
-fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize) -> TreeStats {
+fn measure_tree(path: &Path, _root_device: u64, cancel: &AtomicBool, depth: usize) -> TreeStats {
     let mut stats = TreeStats::new();
     if cancel.load(Ordering::Relaxed) {
         stats.complete = false;
@@ -1171,7 +1171,7 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
         }
     };
     #[cfg(unix)]
-    if metadata.dev() != root_device {
+    if metadata.dev() != _root_device {
         stats.complete = false;
         stats.safety_blocked = true;
         return stats;
@@ -1219,7 +1219,7 @@ fn measure_tree(path: &Path, root_device: u64, cancel: &AtomicBool, depth: usize
         if child.file_name().and_then(|value| value.to_str()) == Some(".git") {
             continue;
         }
-        let child_stats = measure_tree(&child, root_device, cancel, depth + 1);
+        let child_stats = measure_tree(&child, _root_device, cancel, depth + 1);
         stats.logical_bytes = stats
             .logical_bytes
             .saturating_add(child_stats.logical_bytes);

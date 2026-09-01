@@ -1160,15 +1160,13 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
             .arg(path)
             .spawn()
             .map_err(|error| format!("Could not open Finder: {error}"))?;
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
-        return Err("Reveal in Finder is unavailable on this platform.".to_string());
+        Err("Reveal in Finder is unavailable on this platform.".to_string())
     }
-
-    #[cfg(target_os = "macos")]
-    Ok(())
 }
 
 #[tauri::command]
@@ -1185,15 +1183,13 @@ pub fn open_in_terminal(path: String) -> Result<(), String> {
             .arg(path)
             .spawn()
             .map_err(|error| format!("Could not open Terminal: {error}"))?;
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = path;
-        return Err("Opening a terminal is unavailable on this platform.".to_string());
+        Err("Opening a terminal is unavailable on this platform.".to_string())
     }
-
-    #[cfg(target_os = "macos")]
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
