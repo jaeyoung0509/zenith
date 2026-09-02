@@ -120,13 +120,13 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
         };
     }
 
-    // 6. Fallback: recognized user process but not a recognized development server
+    // 6. Fallback: recognized user process but not an allowlisted local tool
     ClassificationResult {
         server_name: clean_process_display_name(input.process_name, input.raw_command),
         project_name,
         working_directory,
         can_release: false,
-        blocked_reason: Some("Not recognized as a development server".to_string()),
+        blocked_reason: Some("Not recognized as a development or testing tool".to_string()),
     }
 }
 
@@ -142,8 +142,11 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
     let matches_any = |targets: &[&str]| {
         targets.iter().any(|t| {
             name_lower == *t
+                || name_lower == format!("{t}.exe")
                 || cmd_lower == *t
+                || cmd_lower == format!("{t}.exe")
                 || exe_name == *t
+                || exe_name == format!("{t}.exe")
                 || name_lower.starts_with(&format!("{t}."))
         })
     };
@@ -159,6 +162,9 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
         "dash",
         "nu",
         "xonsh",
+        "powershell",
+        "pwsh",
+        "cmd",
         "ssh",
         "sshd",
         "mosh-server",
@@ -183,12 +189,15 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
         "warp",
         "hyper",
         "rio",
+        "wt",
+        "conhost",
+        "mintty",
     ];
     if matches_any(TERMINALS) {
         return true;
     }
 
-    // System daemons & macOS services
+    // System daemons & OS services
     const SYSTEM_DAEMONS: &[&str] = &[
         "launchd",
         "systemd",
@@ -214,6 +223,17 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
         "finder",
         "dock",
         "systemsettings",
+        "svchost",
+        "csrss",
+        "services",
+        "lsass",
+        "smss",
+        "wininit",
+        "winlogon",
+        "taskmgr",
+        "explorer",
+        "msmpeng",
+        "securityhealthservice",
     ];
     if matches_any(SYSTEM_DAEMONS) {
         return true;
@@ -279,6 +299,12 @@ fn match_positive_dev_server_signature(
 
     // Check argv lowercase tokens
     let argv_joined = argv.join(" ").to_ascii_lowercase();
+
+    // Local browser automation infrastructure is intentionally disposable,
+    // but only exact official executable paths and automation arguments qualify.
+    if let Some(testing_tool_name) = match_testing_tool_signature(exe_path, argv) {
+        return Some(testing_tool_name);
+    }
 
     // 1. Vite & SvelteKit
     if argv_mentions_tool(argv, "vite")
@@ -437,6 +463,51 @@ fn match_positive_dev_server_signature(
         || (argv_joined.contains("trunk") && argv_joined.contains("serve"))
     {
         return Some("Trunk (Rust WASM)".to_string());
+    }
+
+    None
+}
+
+fn match_testing_tool_signature(exe_path: Option<&Path>, argv: &[String]) -> Option<String> {
+    let executable = exe_path?;
+    let exe_name = executable
+        .file_name()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    let normalized_path = executable
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+
+    let is_agent_browser_binary = exe_name == "agent-browser"
+        || exe_name
+            .strip_prefix("agent-browser-darwin-")
+            .is_some_and(|architecture| matches!(architecture, "arm64" | "x64"));
+    let is_official_agent_browser_path =
+        normalized_path.contains("/node_modules/agent-browser/bin/");
+    if is_agent_browser_binary && is_official_agent_browser_path {
+        return Some("agent-browser".to_string());
+    }
+
+    let chrome_testing_suffix =
+        "/google chrome for testing.app/contents/macos/google chrome for testing";
+    let has_remote_debugging = argv.iter().any(|argument| {
+        argument
+            .to_ascii_lowercase()
+            .starts_with("--remote-debugging-port=")
+    });
+    let has_isolated_profile = argv.iter().any(|argument| {
+        argument
+            .to_ascii_lowercase()
+            .starts_with("--user-data-dir=")
+    });
+
+    if exe_name == "google chrome for testing"
+        && normalized_path.ends_with(chrome_testing_suffix)
+        && has_remote_debugging
+        && has_isolated_profile
+    {
+        return Some("Chrome for Testing".to_string());
     }
 
     None
@@ -642,6 +713,138 @@ mod tests {
     }
 
     #[test]
+    fn classify_verified_agent_browser_and_chrome_for_testing() {
+        let agent_argv = vec![
+            "/opt/homebrew/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64"
+                .to_string(),
+        ];
+        let agent_input = ProcessClassificationInput {
+            pid: 24449,
+            uid: Some(501),
+            current_user_uid: 501,
+            zenith_pid: 1000,
+            port: 62849,
+            raw_command: "agent-browser-darwin-arm64",
+            process_name: "agent-browser-darwin-arm64",
+            exe_path: Some(Path::new(
+                "/opt/homebrew/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64",
+            )),
+            cwd: Some(Path::new("/Users/apple/Myproject/clean1")),
+            argv: &agent_argv,
+            started_at: Some(1700000000),
+        };
+        let agent_result = classify_listener(&agent_input);
+        assert!(agent_result.can_release);
+        assert_eq!(agent_result.server_name, "agent-browser");
+
+        let chrome_argv = vec![
+            "/Users/apple/.agent-browser/browsers/chrome/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing".to_string(),
+            "--remote-debugging-port=0".to_string(),
+            "--user-data-dir=/tmp/agent-browser-chrome-test".to_string(),
+            "--headless=new".to_string(),
+        ];
+        let chrome_input = ProcessClassificationInput {
+            pid: 24450,
+            uid: Some(501),
+            current_user_uid: 501,
+            zenith_pid: 1000,
+            port: 62850,
+            raw_command: "Google Chrome for Testing",
+            process_name: "Google Chrome for Testing",
+            exe_path: Some(Path::new(
+                "/Users/apple/.agent-browser/browsers/chrome/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            )),
+            cwd: Some(Path::new("/Users/apple/Myproject/clean1")),
+            argv: &chrome_argv,
+            started_at: Some(1700000001),
+        };
+        let chrome_result = classify_listener(&chrome_input);
+        assert!(chrome_result.can_release);
+        assert_eq!(chrome_result.server_name, "Chrome for Testing");
+    }
+
+    #[test]
+    fn reject_testing_tool_lookalikes_and_standard_chrome() {
+        let fake_agent_argv = vec!["/tmp/agent-browser-darwin-arm64".to_string()];
+        let fake_agent = ProcessClassificationInput {
+            pid: 30001,
+            uid: Some(501),
+            current_user_uid: 501,
+            zenith_pid: 1000,
+            port: 60001,
+            raw_command: "agent-browser-darwin-arm64",
+            process_name: "agent-browser-darwin-arm64",
+            exe_path: Some(Path::new("/tmp/agent-browser-darwin-arm64")),
+            cwd: Some(Path::new("/Users/apple/project")),
+            argv: &fake_agent_argv,
+            started_at: Some(1700000000),
+        };
+        assert!(!classify_listener(&fake_agent).can_release);
+
+        let chrome_argv = vec![
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
+            "--remote-debugging-port=9222".to_string(),
+            "--user-data-dir=/tmp/chrome-debug".to_string(),
+        ];
+        let standard_chrome = ProcessClassificationInput {
+            pid: 30002,
+            uid: Some(501),
+            current_user_uid: 501,
+            zenith_pid: 1000,
+            port: 9222,
+            raw_command: "Google Chrome",
+            process_name: "Google Chrome",
+            exe_path: Some(Path::new(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            )),
+            cwd: None,
+            argv: &chrome_argv,
+            started_at: Some(1700000001),
+        };
+        assert!(!classify_listener(&standard_chrome).can_release);
+
+        let incomplete_testing_argv = vec![
+            "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+                .to_string(),
+        ];
+        let incomplete_testing_browser = ProcessClassificationInput {
+            pid: 30003,
+            uid: Some(501),
+            current_user_uid: 501,
+            zenith_pid: 1000,
+            port: 9223,
+            raw_command: "Google Chrome for Testing",
+            process_name: "Google Chrome for Testing",
+            exe_path: Some(Path::new(
+                "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            )),
+            cwd: None,
+            argv: &incomplete_testing_argv,
+            started_at: Some(1700000002),
+        };
+        assert!(!classify_listener(&incomplete_testing_browser).can_release);
+
+        let helper_argv = vec![
+            "/Users/apple/.agent-browser/browsers/chrome/Google Chrome for Testing.app/Contents/Frameworks/Google Chrome for Testing Framework.framework/Versions/Current/Helpers/Google Chrome for Testing Helper.app/Contents/MacOS/Google Chrome for Testing Helper".to_string(),
+            "--type=gpu-process".to_string(),
+        ];
+        let testing_browser_helper = ProcessClassificationInput {
+            pid: 30004,
+            uid: Some(501),
+            current_user_uid: 501,
+            zenith_pid: 1000,
+            port: 9224,
+            raw_command: "Google Chrome for Testing Helper",
+            process_name: "Google Chrome for Testing Helper",
+            exe_path: Some(Path::new(&helper_argv[0])),
+            cwd: None,
+            argv: &helper_argv,
+            started_at: Some(1700000003),
+        };
+        assert!(!classify_listener(&testing_browser_helper).can_release);
+    }
+
+    #[test]
     fn reject_generic_runtime_name_only_cases() {
         let argv = vec!["node".to_string(), "long_running_worker.js".to_string()];
         let input = ProcessClassificationInput {
@@ -662,7 +865,7 @@ mod tests {
         assert!(!result.can_release);
         assert_eq!(
             result.blocked_reason.as_deref(),
-            Some("Not recognized as a development server")
+            Some("Not recognized as a development or testing tool")
         );
     }
 

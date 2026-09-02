@@ -3,6 +3,10 @@ import { isTauri } from './index';
 import { commands } from '../bindings/tauri';
 import type {
   AppUninstallInspection,
+  DeveloperArtifact,
+  DeveloperArtifactScanEvent,
+  DeveloperArtifactScanResult,
+  DeveloperWorkspace,
   InstalledApp,
   LargeFileItem,
   LargeFileScanEvent,
@@ -28,6 +32,17 @@ export interface StorageManagementApi {
   ): Promise<LargeFileScanResult>;
   cancelLargeFileScan(scanId: string): Promise<void>;
   prepareLargeFileTrash(scanId: string, selectedItemIds: string[]): Promise<TrashPlanPreview>;
+  pickDeveloperWorkspace(): Promise<DeveloperWorkspace | null>;
+  registerDeveloperHomeWorkspace(): Promise<DeveloperWorkspace>;
+  startDeveloperArtifactScan(
+    workspaceIds: string[],
+    onEvent: (event: DeveloperArtifactScanEvent) => void
+  ): Promise<DeveloperArtifactScanResult>;
+  cancelDeveloperArtifactScan(scanId: string): Promise<void>;
+  prepareDeveloperArtifactCleanup(
+    scanId: string,
+    selectedItemIds: string[]
+  ): Promise<TrashPlanPreview>;
   getInstalledApps(): Promise<InstalledApp[]>;
   inspectAppUninstall(appId: string): Promise<AppUninstallInspection>;
   prepareAppUninstall(
@@ -52,6 +67,28 @@ const nativeStorageApi: StorageManagementApi = {
     return await unwrap(commands.prepareLargeFileTrash(scanId, selectedItemIds));
   },
 
+  async pickDeveloperWorkspace() {
+    return await unwrap(commands.pickDeveloperWorkspace());
+  },
+
+  async registerDeveloperHomeWorkspace() {
+    return await unwrap(commands.registerDeveloperHomeWorkspace());
+  },
+
+  async startDeveloperArtifactScan(workspaceIds, onEvent) {
+    const channel = new Channel<DeveloperArtifactScanEvent>();
+    channel.onmessage = onEvent;
+    return await unwrap(commands.startDeveloperArtifactScan(workspaceIds, channel));
+  },
+
+  async cancelDeveloperArtifactScan(scanId) {
+    await unwrap(commands.cancelDeveloperArtifactScan(scanId));
+  },
+
+  async prepareDeveloperArtifactCleanup(scanId, selectedItemIds) {
+    return await unwrap(commands.prepareDeveloperArtifactCleanup(scanId, selectedItemIds));
+  },
+
   async getInstalledApps() {
     return await unwrap(commands.getInstalledApps());
   },
@@ -73,6 +110,26 @@ const GIB = 1024 * 1024 * 1024;
 const MIB = 1024 * 1024;
 
 const mockLargeFiles: LargeFileItem[] = [
+  {
+    id: 'installer-dmg-1',
+    name: 'ExampleTool.dmg',
+    display_parent: '/Users/mock/Downloads',
+    logical_size: 55 * MIB,
+    allocated_size: 55 * MIB,
+    modified_at: Math.floor(Date.now() / 1000) - 86400 * 12,
+    kind: 'disk_image',
+    extension: 'dmg',
+  },
+  {
+    id: 'installer-pkg-1',
+    name: 'ExampleSDK.pkg',
+    display_parent: '/Users/mock/Downloads',
+    logical_size: 120 * MIB,
+    allocated_size: 120 * MIB,
+    modified_at: Math.floor(Date.now() / 1000) - 86400 * 22,
+    kind: 'installer',
+    extension: 'pkg',
+  },
   {
     id: 'large-video-1',
     name: 'screen-recording.mov',
@@ -102,6 +159,129 @@ const mockLargeFiles: LargeFileItem[] = [
     modified_at: Math.floor(Date.now() / 1000) - 86400 * 43,
     kind: 'archive',
     extension: 'zip',
+  },
+];
+
+const mockDeveloperWorkspaces: DeveloperWorkspace[] = [
+  {
+    id: 'workspace-myproject',
+    name: 'Myproject',
+    display_path: '/Users/mock/Myproject',
+  },
+  {
+    id: 'workspace-work',
+    name: 'work',
+    display_path: '/Users/mock/work',
+  },
+  {
+    id: 'workspace-this-mac',
+    name: 'This Mac',
+    display_path: '/Users/mock',
+  },
+];
+
+const mockDeveloperArtifacts: DeveloperArtifact[] = [
+  {
+    id: 'artifact-rust-target',
+    workspace_id: 'workspace-myproject',
+    project_name: 'clean1',
+    ecosystem: 'rust',
+    kind: 'cargo_target',
+    path: '/Users/mock/Myproject/clean1/target',
+    logical_bytes: 31 * GIB,
+    allocated_bytes: 30.7 * GIB,
+    file_count: 184231,
+    newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 3,
+    rebuild_hint: 'cargo build',
+    evidence: ['Cargo.toml'],
+    status: 'complete',
+    incomplete_reason: null,
+    selected_by_default: false,
+  },
+  {
+    id: 'artifact-node-modules',
+    workspace_id: 'workspace-work',
+    project_name: 'bitbreif',
+    ecosystem: 'node',
+    kind: 'node_modules',
+    path: '/Users/mock/work/bitbreif/node_modules',
+    logical_bytes: 1.2 * GIB,
+    allocated_bytes: 1.18 * GIB,
+    file_count: 55342,
+    newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 12,
+    rebuild_hint: 'pnpm install',
+    evidence: ['package.json', 'pnpm-lock.yaml'],
+    status: 'complete',
+    incomplete_reason: null,
+    selected_by_default: false,
+  },
+  {
+    id: 'artifact-gradle',
+    workspace_id: 'workspace-work',
+    project_name: 'android-app',
+    ecosystem: 'kotlin',
+    kind: 'gradle_build',
+    path: '/Users/mock/work/android-app/build',
+    logical_bytes: 4.6 * GIB,
+    allocated_bytes: 4.4 * GIB,
+    file_count: 87421,
+    newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 28,
+    rebuild_hint: './gradlew build',
+    evidence: ['build.gradle.kts'],
+    status: 'complete',
+    incomplete_reason: null,
+    selected_by_default: false,
+  },
+  {
+    id: 'artifact-php-vendor',
+    workspace_id: 'workspace-work',
+    project_name: 'billing-api',
+    ecosystem: 'php',
+    kind: 'composer_vendor',
+    path: '/Users/mock/work/billing-api/vendor',
+    logical_bytes: 640 * MIB,
+    allocated_bytes: 612 * MIB,
+    file_count: 24118,
+    newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 4,
+    rebuild_hint: 'composer install',
+    evidence: ['composer.json', 'composer.lock'],
+    status: 'complete',
+    incomplete_reason: null,
+    selected_by_default: false,
+  },
+  {
+    id: 'artifact-python-incomplete',
+    workspace_id: 'workspace-myproject',
+    project_name: 'sdk-python',
+    ecosystem: 'python',
+    kind: 'python_venv',
+    path: '/Users/mock/Myproject/sdk-python/.venv',
+    logical_bytes: 877 * MIB,
+    allocated_bytes: 860 * MIB,
+    file_count: 18201,
+    newest_mtime: Math.floor(Date.now() / 1000),
+    rebuild_hint: 'uv sync',
+    evidence: ['pyproject.toml'],
+    status: 'measurement_incomplete',
+    incomplete_reason: 'Permission denied while reading one or more entries',
+    selected_by_default: false,
+  },
+  {
+    id: 'artifact-node-safety-blocked',
+    workspace_id: 'workspace-work',
+    project_name: 'unsafe-link-project',
+    ecosystem: 'node',
+    kind: 'node_modules',
+    path: '/Users/mock/work/unsafe-link-project/node_modules',
+    logical_bytes: 96 * MIB,
+    allocated_bytes: 92 * MIB,
+    file_count: 2400,
+    newest_mtime: Math.floor(Date.now() / 1000) - 86400 * 7,
+    rebuild_hint: 'pnpm install',
+    evidence: ['package.json'],
+    status: 'safety_blocked',
+    incomplete_reason: 'Project markers could not be verified; cleanup is blocked.',
+    selected_by_default: false,
   },
 ];
 
@@ -157,7 +337,10 @@ interface MockTrashPlan {
 
 let activeMockScanId: string | null = null;
 let mockScanCancelled = false;
+let activeMockDeveloperScanId: string | null = null;
+let mockDeveloperScanCancelled = false;
 const mockScans = new Map<string, LargeFileScanResult>();
+const mockDeveloperScans = new Map<string, DeveloperArtifactScanResult>();
 const mockInspections = new Map<string, AppUninstallInspection>();
 const mockPlans = new Map<string, MockTrashPlan>();
 
@@ -214,6 +397,11 @@ const mockStorageApi: StorageManagementApi = {
     const scanId = `mock-large-scan-${Date.now()}`;
     activeMockScanId = scanId;
     mockScanCancelled = false;
+    const isInstallerFilter = request.filter === 'installers';
+    const threshold = Math.max(request.min_size_bytes, isInstallerFilter ? 10 * MIB : 100 * MIB);
+    const matchingMockFiles = mockLargeFiles
+      .filter((item) => item.logical_size >= threshold)
+      .filter((item) => !isInstallerFilter || ['dmg', 'pkg', 'mpkg', 'xip', 'iso'].includes(item.extension ?? ''));
     onEvent({ type: 'started', scan_id: scanId });
 
     const roots = request.roots.length > 0 ? request.roots : ['downloads', 'desktop', 'documents'];
@@ -224,15 +412,14 @@ const mockStorageApi: StorageManagementApi = {
         type: 'progress',
         root,
         entries_scanned: 1200,
-        matches_found: mockLargeFiles.length,
+        matches_found: matchingMockFiles.length,
       });
       onEvent({ type: 'root_finished', root });
     }
 
-    const threshold = Math.max(request.min_size_bytes, 100 * MIB);
     const items = mockScanCancelled
       ? []
-      : mockLargeFiles.filter((item) => item.logical_size >= threshold);
+      : matchingMockFiles;
     for (const item of items) {
       onEvent({ type: 'item_found', item });
     }
@@ -273,6 +460,116 @@ const mockStorageApi: StorageManagementApi = {
       item_count: selected.length,
       logical_size: selected.reduce((sum, item) => sum + item.logical_size, 0),
       allocated_size: selected.reduce((sum, item) => sum + item.allocated_size, 0),
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    };
+    mockPlans.set(planId, { preview, itemIds: selected.map((item) => item.id) });
+    return preview;
+  },
+
+  async pickDeveloperWorkspace() {
+    return { ...mockDeveloperWorkspaces[0] };
+  },
+
+  async registerDeveloperHomeWorkspace() {
+    return { ...mockDeveloperWorkspaces[2] };
+  },
+
+  async startDeveloperArtifactScan(workspaceIds, onEvent) {
+    const scanId = `mock-developer-scan-${Date.now()}`;
+    activeMockDeveloperScanId = scanId;
+    mockDeveloperScanCancelled = false;
+    const wholeHome = workspaceIds.includes('workspace-this-mac');
+    const selectedWorkspaces = wholeHome
+      ? mockDeveloperWorkspaces.filter((workspace) => workspace.id === 'workspace-this-mac')
+      : mockDeveloperWorkspaces.filter((workspace) => workspaceIds.includes(workspace.id));
+    onEvent({
+      type: 'started',
+      scan_id: scanId,
+      workspace_count: selectedWorkspaces.length,
+    });
+    const items: DeveloperArtifact[] = [];
+    for (const workspace of selectedWorkspaces) {
+      if (mockDeveloperScanCancelled) break;
+      onEvent({ type: 'workspace_started', workspace });
+      const workspaceArtifacts = wholeHome
+        ? mockDeveloperArtifacts.map((artifact) => ({
+            ...artifact,
+            workspace_id: workspace.id,
+          }))
+        : mockDeveloperArtifacts.filter((item) => item.workspace_id === workspace.id);
+      for (const artifact of workspaceArtifacts) {
+        if (mockDeveloperScanCancelled) break;
+        onEvent({
+          type: 'project_discovered',
+          workspace_id: workspace.id,
+          project_name: artifact.project_name,
+          ecosystem: artifact.ecosystem,
+        });
+        onEvent({
+          type: 'artifact_measurement_started',
+          artifact_id: artifact.id,
+          project_name: artifact.project_name,
+          kind: artifact.kind,
+        });
+        items.push({ ...artifact, evidence: [...artifact.evidence] });
+        onEvent({ type: 'artifact_found', artifact });
+        onEvent({
+          type: 'progress',
+          workspace_id: workspace.id,
+          discovered_count: items.length,
+          measured_count: items.length,
+          skipped_entries: artifact.status === 'complete' ? 0 : 1,
+        });
+      }
+      onEvent({ type: 'workspace_finished', workspace_id: workspace.id });
+    }
+    const result: DeveloperArtifactScanResult = {
+      scan_id: scanId,
+      items,
+      discovered_count: items.length,
+      measured_count: items.length,
+      skipped_entries: items.filter((item) => item.status !== 'complete').length,
+      cancelled: mockDeveloperScanCancelled,
+      truncated: false,
+    };
+    mockDeveloperScans.set(scanId, result);
+    if (result.cancelled) onEvent({ type: 'cancelled', scan_id: scanId });
+    onEvent({ type: 'finished', result });
+    activeMockDeveloperScanId = null;
+    return result;
+  },
+
+  async cancelDeveloperArtifactScan(scanId) {
+    if (activeMockDeveloperScanId !== scanId) {
+      throw new Error('Developer artifact scan is no longer running');
+    }
+    mockDeveloperScanCancelled = true;
+  },
+
+  async prepareDeveloperArtifactCleanup(scanId, selectedItemIds) {
+    const scan = mockDeveloperScans.get(scanId);
+    if (!scan) throw new Error('Developer artifact inventory expired. Scan again.');
+    if (scan.cancelled) throw new Error('This scan was cancelled. Scan the workspace again before cleanup.');
+    const requestedIds = new Set(selectedItemIds);
+    const selected = scan.items.filter((item) => requestedIds.has(item.id));
+    if (selected.length === 0) {
+      throw new Error('Select at least one developer artifact to move to Trash.');
+    }
+    if (selected.length !== requestedIds.size) {
+      throw new Error('The developer-artifact inventory changed. Scan the workspace again.');
+    }
+    if (selected.some((item) => item.status === 'safety_blocked')) {
+      throw new Error('Some selected artifacts are blocked because their cleanup safety checks could not be verified.');
+    }
+    if (selected.some((item) => item.status === 'scan_cancelled')) {
+      throw new Error('Cancelled artifacts require a new scan before cleanup.');
+    }
+    const planId = `mock-developer-trash-plan-${Date.now()}`;
+    const preview: TrashPlanPreview = {
+      id: planId,
+      item_count: selected.length,
+      logical_size: selected.reduce((sum, item) => sum + item.logical_bytes, 0),
+      allocated_size: selected.reduce((sum, item) => sum + item.allocated_bytes, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
     };
     mockPlans.set(planId, { preview, itemIds: selected.map((item) => item.id) });

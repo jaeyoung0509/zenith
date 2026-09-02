@@ -1,5 +1,6 @@
 use crate::docker::DockerAdapter;
 use crate::models::{Category, CategoryResult, RiskTier, ScanEvent, ScanItem, ScanResult};
+use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -129,10 +130,12 @@ impl ScanEngine {
                 }
             }
 
-            // 2. Special handling for Docker if category is Container
+            // 2. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Container {
-                let docker_items = DockerAdapter::scan_items();
-                for item in docker_items {
+                let adapter_items = DockerAdapter::scan_items()
+                    .into_iter()
+                    .chain(OrbStackAdapter::scan_items());
+                for item in adapter_items {
                     let bytes = item.size.reclaimable();
                     category_total_bytes += bytes;
 

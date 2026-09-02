@@ -7,7 +7,7 @@
 
   let { size = 'md', color = 'bg-current', class: className = '' }: Props = $props();
 
-  let dotSize = $derived(size === 'xs' ? 'w-1 h-1' : size === 'sm' ? 'w-1.2 h-1.2' : 'w-1.5 h-1.5');
+  let dotSize = $derived(size === 'xs' ? 'w-1 h-1' : size === 'sm' ? 'w-[5px] h-[5px]' : 'w-1.5 h-1.5');
 </script>
 
 <span class="inline-flex items-center gap-1 {className}" aria-label="Processing...">

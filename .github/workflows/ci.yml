@@ -10,24 +10,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: Full CI Pipeline (macOS)
-    runs-on: macos-latest
+  frontend:
+    name: Frontend & IPC Contract
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install Linux dependencies for Tauri binding export
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Rust Cache
         id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
-          # Cargo runs from the repository workspace, so target is the root
-          # target directory. The previous value created a nested
-          # src-tauri/src-tauri/target cache that Cargo never used.
           workspaces: '. -> target'
 
       - name: Setup pnpm
@@ -43,11 +47,6 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Report dependency cache status
-        run: |
-          echo "Rust cache hit: ${{ steps.rust-cache.outputs.cache-hit }}"
-          echo "pnpm cache hit: ${{ steps.node-cache.outputs.cache-hit }}"
-
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
@@ -56,20 +55,48 @@ jobs:
           mkdir -p dist
           cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
 
-      - name: Verify generated bindings (drift check)
-        run: git diff --exit-code -- src/lib/bindings/tauri.ts
-
-      - name: Verify Cargo.lock (drift check)
-        run: git diff --exit-code -- Cargo.lock
+      - name: Verify generated bindings and Cargo.lock
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts Cargo.lock
 
       - name: Svelte Typecheck
         run: pnpm check
 
       - name: Vitest Frontend Tests
-        run: pnpm test
+        run: pnpm test -- --run
 
       - name: Vite Production Build
         run: pnpm build
+
+      - name: Upload verified frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          if-no-files-found: error
+
+      - name: Report dependency cache status
+        run: |
+          echo "Rust cache hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          echo "pnpm cache hit: ${{ steps.node-cache.outputs.cache-hit }}"
+
+  rust-macos:
+    name: Rust Checks (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Prepare Tauri frontend directory
+        run: mkdir -p dist
 
       - name: Rust Format Check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
@@ -86,7 +113,109 @@ jobs:
       - name: Install just
         uses: taiki-e/install-action@just
 
-      # The tagged/manual Release workflow owns optimized DMG packaging.
-      # CI only needs to prove that the current frontend is embedded in a macOS app bundle.
-      - name: Build debug app bundle (embedded frontend check)
-        run: just build-fast
+      - name: Release installer regression tests
+        run: just test-release-installer
+
+  rust-windows:
+    name: Rust Checks (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Prepare Tauri frontend directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+      - name: Rust Format Check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust Clippy Linter
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust Unit & Safety Tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust Cargo Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+  package-macos:
+    name: Package Smoke (macOS)
+    needs: [frontend, rust-macos]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download verified frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend-dist
+          path: dist
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build debug app bundle from verified frontend
+        run: pnpm tauri build --debug --bundles app --config .github/tauri.package-ci.json
+
+  package-windows:
+    name: Package Smoke (Windows x64 NSIS)
+    needs: [frontend, rust-windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download verified frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend-dist
+          path: dist
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build debug NSIS installer from verified frontend
+        run: pnpm tauri build --debug --bundles nsis --config .github/tauri.package-ci.json
+
+      - name: Upload Windows packaging smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenith-windows-x64-nsis-debug
+          path: |
+            target/debug/bundle/nsis/*-setup.exe
+            src-tauri/target/debug/bundle/nsis/*-setup.exe
+          if-no-files-found: error

@@ -1,5 +1,4 @@
 use crate::models::{Signature, SignatureManifest, ZenithError};
-use crate::safety::Blacklist;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,21 +29,33 @@ impl SignatureLoader {
         Ok(valid_signatures)
     }
 
-    /// Expands `~` and the current user's `$TMPDIR` without reading arbitrary variables.
+    /// Expands platform placeholders (`${USER_HOME}`, `${LOCAL_APP_DATA}`, `~`, `$TMPDIR`) safely.
     pub fn expand_path(pattern: &str) -> Option<PathBuf> {
-        let home = std::env::var("HOME").ok()?;
-        let path = if pattern == "$TMPDIR" {
-            std::env::temp_dir()
-        } else if let Some(relative) = pattern.strip_prefix("~/") {
-            PathBuf::from(&home).join(relative)
-        } else if pattern == "~" {
-            PathBuf::from(&home)
-        } else {
-            PathBuf::from(pattern)
-        };
+        use crate::platform::paths::{NativePlatformPaths, PlatformPathsProvider};
+        NativePlatformPaths::new().expand_placeholder(pattern)
+    }
+}
 
-        // Normalize path
-        let normalized = Blacklist::normalize_path(&path);
-        Some(normalized)
+#[cfg(test)]
+mod tests {
+    use super::SignatureLoader;
+    use std::path::PathBuf;
+
+    #[test]
+    fn expand_path_preserves_absolute_paths_without_home_lookup() {
+        let abs = if cfg!(windows) {
+            r"C:\test\folder"
+        } else {
+            "/tmp/test_folder"
+        };
+        let expanded = SignatureLoader::expand_path(abs);
+        assert_eq!(expanded, Some(PathBuf::from(abs)));
+    }
+
+    #[test]
+    fn expand_path_expands_tmpdir_variable() {
+        let expanded = SignatureLoader::expand_path("$TMPDIR");
+        assert!(expanded.is_some());
+        assert_eq!(expanded.unwrap(), std::env::temp_dir());
     }
 }

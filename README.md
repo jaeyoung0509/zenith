@@ -4,7 +4,7 @@
 
 <h1 align="center">Zenith</h1>
 
-<p align="center">A macOS utility for developer storage, processes, local services, AI usage, and sleep control.</p>
+<p align="center">A cross-platform utility for developer storage, processes, local services, AI usage, and sleep control.</p>
 
 Zenith helps identify reclaimable caches created by AI tools, compilers, package
 managers, containers, and local model runtimes. Cleanup candidates are classified
@@ -13,7 +13,7 @@ remain outside the cleanup boundary.
 
 ## Features
 
-- Storage cleanup for Claude Code, Cursor, Gemini CLI, Antigravity, Codex,
+- Storage cleanup for Claude Code, Cursor, Antigravity (and legacy Gemini CLI caches), Codex,
   OpenCode, Cargo, Go, Node.js, Python, Xcode, Docker, and related tools.
 - Explicit `Safe`, `Rebuild`, and `Manual` cleanup tiers. Only safe items are
   selected automatically.
@@ -27,12 +27,21 @@ remain outside the cleanup boundary.
   apps can be quit normally or force quit after confirmation; system processes,
   terminals, and Zenith remain protected.
 - A dedicated Development Servers tab that identifies current-user TCP listeners
-  such as Vite and Next.js, shows their project and network exposure, and can
-  release one exact verified listener without terminating unrelated Node.js or
-  runtime processes.
+  such as Vite, Next.js, agent-browser, and Chrome for Testing, shows their
+  project and network exposure, and can release one exact verified listener
+  without terminating unrelated browsers, Node.js, or runtime processes.
+- A local Projects cockpit that groups supported AI CLI processes by canonical
+  repository/worktree identity. Process-only evidence is labelled honestly,
+  inaccessible contexts stay Unassigned, and PID, argv, prompts, transcripts,
+  credentials, and absolute paths never cross into the WebView.
 - AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
-- A configurable menu-bar panel. Storage, cleanup, AI usage, categories, and
+- AI Control Center: provenance-aware usage tracking, local budget alert thresholds,
+  advisory resource autopilot, and bounded project safety posture (secret exposure & MCP
+  configuration inspection). Antigravity is Google's primary individual coding tool;
+  consumer Gemini CLI deprecation is accurately disclosed while Enterprise/API usage
+  remains supported.
+- A configurable menu-bar panel. Storage, cleanup, AI usage, categories, AI Control, and
   memory sections can be shown, hidden, and reordered.
 - Native Keep Awake rules for selected applications and manual timers.
 - Persistent theme, menu-bar layout, provider priority, cleanup defaults, and
@@ -42,11 +51,38 @@ The menu-bar panel stops recurring metrics and provider work while hidden. Disk
 metrics refresh when the panel opens, memory polling runs only while visible,
 and AI usage snapshots use a short backend cache.
 
-## Public Beta Installation (macOS)
+## Public Beta Installation
 
-Zenith is currently distributed as an unsigned public beta for Apple Silicon (ARM64) Macs. Pre-built `.dmg` disk images and SHA256 checksums are available under [GitHub Releases](https://github.com/jaeyoung0509/zenith/releases).
+Zenith is distributed as a public beta for Apple Silicon (ARM64) Macs and
+Windows x64. Pre-built `.dmg` and NSIS `.exe` installers, build metadata, and
+SHA256 checksums are available under
+[GitHub Releases](https://github.com/jaeyoung0509/zenith/releases).
 
-### Opening Unsigned Beta Builds on macOS
+### Windows x64
+
+Download `Zenith-windows-x64-setup.exe`. It installs for the current user under
+`%LOCALAPPDATA%`, so normal installation does not require administrator access.
+The installer downloads Microsoft's WebView2 bootstrapper if the runtime is not
+already available.
+
+The first Windows beta is intentionally unsigned while Zenith completes the
+[SignPath Foundation](https://signpath.org/) open-source onboarding process.
+Microsoft Defender SmartScreen will therefore identify it as an unknown
+publisher. Confirm that the installer came from this repository's GitHub
+Release and verify its SHA256 value against `SHA256SUMS.txt` before choosing
+**More info → Run anyway**. See the [Windows guide](docs/WINDOWS.md) and
+[code signing policy](CODE_SIGNING_POLICY.md) for the exact transition plan.
+
+### macOS ARM64
+
+#### Local release recipes
+
+- `just distribute` only creates fresh `.app` and `.dmg` package artifacts under `target/release`; it never changes `/Applications`.
+- `just release` packages the app, validates its bundle identity and version, then replaces the exact `/Applications/Zenith.app`. The previous installed bundle is restored if activation or verification fails.
+- `just release-and-run` performs the same verified replacement and opens the installed copy rather than the build-tree bundle.
+- `just install-release` installs an already-built release bundle using the same transaction. It reports a clear error if the current user cannot write to `/Applications` and does not use `sudo` automatically.
+
+#### Opening unsigned beta builds on macOS
 
 Because beta builds are not notarized with a paid Apple Developer ID, macOS Gatekeeper will display a security warning on first launch (*"cannot be opened because the developer cannot be verified"* or *"is damaged and can't be opened"*).
 
@@ -65,6 +101,12 @@ To launch Zenith on macOS:
 - **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
 - **Local Logs**: Rotating error logs are stored on your Mac at `~/Library/Logs/Zenith/zenith.log`.
 - **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
+- **Minimized Agent Metadata**: Project Cockpit returns opaque project/session
+  IDs, compact location hints, resource totals, and evidence labels. It does not
+  return process IDs, command lines, environment values, prompts, or transcripts.
+- **AI Control Privacy**: AI Control Center reuses those opaque identities for
+  provenance-aware usage, advisory resource policy, bounded safety inspection,
+  and post-baseline Git metadata. See [AI Control Center](docs/AI_CONTROL_CENTER.md).
 
 ## Cleanup safety
 
@@ -79,6 +121,9 @@ be executed.
   identity metadata to reduce time-of-check/time-of-use risk.
 - Temporary-file cleanup is restricted to known tool prefixes and inactivity
   thresholds; Zenith never scans or deletes all of `/tmp`.
+- OrbStack's reviewed VM disk is reported as manually managed container storage
+  using allocated bytes; Zenith never deletes or compacts it through generic
+  cleanup.
 - Intensive cleanup considers only stale direct children of approved user cache
   and log roots. Symlinks and protected Apple/system namespaces are skipped,
   and inactivity is checked again immediately before deletion.
@@ -97,6 +142,9 @@ separate endpoint-level workflow:
 - Runtime names such as `node` or `python` are insufficient by themselves; a
   conservative development-server signature and stable process identity are
   required.
+- Testing-tool listeners require exact official executable paths. Chrome for
+  Testing additionally requires remote-debugging and isolated-profile arguments;
+  standard Google Chrome and renamed lookalike binaries remain ineligible.
 - The UI receives a short-lived opaque listener ID, not termination authority
   over a PID, path, process group, or signal.
 - Immediately before signaling, Rust rechecks the PID, port, bind address, UID,
@@ -125,6 +173,13 @@ dashboard. Both use typed IPC commands backed by Rust modules for scanning,
 cleanup, metrics, provider integrations, and power management. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the runtime and data flow, and
 [`docs/SAFETY.md`](docs/SAFETY.md) for the deletion trust boundaries.
+Windows contributors can follow [`docs/WINDOWS.md`](docs/WINDOWS.md) for the
+MSVC, Tauri, and NSIS development workflow.
+
+## License
+
+Zenith is available under the [MIT License](LICENSE). Official Windows release
+signing follows the project's [code signing policy](CODE_SIGNING_POLICY.md).
 
 ## Development
 

@@ -2,7 +2,11 @@ import { api, isTauri as isTauriCheck } from '../api';
 import { storageApi } from '../api/storage';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
+  AiProviderUsage,
   AiUsageSnapshot,
+  AiControlCenterSnapshot,
+  AiControlPreferences,
+  AgentActivitySnapshot,
   AppUninstallInspection,
   AwakeBehavior,
   AwakeRule,
@@ -10,7 +14,11 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  ControlCenterQuickSummary,
   DevelopmentListener,
+  DeveloperArtifactScanEvent,
+  DeveloperArtifactScanResult,
+  DeveloperWorkspace,
   DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
@@ -22,6 +30,9 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  PlatformCapabilities,
+  RecommendationPreview,
+  SafetySnapshot,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
@@ -31,12 +42,83 @@ import type {
   TrashPlanPreview,
   TrashResult,
   ZenithSettings,
+  AgentIntegrationInfo,
+  AgentIntegrationResult,
+  AgentQuickSummary,
+  IngestedAgentEvent,
 } from '../models/types';
 
 export const isTauri = isTauriCheck();
 
-export function tauriGetAiUsage(force = false): Promise<AiUsageSnapshot> {
-  return api.getAiUsage(force);
+export function tauriGetProjectContext(force = false): Promise<AgentActivitySnapshot> {
+  return api.getProjectContext(force);
+}
+
+export function tauriRequestStopAgentSession(sessionId: string, leaseId: string): Promise<void> {
+  return api.requestStopAgentSession(sessionId, leaseId);
+}
+
+export function tauriGetAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
+  return api.getAgentIntegrations();
+}
+
+export function tauriSetupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+  return api.setupAgentIntegration(toolId);
+}
+
+export function tauriRemoveAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+  return api.removeAgentIntegration(toolId);
+}
+
+export function tauriGetAgentQuickSummary(): Promise<AgentQuickSummary | null> {
+  return api.getAgentQuickSummary();
+}
+
+export function tauriPostAgentEvent(event: IngestedAgentEvent): Promise<void> {
+  return api.postAgentEvent(event);
+}
+
+export function tauriOpenInTerminal(path: string): Promise<void> {
+  return api.openInTerminal(path);
+}
+
+export function tauriGetAiUsage(
+  force = false,
+  onProvider?: (provider: AiProviderUsage) => void
+): Promise<AiUsageSnapshot> {
+  return api.getAiUsage(force, onProvider);
+}
+
+export function tauriGetAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
+  return api.getAiControlCenter(force);
+}
+
+export function tauriGetAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
+  return api.getAiControlQuickSummary();
+}
+
+export function tauriSaveAiControlPreferences(preferences: AiControlPreferences): Promise<void> {
+  return api.saveAiControlPreferences(preferences);
+}
+
+export function tauriRunAiSafetyScan(): Promise<SafetySnapshot> {
+  return api.runAiSafetyScan();
+}
+
+export function tauriDismissAiSafetyFinding(findingId: string): Promise<void> {
+  return api.dismissAiSafetyFinding(findingId);
+}
+
+export function tauriPreviewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
+  return api.previewAiRecommendation(recommendationId);
+}
+
+export function tauriConsumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
+  return api.consumeAiRecommendationPreview(previewId);
+}
+
+export function tauriGetAiControlGitDiff(projectId: string): Promise<string> {
+  return api.getAiControlGitDiff(projectId);
 }
 
 export function tauriConnectOpenRouter(): Promise<void> {
@@ -159,6 +241,10 @@ export function tauriGetAppVersion(): Promise<string> {
   return api.getAppVersion();
 }
 
+export function tauriGetPlatformCapabilities(): Promise<PlatformCapabilities> {
+  return api.getPlatformCapabilities();
+}
+
 export function tauriGetDiagnostics(): Promise<DiagnosticsSnapshot> {
   return api.getDiagnostics();
 }
@@ -192,6 +278,32 @@ export function tauriPrepareLargeFileTrash(
   selectedItemIds: string[]
 ): Promise<TrashPlanPreview> {
   return storageApi.prepareLargeFileTrash(scanId, selectedItemIds);
+}
+
+export function tauriPickDeveloperWorkspace(): Promise<DeveloperWorkspace | null> {
+  return storageApi.pickDeveloperWorkspace();
+}
+
+export function tauriRegisterDeveloperHomeWorkspace(): Promise<DeveloperWorkspace> {
+  return storageApi.registerDeveloperHomeWorkspace();
+}
+
+export function tauriStartDeveloperArtifactScan(
+  workspaceIds: string[],
+  onEvent: (event: DeveloperArtifactScanEvent) => void
+): Promise<DeveloperArtifactScanResult> {
+  return storageApi.startDeveloperArtifactScan(workspaceIds, onEvent);
+}
+
+export function tauriCancelDeveloperArtifactScan(scanId: string): Promise<void> {
+  return storageApi.cancelDeveloperArtifactScan(scanId);
+}
+
+export function tauriPrepareDeveloperArtifactCleanup(
+  scanId: string,
+  selectedItemIds: string[]
+): Promise<TrashPlanPreview> {
+  return storageApi.prepareDeveloperArtifactCleanup(scanId, selectedItemIds);
 }
 
 export function tauriGetInstalledApps(): Promise<InstalledApp[]> {

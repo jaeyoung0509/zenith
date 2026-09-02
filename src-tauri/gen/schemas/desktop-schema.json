@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the cancel_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-developer-artifact-scan",
+          "markdownDescription": "Enables the cancel_developer_artifact_scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the cancel_large_file_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel-large-file-scan",
@@ -187,6 +193,12 @@
           "type": "string",
           "const": "allow-connect-openrouter-oauth",
           "markdownDescription": "Enables the connect_openrouter_oauth command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the consume_ai_recommendation_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-consume-ai-recommendation-preview",
+          "markdownDescription": "Enables the consume_ai_recommendation_preview command without any pre-configured scope."
         },
         {
           "description": "Enables the create_delete_plan command without any pre-configured scope.",
@@ -207,6 +219,12 @@
           "markdownDescription": "Enables the disable_manual_awake command without any pre-configured scope."
         },
         {
+          "description": "Enables the dismiss_ai_safety_finding command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-dismiss-ai-safety-finding",
+          "markdownDescription": "Enables the dismiss_ai_safety_finding command without any pre-configured scope."
+        },
+        {
           "description": "Enables the execute_clean command without any pre-configured scope.",
           "type": "string",
           "const": "allow-execute-clean",
@@ -217,6 +235,36 @@
           "type": "string",
           "const": "allow-execute-trash-plan",
           "markdownDescription": "Enables the execute_trash_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_integrations command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-integrations",
+          "markdownDescription": "Enables the get_agent_integrations command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_agent_quick_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-agent-quick-summary",
+          "markdownDescription": "Enables the get_agent_quick_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ai_control_center command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-control-center",
+          "markdownDescription": "Enables the get_ai_control_center command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ai_control_git_diff command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-control-git-diff",
+          "markdownDescription": "Enables the get_ai_control_git_diff command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ai_control_quick_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-control-quick-summary",
+          "markdownDescription": "Enables the get_ai_control_quick_summary command without any pre-configured scope."
         },
         {
           "description": "Enables the get_ai_usage command without any pre-configured scope.",
@@ -285,6 +333,18 @@
           "markdownDescription": "Enables the get_memory_metrics command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_platform_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-platform-capabilities",
+          "markdownDescription": "Enables the get_platform_capabilities command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_project_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-project-context",
+          "markdownDescription": "Enables the get_project_context command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-settings",
@@ -315,10 +375,22 @@
           "markdownDescription": "Enables the open_disk_utility command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_in_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-in-terminal",
+          "markdownDescription": "Enables the open_in_terminal command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-logs-folder",
           "markdownDescription": "Enables the open_logs_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pick_developer_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-developer-workspace",
+          "markdownDescription": "Enables the pick_developer_workspace command without any pre-configured scope."
         },
         {
           "description": "Enables the pick_keep_awake_application command without any pre-configured scope.",
@@ -327,10 +399,22 @@
           "markdownDescription": "Enables the pick_keep_awake_application command without any pre-configured scope."
         },
         {
+          "description": "Enables the post_agent_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-post-agent-event",
+          "markdownDescription": "Enables the post_agent_event command without any pre-configured scope."
+        },
+        {
           "description": "Enables the prepare_app_uninstall command without any pre-configured scope.",
           "type": "string",
           "const": "allow-prepare-app-uninstall",
           "markdownDescription": "Enables the prepare_app_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prepare_developer_artifact_cleanup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-developer-artifact-cleanup",
+          "markdownDescription": "Enables the prepare_developer_artifact_cleanup command without any pre-configured scope."
         },
         {
           "description": "Enables the prepare_large_file_trash command without any pre-configured scope.",
@@ -339,10 +423,22 @@
           "markdownDescription": "Enables the prepare_large_file_trash command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_ai_recommendation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-ai-recommendation",
+          "markdownDescription": "Enables the preview_ai_recommendation command without any pre-configured scope."
+        },
+        {
           "description": "Enables the prune_docker_target command without any pre-configured scope.",
           "type": "string",
           "const": "allow-prune-docker-target",
           "markdownDescription": "Enables the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_developer_home_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-register-developer-home-workspace",
+          "markdownDescription": "Enables the register_developer_home_workspace command without any pre-configured scope."
         },
         {
           "description": "Enables the release_development_listener command without any pre-configured scope.",
@@ -351,10 +447,34 @@
           "markdownDescription": "Enables the release_development_listener command without any pre-configured scope."
         },
         {
+          "description": "Enables the remove_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-agent-integration",
+          "markdownDescription": "Enables the remove_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_stop_agent_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-stop-agent-session",
+          "markdownDescription": "Enables the request_stop_agent_session command without any pre-configured scope."
+        },
+        {
           "description": "Enables the reveal_in_finder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-reveal-in-finder",
           "markdownDescription": "Enables the reveal_in_finder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_ai_safety_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-ai-safety-scan",
+          "markdownDescription": "Enables the run_ai_safety_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_ai_control_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-ai-control-preferences",
+          "markdownDescription": "Enables the save_ai_control_preferences command without any pre-configured scope."
         },
         {
           "description": "Enables the save_settings command without any pre-configured scope.",
@@ -373,6 +493,18 @@
           "type": "string",
           "const": "allow-set-manual-awake",
           "markdownDescription": "Enables the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the setup_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-setup-agent-integration",
+          "markdownDescription": "Enables the setup_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-developer-artifact-scan",
+          "markdownDescription": "Enables the start_developer_artifact_scan command without any pre-configured scope."
         },
         {
           "description": "Enables the start_large_file_scan command without any pre-configured scope.",
@@ -399,6 +531,12 @@
           "markdownDescription": "Enables the toggle_quick_panel command without any pre-configured scope."
         },
         {
+          "description": "Denies the cancel_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-developer-artifact-scan",
+          "markdownDescription": "Denies the cancel_developer_artifact_scan command without any pre-configured scope."
+        },
+        {
           "description": "Denies the cancel_large_file_scan command without any pre-configured scope.",
           "type": "string",
           "const": "deny-cancel-large-file-scan",
@@ -409,6 +547,12 @@
           "type": "string",
           "const": "deny-connect-openrouter-oauth",
           "markdownDescription": "Denies the connect_openrouter_oauth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the consume_ai_recommendation_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-consume-ai-recommendation-preview",
+          "markdownDescription": "Denies the consume_ai_recommendation_preview command without any pre-configured scope."
         },
         {
           "description": "Denies the create_delete_plan command without any pre-configured scope.",
@@ -429,6 +573,12 @@
           "markdownDescription": "Denies the disable_manual_awake command without any pre-configured scope."
         },
         {
+          "description": "Denies the dismiss_ai_safety_finding command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-dismiss-ai-safety-finding",
+          "markdownDescription": "Denies the dismiss_ai_safety_finding command without any pre-configured scope."
+        },
+        {
           "description": "Denies the execute_clean command without any pre-configured scope.",
           "type": "string",
           "const": "deny-execute-clean",
@@ -439,6 +589,36 @@
           "type": "string",
           "const": "deny-execute-trash-plan",
           "markdownDescription": "Denies the execute_trash_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_integrations command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-integrations",
+          "markdownDescription": "Denies the get_agent_integrations command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_agent_quick_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-agent-quick-summary",
+          "markdownDescription": "Denies the get_agent_quick_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ai_control_center command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-control-center",
+          "markdownDescription": "Denies the get_ai_control_center command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ai_control_git_diff command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-control-git-diff",
+          "markdownDescription": "Denies the get_ai_control_git_diff command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ai_control_quick_summary command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-control-quick-summary",
+          "markdownDescription": "Denies the get_ai_control_quick_summary command without any pre-configured scope."
         },
         {
           "description": "Denies the get_ai_usage command without any pre-configured scope.",
@@ -507,6 +687,18 @@
           "markdownDescription": "Denies the get_memory_metrics command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_platform_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-platform-capabilities",
+          "markdownDescription": "Denies the get_platform_capabilities command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_project_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-project-context",
+          "markdownDescription": "Denies the get_project_context command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_settings command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-settings",
@@ -537,10 +729,22 @@
           "markdownDescription": "Denies the open_disk_utility command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_in_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-in-terminal",
+          "markdownDescription": "Denies the open_in_terminal command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-logs-folder",
           "markdownDescription": "Denies the open_logs_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pick_developer_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-developer-workspace",
+          "markdownDescription": "Denies the pick_developer_workspace command without any pre-configured scope."
         },
         {
           "description": "Denies the pick_keep_awake_application command without any pre-configured scope.",
@@ -549,10 +753,22 @@
           "markdownDescription": "Denies the pick_keep_awake_application command without any pre-configured scope."
         },
         {
+          "description": "Denies the post_agent_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-post-agent-event",
+          "markdownDescription": "Denies the post_agent_event command without any pre-configured scope."
+        },
+        {
           "description": "Denies the prepare_app_uninstall command without any pre-configured scope.",
           "type": "string",
           "const": "deny-prepare-app-uninstall",
           "markdownDescription": "Denies the prepare_app_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the prepare_developer_artifact_cleanup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-developer-artifact-cleanup",
+          "markdownDescription": "Denies the prepare_developer_artifact_cleanup command without any pre-configured scope."
         },
         {
           "description": "Denies the prepare_large_file_trash command without any pre-configured scope.",
@@ -561,10 +777,22 @@
           "markdownDescription": "Denies the prepare_large_file_trash command without any pre-configured scope."
         },
         {
+          "description": "Denies the preview_ai_recommendation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-ai-recommendation",
+          "markdownDescription": "Denies the preview_ai_recommendation command without any pre-configured scope."
+        },
+        {
           "description": "Denies the prune_docker_target command without any pre-configured scope.",
           "type": "string",
           "const": "deny-prune-docker-target",
           "markdownDescription": "Denies the prune_docker_target command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_developer_home_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-register-developer-home-workspace",
+          "markdownDescription": "Denies the register_developer_home_workspace command without any pre-configured scope."
         },
         {
           "description": "Denies the release_development_listener command without any pre-configured scope.",
@@ -573,10 +801,34 @@
           "markdownDescription": "Denies the release_development_listener command without any pre-configured scope."
         },
         {
+          "description": "Denies the remove_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-agent-integration",
+          "markdownDescription": "Denies the remove_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_stop_agent_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-stop-agent-session",
+          "markdownDescription": "Denies the request_stop_agent_session command without any pre-configured scope."
+        },
+        {
           "description": "Denies the reveal_in_finder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-reveal-in-finder",
           "markdownDescription": "Denies the reveal_in_finder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_ai_safety_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-ai-safety-scan",
+          "markdownDescription": "Denies the run_ai_safety_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_ai_control_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-ai-control-preferences",
+          "markdownDescription": "Denies the save_ai_control_preferences command without any pre-configured scope."
         },
         {
           "description": "Denies the save_settings command without any pre-configured scope.",
@@ -595,6 +847,18 @@
           "type": "string",
           "const": "deny-set-manual-awake",
           "markdownDescription": "Denies the set_manual_awake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the setup_agent_integration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-setup-agent-integration",
+          "markdownDescription": "Denies the setup_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_developer_artifact_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-developer-artifact-scan",
+          "markdownDescription": "Denies the start_developer_artifact_scan command without any pre-configured scope."
         },
         {
           "description": "Denies the start_large_file_scan command without any pre-configured scope.",
@@ -2635,6 +2899,204 @@
           "type": "string",
           "const": "core:window:deny-unminimize",
           "markdownDescription": "Denies the unminimize command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`",
+          "type": "string",
+          "const": "notification:default",
+          "markdownDescription": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`"
+        },
+        {
+          "description": "Enables the batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-batch",
+          "markdownDescription": "Enables the batch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-cancel",
+          "markdownDescription": "Enables the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-check-permissions",
+          "markdownDescription": "Enables the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-create-channel",
+          "markdownDescription": "Enables the create_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-delete-channel",
+          "markdownDescription": "Enables the delete_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-get-active",
+          "markdownDescription": "Enables the get_active command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-get-pending",
+          "markdownDescription": "Enables the get_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the is_permission_granted command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-is-permission-granted",
+          "markdownDescription": "Enables the is_permission_granted command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-list-channels",
+          "markdownDescription": "Enables the list_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-notify",
+          "markdownDescription": "Enables the notify command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-permission-state",
+          "markdownDescription": "Enables the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_action_types command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-register-action-types",
+          "markdownDescription": "Enables the register_action_types command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-register-listener",
+          "markdownDescription": "Enables the register_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-remove-active",
+          "markdownDescription": "Enables the remove_active command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-request-permission",
+          "markdownDescription": "Enables the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:allow-show",
+          "markdownDescription": "Enables the show command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-batch",
+          "markdownDescription": "Denies the batch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-cancel",
+          "markdownDescription": "Denies the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-check-permissions",
+          "markdownDescription": "Denies the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-create-channel",
+          "markdownDescription": "Denies the create_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-delete-channel",
+          "markdownDescription": "Denies the delete_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-get-active",
+          "markdownDescription": "Denies the get_active command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-get-pending",
+          "markdownDescription": "Denies the get_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_permission_granted command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-is-permission-granted",
+          "markdownDescription": "Denies the is_permission_granted command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-list-channels",
+          "markdownDescription": "Denies the list_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the notify command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-notify",
+          "markdownDescription": "Denies the notify command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the permission_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-permission-state",
+          "markdownDescription": "Denies the permission_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_action_types command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-register-action-types",
+          "markdownDescription": "Denies the register_action_types command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-register-listener",
+          "markdownDescription": "Denies the register_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_active command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-remove-active",
+          "markdownDescription": "Denies the remove_active command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-request-permission",
+          "markdownDescription": "Denies the request_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show command without any pre-configured scope.",
+          "type": "string",
+          "const": "notification:deny-show",
+          "markdownDescription": "Denies the show command without any pre-configured scope."
         }
       ]
     },

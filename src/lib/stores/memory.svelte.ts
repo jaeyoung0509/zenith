@@ -5,7 +5,7 @@ import {
   tauriTerminateProcessGroup,
 } from '../utils/tauri';
 
-class MemoryStore {
+export class MemoryStore {
   memory = $state<MemoryMetrics | null>(null);
   disk = $state<DiskMetrics | null>(null);
   isLoading = $state(false);
@@ -15,7 +15,7 @@ class MemoryStore {
   terminating = $state<string | null>(null);
   lastAction = $state<string | null>(null);
 
-  private timer: number | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
   private subscriberCount = 0;
 
   async refresh() {
@@ -69,7 +69,7 @@ class MemoryStore {
     if (this.subscriberCount === 1) {
       this.isPolling = true;
       this.refreshMemory();
-      this.timer = window.setInterval(() => {
+      this.timer = globalThis.setInterval(() => {
         this.refreshMemory();
       }, intervalMs);
     }

@@ -76,9 +76,26 @@ impl PowerSourceProvider for SystemPowerSource {
             fallback_pmset_power_source()
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
-            PowerSourceType::Ac
+            use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+            unsafe {
+                let mut status: SYSTEM_POWER_STATUS = std::mem::zeroed();
+                if GetSystemPowerStatus(&mut status) != 0 {
+                    match status.ACLineStatus {
+                        1 => PowerSourceType::Ac,
+                        0 => PowerSourceType::Battery,
+                        _ => PowerSourceType::Unknown,
+                    }
+                } else {
+                    PowerSourceType::Unknown
+                }
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            PowerSourceType::Unknown
         }
     }
 }
@@ -152,5 +169,8 @@ mod tests {
             source,
             PowerSourceType::Ac | PowerSourceType::Battery | PowerSourceType::Unknown
         ));
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!(source, PowerSourceType::Unknown);
     }
 }

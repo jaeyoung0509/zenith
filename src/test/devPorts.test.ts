@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DevelopmentPortsStore,
   filterDevelopmentListeners,
@@ -9,6 +9,30 @@ import { mockApi } from '../lib/api/mock';
 import type { DevelopmentListener } from '../lib/models/types';
 import fs from 'node:fs';
 import path from 'node:path';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('DevelopmentPortsStore polling lifecycle', () => {
+  it('deduplicates subscribers and stops at zero subscribers', async () => {
+    vi.useFakeTimers();
+    const store = new DevelopmentPortsStore();
+    const refresh = vi.spyOn(store, 'refresh').mockResolvedValue(undefined);
+
+    store.startPolling(1000);
+    store.startPolling(1000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    store.stopPolling();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    store.stopPolling();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('filterDevelopmentListeners utility', () => {
   const sampleListeners: DevelopmentListener[] = [
@@ -143,6 +167,12 @@ describe('mockApi development port operations', () => {
     expect(pg).toBeDefined();
     expect(pg?.can_release).toBe(false);
     expect(pg?.blocked_reason).toContain('Protected');
+
+    const agentBrowser = listeners.find((l) => l.server_name === 'agent-browser');
+    expect(agentBrowser?.can_release).toBe(true);
+
+    const chromeTesting = listeners.find((l) => l.server_name === 'Chrome for Testing');
+    expect(chromeTesting?.can_release).toBe(true);
   });
 
   it('graceful release of Vite returns released', async () => {

@@ -1,4 +1,8 @@
 import type {
+  AgentActivitySnapshot,
+  AiControlCenterSnapshot,
+  AiControlPreferences,
+  AiProviderUsage,
   AiUsageSnapshot,
   AwakeBehavior,
   AwakeRule,
@@ -7,7 +11,11 @@ import type {
   CleanEvent,
   CleanItemResult,
   CleanResult,
-  DevelopmentListener,
+  ControlCenterQuickSummary,
+  AgentIntegrationInfo,
+  AgentIntegrationResult,
+  AgentQuickSummary,
+  IngestedAgentEvent,
   DiagnosticsSnapshot,
   DiskMetrics,
   DiskVolume,
@@ -15,8 +23,9 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
-  ReleaseDevelopmentListenerResult,
-  ReleaseMode,
+  PlatformCapabilities,
+  RecommendationPreview,
+  SafetySnapshot,
   ScanEvent,
   ScanItem,
   ScanResult,
@@ -25,14 +34,249 @@ import type {
   ZenithSettings_Serialize,
 } from '../models/types';
 import type { nativeApi } from './native';
+import { createDevelopmentPortsMock } from './mocks/developmentPorts';
 
 type ZenithApi = typeof nativeApi;
 
+const developmentPortsMock = createDevelopmentPortsMock();
+
+let mockControlPreferences: AiControlPreferences = {
+  budgets: [],
+  manual_usage: [],
+  autopilot: {
+    keep_awake_for_verified_sessions: false,
+    keep_awake_ac_only: true,
+    notify_on_battery: false,
+    notify_on_memory_pressure: false,
+    notify_on_session_completion: false,
+    recommendation_cooldown_seconds: 900,
+  },
+  dismissed_findings: [],
+  audit_retention_days: 30,
+};
+
+function mockControlSnapshot(): AiControlCenterSnapshot {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    observed_at: now,
+    providers: [
+      {
+        provider_id: 'codex-subscription', display_name: 'Codex subscription',
+        source_kind: 'live_quota', source_id: 'codex-app-server', scope: 'subscription',
+        observed_at: now, period: { starts_at: null, ends_at: now + 172800, resets_at: now + 172800, label: 'Weekly' },
+        fresh_for_seconds: 300, quality: 'fresh', installed: true, connected: true,
+        status_message: 'Live subscription window from Codex.',
+        metrics: [{ label: 'Weekly usage', tokens: null, cost: null, used_basis_points: 7000 }],
+        action_url: null, partial_error: null,
+      },
+      {
+        provider_id: 'opencode-local', display_name: 'OpenCode local activity',
+        source_kind: 'local_estimate', source_id: 'opencode-stats', scope: 'local_sessions',
+        observed_at: now, period: { starts_at: now - 604800, ends_at: now, resets_at: null, label: 'Last 7 days' },
+        fresh_for_seconds: 300, quality: 'fresh', installed: true, connected: true,
+        status_message: 'Local estimate; not a provider bill.',
+        metrics: [{ label: 'Local estimate', tokens: 1280000, cost: { micros: 1420000, currency: 'USD' }, used_basis_points: null }],
+        action_url: null, partial_error: null,
+      },
+      ...['openai-api', 'openrouter', 'anthropic-api', 'claude-individual', 'cursor-individual', 'antigravity', 'gemini-enterprise', 'xai-api', 'grok-individual'].map((provider_id) => ({
+        provider_id, display_name: provider_id.replaceAll('-', ' '), source_kind: 'manual' as const,
+        source_id: 'manual-entry', scope: provider_id.includes('individual') || provider_id === 'antigravity' ? 'subscription' as const : 'api_key' as const,
+        observed_at: now, period: { starts_at: null, ends_at: null, resets_at: null, label: 'Not reported' },
+        fresh_for_seconds: 0, quality: 'unavailable' as const, installed: false, connected: false,
+        status_message: 'No authoritative usage source is connected.', metrics: [], action_url: null, partial_error: null,
+      })),
+    ],
+    budget_statuses: [],
+    resources: [{ session_id: 'session-codex-preview', project_id: 'project-zenith-preview', tool_name: 'Codex CLI', cpu_percent: 6.4, memory_bytes: 490733568, process_count: 1, duration_seconds: 1320, open_dev_ports: 1, power_eligible: true, confidence: 'verified', reason: 'Canonical session and project identity matched.', mutable_actions_allowed: true }],
+    recommendations: [{ id: 'recommendation-port-preview', kind: 'development_port', title: 'Review open development port', message: 'A verified project session has an open development listener.', created_at: now, cooldown_until: now + 900, session_id: 'session-codex-preview', project_id: 'project-zenith-preview', action_label: 'Preview', destination: 'development_servers' }],
+    safety: { observed_at: now, quality: 'unavailable', findings: [], scanned_files: 0, skipped_files: 0, status_message: 'Run an explicit bounded inspection.' },
+    git_summaries: [{ project_id: 'project-zenith-preview', baseline_head: 'abc1234', current_head: 'abc1234', baseline_at: now - 1200, added: 0, modified: 2, deleted: 0, renamed: 0, untracked: 1, changed_paths: ['src/routes/dashboard/AiControlCenterView.svelte', 'src-tauri/src/ai_control_center/mod.rs'], available: true, status_message: '3 paths changed after the Zenith baseline.' }],
+    audit: [],
+    quick_summary: { observed_at: now, active_sessions: 1, budget_alerts: 0, safety_findings: 0, quality: 'fresh' },
+    keep_awake_active: false,
+    partial_errors: [],
+  };
+}
+
 export const mockApi = {
-  async getAiUsage(_force = false): Promise<AiUsageSnapshot> {
+  async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return {
-      fetched_at: Math.floor(Date.now() / 1000),
-      providers: [
+      platform: 'macos',
+      system_actions: { status: 'available' },
+      cleanup: { status: 'available' },
+      large_files: { status: 'available' },
+      developer_artifacts: { status: 'available' },
+      installed_apps: { status: 'available' },
+      app_uninstall: { status: 'available' },
+      memory_metrics: { status: 'available' },
+      process_termination: { status: 'available' },
+      development_ports: { status: 'available' },
+      keep_awake: { status: 'available' },
+      local_models: { status: 'available' },
+      docker: { status: 'available' },
+      ai_integrations: { status: 'available' },
+    };
+  },
+
+  async getProjectContext(_force = false): Promise<AgentActivitySnapshot> {
+    const observedAt = Math.floor(Date.now() / 1000);
+    return {
+      observed_at: observedAt,
+      quality: 'fresh',
+      projects: [
+        {
+          identity: {
+            id: 'project-zenith-preview',
+            display_name: 'zenith',
+            location_hint: 'Myproject/clean1',
+            display_path: '~/Myproject/clean1',
+            repository_id: 'repository-zenith-preview',
+            worktree_id: null,
+            is_worktree: false,
+            branch: 'feature/75-agent-project-cockpit',
+            is_dirty: true,
+            is_detached: false,
+          },
+          sessions: [
+            {
+              id: 'session-antigravity-preview',
+              tool_id: 'antigravity',
+              tool_name: 'Antigravity',
+              status: 'working',
+              attention_reason: null,
+              evidence: 'process_observed',
+              observed_at: observedAt,
+              started_at: observedAt - 1320,
+              elapsed_seconds: 1320,
+              cpu_percent: 6.4,
+              memory_bytes: 468 * 1024 * 1024,
+              project_id: 'project-zenith-preview',
+              worktree_id: null,
+              detail: 'Process observed · detailed status unavailable',
+              can_stop: true,
+              stop_lease_id: 'lease-antigravity-mock',
+            },
+          ],
+          last_seen_at: observedAt,
+          dev_ports: [5173],
+          artifact_size_bytes: 1024 * 1024 * 50,
+        },
+        {
+          identity: {
+            id: 'project-design-preview',
+            display_name: 'design-system',
+            location_hint: 'worktrees/design-system',
+            display_path: '~/worktrees/design-system',
+            repository_id: 'repository-design-preview',
+            worktree_id: 'worktree-design-preview',
+            is_worktree: true,
+            branch: 'feature/token-audit',
+            is_dirty: false,
+            is_detached: false,
+          },
+          sessions: [
+            {
+              id: 'session-claude-preview',
+              tool_id: 'claude',
+              tool_name: 'Claude Code',
+              status: 'working',
+              attention_reason: null,
+              evidence: 'process_observed',
+              observed_at: observedAt,
+              started_at: observedAt - 420,
+              elapsed_seconds: 420,
+              cpu_percent: 2.1,
+              memory_bytes: 224 * 1024 * 1024,
+              project_id: 'project-design-preview',
+              worktree_id: 'worktree-design-preview',
+              detail: 'Process observed · detailed status unavailable',
+              can_stop: true,
+              stop_lease_id: 'lease-claude-mock',
+            },
+          ],
+          last_seen_at: observedAt,
+          dev_ports: [3000],
+          artifact_size_bytes: 1024 * 1024 * 120,
+        },
+      ],
+      unassigned_sessions: [],
+      adapters: [
+        { tool_id: 'antigravity', display_name: 'Antigravity', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.', installed_version: '2.0.0' },
+        { tool_id: 'claude', display_name: 'Claude Code', state: 'process_only', evidence: 'process_observed', message: 'Process observed · detailed status unavailable.', installed_version: '1.0.0' },
+        { tool_id: 'cursor', display_name: 'Cursor Agent CLI', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'grok', display_name: 'Grok Build', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', state: 'not_installed', evidence: null, message: 'Not installed in a supported location.', installed_version: null },
+        { tool_id: 'gemini', display_name: 'Gemini CLI (legacy / enterprise)', state: 'process_only', evidence: null, message: 'Process-only observation.', installed_version: null },
+        { tool_id: 'codex', display_name: 'Codex CLI', state: 'process_only', evidence: null, message: 'Process-only observation.', installed_version: null },
+        { tool_id: 'opencode', display_name: 'OpenCode', state: 'process_only', evidence: null, message: 'Process-only baseline.', installed_version: null },
+      ],
+      partial_errors: [],
+    };
+  },
+
+  async requestStopAgentSession(_sessionId: string, _leaseId: string): Promise<void> {
+    // Mock successful stop
+  },
+
+  async getAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
+    return [
+      { tool_id: 'antigravity', display_name: 'Antigravity', supported: true, installed: true, integration_active: true, config_path: '~/.gemini/antigravity/hooks.json', description: 'Legacy Zenith marker detected; removal only.' },
+      { tool_id: 'claude', display_name: 'Claude Code', supported: true, installed: true, integration_active: false, config_path: '~/.claude/settings.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'cursor', display_name: 'Cursor Agent CLI', supported: true, installed: false, integration_active: false, config_path: '~/.cursor/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'grok', display_name: 'Grok Build', supported: true, installed: false, integration_active: false, config_path: '~/.grok/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'copilot', display_name: 'GitHub Copilot CLI', supported: true, installed: false, integration_active: false, config_path: '~/.copilot/hooks.json', description: 'Process-only observation; no verified bridge.' },
+      { tool_id: 'gemini', display_name: 'Gemini CLI (legacy / enterprise)', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
+      { tool_id: 'codex', display_name: 'Codex CLI', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
+      { tool_id: 'opencode', display_name: 'OpenCode', supported: false, installed: false, integration_active: false, config_path: null, description: 'Process-only observation.' },
+    ];
+  },
+
+  async setupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    throw new Error(`Integration for ${toolId} requires a verified event bridge.`);
+  },
+
+  async removeAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    return { tool_id: toolId, success: true, message: `Integration for ${toolId} removed.` };
+  },
+
+  async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
+    return {
+      active_count: 2,
+      attention_count: 0,
+      sessions: [
+        {
+          session_id: 'session-antigravity-preview',
+          tool_name: 'Antigravity',
+          project_name: 'zenith',
+          status: 'working',
+          evidence: 'process_observed',
+          elapsed_seconds: 1320,
+        },
+        {
+          session_id: 'session-claude-preview',
+          tool_name: 'Claude Code',
+          project_name: 'design-system',
+          status: 'working',
+          evidence: 'process_observed',
+          elapsed_seconds: 420,
+        },
+      ],
+    };
+  },
+
+  async postAgentEvent(_event: IngestedAgentEvent): Promise<void> {
+    // Mock event receipt
+  },
+
+  async openInTerminal(_path: string): Promise<void> {
+    // Mock open in terminal
+  },
+
+  async getAiUsage(
+    _force = false,
+    onProvider?: (provider: AiProviderUsage) => void
+  ): Promise<AiUsageSnapshot> {
+    const providers: AiProviderUsage[] = [
         {
           id: 'codex',
           name: 'Codex',
@@ -41,7 +285,10 @@ export const mockApi = {
           auth_label: 'plus · OAuth',
           status_message: 'Live account limits from the official Codex app-server.',
           support: 'live',
-          windows: [{ label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 }],
+          windows: [
+            { label: '5h', used_percent: 0, resets_at: Math.floor(Date.now() / 1000) + 17940 },
+            { label: 'Weekly', used_percent: 70, resets_at: Math.floor(Date.now() / 1000) + 172800 },
+          ],
           summary: {
             lifetime_tokens: 7111812241,
             last_7d_tokens: 452818756,
@@ -121,9 +368,51 @@ export const mockApi = {
           id: 'antigravity',
           name: 'Antigravity',
           installed: true,
-          connected: false,
+          connected: true,
           auth_label: 'Google OAuth',
-          status_message: 'Google does not publish an account-usage API.',
+          status_message: 'Live limits from Antigravity CLI (/usage).',
+          support: 'live',
+          windows: [
+            {
+              label: 'Gemini · Weekly',
+              used_percent: 21,
+              resets_at: Math.floor(Date.now() / 1000) + 316800,
+            },
+            {
+              label: 'Gemini · 5h',
+              used_percent: 1,
+              resets_at: Math.floor(Date.now() / 1000) + 18000,
+            },
+            {
+              label: 'Claude/GPT · Weekly',
+              used_percent: 0,
+              resets_at: Math.floor(Date.now() / 1000) + 604800,
+            },
+            {
+              label: 'Claude/GPT · 5h',
+              used_percent: 0,
+              resets_at: Math.floor(Date.now() / 1000) + 18000,
+            },
+          ],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+        {
+          id: 'cursor',
+          name: 'Cursor',
+          installed: true,
+          connected: false,
+          auth_label: 'Cursor account',
+          status_message: 'Cursor does not expose account quota to Zenith; check usage in Cursor settings.',
           support: 'manual',
           windows: [],
           summary: {
@@ -138,8 +427,84 @@ export const mockApi = {
           },
           action_url: null,
         },
-      ],
+        {
+          id: 'grok',
+          name: 'Grok Build',
+          installed: true,
+          connected: false,
+          auth_label: 'xAI account',
+          status_message: 'Grok Build does not expose account quota to Zenith; check usage in the provider client.',
+          support: 'manual',
+          windows: [],
+          summary: {
+            lifetime_tokens: null,
+            last_7d_tokens: null,
+            peak_daily_tokens: null,
+            current_streak_days: null,
+            local_sessions: null,
+            local_cost_usd: null,
+            usage_usd: null,
+            limit_remaining_usd: null,
+          },
+          action_url: null,
+        },
+    ];
+    const defaultProviderIds = ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'];
+    let selectedProviderIds = defaultProviderIds;
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const saved = JSON.parse(localStorage.getItem('zenith.settings') ?? '{}');
+        if (Array.isArray(saved.ai_accounts_quota_providers)) {
+          selectedProviderIds = saved.ai_accounts_quota_providers;
+        }
+      } catch {
+        // Keep deterministic defaults for malformed preview settings.
+      }
+    }
+    const snapshot: AiUsageSnapshot = {
+      fetched_at: Math.floor(Date.now() / 1000),
+      providers: selectedProviderIds
+        .map((id) => providers.find((provider) => provider.id === id))
+        .filter((provider): provider is AiProviderUsage => Boolean(provider)),
     };
+    if (onProvider) {
+      for (const provider of snapshot.providers) {
+        onProvider(provider);
+      }
+    }
+    return snapshot;
+  },
+
+  async getAiControlCenter(_force = false): Promise<AiControlCenterSnapshot> {
+    return mockControlSnapshot();
+  },
+
+  async getAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
+    return mockControlSnapshot().quick_summary;
+  },
+
+  async saveAiControlPreferences(preferences: AiControlPreferences): Promise<void> {
+    mockControlPreferences = structuredClone(preferences);
+  },
+
+  async runAiSafetyScan(): Promise<SafetySnapshot> {
+    const snapshot = mockControlSnapshot().safety;
+    return { ...snapshot, quality: 'fresh', scanned_files: 12, status_message: 'Bounded inspection complete.' };
+  },
+
+  async dismissAiSafetyFinding(_findingId: string): Promise<void> {},
+
+  async previewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
+    return { id: `preview-${recommendationId}`, recommendation_id: recommendationId, title: 'Review open development port', explanation: 'This opens the existing Development Servers workflow. No process is changed by this preview.', destination: 'development_servers', action_label: 'Open Development Servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
+  },
+
+  async consumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
+    if (!previewId.startsWith('preview-')) throw new Error('Preview expired or already used');
+    return { id: previewId, recommendation_id: previewId.slice(8), title: 'Review', explanation: 'Validated once.', destination: 'development_servers', action_label: 'Open Development Servers', expires_at: Math.floor(Date.now() / 1000) + 120 };
+  },
+
+  async getAiControlGitDiff(_projectId: string): Promise<string> {
+    return 'diff --git a/src/example.ts b/src/example.ts\n+// Explicit, ephemeral preview';
   },
 
   async connectOpenRouter(): Promise<void> {
@@ -676,10 +1041,11 @@ export const mockApi = {
       intensive_cleanup: false,
       theme: 'system',
       excluded_signatures: [],
-      quick_panel_sections: ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+      quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
       quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'],
-      dashboard_tabs_revision: 1,
+      ai_accounts_quota_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
+      dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
+      dashboard_tabs_revision: 5,
       sidebar_collapsed: false,
       awake_rules: [
         {
@@ -699,6 +1065,15 @@ export const mockApi = {
           enabled: false,
         },
       ],
+      ai_control: mockControlPreferences,
+      agent_notifications: {
+        enabled: false,
+        notify_on_turn_completed: true,
+        notify_on_approval_or_input: true,
+        notify_on_possibly_inactive: false,
+        hide_project_basename: false,
+        inactivity_threshold_minutes: 15,
+      },
     };
   },
 
@@ -733,7 +1108,7 @@ export const mockApi = {
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
       enabled_features: [
-        'dashboard_tabs: Storage, Docker, LocalModel, Memory, DevelopmentServers, AiUsage, Awake',
+        'dashboard_tabs: Storage, Docker, LocalModel, Memory, Projects, DevelopmentServers, AiUsage, Awake',
         'quick_panel_sections: Storage, Cleanup, AiUsage, Categories, Memory',
         'clean_categories: ai=true, dev=true, docker=false, models=false',
         'awake_rules: total=2, active=0',
@@ -747,104 +1122,15 @@ export const mockApi = {
     // No-op in browser mock
   },
 
-  async listDevelopmentListeners(): Promise<DevelopmentListener[]> {
-    return [...mockListeners];
+  async listDevelopmentListeners() {
+    return developmentPortsMock.list();
   },
 
-  async releaseDevelopmentListener(
-    id: string,
-    mode: ReleaseMode
-  ): Promise<ReleaseDevelopmentListenerResult> {
-    const target = mockListeners.find((l) => l.id === id);
-    if (!target) {
-      throw new Error('Listener snapshot expired; refresh and try again.');
-    }
-    if (!target.can_release) {
-      throw new Error('This listener is protected and cannot be released.');
-    }
-
-    if (target.port === 3000 && mode === 'graceful') {
-      const freshLeaseId = `mock-lease-next-3000-force-${Date.now()}`;
-      const freshListener: DevelopmentListener = {
-        ...target,
-        id: freshLeaseId,
-      };
-      mockListeners = mockListeners.map((l) => (l.id === id ? freshListener : l));
-      return {
-        port: target.port,
-        outcome: 'still_listening',
-        listener: freshListener,
-      };
-    }
-
-    mockListeners = mockListeners.filter((l) => l.id !== id);
-    return {
-      port: target.port,
-      outcome: 'released',
-      listener: null,
-    };
+  async releaseDevelopmentListener(id, mode) {
+    return developmentPortsMock.release(id, mode);
   },
 
   async hideCurrentWindow(): Promise<void> {
     // No-op in browser mock
   },
 } satisfies ZenithApi;
-
-let mockListeners: DevelopmentListener[] = [
-  {
-    id: 'mock-lease-vite-5173',
-    port: 5173,
-    protocol: 'tcp',
-    bind_address: '127.0.0.1',
-    exposure: 'loopback',
-    pid: 32892,
-    server_name: 'Vite',
-    project_name: 'clean1',
-    working_directory: '~/Myproject/clean1',
-    started_at: Math.floor(Date.now() / 1000) - 17040,
-    can_release: true,
-    blocked_reason: null,
-  },
-  {
-    id: 'mock-lease-next-3000',
-    port: 3000,
-    protocol: 'tcp',
-    bind_address: '0.0.0.0',
-    exposure: 'all_interfaces',
-    pid: 40001,
-    server_name: 'Next.js',
-    project_name: 'web-dashboard',
-    working_directory: '~/work/web-dashboard',
-    started_at: Math.floor(Date.now() / 1000) - 1080,
-    can_release: true,
-    blocked_reason: null,
-  },
-  {
-    id: 'mock-lease-pg-5432',
-    port: 5432,
-    protocol: 'tcp',
-    bind_address: '127.0.0.1',
-    exposure: 'loopback',
-    pid: 5432,
-    server_name: 'postgres',
-    project_name: null,
-    working_directory: null,
-    started_at: Math.floor(Date.now() / 1000) - 86400,
-    can_release: false,
-    blocked_reason: 'Protected system, terminal, database, or container process',
-  },
-  {
-    id: 'mock-lease-custom-8080',
-    port: 8080,
-    protocol: 'tcp',
-    bind_address: '192.168.1.100',
-    exposure: 'network',
-    pid: 7777,
-    server_name: 'worker-service',
-    project_name: 'backend-services',
-    working_directory: '~/backend-services',
-    started_at: Math.floor(Date.now() / 1000) - 7200,
-    can_release: false,
-    blocked_reason: 'Not recognized as a development server',
-  },
-];

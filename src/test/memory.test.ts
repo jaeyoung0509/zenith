@@ -1,6 +1,32 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { filterProcesses } from '../lib/utils/memory';
 import type { ProcessMemory } from '../lib/models/types';
+import { MemoryStore } from '../lib/stores/memory.svelte';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('MemoryStore polling lifecycle', () => {
+  it('polls only while at least one visible subscriber is active', async () => {
+    vi.useFakeTimers();
+    const store = new MemoryStore();
+    const refresh = vi.spyOn(store, 'refreshMemory').mockResolvedValue(undefined);
+
+    store.startPolling(1000);
+    store.startPolling(1000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    store.stopPolling();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    store.stopPolling();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(store.isPolling).toBe(false);
+  });
+});
 
 describe('filterProcesses memory search utility', () => {
   const sampleProcesses: ProcessMemory[] = [

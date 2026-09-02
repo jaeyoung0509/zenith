@@ -43,6 +43,8 @@ pub struct DevelopmentListener {
     pub server_name: String,
     pub project_name: Option<String>,
     pub working_directory: Option<String>,
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
     pub started_at: Option<u64>,
     pub can_release: bool,
     pub blocked_reason: Option<String>,

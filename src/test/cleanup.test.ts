@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ScanItem } from '../lib/models/types';
 import { filterAndSortCleanupItems } from '../lib/utils/cleanup';
+import { cleanOutcome } from '../lib/utils/cleanResult';
 
 function item(overrides: Partial<ScanItem>): ScanItem {
   return {
@@ -64,6 +65,33 @@ describe('filterAndSortCleanupItems', () => {
   });
 });
 
+describe('cleanOutcome', () => {
+  const item = (status: 'success' | 'partial' | 'failed', success: boolean, error_message: string | null = null) => ({
+    item_id: status,
+    name: status,
+    path: `/tmp/${status}`,
+    status,
+    success,
+    bytes_reclaimed: success ? 10 : 0,
+    failure_reason: null,
+    error_message,
+  });
+
+  it('reports a total failure when every item fails', () => {
+    expect(cleanOutcome({ items: [item('failed', false)] })).toBe('failed');
+  });
+
+  it('reports partial cleanup when successful and failed items are mixed', () => {
+    expect(cleanOutcome({ items: [item('success', true), item('failed', false)] })).toBe('partial');
+    expect(cleanOutcome({ items: [item('partial', true, 'one file was locked')] })).toBe('partial');
+  });
+
+  it('reports complete cleanup only when every item succeeds cleanly', () => {
+    expect(cleanOutcome({ items: [item('success', true), item('success', true)] })).toBe('success');
+    expect(cleanOutcome({ items: [] })).toBe('failed');
+  });
+});
+
 describe('quick clean eligibility and predicate consistency', () => {
   it('strictly selects only safe risk items and honors category toggle settings', async () => {
     const { scanStore } = await import('../lib/stores/scan.svelte');
@@ -118,10 +146,33 @@ describe('quick clean eligibility and predicate consistency', () => {
       excluded_signatures: [],
       quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'] as any,
       quick_panel_ai_providers: [],
+      ai_accounts_quota_providers: ['codex'],
       dashboard_tabs: ['storage'] as any,
       dashboard_tabs_revision: 1,
       sidebar_collapsed: false,
       awake_rules: [],
+      ai_control: {
+        budgets: [],
+        manual_usage: [],
+        autopilot: {
+          keep_awake_for_verified_sessions: false,
+          keep_awake_ac_only: true,
+          notify_on_battery: false,
+          notify_on_memory_pressure: false,
+          notify_on_session_completion: false,
+          recommendation_cooldown_seconds: 900,
+        },
+        dismissed_findings: [],
+        audit_retention_days: 30,
+      },
+      agent_notifications: {
+        enabled: false,
+        notify_on_turn_completed: true,
+        notify_on_approval_or_input: true,
+        notify_on_possibly_inactive: true,
+        hide_project_basename: false,
+        inactivity_threshold_minutes: 15,
+      },
     };
 
     // Calculate bytes

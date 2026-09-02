@@ -6,25 +6,58 @@ pub struct Blacklist;
 impl Blacklist {
     /// System and user directory paths that must NEVER be deleted under any circumstances.
     pub fn is_blacklisted(path: &Path) -> bool {
-        let home = std::env::var("HOME").map(PathBuf::from).ok();
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from);
 
         // 1. Exact forbidden root & home
         if path == Path::new("/") {
             return true;
         }
 
-        if let Some(ref h) = home {
-            if path == h {
+        // Drive roots like C:\ or D:\
+        if let Some(path_str) = path.to_str() {
+            let trimmed = path_str.trim_end_matches(['\\', '/']);
+            if trimmed.len() == 2 && trimmed.ends_with(':') {
                 return true;
             }
         }
 
-        // 2. Universal Git protection (.git is forbidden anywhere)
-        for component in path.components() {
-            if let std::path::Component::Normal(os_str) = component {
-                if os_str == ".git" {
-                    return true;
-                }
+        if let Some(ref h) = home {
+            if path == h {
+                return true;
+            }
+            // Whole AppData itself or Local/Roaming themselves
+            if path == h.join("AppData")
+                || path == h.join("AppData/Local")
+                || path == h.join("AppData\\Local")
+                || path == h.join("AppData/Roaming")
+                || path == h.join("AppData\\Roaming")
+            {
+                return true;
+            }
+        }
+
+        // Whole temp dir itself
+        if path == std::env::temp_dir() {
+            return true;
+        }
+
+        // 2. Universal Git protection, ADS, and Windows alias defense
+        let path_str = path.to_string_lossy();
+        for part in path_str.split(['/', '\\']) {
+            if part == ".git" {
+                return true;
+            }
+            if part.ends_with('.') || part.ends_with(' ') {
+                return true;
+            }
+        }
+
+        // Reject alternate data streams (e.g. file.txt:stream or C:\path\file.txt:stream)
+        if let Some(colon_pos) = path_str.rfind(':') {
+            if colon_pos != 1 {
+                return true;
             }
         }
 
@@ -49,6 +82,11 @@ impl Blacklist {
                     "Pictures",
                     "Movies",
                     "Music",
+                    "Videos",
+                    "Contacts",
+                    "Searches",
+                    "Links",
+                    "Saved Games",
                 ];
 
                 for rel in &sensitive_relative {
@@ -80,7 +118,13 @@ impl Blacklist {
             return false;
         }
 
-        // 5. System critical prefixes outside user home and temp
+        // 5. Exact users root directory
+        let normalized_path_str = path.to_string_lossy().replace('\\', "/");
+        if normalized_path_str == "C:/Users" || path == Path::new("/Users") {
+            return true;
+        }
+
+        // 6. System critical prefixes outside user home and temp
         let system_prefixes = [
             "/System",
             "/bin",
@@ -95,10 +139,19 @@ impl Blacklist {
             "/dev",
             "/cores",
             "/opt",
+            "C:/Windows",
+            "C:/Program Files",
+            "C:/Program Files (x86)",
+            "C:/ProgramData",
         ];
 
         for sys in &system_prefixes {
-            if path == Path::new(sys) || path.starts_with(sys) {
+            let sys_path = Path::new(sys);
+            if path == sys_path
+                || path.starts_with(sys_path)
+                || normalized_path_str == *sys
+                || normalized_path_str.starts_with(&format!("{sys}/"))
+            {
                 return true;
             }
         }

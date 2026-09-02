@@ -12,7 +12,7 @@ The frontend may provide:
 - an opaque one-shot `plan_id` after reviewing a preview;
 - typed identities for dedicated adapters, such as a freshly scanned model ID;
 - a Large Files request containing only supported root tokens and a size
-  threshold;
+  threshold plus a backend-validated file filter;
 - an app inventory ID or app-inspection ID returned by the backend.
 
 The frontend may not provide an executable deletion path, cleanup strategy,
@@ -41,6 +41,12 @@ Blocked locations include filesystem roots, the user home root, credentials,
 keychains, source-control metadata such as nested `.git`, and standard user
 content directories. Temporary cleanup never targets all of `/tmp`; candidates
 must match known tool prefixes and inactivity rules.
+
+OrbStack storage is observation-only. Zenith reads allocated block metadata
+from the single reviewed `data.img.raw` path so users can account for managed
+container storage, but it does not scan arbitrary group containers or create a
+generic cleanup target for the VM disk. Manual adapter observations are rejected
+by the planner even if a frontend attempts to select one.
 
 ## Intensive cleanup
 
@@ -103,9 +109,70 @@ Traversal and execution enforce these rules:
    an approved Large Files root, still has the reviewed parent, is still a file,
    is not a symlink, and has the same filesystem identity.
 
+The optional `installers` filter is narrower than the normal Large Files scan:
+it accepts only `.dmg`, `.pkg`, `.mpkg`, `.xip`, and `.iso` files and lowers the
+minimum size to 10 MB. The default `all` filter retains the 100 MB floor. The
+filter is resolved in Rust, installer results are never auto-selected, and the
+frontend cannot provide an arbitrary extension or root. Both modes use the same
+bounded inventory and native Trash plan; moving an installer to Trash is not
+reported as reclaimed space until the user empties Trash.
+
 The specialized Large Files scope does not change `Blacklist` behavior for any
 other cleaner. In particular, `Documents`, `Desktop`, and `Movies` remain
 blacklisted for generic signature-based cleanup.
+
+## Developer Artifact Review
+
+Developer Artifact Review is manual inventory, not Quick Clean. `Scan this
+Mac` registers the canonical current-user home as a backend-owned scan scope;
+the frontend receives only its opaque workspace ID and cannot submit a path,
+scope, or cleanup rule. The native picker remains available for narrower
+user-owned folders beneath home.
+
+The whole-home scope prunes protected paths before traversal. It bypasses
+`Library`, credential stores such as `.ssh`, `.gnupg`, `.aws`, `.azure`, and
+`.kube`, user media/content roots protected by the global blacklist, installed
+`.app` bundles, and known top-level package-manager/runtime state directories.
+Symlinks are not followed. These bypassed paths do not become candidates and
+do not consume recursive measurement work.
+
+Discovery uses reviewed ecosystem evidence before a directory becomes a
+candidate. Project markers must be direct children of the exact project root;
+an ancestor marker never authorizes a same-named directory deeper in the
+source tree:
+
+- `target` requires `Cargo.toml` or `pom.xml`;
+- `node_modules` requires `package.json`;
+- `.venv`/`venv` requires Python dependency metadata and `pyvenv.cfg`;
+- `build`/`.gradle` requires Gradle markers; CMake `build` additionally
+  requires its generated `CMakeCache.txt`;
+- Composer `vendor` requires Composer metadata generated inside `vendor`, and
+  `vendor/bundle` requires Bundler markers;
+- `bin`/`obj` requires a direct .NET project marker;
+- `.build`, `.dart_tool`, `_build`, `deps`, and `.terraform` require Swift,
+  Dart, Elixir, or Terraform markers respectively; and
+- `~/go/pkg/mod` is shown as a separate shared cache when the user selects the
+  `go` workspace root or uses the backend-owned whole-home scope.
+
+Unknown `build`, `dist`, `out`, `cache`, `vendor`, or hidden directories are
+never executable based on their names alone. Discovery skips `.git`, symlinks,
+other filesystems, and recognized artifact trees. Candidate measurement is a
+single bounded traversal that records logical/allocated bytes, file count, and
+newest modification time. A permission error, symlink, depth cutoff, or marker
+change marks the candidate incomplete and blocks planning. Measurement workers
+are bounded at four and cancellation stops new work while retaining only
+completed candidates.
+
+Age is informational. Recent artifacts remain selectable when the user chooses
+them, and old artifacts are not selected automatically. Before a Trash plan is
+created, Rust resolves selected IDs from the fresh inventory and rejects
+incomplete records. Immediately before each move, it revalidates the workspace
+and project identities, exact relative artifact type, marker identities,
+symlink-free scope, directory type, and candidate identity. Project roots,
+workspace roots, `.git`, source paths, forged IDs, stale inventories, replayed
+plans, and frontend-provided paths fail closed. Selecting a project directory
+as the workspace remains valid because only its exact generated child (for
+example, `target/`) enters the plan; the project directory itself never does.
 
 ## App Uninstaller
 
@@ -179,6 +246,20 @@ manifest filesystem path.
 
 ## Process termination
 
+Project Cockpit is observation-only. Its adapter registry matches exact CLI
+executable identities for Antigravity (`agy`), legacy/enterprise Gemini CLI,
+Codex, Claude Code, Cursor Agent CLI, Grok Build, Copilot CLI, and OpenCode.
+Names and substrings alone are insufficient, and Cursor's GUI process never
+creates an agent session. Current-user ownership, a non-zero start time, an
+executable path, and cwd are checked before project correlation. No termination
+lease or mutable command is exposed by this workflow.
+
+Public project/activity snapshots contain opaque hashes rather than PID or full
+filesystem paths. They never serialize raw argv, environment values, prompts,
+tool arguments/results, transcripts, account identity, credentials, remotes,
+or diff content. An inaccessible or unprovable cwd yields an Unassigned session
+instead of basename, branch, port, or recent-activity guessing.
+
 Memory Inspector resolves a fresh process snapshot from a recognized user-app
 group. It does not accept a PID from the WebView. System processes, terminals,
 and Zenith are protected. Normal application termination is offered before a
@@ -206,6 +287,12 @@ new force-authorized lease created only when the same process remains after the
 grace period and a second user confirmation. If another process acquires the
 port, Zenith reports an ownership change and never signals the replacement.
 
+Local testing infrastructure is allowlisted with narrower executable checks.
+`agent-browser` must resolve inside its official package binary directory.
+Google Chrome for Testing must resolve to the exact testing app executable and
+include both remote-debugging and isolated-profile arguments. Standard Chrome,
+browser helper processes, crash reporters, and renamed lookalikes do not match.
+
 ## Failure behavior
 
 Safety checks fail closed. A stale scan, missing signature, expired plan,
@@ -227,3 +314,38 @@ app-data scope, development-server classification, lease expiry/one-shot
 behavior, force authorization, PID reuse, and port ownership changes. Tests
 must never point destructive operations at real user processes or directories;
 the development-port integration test owns and cleans up its ephemeral child.
+
+## AI Control Center safety invariants
+
+AI Control Center enforces strict safety and privacy boundaries:
+
+- **Canonical session identity:** Resource attribution consumes only the
+  verified `AgentSession` and `ProjectIdentity` records from Project Cockpit.
+  Unassigned or low-confidence processes remain visible for transparency but
+  cannot authorize any mutable action.
+- **Advisory-first automation:** Keep Awake automation is disabled by default,
+  requires explicit policy opt-in, honors AC-only restrictions, treats unknown
+  power as ineligible, and automatically releases its assertion when verified
+  sessions exit. Recommendations never kill processes, close ports, or delete
+  files automatically.
+- **Opaque action previews:** Actionable recommendations generate opaque,
+  expiring (120-second), one-shot preview tokens. Consuming a preview navigates
+  the user to the corresponding review workflow; it never performs mutations
+  directly.
+- **Bounded safety inspection:** Project safety scans are user-initiated and
+  strictly bounded to registered active project roots, a maximum of 2,000 files,
+  1 MiB per file, and a directory depth of 8. Inspection never follows symlinks,
+  skips cross-filesystem mounts, and never executes or rewrites tool configs.
+- **Secret redaction guarantees:** Scans detect secret patterns (API keys,
+  tokens, private keys) and broad MCP permissions, returning only the evidence
+  type, relative path, and line numbers. Raw secret bytes, credentials, command
+  arguments, headers, environment variables, and email addresses are never
+  returned, logged, or persisted.
+- **Git baseline integrity:** Captures a repository baseline on first session
+  observation. Pre-existing uncommitted changes are excluded from change
+  counts. Diffs are generated only upon explicit user request, bounded at 256
+  KiB, and never persisted to disk.
+- **Audit and telemetry:** Audit logs are local, bounded to 1,024 entries and
+  512 KiB, sanitized before persistence, and retained for 1–365 days. Zenith
+  collects zero telemetry or analytics. Full details are in
+  [AI_CONTROL_CENTER.md](AI_CONTROL_CENTER.md).

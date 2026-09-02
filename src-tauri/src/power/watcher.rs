@@ -15,6 +15,8 @@ pub struct KeepAwakeManager {
     rules: Arc<Mutex<Vec<AwakeRule>>>,
     active_assertion: Arc<Mutex<Option<PowerAssertion>>>,
     manual_mode: Arc<Mutex<ManualMode>>,
+    control_center_policy: Arc<Mutex<ControlCenterAwakePolicy>>,
+    session_validator: Arc<Mutex<Option<SessionValidator>>>,
     last_trigger_app: Arc<Mutex<Option<String>>>,
     last_active_rule_id: Arc<Mutex<Option<String>>>,
     last_error: Arc<Mutex<Option<String>>>,
@@ -26,7 +28,23 @@ pub struct KeepAwakeManager {
     wake_signal: (Mutex<()>, Condvar),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ControlCenterAwakePolicy {
+    pub enabled: bool,
+    pub ac_only: bool,
+}
+
+impl Default for ControlCenterAwakePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ac_only: true,
+        }
+    }
+}
+
 type ManualMode = Option<(AwakeBehavior, Option<u64>)>;
+type SessionValidator = Arc<dyn Fn() -> bool + Send + Sync>;
 
 impl Default for KeepAwakeManager {
     fn default() -> Self {
@@ -50,6 +68,8 @@ impl KeepAwakeManager {
             rules: Arc::new(Mutex::new(Vec::new())),
             active_assertion: Arc::new(Mutex::new(None)),
             manual_mode: Arc::new(Mutex::new(None)),
+            control_center_policy: Arc::new(Mutex::new(ControlCenterAwakePolicy::default())),
+            session_validator: Arc::new(Mutex::new(None)),
             last_trigger_app: Arc::new(Mutex::new(None)),
             last_active_rule_id: Arc::new(Mutex::new(None)),
             last_error: Arc::new(Mutex::new(None)),
@@ -118,6 +138,40 @@ impl KeepAwakeManager {
 
         self.notify_watcher();
         self.evaluate();
+    }
+
+    /// Sets the AI Control Center Keep Awake policy configuration.
+    /// This sets whether automation is enabled and its power conditions.
+    /// It does NOT clear when sessions end; rather, background evaluation
+    /// asserts Keep Awake when a verified session is active, and releases it
+    /// when the session exits, keeping the policy continuously enabled.
+    pub fn set_control_center_awake_policy(&self, enabled: bool, ac_only: bool) {
+        let mut policy = self
+            .control_center_policy
+            .lock()
+            .expect("control_center_policy poisoned");
+        policy.enabled = enabled;
+        policy.ac_only = ac_only;
+        drop(policy);
+        self.notify_watcher();
+        self.evaluate();
+    }
+
+    #[inline]
+    pub fn set_control_center_session_awake(&self, active: bool, ac_only: bool) {
+        self.set_control_center_awake_policy(active, ac_only);
+    }
+
+    /// Sets a callback that dynamically revalidates whether verified agent sessions
+    /// are still running. Invoked by the background watcher thread during evaluate().
+    pub fn set_session_validator<F>(&self, validator: F)
+    where
+        F: Fn() -> bool + Send + Sync + 'static,
+    {
+        *self
+            .session_validator
+            .lock()
+            .expect("session_validator poisoned") = Some(Arc::new(validator));
     }
 
     /// Gets current Keep Awake state.
@@ -304,7 +358,56 @@ impl KeepAwakeManager {
             return;
         }
 
-        // 4. Apply eligible process rule, or release assertion
+        // 4. Control Center automation is explicitly driven by configured policy.
+        // When enabled, assertions are dynamically acquired when verified sessions run,
+        // and released when sessions exit or power conditions fail, without erasing the policy.
+        let policy = *self
+            .control_center_policy
+            .lock()
+            .expect("control_center_policy poisoned");
+        if policy.enabled {
+            let session_alive = {
+                let validator = self
+                    .session_validator
+                    .lock()
+                    .expect("session_validator poisoned");
+                validator.as_ref().map(|v| v()).unwrap_or(false)
+            };
+            let power_ok = !policy.ac_only || power_source.is_ac();
+            if session_alive && power_ok {
+                let _ = self.ensure_assertion(
+                    AwakeBehavior::PreventSystemSleep,
+                    "Zenith AI Control Center verified agent session",
+                    Some("AI Control Center".to_string()),
+                    Some("ai-control.verified-session".to_string()),
+                );
+                return;
+            } else {
+                let is_our_assertion = {
+                    let rule_id = self
+                        .last_active_rule_id
+                        .lock()
+                        .expect("last_active_rule_id poisoned");
+                    rule_id.as_deref() == Some("ai-control.verified-session")
+                };
+                if is_our_assertion {
+                    self.release_assertion();
+                }
+            }
+        } else {
+            let is_our_assertion = {
+                let rule_id = self
+                    .last_active_rule_id
+                    .lock()
+                    .expect("last_active_rule_id poisoned");
+                rule_id.as_deref() == Some("ai-control.verified-session")
+            };
+            if is_our_assertion {
+                self.release_assertion();
+            }
+        }
+
+        // 5. Apply eligible process rule, or release assertion
         if let Some(rule) = first_eligible_rule {
             let _ = self.ensure_assertion(
                 rule.behavior,
@@ -330,6 +433,12 @@ impl KeepAwakeManager {
                 .expect("rules poisoned")
                 .iter()
                 .any(|rule| rule.enabled);
+        let has_work = has_work
+            || self
+                .control_center_policy
+                .lock()
+                .expect("control_center_policy poisoned")
+                .enabled;
         let guard = self.wake_signal.0.lock().expect("wake_signal poisoned");
         if self.wake_generation.load(Ordering::Acquire) != observed {
             return;
@@ -495,7 +604,8 @@ mod tests {
             if self.should_fail.load(Ordering::SeqCst) {
                 Err(ZenithError::Io("Mock assertion acquisition failed".into()))
             } else {
-                PowerAssertion::acquire(behavior, reason)
+                let _ = reason;
+                Ok(PowerAssertion::mock(behavior))
             }
         }
     }
@@ -640,6 +750,102 @@ mod tests {
             calls_after_eval,
             "get_state must be a pure in-memory read without invoking power source query or process enumeration"
         );
+    }
+
+    #[test]
+    fn control_center_assertion_honors_power_and_releases_on_session_exit() {
+        use std::sync::atomic::AtomicBool;
+        let power = Arc::new(MockPowerSource::new(PowerSourceType::Battery));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power.clone(), assertion);
+        manager.set_session_validator(|| true);
+        manager.set_control_center_session_awake(true, true);
+        assert!(
+            !manager.get_state().is_active,
+            "AC-only must fail closed on battery"
+        );
+        let plugged_in = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let plugged_in_manager = KeepAwakeManager::with_providers(plugged_in, assertion);
+        let session_alive = Arc::new(AtomicBool::new(true));
+        let session_alive_clone = session_alive.clone();
+        plugged_in_manager
+            .set_session_validator(move || session_alive_clone.load(Ordering::SeqCst));
+        plugged_in_manager.set_control_center_session_awake(true, true);
+        assert!(plugged_in_manager.get_state().is_active);
+        assert_eq!(
+            plugged_in_manager.get_state().active_rule_id.as_deref(),
+            Some("ai-control.verified-session")
+        );
+        plugged_in_manager.set_control_center_session_awake(false, true);
+        assert!(
+            !plugged_in_manager.get_state().is_active,
+            "assertion must release when policy is disabled"
+        );
+    }
+
+    #[test]
+    fn control_center_policy_lifecycle_persists_across_session_starts_and_stops() {
+        use std::sync::atomic::AtomicBool;
+        let plugged_in = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(plugged_in, assertion);
+
+        let session_alive = Arc::new(AtomicBool::new(false));
+        let session_alive_clone = session_alive.clone();
+        manager.set_session_validator(move || session_alive_clone.load(Ordering::SeqCst));
+
+        // 1. Enable policy before any session exists:
+        manager.set_control_center_awake_policy(true, true);
+        assert!(
+            !manager.get_state().is_active,
+            "no assertion while session is false"
+        );
+
+        // 2. Session starts:
+        session_alive.store(true, Ordering::SeqCst);
+        manager.evaluate();
+        assert!(
+            manager.get_state().is_active,
+            "assertion acquires when session starts"
+        );
+        assert_eq!(
+            manager.get_state().active_rule_id.as_deref(),
+            Some("ai-control.verified-session")
+        );
+
+        // 3. Session terminates:
+        session_alive.store(false, Ordering::SeqCst);
+        manager.evaluate();
+        assert!(
+            !manager.get_state().is_active,
+            "assertion releases when session stops"
+        );
+
+        // 4. New session starts later WITHOUT touching the policy:
+        session_alive.store(true, Ordering::SeqCst);
+        manager.evaluate();
+        assert!(
+            manager.get_state().is_active,
+            "assertion automatically re-acquires on subsequent session without user intervention"
+        );
+
+        // 5. User explicitly disables policy:
+        manager.set_control_center_awake_policy(false, true);
+        assert!(
+            !manager.get_state().is_active,
+            "assertion releases when policy is disabled"
+        );
+    }
+
+    #[test]
+    fn control_center_ac_only_rejects_unknown_power() {
+        let power = Arc::new(MockPowerSource::new(PowerSourceType::Unknown));
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power, assertion);
+        manager.set_session_validator(|| true);
+        manager.set_control_center_session_awake(true, true);
+        assert!(!manager.get_state().is_active);
     }
 
     #[test]

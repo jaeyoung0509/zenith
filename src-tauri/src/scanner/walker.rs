@@ -213,6 +213,20 @@ impl DirectoryScanner {
             }
         };
 
+        // Signed app bundles are protected by macOS App Management (TCC):
+        // chmod and deletion inside them fail with EPERM even for the owning
+        // user, so generic cleanup can never succeed. Treat any bundle in the
+        // tree like an unreadable subtree and fail closed.
+        if meta.is_dir()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+        {
+            stats.complete = false;
+            return stats;
+        }
+
         if let Ok(modified) = meta.modified() {
             stats.newest_mtime = Some(match stats.newest_mtime {
                 Some(existing) => existing.max(modified),
@@ -341,5 +355,52 @@ mod tests {
             .map(|item| item.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["third.party.cache"]);
+    }
+
+    #[test]
+    fn aged_scan_fails_closed_for_trees_containing_app_bundles() {
+        let root = tempfile::tempdir().unwrap();
+        let eligible = root.path().join("plain.cache");
+        let nested = root.path().join("bundled.cache");
+        let bundle_root = nested.join("Tool.app/Contents/MacOS");
+        let mixed_case = root.path().join("mixed-case-bundled.cache");
+        let mixed_case_bundle_root = mixed_case.join("Tool.App/Contents/MacOS");
+        let standalone = root.path().join("Standalone.app/Contents/MacOS");
+        std::fs::create_dir_all(&bundle_root).unwrap();
+        std::fs::create_dir_all(&mixed_case_bundle_root).unwrap();
+        std::fs::create_dir_all(&standalone).unwrap();
+        std::fs::create_dir(&eligible).unwrap();
+        std::fs::write(eligible.join("data.bin"), vec![1u8; 4096]).unwrap();
+        std::fs::write(bundle_root.join("tool"), vec![1u8; 4096]).unwrap();
+        std::fs::write(mixed_case_bundle_root.join("tool"), vec![1u8; 4096]).unwrap();
+        std::fs::write(standalone.join("tool"), vec![1u8; 4096]).unwrap();
+
+        let signature = Signature {
+            id: "system.test.bundles".into(),
+            name: "Test bundle guard".into(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteDirectory,
+            paths: vec![root.path().to_string_lossy().into_owned()],
+            exclusions: vec![],
+            description: String::new(),
+            min_age_days: Some(0),
+            include_prefixes: vec![],
+            exclude_prefixes: vec![],
+            intensive_only: true,
+        };
+
+        let items = DirectoryScanner::scan_signature(&signature);
+        let names = items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["plain.cache"]);
+
+        // The guard must also fail closed at delete-time TOCTOU re-verification.
+        let stats = DirectoryScanner::measure_tree_stats(&nested, &[], 0, 32);
+        assert!(!stats.complete);
+        let mixed_case_stats = DirectoryScanner::measure_tree_stats(&mixed_case, &[], 0, 32);
+        assert!(!mixed_case_stats.complete);
     }
 }

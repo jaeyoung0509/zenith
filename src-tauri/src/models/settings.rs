@@ -1,4 +1,4 @@
-use crate::models::AwakeRule;
+use crate::models::{AiControlPreferences, AwakeRule};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -10,16 +10,24 @@ pub enum QuickPanelSection {
     AiUsage,
     Categories,
     Memory,
+    AiControl,
+    AgentActivity,
 }
 
 impl QuickPanelSection {
-    pub const DEFAULTS: [Self; 4] = [Self::Cleanup, Self::Storage, Self::Memory, Self::AiUsage];
+    pub const DEFAULTS: [Self; 4] = [
+        Self::Cleanup,
+        Self::Storage,
+        Self::Memory,
+        Self::AgentActivity,
+    ];
+
     pub const ALL: [Self; 5] = [
         Self::Cleanup,
         Self::Storage,
         Self::Memory,
-        Self::AiUsage,
         Self::Categories,
+        Self::AgentActivity,
     ];
 }
 
@@ -32,9 +40,48 @@ pub enum DashboardTab {
     Docker,
     Models,
     Memory,
+    Projects,
     DevelopmentServers,
     Usage,
+    AiControl,
     Awake,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardRoute {
+    #[serde(alias = "disk")]
+    Disk,
+    Storage,
+    Docker,
+    Models,
+    Memory,
+    Projects,
+    DevelopmentServers,
+    Usage,
+    AiControl,
+    Awake,
+    DeveloperArtifacts,
+    LargeFiles,
+    Applications,
+    Settings,
+}
+
+impl From<DashboardTab> for DashboardRoute {
+    fn from(tab: DashboardTab) -> Self {
+        match tab {
+            DashboardTab::Disk => Self::Disk,
+            DashboardTab::Storage => Self::Storage,
+            DashboardTab::Docker => Self::Docker,
+            DashboardTab::Models => Self::Models,
+            DashboardTab::Memory => Self::Memory,
+            DashboardTab::Projects => Self::Projects,
+            DashboardTab::DevelopmentServers => Self::DevelopmentServers,
+            DashboardTab::Usage => Self::Usage,
+            DashboardTab::AiControl => Self::AiControl,
+            DashboardTab::Awake => Self::Awake,
+        }
+    }
 }
 
 impl DashboardTab {
@@ -44,7 +91,7 @@ impl DashboardTab {
         Self::Models,
         Self::Memory,
         Self::DevelopmentServers,
-        Self::Usage,
+        Self::Projects,
         Self::Awake,
     ];
 }
@@ -64,10 +111,14 @@ pub struct ZenithSettings {
     pub awake_rules: Vec<AwakeRule>,
     pub quick_panel_sections: Vec<QuickPanelSection>,
     pub quick_panel_ai_providers: Vec<String>,
+    pub ai_accounts_quota_providers: Vec<String>,
     pub dashboard_tabs: Vec<DashboardTab>,
     #[serde(default = "legacy_dashboard_tabs_revision")]
     pub dashboard_tabs_revision: u8,
     pub sidebar_collapsed: bool,
+    pub ai_control: AiControlPreferences,
+    #[serde(default)]
+    pub agent_notifications: crate::models::AgentNotificationPreferences,
 }
 
 impl Default for ZenithSettings {
@@ -164,9 +215,18 @@ impl Default for ZenithSettings {
                 "openrouter".to_string(),
                 "antigravity".to_string(),
             ],
+            ai_accounts_quota_providers: vec![
+                "codex".to_string(),
+                "claude".to_string(),
+                "opencode".to_string(),
+                "openrouter".to_string(),
+                "antigravity".to_string(),
+            ],
             dashboard_tabs: DashboardTab::ALL.to_vec(),
-            dashboard_tabs_revision: 1,
+            dashboard_tabs_revision: 5,
             sidebar_collapsed: false,
+            ai_control: AiControlPreferences::default(),
+            agent_notifications: crate::models::AgentNotificationPreferences::default(),
         }
     }
 }
@@ -211,12 +271,135 @@ impl ZenithSettings {
             self.dashboard_tabs_revision = 1;
         }
 
+        // #75 adds Projects once after Memory. The revision guard preserves
+        // any later user hide/reorder choice instead of re-inserting it.
+        if self.dashboard_tabs_revision < 2 {
+            if !self.dashboard_tabs.contains(&DashboardTab::Projects) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Memory)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Projects);
+            }
+            self.dashboard_tabs_revision = 2;
+        }
+
+        // #74 adds AI Control once after Projects. Preserve user ordering and
+        // allow the tab to remain hidden after this migration has run.
+        if self.dashboard_tabs_revision < 3 {
+            if !self.dashboard_tabs.contains(&DashboardTab::AiControl) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Projects)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::AiControl);
+            }
+            self.dashboard_tabs_revision = 3;
+        }
+
+        // #75 ensures Projects tab exists once, then preserves later user hide/reorder choices.
+        if self.dashboard_tabs_revision < 4 {
+            if !self.dashboard_tabs.contains(&DashboardTab::Projects) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::Memory)
+                    .map_or(self.dashboard_tabs.len(), |index| index + 1);
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Projects);
+            }
+            self.dashboard_tabs_revision = 4;
+        }
+
+        // #78 consolidates AI tabs: if user had Usage, AiControl, or Projects,
+        // ensure Projects is preserved, and remove Usage and AiControl from dashboard_tabs.
+        if self.dashboard_tabs_revision < 5 {
+            let had_ai_tab = self.dashboard_tabs.contains(&DashboardTab::Projects)
+                || self.dashboard_tabs.contains(&DashboardTab::AiControl)
+                || self.dashboard_tabs.contains(&DashboardTab::Usage);
+            self.dashboard_tabs
+                .retain(|tab| *tab != DashboardTab::AiControl && *tab != DashboardTab::Usage);
+            if had_ai_tab && !self.dashboard_tabs.contains(&DashboardTab::Projects) {
+                let insert_at = self
+                    .dashboard_tabs
+                    .iter()
+                    .position(|tab| *tab == DashboardTab::DevelopmentServers)
+                    .unwrap_or(self.dashboard_tabs.len());
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Projects);
+            }
+
+            // Consolidate quick panel sections: replace ai_control and ai_usage with agent_activity
+            let had_ai_section = self
+                .quick_panel_sections
+                .contains(&QuickPanelSection::AgentActivity)
+                || self
+                    .quick_panel_sections
+                    .contains(&QuickPanelSection::AiControl)
+                || self
+                    .quick_panel_sections
+                    .contains(&QuickPanelSection::AiUsage);
+            self.quick_panel_sections.retain(|sec| {
+                *sec != QuickPanelSection::AiControl && *sec != QuickPanelSection::AiUsage
+            });
+            if had_ai_section
+                && !self
+                    .quick_panel_sections
+                    .contains(&QuickPanelSection::AgentActivity)
+            {
+                self.quick_panel_sections
+                    .push(QuickPanelSection::AgentActivity);
+            }
+
+            self.dashboard_tabs_revision = 5;
+        }
+
+        // Retired identifiers stay invalid even if a malformed/newer settings
+        // payload already claims migration revision 5.
+        self.dashboard_tabs
+            .retain(|tab| *tab != DashboardTab::AiControl && *tab != DashboardTab::Usage);
+        if self.dashboard_tabs.is_empty() {
+            self.dashboard_tabs.push(DashboardTab::Storage);
+        }
+        self.quick_panel_sections.retain(|section| {
+            *section != QuickPanelSection::AiControl && *section != QuickPanelSection::AiUsage
+        });
+        if self.quick_panel_sections.is_empty() {
+            self.quick_panel_sections.push(QuickPanelSection::Storage);
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
         self.quick_panel_ai_providers.retain(|provider| {
             SUPPORTED_PROVIDERS.contains(&provider.as_str()) && providers.insert(provider.clone())
         });
+        const SUPPORTED_ACCOUNT_PROVIDERS: [&str; 7] = [
+            "codex",
+            "claude",
+            "opencode",
+            "openrouter",
+            "antigravity",
+            "cursor",
+            "grok",
+        ];
+        let mut account_providers = HashSet::new();
+        self.ai_accounts_quota_providers.retain(|provider| {
+            SUPPORTED_ACCOUNT_PROVIDERS.contains(&provider.as_str())
+                && account_providers.insert(provider.clone())
+        });
+        if self.ai_accounts_quota_providers.is_empty() {
+            self.ai_accounts_quota_providers.push("codex".into());
+        }
+        self.agent_notifications.inactivity_threshold_minutes = self
+            .agent_notifications
+            .inactivity_threshold_minutes
+            .clamp(5, 120);
+        self.ai_control = crate::ai_control_center::budgets::sanitize(self.ai_control);
         self
     }
 }
@@ -235,6 +418,7 @@ mod tests {
             quick_panel_sections: Vec::new(),
             dashboard_tabs: Vec::new(),
             quick_panel_ai_providers: Vec::new(),
+            ai_accounts_quota_providers: Vec::new(),
             ..ZenithSettings::default()
         };
 
@@ -244,6 +428,7 @@ mod tests {
             vec![QuickPanelSection::Storage]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
+        assert_eq!(sanitized.ai_accounts_quota_providers, vec!["codex"]);
     }
 
     #[test]
@@ -256,19 +441,26 @@ mod tests {
             ],
             dashboard_tabs: vec![DashboardTab::Usage, DashboardTab::Usage, DashboardTab::Disk],
             quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
+            ai_accounts_quota_providers: vec![
+                "cursor".into(),
+                "unknown".into(),
+                "grok".into(),
+                "cursor".into(),
+            ],
             ..ZenithSettings::default()
         };
 
         let sanitized = configured.sanitize();
         assert_eq!(
             sanitized.quick_panel_sections,
-            vec![QuickPanelSection::AiUsage, QuickPanelSection::Memory]
+            vec![QuickPanelSection::Memory]
         );
-        assert_eq!(
-            sanitized.dashboard_tabs,
-            vec![DashboardTab::Usage, DashboardTab::Storage]
-        );
+        assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
         assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
+        assert_eq!(
+            sanitized.ai_accounts_quota_providers,
+            vec!["cursor", "grok"]
+        );
     }
 
     #[test]
@@ -282,6 +474,10 @@ mod tests {
         assert_eq!(parsed.quick_panel_sections.len(), 4);
         assert_eq!(parsed.dashboard_tabs.len(), 7);
         assert_eq!(parsed.dashboard_tabs_revision, 0);
+        assert_eq!(
+            parsed.ai_accounts_quota_providers,
+            vec!["codex", "claude", "opencode", "openrouter", "antigravity"]
+        );
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");
         assert!(!parsed.intensive_cleanup);
@@ -289,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_adds_development_servers_once_for_existing_settings() {
+    fn sanitize_adds_new_dashboard_tabs_once_for_existing_settings() {
         let raw = r#"{
             "dashboard_tabs": ["storage", "memory", "usage"],
             "theme": "system"
@@ -302,11 +498,11 @@ mod tests {
             vec![
                 DashboardTab::Storage,
                 DashboardTab::Memory,
+                DashboardTab::Projects,
                 DashboardTab::DevelopmentServers,
-                DashboardTab::Usage,
             ]
         );
-        assert_eq!(migrated.dashboard_tabs_revision, 1);
+        assert_eq!(migrated.dashboard_tabs_revision, 5);
 
         let hidden_again = ZenithSettings {
             dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Memory],

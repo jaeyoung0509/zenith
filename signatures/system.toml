@@ -6,8 +6,9 @@ name = "Stale Developer Temporary Files"
 category = "system"
 risk = "safe"
 strategy = "delete_directory"
-paths = ["$TMPDIR"]
+paths = ["$TMPDIR", "${TEMP}"]
 include_prefixes = [
+    "agent-browser-chrome-",
     "antigravity-",
     "claude-",
     "claude_",
@@ -22,9 +23,15 @@ include_prefixes = [
     "discord-",
     "esbuild-",
     "gemini-",
+    "metro-cache",
+    "metro-file-map-",
+    "node-compile-cache",
     "opencode-",
     "opencode_",
+    "openai-docs-cache",
+    "pytest-of-",
     "tauri-",
+    "v8-compile-cache-",
     "vite-"
 ]
 min_age_days = 3
@@ -44,10 +51,11 @@ exclude_prefixes = [
     "FamilyCircle",
     "GeoServices",
     "HomeKit",
-    "Safari"
+    "Safari",
+    "dotslash"
 ]
 intensive_only = true
-description = "A third-party application cache whose entire tree has been inactive for at least 7 days. Apple and system cache namespaces are excluded."
+description = "A third-party application cache whose entire tree has been inactive for at least 7 days. Apple, system, and tool-managed cache namespaces are excluded. dotslash is a content-addressed cache that the dotslash CLI itself downloads, validates, and invalidates."
 
 [[signatures]]
 id = "system.intensive.application_logs"

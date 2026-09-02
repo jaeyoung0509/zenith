@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import DeveloperArtifactsView from '../routes/dashboard/DeveloperArtifactsView.svelte';
+import { mockStorageApi } from '../lib/api/storage';
+
+describe('developer artifact review workflow', () => {
+  it('streams marker-backed candidates with empty default selection', async () => {
+    const events: string[] = [];
+    const result = await mockStorageApi.startDeveloperArtifactScan(['workspace-myproject'], (event) => {
+      events.push(event.type);
+    });
+
+    expect(events).toContain('artifact_found');
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.items.every((item) => item.selected_by_default === false)).toBe(true);
+    expect(result.items.some((item) => item.ecosystem === 'rust')).toBe(true);
+  });
+
+  it('allows measurement-incomplete candidates only through explicit selection', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(
+      ['workspace-myproject', 'workspace-work'],
+      () => undefined
+    );
+    const incomplete = result.items.find((item) => item.status === 'measurement_incomplete');
+    expect(incomplete).toBeDefined();
+    await expect(
+      mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [incomplete!.id])
+    ).resolves.toMatchObject({ item_count: 1 });
+  });
+
+  it('keeps safety-blocked candidates out of cleanup plans', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(['workspace-work'], () => undefined);
+    const blocked = result.items.find((item) => item.status === 'safety_blocked');
+    expect(blocked).toBeDefined();
+    await expect(
+      mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [blocked!.id])
+    ).rejects.toThrow('safety checks');
+  });
+
+  it('rejects forged artifact IDs even when a valid ID is also selected', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(['workspace-myproject'], () => undefined);
+    const valid = result.items.find((item) => item.status === 'complete');
+    expect(valid).toBeDefined();
+    await expect(
+      mockStorageApi.prepareDeveloperArtifactCleanup(result.scan_id, [valid!.id, 'forged-artifact'])
+    ).rejects.toThrow('inventory changed');
+  });
+
+  it('scans the whole user scope without manually adding project folders', async () => {
+    const workspace = await mockStorageApi.registerDeveloperHomeWorkspace();
+    const result = await mockStorageApi.startDeveloperArtifactScan([workspace.id], () => undefined);
+
+    expect(workspace.name).toBe('This Mac');
+    expect(result.items.length).toBeGreaterThan(3);
+    expect(result.items.every((item) => item.workspace_id === workspace.id)).toBe(true);
+    expect(result.items.some((item) => item.ecosystem === 'kotlin')).toBe(true);
+  });
+
+  it('renders the review-only copy and supported ecosystem guidance', () => {
+    const rendered = render(DeveloperArtifactsView, {
+      props: { onBack: () => undefined },
+    });
+
+    expect(rendered.body).toContain('Developer Artifacts');
+    expect(rendered.body).toContain('nothing selected by default');
+    expect(rendered.body).toContain('Scan this Mac');
+    expect(rendered.body).toContain('System, credential, media, and app-bundle paths are bypassed');
+    expect(rendered.body).toContain('Project source, manifests, lockfiles, and project roots are never cleanup targets');
+    expect(rendered.body).toContain('Java/Kotlin');
+    expect(rendered.body).toContain('Terraform');
+    expect(rendered.body).not.toContain('Incomplete · blocked');
+  });
+});

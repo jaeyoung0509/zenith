@@ -13,7 +13,6 @@ use uuid::Uuid;
 use std::os::unix::fs::MetadataExt;
 
 const MAX_RESULTS: usize = 10_000;
-const MIN_THRESHOLD: u64 = 100 * 1024 * 1024;
 const MAX_THRESHOLD: u64 = 64 * 1024 * 1024 * 1024;
 const LARGE_FILE_ROOTS: [&str; 4] = ["Downloads", "Desktop", "Documents", "Movies"];
 
@@ -50,7 +49,26 @@ impl FileIdentity {
         }
         #[cfg(unix)]
         let (device, inode) = (meta.dev(), meta.ino());
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let (device, inode) = if let Ok(file) = std::fs::File::open(path) {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{
+                GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+            };
+            unsafe {
+                let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+                if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0 {
+                    let dev = info.dwVolumeSerialNumber as u64;
+                    let ino = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+                    (dev, ino)
+                } else {
+                    (0, 0)
+                }
+            }
+        } else {
+            (0, 0)
+        };
+        #[cfg(not(any(unix, windows)))]
         let (device, inode) = (0, 0);
         Some(Self {
             device,
@@ -74,7 +92,9 @@ pub fn is_allowed_large_file_path(path: &Path) -> bool {
 }
 
 pub fn allowed_large_file_root(path: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
     LARGE_FILE_ROOTS
         .iter()
         .map(|root| home.join(root))
@@ -92,7 +112,9 @@ impl LargeFileScanner {
     where
         F: FnMut(LargeFileScanEvent),
     {
-        let threshold = request.min_size_bytes.clamp(MIN_THRESHOLD, MAX_THRESHOLD);
+        let threshold = request
+            .min_size_bytes
+            .clamp(request.filter.minimum_threshold(), MAX_THRESHOLD);
         let roots = resolve_roots(&request.roots)?;
         let scan_id = Uuid::new_v4().to_string();
         on_event(LargeFileScanEvent::Started {
@@ -124,14 +146,12 @@ impl LargeFileScanner {
                 root: display_root.clone(),
             });
 
-            let Some(root_meta) = safe_scan_root_metadata(&root) else {
+            let Some(_root_meta) = safe_scan_root_metadata(&root) else {
                 skipped_entries += 1;
                 continue;
             };
             #[cfg(unix)]
-            let root_device = root_meta.dev();
-            #[cfg(not(unix))]
-            let root_device = 0u64;
+            let root_device = _root_meta.dev();
 
             let mut stack = vec![root.clone()];
             while let Some(dir) = stack.pop() {
@@ -203,19 +223,24 @@ impl LargeFileScanner {
                         stack.push(path);
                         continue;
                     }
-                    if !meta.is_file() || meta.len() < threshold {
+                    if !meta.is_file() {
                         continue;
                     }
 
+                    let extension = path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|value| value.to_ascii_lowercase());
+                    if !request.filter.matches_extension(extension.as_deref())
+                        || meta.len() < threshold
+                    {
+                        continue;
+                    }
                     let id = Uuid::new_v4().to_string();
                     #[cfg(unix)]
                     let allocated_size = meta.blocks().saturating_mul(512);
                     #[cfg(not(unix))]
                     let allocated_size = meta.len();
-                    let extension = path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|value| value.to_ascii_lowercase());
                     let item = LargeFileItem {
                         id: id.clone(),
                         name: path
@@ -339,8 +364,9 @@ fn inventory_from_retained(
 }
 
 fn resolve_roots(tokens: &[String]) -> Result<Vec<PathBuf>, String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let home = crate::platform::paths::NativePlatformPaths::new()
+        .home()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     resolve_roots_for_home(tokens, &home)
 }
@@ -398,6 +424,7 @@ fn classify(extension: Option<&str>) -> LargeFileKind {
         "mov" | "mp4" | "mkv" | "avi" | "webm" | "m4v" => LargeFileKind::Video,
         "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => LargeFileKind::Archive,
         "dmg" | "iso" => LargeFileKind::DiskImage,
+        "pkg" | "mpkg" | "xip" => LargeFileKind::Installer,
         "qcow2" | "vmdk" | "vdi" | "pvm" => LargeFileKind::VmImage,
         "gguf" | "safetensors" | "ckpt" | "onnx" => LargeFileKind::AiModel,
         "db" | "sqlite" | "sqlite3" | "dump" | "sql" => LargeFileKind::Database,
@@ -423,12 +450,35 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::LargeFileFilter;
 
     #[test]
     fn classifies_developer_large_files() {
         assert_eq!(classify(Some("gguf")), LargeFileKind::AiModel);
         assert_eq!(classify(Some("qcow2")), LargeFileKind::VmImage);
         assert_eq!(classify(Some("mkv")), LargeFileKind::Video);
+    }
+
+    #[test]
+    fn installer_filter_has_a_lower_floor_and_strict_extensions() {
+        assert_eq!(
+            LargeFileFilter::Installers.minimum_threshold(),
+            10 * 1024 * 1024
+        );
+        assert!(LargeFileFilter::Installers.matches_extension(Some("pkg")));
+        assert!(LargeFileFilter::Installers.matches_extension(Some("dmg")));
+        assert!(!LargeFileFilter::Installers.matches_extension(Some("zip")));
+        assert_eq!(classify(Some("pkg")), LargeFileKind::Installer);
+        assert_eq!(classify(Some("dmg")), LargeFileKind::DiskImage);
+    }
+
+    #[test]
+    fn missing_filter_keeps_existing_large_file_requests_on_all_files() {
+        let request: LargeFileScanRequest =
+            serde_json::from_str(r#"{"roots":["downloads"],"min_size_bytes":104857600}"#)
+                .expect("legacy request should deserialize");
+        assert_eq!(request.filter, LargeFileFilter::All);
+        assert!(request.filter.matches_extension(Some("zip")));
     }
 
     #[test]

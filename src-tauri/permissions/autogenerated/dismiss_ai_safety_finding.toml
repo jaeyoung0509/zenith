@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dismiss-ai-safety-finding"
+description = "Enables the dismiss_ai_safety_finding command without any pre-configured scope."
+commands.allow = ["dismiss_ai_safety_finding"]
+
+[[permission]]
+identifier = "deny-dismiss-ai-safety-finding"
+description = "Denies the dismiss_ai_safety_finding command without any pre-configured scope."
+commands.deny = ["dismiss_ai_safety_finding"]

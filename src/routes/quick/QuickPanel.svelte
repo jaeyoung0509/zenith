@@ -1,22 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { AiProviderUsage } from '../../lib/models/types';
+  import type { AiProviderUsage, ControlCenterQuickSummary, AgentQuickSummary } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
   import { isQuickPanelDismissShortcut, projectAiProviders } from '../../lib/utils/quickPanel';
   import {
     isTauri,
     tauriHideCurrentWindow,
+    tauriGetAiControlQuickSummary,
+    tauriGetAgentQuickSummary,
     tauriOpenDashboard,
     tauriStartWindowDrag,
   } from '../../lib/utils/tauri';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
+  import QuickUsageGauges from '../../lib/components/QuickUsageGauges.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import {
@@ -39,14 +43,27 @@
 
   let panelActive = false;
   let showResultModal = $state(false);
+  let controlSummary = $state<ControlCenterQuickSummary | null>(null);
+  let agentSummary = $state<AgentQuickSummary | null>(null);
   let settings = $derived(settingsStore.settings);
   let disk = $derived(memoryStore.disk);
   let memory = $derived(memoryStore.memory);
   let scan = $derived(scanStore.lastScan);
   let awakeState = $derived(awakeStore.state);
   let selectedProviders = $derived(
-    projectAiProviders(settings.quick_panel_ai_providers, usageStore.snapshot?.providers)
+    projectAiProviders(
+      settings.quick_panel_ai_providers,
+      usageStore.snapshot?.providers,
+      usageStore.isLoading
+    )
   );
+  let cleanupCapability = $derived(platformCapabilitiesStore.feature('cleanup'));
+  let awakeCapability = $derived(platformCapabilitiesStore.feature('keep_awake'));
+  let aiCapability = $derived(platformCapabilitiesStore.feature('ai_integrations'));
+  let cleanupAvailable = $derived(cleanupCapability?.status === 'available');
+  let memoryAvailable = $derived(platformCapabilitiesStore.isInspectable('memory_metrics'));
+  let awakeAvailable = $derived(awakeCapability?.status === 'available');
+  let aiAvailable = $derived(aiCapability?.status === 'available');
 
   let quickCleanableBytes = $derived.by(() =>
     scanStore.quickCleanableBytes(settings)
@@ -65,6 +82,12 @@
     return 'clean';
   });
 
+  function formatDuration(seconds: number) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours > 0 ? `${hours}h ${minutes}m` : `${Math.max(minutes, 1)}m`;
+  }
+
   function hasSection(section: typeof settings.quick_panel_sections[number]) {
     return settings.quick_panel_sections.includes(section);
   }
@@ -73,14 +96,30 @@
     if (panelActive) return;
     panelActive = true;
     await settingsStore.load(true);
+    await platformCapabilitiesStore.load(true);
     if (!panelActive) return;
-    void awakeStore.refresh();
-    if (hasSection('storage')) void memoryStore.refreshDisk();
-    if (hasSection('memory')) memoryStore.startPolling(3000);
-    if (hasSection('ai_usage') && settings.quick_panel_ai_providers.length > 0) {
+    if (awakeAvailable) void awakeStore.refresh();
+    if (hasSection('storage') && cleanupAvailable) void memoryStore.refreshDisk();
+    if (hasSection('memory') && memoryAvailable) memoryStore.startPolling(3000);
+    if (
+      (hasSection('ai_usage') || hasSection('agent_activity')) &&
+      aiAvailable &&
+      settings.quick_panel_ai_providers.length > 0
+    ) {
       void usageStore.refreshIfStale();
     }
-    if (hasSection('cleanup') || hasSection('categories')) {
+    if (hasSection('ai_control') && aiAvailable) {
+      // Cached backend projection only: no provider calls, scans, or hidden polling.
+      void tauriGetAiControlQuickSummary().then((summary) => {
+        if (panelActive) controlSummary = summary;
+      });
+    }
+    if (hasSection('agent_activity') && aiAvailable) {
+      void tauriGetAgentQuickSummary().then((summary) => {
+        if (panelActive) agentSummary = summary;
+      });
+    }
+    if ((hasSection('cleanup') || hasSection('categories')) && cleanupAvailable) {
       await scanStore.init();
       if (panelActive && scanStore.isStale()) void scanStore.runScan();
     }
@@ -149,7 +188,11 @@
   }
 
   function providerValue(provider: AiProviderUsage) {
-    if (provider.windows[0]) {
+    if (usageStore.isProviderLoading(provider.id)) {
+      return '';
+    }
+
+    if (provider.windows.length > 0) {
       const window = provider.windows[0];
       const percent = Math.round(window.used_percent ?? 0);
       if (window.resets_at) {
@@ -160,14 +203,23 @@
       }
       return `${percent}% used`;
     }
+
     if (provider.summary.local_sessions != null) return `${provider.summary.local_sessions} sessions`;
     if (provider.summary.usage_usd != null) return `$${provider.summary.usage_usd.toFixed(2)}`;
     return provider.connected ? 'Connected' : provider.installed ? 'Available' : 'Not installed';
   }
 
   function providerTitle(provider: AiProviderUsage) {
-    if (provider.windows[0]?.resets_at) {
-      return `${provider.name}: ${Math.round(provider.windows[0].used_percent ?? 0)}% used, resets on ${formatResetDate(provider.windows[0].resets_at)} (in ${formatTimeUntil(provider.windows[0].resets_at)})`;
+    if (usageStore.isProviderLoading(provider.id)) {
+      return `${provider.name}: Loading live quota...`;
+    }
+    if (provider.windows.length > 0) {
+      return provider.windows
+        .map((w) => {
+          const time = w.resets_at ? ` (resets in ${formatTimeUntil(w.resets_at)})` : '';
+          return `${w.label}: ${Math.round(w.used_percent ?? 0)}% used${time}`;
+        })
+        .join(' · ');
     }
     return provider.status_message || provider.auth_label || provider.name;
   }
@@ -249,7 +301,7 @@
           <Button
             variant="primary"
             size="sm"
-            disabled={scanStore.isScanning || scanStore.isCleaning || !scan || quickCleanableBytes === 0}
+            disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning || !scan || quickCleanableBytes === 0}
             onclick={handleCleanSafe}
             class="gap-1.5 min-w-[88px] text-xs font-semibold py-2 px-3"
           >
@@ -262,6 +314,11 @@
             {/if}
           </Button>
         </div>
+        {#if !cleanupAvailable}
+          <p class="mt-2 text-caption text-warning">
+            {cleanupCapability?.reason ?? 'Cleanup is unavailable on this platform.'}
+          </p>
+        {/if}
       {:else if section === 'storage' && disk}
         <!-- Storage Gauge -->
         <div class="space-y-1.5 p-2.5 rounded-xl border border-border/50 bg-card/40">
@@ -271,7 +328,7 @@
           </div>
           <ProgressBar value={disk.percent_used ?? 0} height="h-2" />
         </div>
-      {:else if section === 'memory' && memory}
+      {:else if section === 'memory' && memory && memoryAvailable}
         <!-- Memory Gauge -->
         <div class="space-y-1.5 p-2.5 rounded-xl border border-border/50 bg-card/40">
           <div class="flex justify-between text-xs font-medium">
@@ -299,8 +356,10 @@
             <button
               type="button"
               class="text-muted-foreground hover:text-foreground p-0.5"
-              disabled={usageStore.isLoading}
-              onclick={() => usageStore.refresh(true)}
+              disabled={!aiAvailable || usageStore.isLoading}
+              onclick={() => {
+                if (aiAvailable) void usageStore.refresh(true);
+              }}
               aria-label="Refresh AI usage"
             >
               <RotateCw size={12} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
@@ -313,14 +372,20 @@
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}
               <div
-                class="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                class="flex items-center justify-between gap-2 rounded-lg px-1.5 py-1.5 text-xs hover:bg-secondary/40 transition-colors"
                 title={providerTitle(provider)}
               >
                 <div class="flex min-w-0 items-center gap-2">
                   <Bot size={13} class={provider.connected ? 'text-success' : 'text-muted-foreground'} />
                   <span class="truncate font-medium">{provider.name}</span>
                 </div>
-                <span class="ml-2 shrink-0 font-mono text-caption text-muted-foreground">{providerValue(provider)}</span>
+                {#if usageStore.isProviderLoading(provider.id)}
+                  <span class="shrink-0 inline-flex items-center text-muted-foreground/70" title="Loading live quota...">
+                    <RotateCw size={11} class="animate-spin" />
+                  </span>
+                {:else}
+                  <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
+                {/if}
               </div>
             {/each}
           {:else}
@@ -349,6 +414,87 @@
             <p class="text-xs text-muted-foreground">Scanning caches...</p>
           </div>
         {/if}
+      {:else if section === 'ai_control'}
+        <div class="space-y-2 rounded-xl border border-border/60 bg-card/40 p-2.5">
+          <div class="flex items-center justify-between px-1">
+            <div class="flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-muted-foreground"><Sparkles size={12} class="text-violet-400" />AI Control</div>
+            <span class="text-micro capitalize text-muted-foreground">{controlSummary?.quality ?? 'not cached'}</span>
+          </div>
+          {#if controlSummary}
+            <div class="grid grid-cols-3 gap-1.5 text-center">
+              <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.active_sessions}</p><p class="text-micro text-muted-foreground">Sessions</p></div>
+              <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.budget_alerts}</p><p class="text-micro text-muted-foreground">Alerts</p></div>
+              <div class="rounded-lg bg-secondary/50 p-2"><p class="font-mono text-sm font-semibold">{controlSummary.safety_findings}</p><p class="text-micro text-muted-foreground">Safety</p></div>
+            </div>
+          {:else}<p class="px-1 py-2 text-caption text-muted-foreground">Open AI Control in the dashboard to create a cached snapshot.</p>{/if}
+        </div>
+      {:else if section === 'agent_activity'}
+        <div class="space-y-2 rounded-xl border border-border/60 bg-card/40 p-2.5">
+          <div class="flex items-center justify-between px-1">
+            <div class="flex items-center gap-1.5 text-meta font-semibold uppercase tracking-wider text-muted-foreground">
+              <Bot size={12} class="text-primary" /> AI & Agents
+            </div>
+            <button
+              type="button"
+              class="text-caption text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              onclick={handleOpenDashboard}
+            >
+              Open AI Activity <ArrowRight size={10} />
+            </button>
+          </div>
+          {#if selectedProviders.length > 0}
+            <div class="space-y-0.5 rounded-lg border border-border/40 bg-background/30 p-1">
+              {#each selectedProviders as provider (provider.id)}
+                <div
+                  class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                  title={providerTitle(provider)}
+                >
+                  <div class="flex min-w-0 items-center gap-1.5">
+                    <span class="h-1.5 w-1.5 shrink-0 rounded-full {usageStore.isProviderLoading(provider.id) ? 'bg-muted-foreground/40 animate-pulse' : provider.connected ? 'bg-success' : 'bg-muted-foreground/50'}"></span>
+                    <span class="truncate text-muted-foreground">{provider.name}</span>
+                  </div>
+                  {#if usageStore.isProviderLoading(provider.id)}
+                    <span class="shrink-0 inline-flex items-center text-muted-foreground/70" title="Loading live quota...">
+                      <RotateCw size={11} class="animate-spin" />
+                    </span>
+                  {:else}
+                    <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if agentSummary && agentSummary.active_count > 0}
+            <div class="grid grid-cols-2 gap-1.5 text-center">
+              <div class="rounded-lg bg-secondary/50 p-2">
+                <p class="font-mono text-sm font-semibold">{agentSummary.active_count}</p>
+                <p class="text-micro text-muted-foreground">Active</p>
+              </div>
+              <div class="rounded-lg bg-secondary/50 p-2">
+                <p class="font-mono text-sm font-semibold {agentSummary.attention_count > 0 ? 'text-destructive' : ''}">{agentSummary.attention_count}</p>
+                <p class="text-micro text-muted-foreground">Attention</p>
+              </div>
+            </div>
+            {#if agentSummary.sessions.length > 0}
+              <div class="divide-y divide-border/40 rounded-lg border border-border/50 bg-background/30 overflow-hidden">
+                {#each agentSummary.sessions as session}
+                  <div class="flex items-center justify-between px-2 py-1.5 text-xs">
+                    <div class="flex items-center gap-1.5 min-w-0">
+                      <span class="font-medium truncate">{session.tool_name}</span>
+                      <span class="text-caption text-muted-foreground truncate">in {session.project_name}</span>
+                    </div>
+                    <span class="font-mono text-caption text-muted-foreground shrink-0 ml-2">
+                      {formatDuration(session.elapsed_seconds)}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {:else if selectedProviders.length === 0}
+            <p class="px-1 py-2 text-caption text-muted-foreground">No active agent sessions detected.</p>
+          {/if}
+        </div>
       {/if}
     {/each}
   </div>
@@ -359,10 +505,12 @@
       <span>Last scan {formatTimeAgo(scan?.finished_at)}</span>
       <button
         type="button"
-        disabled={scanStore.isScanning || scanStore.isCleaning}
-        onclick={() => scanStore.runScan()}
+        disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning}
+        onclick={() => {
+          if (cleanupAvailable) void scanStore.runScan();
+        }}
         class="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-        title="Rescan storage"
+        title={cleanupAvailable ? 'Rescan storage' : (cleanupCapability?.reason ?? 'Storage cleanup is unavailable on this platform.')}
       >
         <RotateCw size={11} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
       </button>

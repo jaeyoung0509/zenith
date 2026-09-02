@@ -2,7 +2,9 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 use zenith_lib::docker::DockerAdapter;
-use zenith_lib::models::{AwakeBehavior, Category, CleanStrategy, RiskTier, Signature};
+use zenith_lib::models::{
+    AwakeBehavior, Category, CleanStrategy, DiskMetrics, RiskTier, Signature,
+};
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
@@ -192,6 +194,7 @@ fn test_size_calculator_recursive_and_exclusions() {
     assert_eq!(filtered_size.logical, 10000);
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn test_power_assertion_raii_lifecycle() {
     {
@@ -223,6 +226,22 @@ fn test_power_assertion_raii_lifecycle() {
     manager.disable_manual();
     let state_after = manager.get_state();
     assert!(!state_after.is_active);
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn test_power_assertion_fails_closed_without_native_adapter() {
+    let assertion = PowerAssertion::acquire(
+        AwakeBehavior::PreventSystemSleep,
+        "Zenith Rust Test Assertion",
+    );
+    assert!(assertion.is_err());
+
+    let manager = KeepAwakeManager::new();
+    assert!(manager
+        .set_manual(Some(3600), AwakeBehavior::PreventSystemSleep)
+        .is_err());
+    assert!(!manager.get_state().is_active);
 }
 
 #[test]
@@ -266,4 +285,136 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
     );
     assert!(!state.rule_evaluations[0].is_power_eligible);
     assert!(state.rule_evaluations[1].is_power_eligible);
+}
+
+#[test]
+fn test_windows_blacklist_and_path_defense() {
+    use std::path::Path;
+    use zenith_lib::safety::Blacklist;
+
+    // Drive root
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\")));
+    assert!(Blacklist::is_blacklisted(Path::new("D:/")));
+
+    // Windows System directories
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "C:\\Windows\\System32"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\Program Files")));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "C:\\Program Files (x86)"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\Users")));
+
+    // Alternate Data Streams and trailing aliases
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "C:\\safe\\file.txt:stream"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder.")));
+    assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder ")));
+}
+
+#[test]
+fn test_windows_reparse_point_symlink_defense() {
+    use std::path::Path;
+    use zenith_lib::safety::SymlinkGuard;
+
+    let non_existent = Path::new("C:\\path\\does\\not\\exist\\123");
+    assert!(!SymlinkGuard::is_symlink(non_existent));
+}
+
+#[test]
+fn test_windows_platform_capabilities_batch2() {
+    use zenith_lib::models::{PlatformCapabilities, PlatformFeatureStatus, PlatformKind};
+
+    let caps = PlatformCapabilities::windows();
+    assert_eq!(caps.platform, PlatformKind::Windows);
+    assert_eq!(caps.system_actions.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.cleanup.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.large_files.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.developer_artifacts.status,
+        PlatformFeatureStatus::Available
+    );
+    assert_eq!(caps.installed_apps.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.app_uninstall.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.memory_metrics.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.process_termination.status,
+        PlatformFeatureStatus::Available
+    );
+    assert_eq!(
+        caps.development_ports.status,
+        PlatformFeatureStatus::Available
+    );
+    assert_eq!(caps.keep_awake.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.local_models.status, PlatformFeatureStatus::Available);
+    assert_eq!(caps.docker.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.ai_integrations.status,
+        PlatformFeatureStatus::Available
+    );
+}
+
+#[test]
+fn test_windows_dev_ports_classification_defense() {
+    use std::path::Path;
+    use zenith_lib::dev_ports::{classify_listener, ProcessClassificationInput};
+
+    // Protected PowerShell / Windows Terminal
+    let input_ps = ProcessClassificationInput {
+        pid: 4500,
+        uid: Some(1000),
+        current_user_uid: 1000,
+        zenith_pid: 9999,
+        port: 8080,
+        raw_command: "powershell.exe",
+        process_name: "powershell.exe",
+        exe_path: Some(Path::new(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        )),
+        cwd: Some(Path::new("C:\\Users\\test")),
+        argv: &["powershell.exe".to_string()],
+        started_at: Some(100),
+    };
+    let res_ps = classify_listener(&input_ps);
+    assert!(!res_ps.can_release);
+    assert!(res_ps.blocked_reason.is_some());
+
+    // Allowlisted Vite dev server on Windows
+    let input_vite = ProcessClassificationInput {
+        pid: 5600,
+        uid: Some(1000),
+        current_user_uid: 1000,
+        zenith_pid: 9999,
+        port: 5173,
+        raw_command: "node.exe",
+        process_name: "node.exe",
+        exe_path: Some(Path::new("C:\\Program Files\\nodejs\\node.exe")),
+        cwd: Some(Path::new("C:\\Users\\test\\projects\\my-app")),
+        argv: &[
+            "node.exe".to_string(),
+            "C:\\Users\\test\\projects\\my-app\\node_modules\\vite\\bin\\vite.js".to_string(),
+        ],
+        started_at: Some(200),
+    };
+    let res_vite = classify_listener(&input_vite);
+    assert!(res_vite.can_release);
+    assert_eq!(res_vite.server_name, "Vite");
+}
+
+#[test]
+fn test_real_ipc_model_rejects_unsafe_u64_values() {
+    let metrics = DiskMetrics {
+        mount_point: "/".into(),
+        total_bytes: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        used_bytes: 0,
+        free_bytes: 0,
+        available_bytes: 0,
+        percent_used: 0.0,
+    };
+
+    let error = serde_json::to_string(&metrics).unwrap_err().to_string();
+    assert!(error.contains("Number.MAX_SAFE_INTEGER"));
 }

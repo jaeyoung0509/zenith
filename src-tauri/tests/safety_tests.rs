@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -281,6 +283,115 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
     // Inner subfiles must be deleted
     assert!(!subfile.exists());
     assert!(!subdir.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn cleaner_removes_user_owned_read_only_cache_trees_without_privilege_escalation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().expect("create temp dir");
+    let cache_root = dir.path().join("react-native-devtools");
+    let nested = cache_root.join("Contents").join("Resources");
+    fs::create_dir_all(&nested).expect("create nested app bundle directories");
+    fs::write(nested.join("resources.pak"), b"cache payload").expect("write cache payload");
+
+    // macOS app bundles downloaded into caches can be owner-readable but not
+    // owner-writable. The target remains owned by this test process.
+    fs::set_permissions(&cache_root, fs::Permissions::from_mode(0o555))
+        .expect("make cache root read-only");
+    fs::set_permissions(
+        cache_root.join("Contents"),
+        fs::Permissions::from_mode(0o555),
+    )
+    .expect("make app contents read-only");
+    fs::set_permissions(&nested, fs::Permissions::from_mode(0o555))
+        .expect("make app resources read-only");
+
+    let report = SafeTreeDeleter::delete_path(&cache_root, &[]);
+
+    assert!(
+        report.is_success(),
+        "unexpected cleanup errors: {:?}",
+        report.errors
+    );
+    assert_eq!(report.deleted_files, 1);
+    assert!(!cache_root.exists());
+
+    // The fixture is owned by the current user, so no administrator command or
+    // broad chmod is needed to remove the read-only tree.
+}
+
+#[cfg(unix)]
+#[test]
+fn cleaner_restores_read_only_root_after_delete_contents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().expect("create temp dir");
+    let cache_root = dir.path().join("read-only-root");
+    fs::create_dir_all(cache_root.join("nested")).expect("create cache tree");
+    fs::write(cache_root.join("nested").join("payload.bin"), b"payload").expect("write payload");
+    fs::set_permissions(&cache_root, fs::Permissions::from_mode(0o555))
+        .expect("make cache root read-only");
+    fs::set_permissions(cache_root.join("nested"), fs::Permissions::from_mode(0o555))
+        .expect("make nested directory read-only");
+
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &[]);
+
+    assert!(
+        report.is_success(),
+        "unexpected cleanup errors: {:?}",
+        report.errors
+    );
+    assert!(!cache_root.join("nested").exists());
+    assert!(cache_root.is_dir());
+    assert_eq!(
+        fs::metadata(&cache_root)
+            .expect("read root metadata")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o555
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cleaner_unlinks_symlink_without_changing_target_permissions() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let dir = tempdir().expect("create cleanup root");
+    let cache_root = dir.path().join("cache");
+    fs::create_dir(&cache_root).expect("create cache directory");
+
+    let outside = tempdir().expect("create outside directory");
+    let outside_file = outside.path().join("preserved.bin");
+    fs::write(&outside_file, b"preserved").expect("write outside file");
+    fs::set_permissions(outside.path(), fs::Permissions::from_mode(0o555))
+        .expect("make outside directory read-only");
+
+    let link = cache_root.join("outside-link");
+    symlink(outside.path(), &link).expect("create symlink");
+
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &[]);
+
+    assert!(
+        report.is_success(),
+        "unexpected cleanup errors: {:?}",
+        report.errors
+    );
+    assert!(!link.exists());
+    assert!(outside_file.exists());
+    assert_eq!(
+        fs::metadata(outside.path())
+            .expect("read target metadata")
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o555
+    );
+    fs::set_permissions(outside.path(), fs::Permissions::from_mode(0o755))
+        .expect("restore fixture permissions");
 }
 
 #[test]

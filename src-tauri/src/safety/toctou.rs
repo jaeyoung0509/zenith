@@ -24,7 +24,46 @@ impl ToctouGuard {
             })
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let (mtime_secs, mtime_nanos) = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| (d.as_secs(), d.subsec_nanos()))
+                .unwrap_or((0, 0));
+
+            let (device, inode) = if let Ok(file) = std::fs::File::open(path) {
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Storage::FileSystem::{
+                    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+                };
+                unsafe {
+                    let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+                    if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0 {
+                        let dev = info.dwVolumeSerialNumber as u64;
+                        let ino =
+                            ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+                        (dev, ino)
+                    } else {
+                        (0, 0)
+                    }
+                }
+            } else {
+                (0, 0)
+            };
+
+            Some(FileIdentity {
+                device,
+                inode,
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+                mtime_secs,
+                mtime_nanos,
+            })
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let (mtime_secs, mtime_nanos) = meta
                 .modified()
@@ -63,12 +102,14 @@ impl ToctouGuard {
             }
         };
 
-        // Inode and device must match on Unix
-        #[cfg(unix)]
+        // Inode/FileId and device/volume must match on Unix and Windows
+        #[cfg(any(unix, windows))]
         {
-            if current.device != expected.device || current.inode != expected.inode {
+            if (expected.device != 0 || expected.inode != 0)
+                && (current.device != expected.device || current.inode != expected.inode)
+            {
                 return Err(ZenithError::ChangedSinceScan(format!(
-                    "Inode or device mismatch for {}: expected (dev={}, ino={}), found (dev={}, ino={})",
+                    "Identity mismatch for {}: expected (dev={}, ino={}), found (dev={}, ino={})",
                     path.display(),
                     expected.device,
                     expected.inode,

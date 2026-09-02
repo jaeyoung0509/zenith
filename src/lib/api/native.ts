@@ -1,7 +1,16 @@
 import { Channel } from '@tauri-apps/api/core';
 import { commands } from '../bindings/tauri';
 import type {
+  AiProviderUsage,
   AiUsageSnapshot,
+  AiControlCenterSnapshot,
+  AiControlPreferences,
+  ControlCenterQuickSummary,
+  AgentActivitySnapshot,
+  AgentIntegrationInfo,
+  AgentIntegrationResult,
+  AgentQuickSummary,
+  IngestedAgentEvent,
   AwakeBehavior,
   AwakeRule,
   AwakeState,
@@ -16,6 +25,9 @@ import type {
   LocalModelItem,
   MemoryMetrics,
   PlanPreview,
+  PlatformCapabilities,
+  RecommendationPreview,
+  SafetySnapshot,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
@@ -37,8 +49,79 @@ async function unwrap<T, E>(promise: Promise<Result<T, E>>): Promise<T> {
 }
 
 export const nativeApi = {
-  async getAiUsage(force = false): Promise<AiUsageSnapshot> {
-    return await unwrap(commands.getAiUsage(force));
+  async getProjectContext(force = false): Promise<AgentActivitySnapshot> {
+    return await unwrap(commands.getProjectContext(force));
+  },
+
+  async requestStopAgentSession(sessionId: string, leaseId: string): Promise<void> {
+    await unwrap(commands.requestStopAgentSession(sessionId, leaseId));
+  },
+
+  async getAgentIntegrations(): Promise<AgentIntegrationInfo[]> {
+    return await unwrap(commands.getAgentIntegrations());
+  },
+
+  async setupAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    return await unwrap(commands.setupAgentIntegration(toolId));
+  },
+
+  async removeAgentIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    return await unwrap(commands.removeAgentIntegration(toolId));
+  },
+
+  async getAgentQuickSummary(): Promise<AgentQuickSummary | null> {
+    return await unwrap(commands.getAgentQuickSummary());
+  },
+
+  async postAgentEvent(event: IngestedAgentEvent): Promise<void> {
+    await unwrap(commands.postAgentEvent(event as any));
+  },
+
+  async openInTerminal(path: string): Promise<void> {
+    await unwrap(commands.openInTerminal(path));
+  },
+
+  async getAiUsage(
+    force = false,
+    onProvider?: (provider: AiProviderUsage) => void
+  ): Promise<AiUsageSnapshot> {
+    const channel = new Channel<AiProviderUsage>();
+    channel.onmessage = (provider) => {
+      onProvider?.(provider);
+    };
+    return await unwrap(commands.getAiUsage(channel, force));
+  },
+
+  async getAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
+    return await unwrap(commands.getAiControlCenter(force));
+  },
+
+  async getAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
+    return await commands.getAiControlQuickSummary();
+  },
+
+  async saveAiControlPreferences(preferences: AiControlPreferences): Promise<void> {
+    await unwrap(commands.saveAiControlPreferences(preferences));
+  },
+
+  async runAiSafetyScan(): Promise<SafetySnapshot> {
+    return await unwrap(commands.runAiSafetyScan());
+  },
+
+  async dismissAiSafetyFinding(findingId: string): Promise<void> {
+    await unwrap(commands.dismissAiSafetyFinding(findingId));
+  },
+
+  async previewAiRecommendation(recommendationId: string): Promise<RecommendationPreview> {
+    return await unwrap(commands.previewAiRecommendation(recommendationId));
+  },
+
+  async consumeAiRecommendationPreview(previewId: string): Promise<RecommendationPreview> {
+    return await unwrap(commands.consumeAiRecommendationPreview(previewId));
+  },
+
+  async getAiControlGitDiff(projectId: string): Promise<string> {
+    return await unwrap(commands.getAiControlGitDiff(projectId));
   },
 
   async connectOpenRouter(): Promise<void> {
@@ -97,7 +180,7 @@ export const nativeApi = {
   },
 
   async getDiskVolumes(): Promise<DiskVolume[]> {
-    return await commands.getDiskVolumes();
+    return await unwrap(commands.getDiskVolumes());
   },
 
   async openDiskUtility(): Promise<void> {
@@ -165,6 +248,10 @@ export const nativeApi = {
     } catch {
       return typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
     }
+  },
+
+  async getPlatformCapabilities(): Promise<PlatformCapabilities> {
+    return await commands.getPlatformCapabilities();
   },
 
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {

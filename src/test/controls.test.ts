@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import Switch from '../lib/components/Switch.svelte';
 import Checkbox from '../lib/components/Checkbox.svelte';
 import CategoryCard from '../lib/components/CategoryCard.svelte';
+import DeletingDots from '../lib/components/DeletingDots.svelte';
+import { scanStore } from '../lib/stores/scan.svelte';
+
+afterEach(() => {
+  scanStore.selectedMap = {};
+});
 
 describe('Switch component SSR / visual contracts', () => {
   it('renders input with required aria-label and default emerald styling', () => {
@@ -72,6 +78,17 @@ describe('Checkbox component SSR / visual contracts', () => {
   });
 });
 
+describe('DeletingDots component SSR / visual contracts', () => {
+  it('uses generated dimensions and staggered animations at button size', () => {
+    const rendered = render(DeletingDots, { props: { size: 'sm' } });
+
+    expect(rendered.body).toContain('w-[5px] h-[5px]');
+    expect(rendered.body).toContain('animate-bounce-dot-1');
+    expect(rendered.body).toContain('animate-bounce-dot-2');
+    expect(rendered.body).toContain('animate-bounce-dot-3');
+  });
+});
+
 describe('metric and action consistency contracts', () => {
   it('reserves a stable no-wrap column for category byte metrics', () => {
     const rendered = render(CategoryCard, {
@@ -91,5 +108,102 @@ describe('metric and action consistency contracts', () => {
     expect(rendered.body).toContain('w-[7rem]');
     expect(rendered.body).toContain('whitespace-nowrap');
     expect(rendered.body).toContain('Rebuild: 198.8 MB');
+  });
+
+  it('does not duplicate the default safe subtotal as a Selected metric', () => {
+    scanStore.selectedMap = { safe: true, rebuild: false };
+    const rendered = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer',
+          items: [
+            {
+              id: 'safe',
+              signature_id: 'developer.safe',
+              name: 'Safe cache',
+              category: 'developer',
+              risk: 'safe',
+              path: '/tmp/safe',
+              size: { logical: 84.9 * 1024 * 1024, allocated: 84.9 * 1024 * 1024 },
+              file_count: 1,
+              description: 'Safe cache',
+              is_selected: true,
+              last_modified: 0,
+              exists: true,
+            },
+            {
+              id: 'rebuild',
+              signature_id: 'developer.rebuild',
+              name: 'Rebuild cache',
+              category: 'developer',
+              risk: 'rebuild',
+              path: '/tmp/rebuild',
+              size: { logical: 207.5 * 1024 * 1024, allocated: 207.5 * 1024 * 1024 },
+              file_count: 1,
+              description: 'Rebuild cache',
+              is_selected: false,
+              last_modified: 0,
+              exists: true,
+            },
+          ],
+          total_bytes: 292.4 * 1024 * 1024,
+          safe_bytes: 84.9 * 1024 * 1024,
+          rebuild_bytes: 207.5 * 1024 * 1024,
+          manual_bytes: 0,
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('Safe: 84.9 MB');
+    expect(rendered.body).not.toContain('Selected: 84.9 MB');
+  });
+
+  it('keeps Selected visible when the selection differs from the safe subtotal', () => {
+    scanStore.selectedMap = { safe: false, rebuild: true };
+    const rendered = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer',
+          items: [
+            {
+              id: 'safe',
+              signature_id: 'developer.safe',
+              name: 'Safe cache',
+              category: 'developer',
+              risk: 'safe',
+              path: '/tmp/safe',
+              size: { logical: 80 * 1024 * 1024, allocated: 80 * 1024 * 1024 },
+              file_count: 1,
+              description: 'Safe cache',
+              is_selected: false,
+              last_modified: 0,
+              exists: true,
+            },
+            {
+              id: 'rebuild',
+              signature_id: 'developer.rebuild',
+              name: 'Rebuild cache',
+              category: 'developer',
+              risk: 'rebuild',
+              path: '/tmp/rebuild',
+              size: { logical: 200 * 1024 * 1024, allocated: 200 * 1024 * 1024 },
+              file_count: 1,
+              description: 'Rebuild cache',
+              is_selected: true,
+              last_modified: 0,
+              exists: true,
+            },
+          ],
+          total_bytes: 280 * 1024 * 1024,
+          safe_bytes: 80 * 1024 * 1024,
+          rebuild_bytes: 200 * 1024 * 1024,
+          manual_bytes: 0,
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('Selected: 200 MB');
   });
 });

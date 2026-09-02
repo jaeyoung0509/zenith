@@ -70,4 +70,9 @@ describe('Dashboard sidebar affordances', () => {
     expect(memorySource).not.toContain('developmentPortsStore');
     expect(memorySource).not.toContain('Development Servers Section');
   });
+
+  it('exposes the consolidated AI Activity dashboard route', () => {
+    const rendered = render(Dashboard);
+    expect(rendered.body).toContain('AI Activity');
+  });
 });

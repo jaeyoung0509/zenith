@@ -65,12 +65,18 @@ impl SafetyPlanner {
                 continue;
             }
 
+            // Read-only adapter observations do not need a registry signature, but they must
+            // always fail before any generic filesystem planning is attempted.
+            if item.risk == RiskTier::Manual {
+                return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
+            }
+
             // 1. Verify signature exists in registry
             let signature = registry
                 .get(&item.signature_id)
                 .ok_or_else(|| ZenithError::SignatureMismatch(item.signature_id.clone()))?;
 
-            if item.risk == RiskTier::Manual || signature.strategy == CleanStrategy::Manual {
+            if signature.strategy == CleanStrategy::Manual {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
@@ -155,5 +161,37 @@ impl SafetyPlanner {
             risk: risk_summary,
             created_at: now,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SafetyPlanner;
+    use crate::models::{Category, FileSize, RiskTier, ScanItem, ZenithError};
+    use crate::signatures::SignatureRegistry;
+
+    #[test]
+    fn rejects_manual_adapter_observations_before_signature_resolution() {
+        let item = ScanItem {
+            id: "container.orbstack.storage".to_string(),
+            signature_id: "adapter.orbstack.storage".to_string(),
+            name: "OrbStack VM Storage".to_string(),
+            category: Category::Container,
+            risk: RiskTier::Manual,
+            path: "/untrusted/data.img.raw".to_string(),
+            size: FileSize::new(1024, Some(512)),
+            file_count: 1,
+            description: String::new(),
+            is_selected: true,
+            last_modified: None,
+            exists: true,
+        };
+
+        let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());
+        assert!(matches!(
+            result,
+            Err(ZenithError::UnsupportedManualOperation(name))
+                if name == "OrbStack VM Storage"
+        ));
     }
 }

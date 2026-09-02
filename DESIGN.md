@@ -99,6 +99,27 @@ pixel utilities for those sizes.
 - Never show account email addresses or secret-bearing identifiers. Connection
   buttons describe the provider and open only user-initiated OAuth flows.
 
+### AI Control Center
+
+- Use four compact sections: Overview, Usage & Budgets, Resource Autopilot, and
+  Safety Posture.
+- Provider rows always show provenance scope and freshness badges (`Fresh`, `Stale`,
+  `Partial`, `Unavailable`); local estimates and manual values must never look like
+  provider-enforced quotas.
+- Local alert thresholds must be labelled as "Zenith local budget alert" and must
+  not imply provider billing or quota enforcement. When aggregating across different
+  provenance kinds (e.g. authoritative + local estimate + manual), copy must
+  explicitly indicate "mixed sources".
+- Recommendations are presented as advisory cards with clear action labels.
+  Preview modals clearly inform the user that one-shot previews expire and that
+  no mutation has occurred.
+- Safety findings are displayed with distinct severity badges (`Critical`, `Warning`,
+  `Info`), concise remediation steps, relative file locations, and dismiss controls.
+- Automation switches state that they are off by default and emphasize that policies
+  never terminate processes, release ports, or delete files automatically.
+- The Quick Panel shows only the cached compact summary and offers no refresh or
+  mutation control for this feature.
+
 ### Quick panel
 
 - Show only user-selected high-frequency sections: storage, safe reclaim amount,
@@ -138,6 +159,9 @@ pixel utilities for those sizes.
 - Use a dedicated sidebar tab rather than mixing listeners into the Memory
   inspector. Rows lead with port/protocol, then sanitized server and project
   context, bind exposure, process age, and the secondary Release action.
+- Recognized disposable testing infrastructure such as agent-browser and Chrome
+  for Testing follows the same row and confirmation treatment as development
+  servers; do not imply that ordinary browser sessions are releasable.
 - Use neutral styling for loopback, an informational treatment for a specific
   network interface, and the semantic warning token for all-interface binds.
   Protected or unrecognized listeners remain visible with the backend-provided
@@ -146,6 +170,30 @@ pixel utilities for those sizes.
   Force Release dialog only after the backend confirms the same listener
   ignored SIGTERM. Dialog focus enters on open and returns to the originating
   row action on cancel or completion.
+
+### Projects
+
+- Keep AI Activity Level 1 focused with three compact sub-tabs directly below
+  the header: `Usage` (default), `Projects`, and `Tool Adapters`. Each tab
+  should show only its own domain and use an obvious active indicator plus a
+  visible keyboard focus ring; the tab state must not rely on color alone.
+- Scope loading and refresh feedback to the selected sub-tab. Usage displays
+  provider cards, Projects displays project/session summaries, and Tool
+  Adapters displays the supported adapter matrix. Preserve successful stale
+  data beside an inline error and load agent integrations only when the
+  adapter tab is first opened.
+- Group rows by canonical repository/worktree identity and use the compact
+  parent/name hint plus branch to distinguish same-name projects without showing
+  an absolute path. Worktrees receive a text badge.
+- Every session shows a non-color evidence label. Process-only observations say
+  `Process observed · detailed status unavailable`; they never claim Finished,
+  Waiting, or Stalled.
+- Keep Unassigned sessions visible in their own section with an explanation that
+  project correlation could not be proven. Never guess from basename, branch,
+  port, or PID.
+- Preserve the last successful snapshot during refresh failures. First load uses
+  stable skeleton cards; empty state explains supported local observation and
+  the privacy boundary. Adapter health stays available in a secondary disclosure.
 
 ### Keep Awake
 

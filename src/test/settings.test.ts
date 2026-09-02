@@ -17,6 +17,7 @@ describe('serializeSettingsSnapshot', () => {
     excluded_signatures: ['sig1', 'sig2'],
     quick_panel_sections: ['cleanup', 'storage', 'memory'],
     quick_panel_ai_providers: ['codex', 'claude'],
+    ai_accounts_quota_providers: ['codex', 'claude'],
     dashboard_tabs: ['storage', 'memory', 'docker'],
     dashboard_tabs_revision: 1,
     sidebar_collapsed: false,
@@ -30,6 +31,28 @@ describe('serializeSettingsSnapshot', () => {
         enabled: true,
       },
     ],
+    ai_control: {
+      budgets: [],
+      manual_usage: [],
+      autopilot: {
+        keep_awake_for_verified_sessions: false,
+        keep_awake_ac_only: true,
+        notify_on_battery: false,
+        notify_on_memory_pressure: false,
+        notify_on_session_completion: false,
+        recommendation_cooldown_seconds: 900,
+      },
+      dismissed_findings: [],
+      audit_retention_days: 30,
+    },
+    agent_notifications: {
+      enabled: false,
+      notify_on_turn_completed: true,
+      notify_on_approval_or_input: true,
+      notify_on_possibly_inactive: true,
+      hide_project_basename: false,
+      inactivity_threshold_minutes: 15,
+    },
   };
 
   it('creates an unproxied plain POJO copy of settings', () => {
@@ -39,6 +62,7 @@ describe('serializeSettingsSnapshot', () => {
     expect(snapshot.awake_rules).not.toBe(sampleSettings.awake_rules);
     expect(snapshot.awake_rules[0]).not.toBe(sampleSettings.awake_rules[0]);
     expect(snapshot.quick_panel_sections).not.toBe(sampleSettings.quick_panel_sections);
+    expect(snapshot.ai_control).not.toBe(sampleSettings.ai_control);
   });
 
   it('deeply clones all properties without mutating the input source', () => {
@@ -160,6 +184,26 @@ describe('SettingsStore persistence and lifecycle', () => {
     await store.load();
     expect(store.settings.intensive_cleanup).toBe(false);
     expect(store.settings.sidebar_collapsed).toBe(false);
+    expect(store.settings.ai_control.autopilot?.keep_awake_for_verified_sessions).toBe(false);
+    expect(store.settings.ai_control.autopilot?.notify_on_battery).toBe(false);
+    expect(store.settings.ai_accounts_quota_providers).toEqual([
+      'codex',
+      'claude',
+      'opencode',
+      'openrouter',
+      'antigravity',
+    ]);
+  });
+
+  it('keeps one Accounts & Quota provider enabled and preserves configured order', async () => {
+    await store.load();
+    await store.save({ ai_accounts_quota_providers: ['cursor'] });
+    await store.toggleAccountsQuotaProvider('cursor');
+    expect(store.settings.ai_accounts_quota_providers).toEqual(['cursor']);
+
+    await store.toggleAccountsQuotaProvider('grok');
+    await store.moveAccountsQuotaProvider('grok', -1);
+    expect(store.settings.ai_accounts_quota_providers).toEqual(['grok', 'cursor']);
   });
 
   it('persists the sidebar collapse preference with the rest of the settings', async () => {

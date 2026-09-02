@@ -12,6 +12,7 @@ const rootDir = path.resolve(__dirname, '..');
 const pkgPath = path.join(rootDir, 'package.json');
 const tauriPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
 const cargoPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
+const cargoLockPath = path.join(rootDir, 'Cargo.lock');
 
 function getVersions() {
   const pkgMatch = fs.readFileSync(pkgPath, 'utf8').match(/"version":\s*"([^"]+)"/);
@@ -23,18 +24,32 @@ function getVersions() {
   const cargoMatch = fs.readFileSync(cargoPath, 'utf8').match(/^version\s*=\s*"([^"]+)"/m);
   const cargo = cargoMatch ? cargoMatch[1] : null;
 
-  return { pkg, tauri, cargo };
+  const cargoLockMatch = fs
+    .readFileSync(cargoLockPath, 'utf8')
+    .match(/name = "zenith-core"\r?\nversion = "([^"]+)"/);
+  const cargoLock = cargoLockMatch ? cargoLockMatch[1] : null;
+
+  return { pkg, tauri, cargo, cargoLock };
 }
 
-function checkVersions() {
-  const { pkg, tauri, cargo } = getVersions();
+function checkVersions(expectedVersion) {
+  const { pkg, tauri, cargo, cargoLock } = getVersions();
   console.log(`📦 package.json:      ${pkg}`);
   console.log(`🦀 Cargo.toml:        ${cargo}`);
+  console.log(`🔒 Cargo.lock:        ${cargoLock}`);
   console.log(`⚙️  tauri.conf.json:   ${tauri}`);
 
-  if (!pkg || !tauri || !cargo || pkg !== cargo || pkg !== tauri) {
+  if (!pkg || !tauri || !cargo || !cargoLock || pkg !== cargo || pkg !== tauri || pkg !== cargoLock) {
     console.error('❌ Version mismatch detected between manifest files!');
     process.exit(1);
+  }
+
+  if (expectedVersion) {
+    const cleanExpected = expectedVersion.trim().replace(/^v/, '');
+    if (pkg !== cleanExpected) {
+      console.error(`❌ Release version ${cleanExpected} does not match manifest version ${pkg}!`);
+      process.exit(1);
+    }
   }
   console.log('✅ All manifest versions are synchronized.');
 }
@@ -60,6 +75,14 @@ function writeVersion(nextVersion) {
   let cargo = fs.readFileSync(cargoPath, 'utf8');
   cargo = cargo.replace(/^version\s*=\s*"[^"]+"/m, `version = "${cleanVersion}"`);
   fs.writeFileSync(cargoPath, cargo);
+
+  // 4. Cargo.lock workspace package entry
+  let cargoLock = fs.readFileSync(cargoLockPath, 'utf8');
+  cargoLock = cargoLock.replace(
+    /(name = "zenith-core"\r?\nversion = ")[^"]+"/,
+    `$1${cleanVersion}"`,
+  );
+  fs.writeFileSync(cargoLockPath, cargoLock);
 
   console.log(`🚀 Successfully updated version to ${cleanVersion} across all manifests.`);
   checkVersions();
@@ -99,7 +122,7 @@ const arg = process.argv[3];
 
 switch (command) {
   case 'check':
-    checkVersions();
+    checkVersions(arg);
     break;
   case 'patch':
   case 'minor':

@@ -108,8 +108,9 @@ mod tests {
     fn settings_round_trip_through_config_directory() {
         let directory = tempfile::tempdir().unwrap();
         let settings = ZenithSettings {
-            quick_panel_sections: vec![QuickPanelSection::AiUsage],
+            quick_panel_sections: vec![QuickPanelSection::AgentActivity],
             quick_panel_ai_providers: vec!["opencode".into()],
+            ai_accounts_quota_providers: vec!["cursor".into(), "grok".into()],
             ..ZenithSettings::default()
         };
 

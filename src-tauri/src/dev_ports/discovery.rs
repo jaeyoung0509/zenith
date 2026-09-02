@@ -137,7 +137,7 @@ fn classify_address(host: &str) -> (String, ListenerExposure) {
 
 /// Deduplicates repeated socket descriptors for the same exact endpoint while
 /// preserving distinct bind addresses owned by the same process.
-fn deduplicate_listeners(records: Vec<RawListenerRecord>) -> Vec<RawListenerRecord> {
+pub fn deduplicate_listeners(records: Vec<RawListenerRecord>) -> Vec<RawListenerRecord> {
     let mut map: HashMap<(u32, u16, String), RawListenerRecord> = HashMap::new();
 
     for record in records {
