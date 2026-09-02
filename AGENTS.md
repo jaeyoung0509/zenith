@@ -100,7 +100,10 @@ safety conventions below when changing Zenith.
 - Release jobs fan out from one verified frontend artifact and fan in to one
   GitHub Release publisher. Only that publisher receives `contents: write`.
   Keep public artifact names stable and compute WinGet hashes from the final
-  installer bytes. Never claim an unsigned build is signed; after SignPath
+  installer bytes. Generate and combine checksum manifests through
+  `scripts/release_checksums.cjs` so every published file uses portable LF
+  endings, then verify the combined manifest against the downloaded artifacts
+  before publication. Never claim an unsigned build is signed; after SignPath
   approval, follow `CODE_SIGNING_POLICY.md` and verify Authenticode before
   checksum generation or publication.
 
