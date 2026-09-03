@@ -359,7 +359,12 @@ mod tests {
 
     #[test]
     fn discovery_requires_one_absolute_utf8_path() {
-        assert!(parse_discovered_path(b"/Users/test/Library/Caches/uv\n").is_ok());
+        #[cfg(target_os = "windows")]
+        let absolute = "C:\\Users\\테스트 사용자\\AppData\\Local\\uv\\cache\r\n";
+        #[cfg(not(target_os = "windows"))]
+        let absolute = "/Users/테스트 사용자/Library/Caches/uv\n";
+
+        assert!(parse_discovered_path(absolute.as_bytes()).is_ok());
         assert!(parse_discovered_path(b"relative/cache\n").is_err());
         assert!(parse_discovered_path(b"/one\n/two\n").is_err());
         assert!(parse_discovered_path(&[0xff]).is_err());
