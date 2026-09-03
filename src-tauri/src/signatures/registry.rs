@@ -108,7 +108,9 @@ impl SignatureRegistry {
         self.signatures
             .values()
             .filter(|signature| {
-                signature.category == category && (intensive_cleanup || !signature.intensive_only)
+                signature.category == category
+                    && signature.supports_current_platform()
+                    && (intensive_cleanup || !signature.intensive_only)
             })
             .collect()
     }
@@ -134,7 +136,7 @@ impl SignatureRegistry {
 #[cfg(test)]
 mod tests {
     use super::SignatureRegistry;
-    use crate::models::Category;
+    use crate::models::{Category, RiskTier};
 
     #[test]
     fn intensive_signatures_are_opt_in() {
@@ -184,6 +186,56 @@ mod tests {
                 .iter()
                 .any(|prefix| prefix == "dotslash"),
             "dotslash cache must stay excluded: it is content-addressed and managed by the dotslash CLI"
+        );
+    }
+
+    #[test]
+    fn platform_specific_gpu_signatures_do_not_cross_platforms() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let ai = registry.by_category_for_mode(Category::Ai, false);
+        #[cfg(target_os = "macos")]
+        {
+            assert!(ai
+                .iter()
+                .any(|signature| signature.id == "ai.llamacpp.opencl.macos"));
+            assert!(ai
+                .iter()
+                .all(|signature| signature.id != "ai.gpu.directx_shader"));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert!(ai
+                .iter()
+                .any(|signature| signature.id == "ai.gpu.directx_shader"));
+            assert!(ai
+                .iter()
+                .all(|signature| signature.id != "ai.llamacpp.opencl.macos"));
+        }
+    }
+
+    #[test]
+    fn shared_package_stores_are_never_generic_safe_deletions() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        for id in [
+            "dev.npm.cache",
+            "dev.pnpm.store",
+            "dev.yarn.cache",
+            "dev.bun.cache",
+            "dev.pip.cache",
+            "dev.uv.cache",
+            "dev.gradle.caches",
+            "dev.m2.repository",
+        ] {
+            let signature = registry.get(id).unwrap();
+            assert_ne!(signature.risk, RiskTier::Safe, "{id}");
+        }
+        assert_eq!(
+            registry.get("dev.uv.cache").unwrap().strategy,
+            crate::models::CleanStrategy::ExternalCommand
+        );
+        assert_eq!(
+            registry.get("dev.pnpm.store").unwrap().strategy,
+            crate::models::CleanStrategy::ExternalCommand
         );
     }
 }

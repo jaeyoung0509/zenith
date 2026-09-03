@@ -1,3 +1,4 @@
+use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::models::{Category, CategoryResult, RiskTier, ScanEvent, ScanItem, ScanResult};
 use crate::orbstack::OrbStackAdapter;
@@ -131,6 +132,17 @@ impl ScanEngine {
             }
 
             // 2. Typed container adapters can report cleanable or observation-only storage.
+            if category == Category::Developer {
+                for item in CacheProviderRegistry::scan_items(registry) {
+                    let bytes = item.size.reclaimable();
+                    category_total_bytes += bytes;
+                    cat_rebuild += bytes;
+                    on_event(ScanEvent::ItemFound { item: item.clone() });
+                    category_items.push(item);
+                }
+            }
+
+            // 3. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Container {
                 let adapter_items = DockerAdapter::scan_items()
                     .into_iter()

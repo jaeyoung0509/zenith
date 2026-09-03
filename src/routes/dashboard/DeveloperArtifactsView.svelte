@@ -19,7 +19,7 @@
     tauriPickDeveloperWorkspace,
     tauriPrepareDeveloperArtifactCleanup,
     tauriRegisterDeveloperHomeWorkspace,
-    tauriRevealInFinder,
+    tauriShowInFileManager,
     tauriStartDeveloperArtifactScan,
   } from '../../lib/utils/tauri';
   import {
@@ -105,6 +105,8 @@
       python_venv: 'Python environment',
       go_module_cache: 'Go module cache',
       maven_target: 'Maven target',
+      sbt_target: 'sbt target',
+      clojure_target: 'Clojure target',
       gradle_build: 'Gradle build',
       gradle_cache: 'Gradle cache',
       composer_vendor: 'Composer vendor',
@@ -116,6 +118,10 @@
       flutter_tooling: 'Flutter tooling',
       elixir_build: 'Elixir build',
       elixir_deps: 'Elixir dependencies',
+      erlang_build: 'Erlang build',
+      haskell_stack_work: 'Stack work',
+      haskell_dist_newstyle: 'Cabal build',
+      zig_cache: 'Zig cache',
       terraform_cache: 'Terraform cache',
     };
     return labels[item.kind];
@@ -128,6 +134,8 @@
       python_venv: item.path.endsWith('/.venv') ? '.venv/' : 'venv/',
       go_module_cache: 'pkg/mod/',
       maven_target: 'target/',
+      sbt_target: 'target/',
+      clojure_target: 'target/',
       gradle_build: 'build/',
       gradle_cache: '.gradle/',
       composer_vendor: 'vendor/',
@@ -139,6 +147,10 @@
       flutter_tooling: '.dart_tool/',
       elixir_build: '_build/',
       elixir_deps: 'deps/',
+      erlang_build: '_build/',
+      haskell_stack_work: '.stack-work/',
+      haskell_dist_newstyle: 'dist-newstyle/',
+      zig_cache: '.zig-cache/',
       terraform_cache: '.terraform/',
     };
     return labels[item.kind];
@@ -271,7 +283,7 @@
     await runScan(selectedWorkspaceIds);
   }
 
-  async function scanThisMac() {
+  async function scanThisComputer() {
     error = null;
     try {
       const workspace = await tauriRegisterDeveloperHomeWorkspace();
@@ -369,7 +381,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <div class="text-xs font-medium">Scan scope</div>
-        <p class="mt-1 text-meta text-muted-foreground">Scan your user-owned Mac files in one pass. System, credential, media, and app-bundle paths are bypassed.</p>
+        <p class="mt-1 text-meta text-muted-foreground">Scan your user-owned files in one pass. System, credential, media, and installed-application paths are bypassed.</p>
       </div>
       <div class="flex items-center gap-2">
         {#if isScanning && activeScanId}
@@ -378,9 +390,9 @@
             Cancel
           </Button>
         {/if}
-        <Button variant="primary" size="md" onclick={scanThisMac} disabled={isScanning} class="gap-1.5">
+        <Button variant="primary" size="md" onclick={scanThisComputer} disabled={isScanning} class="gap-1.5">
           {#if isScanning}<DeletingDots size="sm" />{:else}<HardDrive size={14} />{/if}
-          {isScanning ? 'Scanning this Mac…' : 'Scan this Mac'}
+          {isScanning ? 'Scanning this computer…' : 'Scan this computer'}
         </Button>
         <Button variant="outline" size="md" onclick={addWorkspace} disabled={isScanning} class="gap-1.5">
           <FolderOpen size={14} />
@@ -395,7 +407,7 @@
 
     {#if workspaces.length === 0}
       <div class="rounded-lg border border-dashed border-border/80 p-4 text-xs text-muted-foreground">
-        <span class="font-medium text-foreground">Scan this Mac</span> searches your user-owned files automatically. Add a folder only when you want a narrower scan.
+        <span class="font-medium text-foreground">Scan this computer</span> searches your user-owned files automatically. Add a folder only when you want a narrower scan.
       </div>
     {:else}
       <div class="grid gap-2 sm:grid-cols-2">
@@ -567,7 +579,7 @@
                 {#if item.incomplete_reason}<span class={item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}>{item.incomplete_reason}</span>{/if}
               </div>
             </div>
-            <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => tauriRevealInFinder(item.path)} ariaLabel={`Reveal ${item.path}`} title="Reveal in Finder">
+            <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => tauriShowInFileManager(item.path)} ariaLabel={`Show ${item.path} in file manager`} title="Show in File Manager">
               <FolderOpen size={13} />
             </Button>
           </div>

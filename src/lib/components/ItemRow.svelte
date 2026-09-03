@@ -2,7 +2,7 @@
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
   import { scanStore } from '../stores/scan.svelte';
-  import { tauriRevealInFinder } from '../utils/tauri';
+  import { tauriShowInFileManager } from '../utils/tauri';
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -14,7 +14,15 @@
 
   let { item }: Props = $props();
 
-  let isManual = $derived(item.risk === 'manual');
+  let cacheMetadata = $derived(item.cache_metadata ?? {
+    provider: 'Zenith',
+    management_mode: 'zenith' as const,
+    artifact_kind: 'temporary' as const,
+    consequence: '',
+    size_semantics: 'physical_reclaimable' as const,
+    last_used_confidence: 'unknown' as const,
+  });
+  let isManual = $derived(item.risk === 'manual' || cacheMetadata.management_mode === 'advisory');
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual);
 
   function handleToggle() {
@@ -24,7 +32,7 @@
 
   function handleReveal(e: MouseEvent) {
     e.stopPropagation();
-    tauriRevealInFinder(item.path);
+    tauriShowInFileManager(item.path);
   }
 </script>
 
@@ -65,6 +73,23 @@
         {item.description || item.path}
       </p>
 
+      {#if cacheMetadata.provider || cacheMetadata.consequence}
+        <div class="flex flex-wrap items-center gap-1.5 mt-1 text-caption text-muted-foreground">
+          <span class="rounded border border-border/70 px-1.5 py-0.5">
+            {cacheMetadata.provider || 'Zenith'} · {cacheMetadata.management_mode.replace('_', ' ')}
+          </span>
+          <span class="rounded border border-border/70 px-1.5 py-0.5">
+            {cacheMetadata.artifact_kind.replaceAll('_', ' ')}
+          </span>
+          {#if cacheMetadata.consequence}
+            <span class="line-clamp-1">{cacheMetadata.consequence}</span>
+          {/if}
+          {#if cacheMetadata.last_used_confidence !== 'unknown'}
+            <span>usage time: {cacheMetadata.last_used_confidence}</span>
+          {/if}
+        </div>
+      {/if}
+
       <div class="flex items-center gap-2 mt-1 text-caption text-muted-foreground font-mono">
         <span class="truncate max-w-[280px]">{item.path}</span>
         {#if item.file_count > 0}
@@ -79,7 +104,7 @@
 
   <div class="flex items-center gap-2 shrink-0">
     <span class="min-w-[5rem] whitespace-nowrap text-right text-xs font-mono font-semibold text-foreground">
-      {formatBytes(item.size.allocated ?? item.size.logical)}
+      {cacheMetadata.size_semantics === 'conservative_lower_bound' ? '≥ ' : cacheMetadata.size_semantics === 'informational' ? '~ ' : ''}{formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
 
     <Button
@@ -87,6 +112,8 @@
       size="icon"
       class="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
       onclick={handleReveal}
+      ariaLabel={`Show ${item.name} in file manager`}
+      title={`Show ${item.name} in file manager`}
     >
       <FolderOpen size={13} class="text-muted-foreground" />
     </Button>

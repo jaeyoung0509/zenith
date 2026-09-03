@@ -23,7 +23,7 @@
     tauriCancelLargeFileScan,
     tauriExecuteTrashPlan,
     tauriPrepareLargeFileTrash,
-    tauriRevealInFinder,
+    tauriShowInFileManager,
     tauriStartLargeFileScan,
   } from '../../lib/utils/tauri';
   import {
@@ -538,9 +538,9 @@
               <Button
                 variant="ghost"
                 size="icon"
-                onclick={() => tauriRevealInFinder(`${item.display_parent}/${item.name}`)}
-                ariaLabel={`Reveal ${item.name} in Finder`}
-                title="Reveal in Finder"
+                onclick={() => tauriShowInFileManager(`${item.display_parent}/${item.name}`)}
+                ariaLabel={`Show ${item.name} in file manager`}
+                title="Show in File Manager"
               >
                 <FolderOpen size={14} />
               </Button>

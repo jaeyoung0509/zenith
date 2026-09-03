@@ -100,7 +100,10 @@ safety conventions below when changing Zenith.
 - Release jobs fan out from one verified frontend artifact and fan in to one
   GitHub Release publisher. Only that publisher receives `contents: write`.
   Keep public artifact names stable and compute WinGet hashes from the final
-  installer bytes. Never claim an unsigned build is signed; after SignPath
+  installer bytes. Generate and combine checksum manifests through
+  `scripts/release_checksums.cjs` so every published file uses portable LF
+  endings, then verify the combined manifest against the downloaded artifacts
+  before publication. Never claim an unsigned build is signed; after SignPath
   approval, follow `CODE_SIGNING_POLICY.md` and verify Authenticode before
   checksum generation or publication.
 
@@ -126,6 +129,9 @@ safety conventions below when changing Zenith.
   Order cleanup candidates by reclaimable bytes unless the user chooses another
   explicit sort. `Rebuild` means deletable but re-downloadable/rebuildable; it
   remains opt-in to avoid unexpected network or build costs.
+- Tool-owned shared caches must use a backend-owned fixed-argument provider or
+  remain advisory. `external_command` is never a filesystem-delete fallback;
+  rediscover and validate the provider path immediately before mutation.
 
 ## Product and design
 

@@ -2,6 +2,7 @@ pub mod agent_activity;
 pub mod ai_control_center;
 pub mod ai_usage;
 pub mod applications;
+pub mod cache_providers;
 pub mod cleaner;
 pub mod commands;
 pub mod dev_ports;
@@ -328,7 +329,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::pick_keep_awake_application,
             commands::get_disk_metrics,
             commands::get_disk_volumes,
-            commands::open_disk_utility,
+            commands::open_storage_settings,
             commands::get_docker_status,
             commands::prune_docker_target,
             commands::get_local_models,
@@ -339,7 +340,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::disable_manual_awake,
             commands::get_settings,
             commands::save_settings,
-            commands::reveal_in_finder,
+            commands::show_in_file_manager,
             commands::open_dashboard_window,
             commands::get_app_version,
             commands::get_platform_capabilities,

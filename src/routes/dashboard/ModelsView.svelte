@@ -4,7 +4,7 @@
   import { localModelsStore } from '../../lib/stores/models.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
   import { withMinimumDuration } from '../../lib/utils/async';
-  import { tauriRevealInFinder } from '../../lib/utils/tauri';
+  import { tauriShowInFileManager } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
@@ -164,9 +164,9 @@
               variant="ghost"
               size="icon"
               class="h-7 w-7 text-muted-foreground"
-              onclick={() => tauriRevealInFinder(model.path)}
-              ariaLabel={`Reveal ${model.name} in Finder`}
-              title="Reveal in Finder"
+              onclick={() => tauriShowInFileManager(model.path)}
+              ariaLabel={`Show ${model.name} in file manager`}
+              title="Show in File Manager"
             >
               <FolderOpen size={13} />
             </Button>

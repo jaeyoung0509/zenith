@@ -68,7 +68,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).toContain('✓ 100 MB Safe');
     // Ensure responsive toolbar classes for 960x660 baseline
     expect(rendered.body).toContain('flex flex-col md:flex-row md:items-center justify-between gap-3');
-    expect(rendered.body).toContain('aria-label="Open macOS Disk Utility"');
+    expect(rendered.body).toContain('aria-label="Open storage settings"');
   });
 
   it('renders "Review & Clean" when rebuildable items are selected', () => {

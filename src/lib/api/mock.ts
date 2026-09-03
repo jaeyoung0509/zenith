@@ -533,6 +533,7 @@ export const mockApi = {
             size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
             file_count: 3200,
             description: 'V8 code cache and GPU shader cache',
+            cache_metadata: { provider: 'Cursor', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
             is_selected: true,
             last_modified: null,
             exists: true,
@@ -550,6 +551,7 @@ export const mockApi = {
             size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
             file_count: 140,
             description: 'Session diagnostic logs',
+            cache_metadata: { provider: 'Claude Code', management_mode: 'zenith', artifact_kind: 'log', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
             is_selected: true,
             last_modified: null,
             exists: true,
@@ -572,6 +574,7 @@ export const mockApi = {
             size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
             file_count: 12000,
             description: 'Compiled packages cache',
+            cache_metadata: { provider: 'Go', management_mode: 'zenith', artifact_kind: 'build_artifact', consequence: 'Packages will compile again.', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
             is_selected: true,
             last_modified: null,
             exists: true,
@@ -589,6 +592,7 @@ export const mockApi = {
             size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
             file_count: 850,
             description: 'Downloaded crates archive',
+            cache_metadata: { provider: 'Cargo', management_mode: 'zenith', artifact_kind: 'download_cache', consequence: 'Crates will download again.', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
             is_selected: false,
             last_modified: null,
             exists: true,
@@ -618,6 +622,7 @@ export const mockApi = {
           size: { logical: intensiveBytes, allocated: intensiveBytes },
           file_count: 2400,
           description: 'Third-party cache inactive for at least 7 days',
+          cache_metadata: { provider: 'Zenith', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'approximate' },
           is_selected: true,
           last_modified: Math.floor(Date.now() / 1000) - 8 * 86400,
           exists: true,
@@ -882,7 +887,7 @@ export const mockApi = {
   async getDiskVolumes(): Promise<DiskVolume[]> {
     return [
       {
-        name: 'Macintosh HD',
+        name: 'Primary Volume',
         mount_point: '/',
         file_system: 'APFS',
         disk_type: 'SSD',
@@ -908,7 +913,7 @@ export const mockApi = {
     ];
   },
 
-  async openDiskUtility(): Promise<void> {
+  async openStorageSettings(): Promise<void> {
     // No-op in browser mock
   },
 
@@ -1083,7 +1088,7 @@ export const mockApi = {
     }
   },
 
-  async revealInFinder(_path: string): Promise<void> {
+  async showInFileManager(_path: string): Promise<void> {
     // No-op in browser mock
   },
 
@@ -1104,7 +1109,7 @@ export const mockApi = {
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {
     return {
       app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.4',
-      os_version: 'macOS 15.3.1 (Mock Preview)',
+      os_version: 'Browser Preview',
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
       enabled_features: [

@@ -94,6 +94,7 @@ impl DirectoryScanner {
                 size,
                 file_count,
                 description: signature.description.clone(),
+                cache_metadata: signature.cache_metadata(),
                 is_selected,
                 last_modified,
                 exists,
@@ -172,6 +173,7 @@ impl DirectoryScanner {
                     "{} (unchanged for at least {} days)",
                     signature.description, min_age_days
                 ),
+                cache_metadata: signature.cache_metadata(),
                 is_selected: signature.risk.is_auto_selectable(),
                 last_modified: modified
                     .duration_since(SystemTime::UNIX_EPOCH)
@@ -347,6 +349,12 @@ mod tests {
             include_prefixes: vec![],
             exclude_prefixes: vec!["com.apple.".into()],
             intensive_only: true,
+            platforms: vec![],
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature);
@@ -388,6 +396,12 @@ mod tests {
             include_prefixes: vec![],
             exclude_prefixes: vec![],
             intensive_only: true,
+            platforms: vec![],
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature);

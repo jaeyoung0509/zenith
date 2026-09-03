@@ -20,7 +20,7 @@
     tauriGetInstalledApps,
     tauriInspectAppUninstall,
     tauriPrepareAppUninstall,
-    tauriRevealInFinder,
+    tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import {
     AlertCircle,
@@ -365,11 +365,11 @@
             <Button
               variant="ghost"
               size="sm"
-              onclick={() => tauriRevealInFinder(inspection!.app.display_path)}
+              onclick={() => tauriShowInFileManager(inspection!.app.display_path)}
               class="gap-1.5"
             >
               <FolderOpen size={13} />
-              Finder
+              File Manager
             </Button>
           </div>
 

@@ -466,11 +466,7 @@ pub fn register_home_workspace(
     if metadata.uid() != unsafe { libc::geteuid() } {
         return Err("The user home directory must be owned by the current user.".to_string());
     }
-    let name = if cfg!(target_os = "macos") {
-        "This Mac".to_string()
-    } else {
-        "This PC".to_string()
-    };
+    let name = "This Computer".to_string();
     Ok(store_workspace(canonical, name, true, workspaces_store)?.workspace)
 }
 
@@ -520,7 +516,9 @@ fn store_workspace(
         workspace: DeveloperWorkspace {
             id: id.clone(),
             name,
-            display_path: canonical.to_string_lossy().into_owned(),
+            display_path: Blacklist::normalize_path(&canonical)
+                .to_string_lossy()
+                .into_owned(),
         },
         path: canonical,
         identity,
@@ -691,7 +689,9 @@ fn recognize_artifact(
         "bin" | "obj" => recognize_dotnet(project_root, child_name),
         ".build" => recognize_swift(project_root, child_name),
         ".dart_tool" => recognize_flutter(project_root, child_name),
-        "_build" | "deps" => recognize_elixir(project_root, child_name),
+        "_build" | "deps" => recognize_beam(project_root, child_name),
+        ".stack-work" | "dist-newstyle" => recognize_haskell(project_root, child_name),
+        ".zig-cache" => recognize_zig(project_root, child_name),
         ".terraform" => recognize_terraform(project_root, child_name),
         "pkg" => None,
         _ => None,
@@ -737,7 +737,7 @@ fn global_go_module_candidate(
         artifact_relative: PathBuf::from("pkg/mod"),
         marker_paths: Vec::new(),
         evidence: vec![if workspace.whole_home {
-            "Built-in Scan this Mac scope".to_string()
+            "Built-in whole-home scan scope".to_string()
         } else {
             "Explicitly selected ~/go workspace".to_string()
         }],
@@ -790,15 +790,37 @@ fn recognize_target(project_root: &Path) -> Option<ArtifactMatch> {
             rebuild_hint: Some("cargo build".to_string()),
         });
     }
-    let marker = find_named_marker(project_root, &["pom.xml"])?;
+    if let Some(marker) = find_named_marker(project_root, &["pom.xml"]) {
+        return Some(ArtifactMatch {
+            ecosystem: DeveloperEcosystem::Java,
+            kind: DeveloperArtifactKind::MavenTarget,
+            project_root: project_root.to_path_buf(),
+            artifact_relative: PathBuf::from("target"),
+            marker_paths: vec![marker],
+            evidence: vec!["pom.xml".to_string()],
+            rebuild_hint: Some("mvn clean package".to_string()),
+        });
+    }
+    if let Some(marker) = find_named_marker(project_root, &["build.sbt"]) {
+        return Some(ArtifactMatch {
+            ecosystem: DeveloperEcosystem::Scala,
+            kind: DeveloperArtifactKind::SbtTarget,
+            project_root: project_root.to_path_buf(),
+            artifact_relative: PathBuf::from("target"),
+            marker_paths: vec![marker],
+            evidence: vec!["build.sbt".to_string()],
+            rebuild_hint: Some("sbt compile".to_string()),
+        });
+    }
+    let marker = find_named_marker(project_root, &["project.clj", "deps.edn"])?;
     Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Java,
-        kind: DeveloperArtifactKind::MavenTarget,
+        ecosystem: DeveloperEcosystem::Clojure,
+        kind: DeveloperArtifactKind::ClojureTarget,
         project_root: project_root.to_path_buf(),
         artifact_relative: PathBuf::from("target"),
-        marker_paths: vec![marker],
-        evidence: vec!["pom.xml".to_string()],
-        rebuild_hint: Some("mvn clean package".to_string()),
+        marker_paths: vec![marker.clone()],
+        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
+        rebuild_hint: Some("clojure -T:build compile".to_string()),
     })
 }
 
@@ -963,7 +985,7 @@ fn recognize_build(project_root: &Path, child_name: &str) -> Option<ArtifactMatc
         return None;
     }
     Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Cpp,
+        ecosystem: native_cmake_ecosystem(project_root),
         kind: DeveloperArtifactKind::CMakeBuild,
         project_root: project_root.to_path_buf(),
         artifact_relative: PathBuf::from(child_name),
@@ -998,7 +1020,7 @@ fn recognize_gradle(project_root: &Path, child_name: &str) -> Option<ArtifactMat
         kind: DeveloperArtifactKind::GradleCache,
         project_root: project_root.to_path_buf(),
         artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker],
+        marker_paths: vec![marker.clone()],
         evidence: vec![marker_name],
         rebuild_hint: Some("./gradlew build".to_string()),
     })
@@ -1049,22 +1071,92 @@ fn recognize_flutter(project_root: &Path, child_name: &str) -> Option<ArtifactMa
     })
 }
 
-fn recognize_elixir(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &["mix.exs"])?;
+fn recognize_beam(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &["mix.exs", "rebar.config"])?;
+    let is_erlang = marker.file_name()?.to_string_lossy() == "rebar.config";
+    if child_name == "deps" && is_erlang {
+        return None;
+    }
     let kind = if child_name == "_build" {
-        DeveloperArtifactKind::ElixirBuild
+        if is_erlang {
+            DeveloperArtifactKind::ErlangBuild
+        } else {
+            DeveloperArtifactKind::ElixirBuild
+        }
     } else {
         DeveloperArtifactKind::ElixirDeps
     };
     Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Elixir,
+        ecosystem: if is_erlang {
+            DeveloperEcosystem::Erlang
+        } else {
+            DeveloperEcosystem::Elixir
+        },
         kind,
         project_root: project_root.to_path_buf(),
         artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker],
-        evidence: vec!["mix.exs".to_string()],
-        rebuild_hint: Some("mix deps.get".to_string()),
+        marker_paths: vec![marker.clone()],
+        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
+        rebuild_hint: Some(
+            if is_erlang {
+                "rebar3 compile"
+            } else {
+                "mix deps.get"
+            }
+            .to_string(),
+        ),
     })
+}
+
+fn recognize_haskell(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &["stack.yaml", "cabal.project"])
+        .or_else(|| find_project_extension_marker(project_root, &["cabal"]))?;
+    let (kind, hint) = if child_name == ".stack-work" {
+        (DeveloperArtifactKind::HaskellStackWork, "stack build")
+    } else {
+        (DeveloperArtifactKind::HaskellDistNewstyle, "cabal build")
+    };
+    Some(ArtifactMatch {
+        ecosystem: DeveloperEcosystem::Haskell,
+        kind,
+        project_root: project_root.to_path_buf(),
+        artifact_relative: PathBuf::from(child_name),
+        marker_paths: vec![marker.clone()],
+        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
+        rebuild_hint: Some(hint.to_string()),
+    })
+}
+
+fn recognize_zig(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
+    let marker = find_named_marker(project_root, &["build.zig"])?;
+    Some(ArtifactMatch {
+        ecosystem: DeveloperEcosystem::Zig,
+        kind: DeveloperArtifactKind::ZigCache,
+        project_root: project_root.to_path_buf(),
+        artifact_relative: PathBuf::from(child_name),
+        marker_paths: vec![marker],
+        evidence: vec!["build.zig".to_string()],
+        rebuild_hint: Some("zig build".to_string()),
+    })
+}
+
+fn native_cmake_ecosystem(project_root: &Path) -> DeveloperEcosystem {
+    let Ok(entries) = fs::read_dir(project_root) else {
+        return DeveloperEcosystem::Cpp;
+    };
+    let mut has_c = false;
+    for path in entries.flatten().map(|entry| entry.path()) {
+        match path.extension().and_then(|value| value.to_str()) {
+            Some("cc" | "cpp" | "cxx" | "mm") => return DeveloperEcosystem::Cpp,
+            Some("c") => has_c = true,
+            _ => {}
+        }
+    }
+    if has_c {
+        DeveloperEcosystem::C
+    } else {
+        DeveloperEcosystem::Cpp
+    }
 }
 
 fn recognize_terraform(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
@@ -1129,6 +1221,9 @@ fn should_skip_discovery_directory(name: &str) -> bool {
             | ".dart_tool"
             | "_build"
             | "deps"
+            | ".stack-work"
+            | "dist-newstyle"
+            | ".zig-cache"
             | ".terraform"
             | "dist"
             | "out"
@@ -1409,7 +1504,7 @@ fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("powershell.exe")
+        let output = crate::tooling::command("powershell.exe")
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -1520,6 +1615,52 @@ mod tests {
                 .unwrap()
                 .ecosystem,
             DeveloperEcosystem::Dotnet
+        );
+    }
+
+    #[test]
+    fn recognizes_scala_clojure_haskell_erlang_zig_and_c_markers() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = workspace_record(temp.path());
+        let fixtures = [
+            ("scala", "target", "build.sbt", DeveloperEcosystem::Scala),
+            ("clojure", "target", "deps.edn", DeveloperEcosystem::Clojure),
+            (
+                "haskell",
+                ".stack-work",
+                "stack.yaml",
+                DeveloperEcosystem::Haskell,
+            ),
+            (
+                "erlang",
+                "_build",
+                "rebar.config",
+                DeveloperEcosystem::Erlang,
+            ),
+            ("zig", ".zig-cache", "build.zig", DeveloperEcosystem::Zig),
+        ];
+        for (name, artifact, marker, ecosystem) in fixtures {
+            let project = temp.path().join(name);
+            fs::create_dir_all(project.join(artifact)).unwrap();
+            fs::write(project.join(marker), "fixture\n").unwrap();
+            assert_eq!(
+                recognize_artifact(&workspace, &project, artifact)
+                    .unwrap()
+                    .ecosystem,
+                ecosystem
+            );
+        }
+
+        let c_project = temp.path().join("c-project");
+        fs::create_dir_all(c_project.join("build")).unwrap();
+        fs::write(c_project.join("CMakeLists.txt"), "project(c_demo C)\n").unwrap();
+        fs::write(c_project.join("main.c"), "int main(void) { return 0; }\n").unwrap();
+        fs::write(c_project.join("build/CMakeCache.txt"), "fixture\n").unwrap();
+        assert_eq!(
+            recognize_artifact(&workspace, &c_project, "build")
+                .unwrap()
+                .ecosystem,
+            DeveloperEcosystem::C
         );
     }
 
@@ -1732,7 +1873,22 @@ mod tests {
 
         assert_eq!(record.path, canonical_home);
         assert!(record.whole_home);
-        assert_eq!(workspace.name, "This Mac");
+        assert_eq!(workspace.name, "This Computer");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn workspace_display_path_hides_the_windows_verbatim_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temp.path()).unwrap();
+        let store = Mutex::new(HashMap::new());
+        let record = store_workspace(canonical, "Workspace".to_string(), false, &store).unwrap();
+
+        assert!(!record.workspace.display_path.starts_with(r"\\?\"));
+        assert_eq!(
+            PathBuf::from(&record.workspace.display_path),
+            Blacklist::normalize_path(&record.path)
+        );
     }
 
     #[test]

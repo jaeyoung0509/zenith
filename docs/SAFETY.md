@@ -124,7 +124,7 @@ blacklisted for generic signature-based cleanup.
 ## Developer Artifact Review
 
 Developer Artifact Review is manual inventory, not Quick Clean. `Scan this
-Mac` registers the canonical current-user home as a backend-owned scan scope;
+computer` registers the canonical current-user home as a backend-owned scan scope;
 the frontend receives only its opaque workspace ID and cannot submit a path,
 scope, or cleanup rule. The native picker remains available for narrower
 user-owned folders beneath home.
@@ -220,9 +220,9 @@ and requires a fresh inspection rather than weakening the fail-closed check.
 
 ## Native Trash semantics
 
-Large Files and App Uninstaller move reviewed targets to the macOS Trash through
-the dedicated Trash adapter. They do not call the generic tree deleter, `rm`, or
-`remove_dir_all`.
+Large Files and App Uninstaller move reviewed targets to the platform's native
+Trash or Recycle Bin through the dedicated Trash adapter. They do not call the
+generic tree deleter, `rm`, or `remove_dir_all`.
 
 Trash plans expire after five minutes and are removed from the backend plan map
 before execution, making them one-shot. Every target is revalidated immediately
@@ -301,6 +301,25 @@ external command, stale Large Files inventory, or expired app inspection
 produces an error and leaves the target untouched where possible. Cleanup events
 report per-target results instead of converting a partial failure into a
 success.
+
+## Tool-managed cache safety
+
+Package stores and AI runtime roots are not authorized merely because their
+paths are known. When an owner exposes locking, garbage collection, revision
+selection, or project-aware purge, Zenith must use a typed fixed-argument
+adapter or remain advisory. `external_command` targets rediscover and
+canonicalize their path immediately before mutation, require current-user
+containment, reject symlinks/reparse points and untrusted executables, and fail
+if the owning process is active or the location changed. Frontend values can
+never select executables, arguments, paths, environment variables, packages,
+or model revisions.
+
+GPU/JIT signatures cover only independently rebuildable per-user defaults.
+Driver packages, ProgramData, WSL VHDX files, container volumes, models,
+datasets, optimized engines, performance databases, prompt/session state, and
+mixed runtime roots remain out of generic deletion. Allocated bytes for shared,
+hard-linked, cloned, sparse, or deduplicated stores are labeled as a lower
+bound rather than promised reclaimed space.
 
 ## Regression tests
 

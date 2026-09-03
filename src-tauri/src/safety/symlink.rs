@@ -28,10 +28,15 @@ impl SymlinkGuard {
     /// Resolves the trusted base anchor for a given target path.
     /// E.g., user home directory (`/Users/username` or `C:\Users\username`), `/tmp`, or temp dir.
     pub fn resolve_trusted_anchor(target: &Path) -> PathBuf {
-        if let Some(home) = std::env::var_os("HOME")
+        #[cfg(target_os = "windows")]
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from);
+        #[cfg(not(target_os = "windows"))]
+        let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-        {
+            .map(PathBuf::from);
+        if let Some(home) = home {
             if target.starts_with(&home) {
                 return home;
             }

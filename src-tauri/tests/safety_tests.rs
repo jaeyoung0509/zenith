@@ -180,6 +180,7 @@ fn test_safety_planner_rejects_unknown_signatures() {
         size: FileSize::new(1024, Some(1024)),
         file_count: 1,
         description: "fake".to_string(),
+        cache_metadata: Default::default(),
         is_selected: true,
         last_modified: None,
         exists: true,
@@ -210,6 +211,7 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
         size: FileSize::new(1024, Some(1024)),
         file_count: 1,
         description: "must not be planned".into(),
+        cache_metadata: Default::default(),
         is_selected: true,
         last_modified: None,
         exists: true,
@@ -252,6 +254,12 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         include_prefixes: vec![],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     });
 
     let scan_item = ScanItem {
@@ -264,6 +272,7 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         size: FileSize::new(2048, Some(2048)),
         file_count: 2,
         description: "test".to_string(),
+        cache_metadata: Default::default(),
         is_selected: true,
         last_modified: None,
         exists: true,
@@ -446,6 +455,12 @@ fn manual_strategy_never_enters_generic_cleaner() {
         include_prefixes: vec![],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     });
     let item = ScanItem {
         id: "test.manual-model".into(),
@@ -457,6 +472,7 @@ fn manual_strategy_never_enters_generic_cleaner() {
         size: FileSize::new(1, Some(1)),
         file_count: 1,
         description: "adapter-only".into(),
+        cache_metadata: Default::default(),
         is_selected: true,
         last_modified: None,
         exists: true,
@@ -467,6 +483,59 @@ fn manual_strategy_never_enters_generic_cleaner() {
         Err(ZenithError::UnsupportedManualOperation(_))
     ));
     assert!(model_root.exists());
+}
+
+#[test]
+fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
+    let dir = tempdir().unwrap();
+    let cache_root = dir.path().join("provider-cache");
+    fs::create_dir(&cache_root).unwrap();
+    let payload = cache_root.join("keep.bin");
+    fs::write(&payload, b"provider owned").unwrap();
+    let mut registry = SignatureRegistry::new();
+    registry.register(Signature {
+        id: "test.unknown-provider".into(),
+        name: "Unknown provider".into(),
+        category: Category::Developer,
+        risk: RiskTier::Rebuild,
+        strategy: CleanStrategy::ExternalCommand,
+        paths: vec![cache_root.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "test".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
+        platforms: vec![],
+        provider: "test".into(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
+    });
+    let item = ScanItem {
+        id: "test.unknown-provider".into(),
+        signature_id: "test.unknown-provider".into(),
+        name: "Unknown provider".into(),
+        category: Category::Developer,
+        risk: RiskTier::Rebuild,
+        path: cache_root.to_string_lossy().into_owned(),
+        size: FileSize::new(14, Some(14)),
+        file_count: 1,
+        description: "test".into(),
+        cache_metadata: Default::default(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+    let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
+    let result = CleanExecutor::execute(plan, |_| {});
+    assert!(!result.items[0].success);
+    assert_eq!(
+        result.items[0].failure_reason,
+        Some(CleanFailureReason::ExternalCommandFailed)
+    );
+    assert!(payload.exists());
 }
 
 #[test]
@@ -598,6 +667,7 @@ fn test_docker_prune_target_can_create_plan() {
         size: FileSize::new(1024 * 1024, Some(1024 * 1024)),
         file_count: 1,
         description: "Docker build cache".to_string(),
+        cache_metadata: Default::default(),
         is_selected: true,
         last_modified: None,
         exists: true,
@@ -633,6 +703,12 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         include_prefixes: vec![],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     });
 
     let scan_item = ScanItem {
@@ -645,6 +721,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         size: FileSize::new(1024, Some(1024)),
         file_count: 1,
         description: "test".into(),
+        cache_metadata: Default::default(),
         is_selected: true,
         last_modified: None,
         exists: true,

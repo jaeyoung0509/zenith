@@ -80,6 +80,12 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         include_prefixes: vec!["codex-".into()],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     };
 
     let items = DirectoryScanner::scan_signature(&signature);
@@ -115,6 +121,12 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         include_prefixes: vec![],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     };
 
     let mut registry = SignatureRegistry::new();
@@ -313,6 +325,37 @@ fn test_windows_blacklist_and_path_defense() {
     )));
     assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder.")));
     assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder ")));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
+    use std::path::{Path, PathBuf};
+    use zenith_lib::safety::Blacklist;
+
+    let user_cache = Path::new(r"\\?\C:\Users\테스트\.gemini\antigravity-cli\log");
+    assert_eq!(
+        Blacklist::normalize_path(user_cache),
+        PathBuf::from(r"C:\Users\테스트\.gemini\antigravity-cli\log")
+    );
+    assert_eq!(
+        Blacklist::normalize_path(Path::new(r"\\?\UNC\server\share\cache")),
+        PathBuf::from(r"\\server\share\cache")
+    );
+    assert!(!Blacklist::is_blacklisted(user_cache));
+    assert!(Blacklist::validate(user_cache).is_ok());
+
+    assert!(Blacklist::is_blacklisted(Path::new(r"\\?\C:\")));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        r"\\?\C:\Windows\System32"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        r"\\?\C:\safe\file.txt:stream"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new(r"\\.\PhysicalDrive0")));
 }
 
 #[test]

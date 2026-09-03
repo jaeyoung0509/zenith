@@ -206,7 +206,7 @@ backend-owned ephemeral inventory
        TrashExecutor
  scope + type + identity revalidation
             |
-        macOS Trash
+   Native Trash / Recycle Bin
 ```
 
 Large Files only accepts the named user-content roots `Downloads`, `Desktop`,
@@ -247,7 +247,7 @@ reports the amount moved and describes it as potentially reclaimable after the
 Trash is emptied.
 
 Developer Artifact Review is a third dedicated storage workflow. `Scan this
-Mac` registers the canonical current-user home as a backend-owned scope, while
+computer` registers the canonical current-user home as a backend-owned scope, while
 the native folder picker registers narrower user-owned workspaces. Both return
 only opaque workspace IDs to the frontend. Whole-home discovery prunes system,
 credential, media, package-manager state, and installed app-bundle trees before
@@ -439,7 +439,10 @@ Only the final job has `contents: write`; platform jobs can build and upload
 workflow artifacts but cannot create competing GitHub Releases. Public filenames
 are stable, while their download URLs remain immutable because the version is
 part of the tag path. Each platform emits separate build metadata and checksums,
-and the publisher also emits their combined checksum file.
+and the publisher also emits their combined checksum file. Both platform jobs
+use `scripts/release_checksums.cjs` rather than shell-specific text writers.
+The publisher normalizes any incoming CRLF to LF, validates every checksum line,
+and runs `shasum -c` against the merged artifacts before it can create a release.
 
 The Windows job generates a WinGet community-repository multi-file manifest
 from the exact NSIS bytes and computed SHA256 hash. v0.2.0 is the explicitly
@@ -454,4 +457,37 @@ On macOS and Windows, applications launched from the desktop shell receive a
 distinct `PATH` compared to an interactive shell. `tooling.rs` resolves CLIs
 through inherited paths and standard platform locations (Homebrew, local AppData,
 Program Files, Docker, and Ollama) before spawning processes. Adapters fail closed
-when a required tool is unavailable.
+when a required tool is unavailable. Resolved background commands and direct
+commands managed by the timeout helper set Windows `CREATE_NO_WINDOW`, including
+native picker adapters; actions whose purpose is to open a terminal bypass this
+helper.
+
+Windows `std::fs::canonicalize` returns verbatim paths such as `\\?\C:\...`.
+Safety comparisons normalize the verbatim drive or UNC prefix before applying
+drive-root, protected-directory, traversal, and alternate-data-stream rules.
+Backend records may retain canonical paths for filesystem identity and long-path
+operations, but serialized display paths must use the normalized form. The
+automatic AI safety scanner applies the same normalization and resolves
+`USERPROFILE` before `HOME` on Windows so drive roots, the user profile, and
+broad operating-system roots can never become recursive scan scopes.
+
+Cross-platform system actions use capability and IPC names that describe the
+intent (`open_storage_settings`, `show_in_file_manager`) rather than a specific
+macOS application. Native adapters remain responsible for choosing the platform's
+file manager and storage settings pane at runtime.
+
+### Cache provider registry
+
+Cache coverage is split by ownership, not by display language. Stable,
+independently rebuildable user-cache directories use platform-scoped TOML
+signatures. Stores with owner-provided locking or garbage collection use the
+typed cache-provider registry. Mixed, relocated, WSL/container, model, and
+application-configured roots are advisory until a dedicated adapter can prove
+their identity and scope. See [CACHE_SUPPORT.md](CACHE_SUPPORT.md).
+
+Provider ScanItems carry source, management mode, artifact role, rebuild
+consequence, and physical-byte confidence. The generic scan remains one UI and
+one opaque plan flow, but `external_command` dispatches only to a registered
+provider; it is never an alias for recursive deletion. Provider discovery and
+mutation use backend-owned fixed argv and fresh cache-path validation. A failed
+or missing CLI degrades locally and does not fail unrelated signatures.

@@ -6,8 +6,8 @@
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
   import {
     tauriGetDiskVolumes,
-    tauriOpenDiskUtility,
-    tauriRevealInFinder,
+    tauriOpenStorageSettings,
+    tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -75,7 +75,7 @@
         <div class="flex justify-between items-baseline">
           <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
             <HardDrive size={13} class="text-cyan-400" />
-            Mac Primary Storage
+            Primary Storage
           </span>
           {#if disk}
             <span class="whitespace-nowrap font-mono text-sm font-semibold text-foreground">
@@ -140,8 +140,9 @@
                 variant="ghost"
                 size="icon"
                 class="h-6 w-6 text-muted-foreground shrink-0"
-                title="Reveal in Finder"
-                onclick={() => tauriRevealInFinder(volume.mount_point)}
+                title="Show in File Manager"
+                ariaLabel={`Show ${volume.name || volume.mount_point} in file manager`}
+                onclick={() => tauriShowInFileManager(volume.mount_point)}
               >
                 <FolderOpen size={12} />
               </Button>
@@ -179,13 +180,13 @@
         <Button
           variant="ghost"
           size="sm"
-          onclick={() => tauriOpenDiskUtility()}
+          onclick={() => tauriOpenStorageSettings()}
           class="text-xs text-muted-foreground gap-1 px-2.5"
-          title="Open macOS Disk Utility"
-          ariaLabel="Open macOS Disk Utility"
+          title="Open storage settings"
+          ariaLabel="Open storage settings"
         >
           <ExternalLink size={12} />
-          <span>Disk Utility</span>
+          <span>Storage Settings</span>
         </Button>
       </div>
 
