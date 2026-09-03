@@ -105,6 +105,8 @@
       python_venv: 'Python environment',
       go_module_cache: 'Go module cache',
       maven_target: 'Maven target',
+      sbt_target: 'sbt target',
+      clojure_target: 'Clojure target',
       gradle_build: 'Gradle build',
       gradle_cache: 'Gradle cache',
       composer_vendor: 'Composer vendor',
@@ -116,6 +118,10 @@
       flutter_tooling: 'Flutter tooling',
       elixir_build: 'Elixir build',
       elixir_deps: 'Elixir dependencies',
+      erlang_build: 'Erlang build',
+      haskell_stack_work: 'Stack work',
+      haskell_dist_newstyle: 'Cabal build',
+      zig_cache: 'Zig cache',
       terraform_cache: 'Terraform cache',
     };
     return labels[item.kind];
@@ -128,6 +134,8 @@
       python_venv: item.path.endsWith('/.venv') ? '.venv/' : 'venv/',
       go_module_cache: 'pkg/mod/',
       maven_target: 'target/',
+      sbt_target: 'target/',
+      clojure_target: 'target/',
       gradle_build: 'build/',
       gradle_cache: '.gradle/',
       composer_vendor: 'vendor/',
@@ -139,6 +147,10 @@
       flutter_tooling: '.dart_tool/',
       elixir_build: '_build/',
       elixir_deps: 'deps/',
+      erlang_build: '_build/',
+      haskell_stack_work: '.stack-work/',
+      haskell_dist_newstyle: 'dist-newstyle/',
+      zig_cache: '.zig-cache/',
       terraform_cache: '.terraform/',
     };
     return labels[item.kind];

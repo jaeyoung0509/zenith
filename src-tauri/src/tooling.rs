@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug)]
 pub enum SubprocessError {
     Timeout(String, Duration),
@@ -106,11 +108,14 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     let stdout_handle = std::thread::spawn(move || {
         if let Some(mut stream) = stdout_stream.take() {
             let mut chunk = [0u8; 8192];
+            let mut captured = 0usize;
             loop {
                 match stream.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if tx_out.send(chunk[..n].to_vec()).is_err() {
+                        let keep = n.min(MAX_CAPTURE_BYTES.saturating_sub(captured));
+                        captured = captured.saturating_add(keep);
+                        if keep > 0 && tx_out.send(chunk[..keep].to_vec()).is_err() {
                             break;
                         }
                     }
@@ -125,11 +130,14 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     let stderr_handle = std::thread::spawn(move || {
         if let Some(mut stream) = stderr_stream.take() {
             let mut chunk = [0u8; 8192];
+            let mut captured = 0usize;
             loop {
                 match stream.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if tx_err.send(chunk[..n].to_vec()).is_err() {
+                        let keep = n.min(MAX_CAPTURE_BYTES.saturating_sub(captured));
+                        captured = captured.saturating_add(keep);
+                        if keep > 0 && tx_err.send(chunk[..keep].to_vec()).is_err() {
                             break;
                         }
                     }
@@ -150,7 +158,10 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
 
         while Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(15)) {
-                Ok(chunk) => collected.extend_from_slice(&chunk),
+                Ok(chunk) => {
+                    let remaining = MAX_CAPTURE_BYTES.saturating_sub(collected.len());
+                    collected.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     finished = true;
                     break;
@@ -160,7 +171,8 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
         }
 
         while let Ok(chunk) = rx.try_recv() {
-            collected.extend_from_slice(&chunk);
+            let remaining = MAX_CAPTURE_BYTES.saturating_sub(collected.len());
+            collected.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
         }
 
         if finished {
@@ -381,6 +393,15 @@ mod tests {
             String::from_utf8_lossy(&output.stdout).trim(),
             "hello world"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_caps_captured_output() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "yes x | head -c 2097152"]);
+        let output = super::run_with_timeout(cmd, std::time::Duration::from_secs(3)).unwrap();
+        assert_eq!(output.stdout.len(), super::MAX_CAPTURE_BYTES);
     }
 
     #[cfg(unix)]

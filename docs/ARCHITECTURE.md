@@ -475,3 +475,19 @@ Cross-platform system actions use capability and IPC names that describe the
 intent (`open_storage_settings`, `show_in_file_manager`) rather than a specific
 macOS application. Native adapters remain responsible for choosing the platform's
 file manager and storage settings pane at runtime.
+
+### Cache provider registry
+
+Cache coverage is split by ownership, not by display language. Stable,
+independently rebuildable user-cache directories use platform-scoped TOML
+signatures. Stores with owner-provided locking or garbage collection use the
+typed cache-provider registry. Mixed, relocated, WSL/container, model, and
+application-configured roots are advisory until a dedicated adapter can prove
+their identity and scope. See [CACHE_SUPPORT.md](CACHE_SUPPORT.md).
+
+Provider ScanItems carry source, management mode, artifact role, rebuild
+consequence, and physical-byte confidence. The generic scan remains one UI and
+one opaque plan flow, but `external_command` dispatches only to a registered
+provider; it is never an alias for recursive deletion. Provider discovery and
+mutation use backend-owned fixed argv and fresh cache-path validation. A failed
+or missing CLI degrades locally and does not fail unrelated signatures.

@@ -504,6 +504,23 @@ export type BudgetStatus = {
 	mixed_sources: boolean,
 };
 
+export type CacheArtifactKind = "temporary" | "download_cache" | "package_store" | "build_artifact" | "compiled_kernel" | "optimized_engine" | "autotune" | "model_weight" | "prompt_or_session_state" | "runtime_memory" | "log";
+
+export type CacheManagementMode = "zenith" | "tool_managed" | "advisory";
+
+export type CacheMetadata = {
+	provider: string,
+	management_mode: CacheManagementMode,
+	artifact_kind: CacheArtifactKind,
+	consequence: string,
+	size_semantics: CacheSizeSemantics,
+	last_used_confidence?: CacheUsageConfidence,
+};
+
+export type CacheSizeSemantics = "physical_reclaimable" | "conservative_lower_bound" | "informational";
+
+export type CacheUsageConfidence = "exact" | "approximate" | "unknown";
+
 export type Category = "ai" | "developer" | "container" | "model" | "system";
 
 export type CategoryResult = CategoryResult_Serialize | CategoryResult_Deserialize;
@@ -616,7 +633,7 @@ export type DashboardTab_Serialize = "disk" | "storage" | "docker" | "models" | 
 
 export type DeveloperArtifact = DeveloperArtifact_Serialize | DeveloperArtifact_Deserialize;
 
-export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_venv" | "go_module_cache" | "maven_target" | "gradle_build" | "gradle_cache" | "composer_vendor" | "ruby_bundle" | "dotnet_bin" | "dotnet_obj" | "c_make_build" | "swift_build" | "flutter_tooling" | "elixir_build" | "elixir_deps" | "terraform_cache";
+export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_venv" | "go_module_cache" | "maven_target" | "sbt_target" | "clojure_target" | "gradle_build" | "gradle_cache" | "composer_vendor" | "ruby_bundle" | "dotnet_bin" | "dotnet_obj" | "c_make_build" | "swift_build" | "flutter_tooling" | "elixir_build" | "elixir_deps" | "erlang_build" | "haskell_stack_work" | "haskell_dist_newstyle" | "zig_cache" | "terraform_cache";
 
 export type DeveloperArtifactScanEvent = DeveloperArtifactScanEvent_Serialize | DeveloperArtifactScanEvent_Deserialize;
 
@@ -699,7 +716,7 @@ export type DeveloperArtifact_Serialize = {
 	selected_by_default: boolean,
 };
 
-export type DeveloperEcosystem = "rust" | "node" | "python" | "go" | "java" | "kotlin" | "php" | "ruby" | "dotnet" | "cpp" | "swift" | "dart" | "elixir" | "terraform";
+export type DeveloperEcosystem = "rust" | "node" | "python" | "go" | "java" | "kotlin" | "php" | "ruby" | "dotnet" | "c" | "cpp" | "swift" | "dart" | "elixir" | "erlang" | "scala" | "clojure" | "haskell" | "zig" | "objective_c" | "r" | "julia" | "lua" | "terraform";
 
 export type DeveloperWorkspace = {
 	id: string,
@@ -1608,6 +1625,7 @@ export type ScanItem_Deserialize = {
 	size: FileSize_Deserialize,
 	file_count: number,
 	description: string,
+	cache_metadata?: CacheMetadata,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -1623,6 +1641,7 @@ export type ScanItem_Serialize = {
 	size: FileSize_Serialize,
 	file_count: number,
 	description: string,
+	cache_metadata: CacheMetadata,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,

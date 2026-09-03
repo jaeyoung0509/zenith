@@ -129,6 +129,9 @@ safety conventions below when changing Zenith.
   Order cleanup candidates by reclaimable bytes unless the user chooses another
   explicit sort. `Rebuild` means deletable but re-downloadable/rebuildable; it
   remains opt-in to avoid unexpected network or build costs.
+- Tool-owned shared caches must use a backend-owned fixed-argument provider or
+  remain advisory. `external_command` is never a filesystem-delete fallback;
+  rediscover and validate the provider path immediately before mutation.
 
 ## Product and design
 

@@ -80,6 +80,12 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         include_prefixes: vec!["codex-".into()],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     };
 
     let items = DirectoryScanner::scan_signature(&signature);
@@ -115,6 +121,12 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         include_prefixes: vec![],
         exclude_prefixes: vec![],
         intensive_only: false,
+        platforms: vec![],
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
     };
 
     let mut registry = SignatureRegistry::new();

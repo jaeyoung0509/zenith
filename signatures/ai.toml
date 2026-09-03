@@ -169,3 +169,96 @@ exclusions = [
     "~/.opencode/config.json"
 ]
 description = "Temporary telemetry and API response caches."
+
+[[signatures]]
+id = "ai.gpu.directx_shader"
+name = "DirectX Shader Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/D3DSCache"]
+description = "Per-user Direct3D compiled shader cache."
+provider = "Microsoft Direct3D"
+artifact_kind = "compiled_kernel"
+consequence = "Games and GPU applications may stutter while shaders compile again."
+
+[[signatures]]
+id = "ai.gpu.nvidia_dx"
+name = "NVIDIA DirectX Shader Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/NVIDIA/DXCache"]
+description = "Per-user NVIDIA DirectX compiled shader cache."
+provider = "NVIDIA"
+artifact_kind = "compiled_kernel"
+consequence = "GPU applications may recompile shaders and stutter on first use."
+
+[[signatures]]
+id = "ai.gpu.nvidia_gl"
+name = "NVIDIA OpenGL Shader Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/NVIDIA/GLCache"]
+description = "Per-user NVIDIA OpenGL compiled shader cache."
+provider = "NVIDIA"
+artifact_kind = "compiled_kernel"
+consequence = "GPU applications may recompile shaders and stutter on first use."
+
+[[signatures]]
+id = "ai.cuda.compute_cache"
+name = "CUDA JIT Compute Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+platforms = ["windows"]
+paths = ["${ROAMING_APP_DATA}/NVIDIA/ComputeCache"]
+description = "Compiled CUDA PTX-to-CUBIN artifacts in CUDA's documented Windows default."
+provider = "NVIDIA CUDA"
+artifact_kind = "compiled_kernel"
+consequence = "CUDA workloads must compile kernels again on their next run."
+
+[[signatures]]
+id = "ai.torchinductor.temp"
+name = "Inactive TorchInductor / Triton Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos", "windows"]
+paths = ["${TEMP}"]
+include_prefixes = ["torchinductor_"]
+min_age_days = 3
+description = "Per-user compiled graph and kernel artifacts under the system temp directory."
+provider = "PyTorch / Triton"
+artifact_kind = "compiled_kernel"
+consequence = "Models must recompile graphs and kernels, increasing next-run latency."
+
+[[signatures]]
+id = "ai.llamacpp.opencl.windows"
+name = "llama.cpp OpenCL Program Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/llama.cpp/cl-cache"]
+description = "Compiled OpenCL programs; model weights and session files are excluded by scope."
+provider = "llama.cpp"
+artifact_kind = "compiled_kernel"
+consequence = "OpenCL kernels compile again on next use."
+
+[[signatures]]
+id = "ai.llamacpp.opencl.macos"
+name = "llama.cpp OpenCL Program Cache"
+category = "ai"
+risk = "rebuild"
+strategy = "delete_contents"
+platforms = ["macos"]
+paths = ["~/Library/Caches/llama.cpp/cl-cache"]
+description = "Compiled OpenCL programs; model weights and session files are excluded by scope."
+provider = "llama.cpp"
+artifact_kind = "compiled_kernel"
+consequence = "OpenCL kernels compile again on next use."
