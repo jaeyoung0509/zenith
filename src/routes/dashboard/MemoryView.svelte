@@ -140,7 +140,7 @@
   {#if memoryStore.error}
     <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">{memoryStore.error}</div>
   {:else if memoryStore.lastAction}
-    <div class="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-success">{memoryStore.lastAction} macOS may retain some memory as reusable cache.</div>
+    <div class="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-success">{memoryStore.lastAction} The operating system may retain some memory as reusable cache.</div>
   {/if}
 
   {#if memory}
@@ -176,7 +176,7 @@
           {formatBytes(memory.compressed_bytes)}
         </div>
         <p class="text-meta text-muted-foreground mt-1">
-          macOS in-RAM memory compression avoiding disk swap slowdowns.
+          In-memory compression can reduce slower disk swap activity.
         </p>
       </Card>
 
@@ -297,7 +297,7 @@
   {:else}
     <div class="py-16 text-center text-xs text-muted-foreground space-y-2">
       <RotateCw size={20} class="animate-gentle-spin mx-auto opacity-50" />
-      <p>Reading macOS memory statistics...</p>
+      <p>Reading system memory statistics...</p>
     </div>
   {/if}
 

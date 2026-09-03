@@ -42,8 +42,8 @@ describe('accessible action contracts', () => {
       'utf8'
     );
 
-    expect(source).toContain('ariaLabel={`Reveal ${model.name} in Finder`}');
-    expect(source).toContain('title="Reveal in Finder"');
+    expect(source).toContain('ariaLabel={`Show ${model.name} in file manager`}');
+    expect(source).toContain('title="Show in File Manager"');
   });
 
   it('offers keyboard-operable ordering controls in Settings', () => {

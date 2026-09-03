@@ -175,7 +175,7 @@ const mockDeveloperWorkspaces: DeveloperWorkspace[] = [
   },
   {
     id: 'workspace-this-mac',
-    name: 'This Mac',
+    name: 'This Computer',
     display_path: '/Users/mock',
   },
 ];

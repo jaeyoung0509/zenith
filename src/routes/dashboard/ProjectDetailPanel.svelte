@@ -19,7 +19,7 @@
   } from '../../lib/models/types';
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
   import { formatBytes } from '../../lib/utils/format';
-  import { tauriRevealInFinder } from '../../lib/utils/tauri';
+  import { tauriShowInFileManager } from '../../lib/utils/tauri';
   import Badge from '../../lib/components/Badge.svelte';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -104,8 +104,8 @@
     }
   }
 
-  function handleRevealInFinder(path: string) {
-    void tauriRevealInFinder(path);
+  function handleShowInFileManager(path: string) {
+    void tauriShowInFileManager(path);
   }
 
   function handleOpenInTerminal(path: string) {
@@ -130,11 +130,11 @@
       <Button
         variant="outline"
         size="sm"
-        onclick={() => handleRevealInFinder(project.identity.display_path)}
-        title="Reveal repository folder in Finder"
+        onclick={() => handleShowInFileManager(project.identity.display_path)}
+        title="Show repository folder in file manager"
       >
         <FolderOpen size={13} />
-        Reveal in Finder
+        Show in File Manager
       </Button>
       <Button
         variant="outline"

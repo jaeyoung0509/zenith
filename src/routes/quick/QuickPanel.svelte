@@ -323,7 +323,7 @@
         <!-- Storage Gauge -->
         <div class="space-y-1.5 p-2.5 rounded-xl border border-border/50 bg-card/40">
           <div class="flex justify-between text-xs font-medium">
-            <span class="text-muted-foreground">Mac Storage</span>
+            <span class="text-muted-foreground">Storage</span>
             <span class="font-mono text-foreground">{formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}</span>
           </div>
           <ProgressBar value={disk.percent_used ?? 0} height="h-2" />

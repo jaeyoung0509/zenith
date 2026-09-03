@@ -183,8 +183,8 @@ export const nativeApi = {
     return await unwrap(commands.getDiskVolumes());
   },
 
-  async openDiskUtility(): Promise<void> {
-    await unwrap(commands.openDiskUtility());
+  async openStorageSettings(): Promise<void> {
+    await unwrap(commands.openStorageSettings());
   },
 
   async getDockerStatus(): Promise<DockerStatus> {
@@ -230,8 +230,8 @@ export const nativeApi = {
     await unwrap(commands.saveSettings(settings));
   },
 
-  async revealInFinder(path: string): Promise<void> {
-    await unwrap(commands.revealInFinder(path));
+  async showInFileManager(path: string): Promise<void> {
+    await unwrap(commands.showInFileManager(path));
   },
 
   async openDashboard(): Promise<void> {

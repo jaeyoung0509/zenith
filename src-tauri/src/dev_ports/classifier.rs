@@ -49,7 +49,7 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
             project_name,
             working_directory,
             can_release: false,
-            blocked_reason: Some("Zenith or macOS system core process".to_string()),
+            blocked_reason: Some("Zenith or operating-system core process".to_string()),
         };
     }
 

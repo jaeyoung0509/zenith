@@ -466,11 +466,7 @@ pub fn register_home_workspace(
     if metadata.uid() != unsafe { libc::geteuid() } {
         return Err("The user home directory must be owned by the current user.".to_string());
     }
-    let name = if cfg!(target_os = "macos") {
-        "This Mac".to_string()
-    } else {
-        "This PC".to_string()
-    };
+    let name = "This Computer".to_string();
     Ok(store_workspace(canonical, name, true, workspaces_store)?.workspace)
 }
 
@@ -520,7 +516,9 @@ fn store_workspace(
         workspace: DeveloperWorkspace {
             id: id.clone(),
             name,
-            display_path: canonical.to_string_lossy().into_owned(),
+            display_path: Blacklist::normalize_path(&canonical)
+                .to_string_lossy()
+                .into_owned(),
         },
         path: canonical,
         identity,
@@ -737,7 +735,7 @@ fn global_go_module_candidate(
         artifact_relative: PathBuf::from("pkg/mod"),
         marker_paths: Vec::new(),
         evidence: vec![if workspace.whole_home {
-            "Built-in Scan this Mac scope".to_string()
+            "Built-in whole-home scan scope".to_string()
         } else {
             "Explicitly selected ~/go workspace".to_string()
         }],
@@ -1409,7 +1407,7 @@ fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("powershell.exe")
+        let output = crate::tooling::command("powershell.exe")
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -1732,7 +1730,22 @@ mod tests {
 
         assert_eq!(record.path, canonical_home);
         assert!(record.whole_home);
-        assert_eq!(workspace.name, "This Mac");
+        assert_eq!(workspace.name, "This Computer");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn workspace_display_path_hides_the_windows_verbatim_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temp.path()).unwrap();
+        let store = Mutex::new(HashMap::new());
+        let record = store_workspace(canonical, "Workspace".to_string(), false, &store).unwrap();
+
+        assert!(!record.workspace.display_path.starts_with(r"\\?\"));
+        assert_eq!(
+            PathBuf::from(&record.workspace.display_path),
+            Blacklist::normalize_path(&record.path)
+        );
     }
 
     #[test]

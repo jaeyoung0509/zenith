@@ -64,7 +64,7 @@ pub async fn get_disk_volumes() -> Result<Vec<DiskVolume>, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_disk_utility() -> Result<(), String> {
+pub async fn open_storage_settings() -> Result<(), String> {
     run_blocking(
         || {
             use crate::platform::SystemActionProvider;
@@ -227,7 +227,7 @@ pub async fn save_settings(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+pub async fn show_in_file_manager(path: String) -> Result<(), String> {
     run_blocking(
         move || {
             use crate::platform::SystemActionProvider;

@@ -2,7 +2,7 @@
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
   import { scanStore } from '../stores/scan.svelte';
-  import { tauriRevealInFinder } from '../utils/tauri';
+  import { tauriShowInFileManager } from '../utils/tauri';
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -24,7 +24,7 @@
 
   function handleReveal(e: MouseEvent) {
     e.stopPropagation();
-    tauriRevealInFinder(item.path);
+    tauriShowInFileManager(item.path);
   }
 </script>
 

@@ -97,7 +97,7 @@ impl CleanFailureReason {
     pub fn user_message(&self, target_name: &str) -> String {
         match self {
             CleanFailureReason::PermissionDenied => {
-                format!("macOS denied permission to clean {}. Check full disk access in System Settings.", target_name)
+                format!("The operating system denied permission to clean {}. Check your system's storage and privacy permissions.", target_name)
             }
             CleanFailureReason::ChangedSinceScan => {
                 format!("{} changed on disk since the last scan. Aborted cleaning to prevent data corruption.", target_name)

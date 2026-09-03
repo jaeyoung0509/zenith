@@ -882,7 +882,7 @@ export const mockApi = {
   async getDiskVolumes(): Promise<DiskVolume[]> {
     return [
       {
-        name: 'Macintosh HD',
+        name: 'Primary Volume',
         mount_point: '/',
         file_system: 'APFS',
         disk_type: 'SSD',
@@ -908,7 +908,7 @@ export const mockApi = {
     ];
   },
 
-  async openDiskUtility(): Promise<void> {
+  async openStorageSettings(): Promise<void> {
     // No-op in browser mock
   },
 
@@ -1083,7 +1083,7 @@ export const mockApi = {
     }
   },
 
-  async revealInFinder(_path: string): Promise<void> {
+  async showInFileManager(_path: string): Promise<void> {
     // No-op in browser mock
   },
 
@@ -1104,7 +1104,7 @@ export const mockApi = {
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {
     return {
       app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.4',
-      os_version: 'macOS 15.3.1 (Mock Preview)',
+      os_version: 'Browser Preview',
       arch: 'aarch64',
       log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
       enabled_features: [

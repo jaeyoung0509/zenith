@@ -369,12 +369,6 @@
           "markdownDescription": "Enables the open_dashboard_window command without any pre-configured scope."
         },
         {
-          "description": "Enables the open_disk_utility command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-open-disk-utility",
-          "markdownDescription": "Enables the open_disk_utility command without any pre-configured scope."
-        },
-        {
           "description": "Enables the open_in_terminal command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-in-terminal",
@@ -385,6 +379,12 @@
           "type": "string",
           "const": "allow-open-logs-folder",
           "markdownDescription": "Enables the open_logs_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_storage_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-storage-settings",
+          "markdownDescription": "Enables the open_storage_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the pick_developer_workspace command without any pre-configured scope.",
@@ -459,12 +459,6 @@
           "markdownDescription": "Enables the request_stop_agent_session command without any pre-configured scope."
         },
         {
-          "description": "Enables the reveal_in_finder command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-reveal-in-finder",
-          "markdownDescription": "Enables the reveal_in_finder command without any pre-configured scope."
-        },
-        {
           "description": "Enables the run_ai_safety_scan command without any pre-configured scope.",
           "type": "string",
           "const": "allow-run-ai-safety-scan",
@@ -499,6 +493,12 @@
           "type": "string",
           "const": "allow-setup-agent-integration",
           "markdownDescription": "Enables the setup_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_in_file_manager command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-in-file-manager",
+          "markdownDescription": "Enables the show_in_file_manager command without any pre-configured scope."
         },
         {
           "description": "Enables the start_developer_artifact_scan command without any pre-configured scope.",
@@ -723,12 +723,6 @@
           "markdownDescription": "Denies the open_dashboard_window command without any pre-configured scope."
         },
         {
-          "description": "Denies the open_disk_utility command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-open-disk-utility",
-          "markdownDescription": "Denies the open_disk_utility command without any pre-configured scope."
-        },
-        {
           "description": "Denies the open_in_terminal command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-in-terminal",
@@ -739,6 +733,12 @@
           "type": "string",
           "const": "deny-open-logs-folder",
           "markdownDescription": "Denies the open_logs_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_storage_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-storage-settings",
+          "markdownDescription": "Denies the open_storage_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the pick_developer_workspace command without any pre-configured scope.",
@@ -813,12 +813,6 @@
           "markdownDescription": "Denies the request_stop_agent_session command without any pre-configured scope."
         },
         {
-          "description": "Denies the reveal_in_finder command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-reveal-in-finder",
-          "markdownDescription": "Denies the reveal_in_finder command without any pre-configured scope."
-        },
-        {
           "description": "Denies the run_ai_safety_scan command without any pre-configured scope.",
           "type": "string",
           "const": "deny-run-ai-safety-scan",
@@ -853,6 +847,12 @@
           "type": "string",
           "const": "deny-setup-agent-integration",
           "markdownDescription": "Denies the setup_agent_integration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_in_file_manager command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-in-file-manager",
+          "markdownDescription": "Denies the show_in_file_manager command without any pre-configured scope."
         },
         {
           "description": "Denies the start_developer_artifact_scan command without any pre-configured scope.",
