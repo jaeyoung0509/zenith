@@ -19,7 +19,7 @@
     tauriPickDeveloperWorkspace,
     tauriPrepareDeveloperArtifactCleanup,
     tauriRegisterDeveloperHomeWorkspace,
-    tauriRevealInFinder,
+    tauriShowInFileManager,
     tauriStartDeveloperArtifactScan,
   } from '../../lib/utils/tauri';
   import {
@@ -567,7 +567,7 @@
                 {#if item.incomplete_reason}<span class={item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}>{item.incomplete_reason}</span>{/if}
               </div>
             </div>
-            <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => tauriRevealInFinder(item.path)} ariaLabel={`Show ${item.path} in file manager`} title="Show in File Manager">
+            <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => tauriShowInFileManager(item.path)} ariaLabel={`Show ${item.path} in file manager`} title="Show in File Manager">
               <FolderOpen size={13} />
             </Button>
           </div>

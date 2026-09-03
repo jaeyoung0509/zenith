@@ -6,8 +6,8 @@
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
   import {
     tauriGetDiskVolumes,
-    tauriOpenDiskUtility,
-    tauriRevealInFinder,
+    tauriOpenStorageSettings,
+    tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -142,7 +142,7 @@
                 class="h-6 w-6 text-muted-foreground shrink-0"
                 title="Show in File Manager"
                 ariaLabel={`Show ${volume.name || volume.mount_point} in file manager`}
-                onclick={() => tauriRevealInFinder(volume.mount_point)}
+                onclick={() => tauriShowInFileManager(volume.mount_point)}
               >
                 <FolderOpen size={12} />
               </Button>
@@ -180,7 +180,7 @@
         <Button
           variant="ghost"
           size="sm"
-          onclick={() => tauriOpenDiskUtility()}
+          onclick={() => tauriOpenStorageSettings()}
           class="text-xs text-muted-foreground gap-1 px-2.5"
           title="Open storage settings"
           ariaLabel="Open storage settings"

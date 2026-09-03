@@ -4,8 +4,8 @@
   import { scanStore } from '../../lib/stores/scan.svelte';
   import {
     tauriGetDiskVolumes,
-    tauriOpenDiskUtility,
-    tauriRevealInFinder,
+    tauriOpenStorageSettings,
+    tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import { formatBytes } from '../../lib/utils/format';
   import Button from '../../lib/components/Button.svelte';
@@ -58,7 +58,7 @@
       </div>
     </div>
     <div class="flex items-center gap-2">
-      <Button variant="outline" size="sm" class="gap-1.5" onclick={() => tauriOpenDiskUtility()}>
+      <Button variant="outline" size="sm" class="gap-1.5" onclick={() => tauriOpenStorageSettings()}>
         <ExternalLink size={13} />
         Storage Settings
       </Button>
@@ -111,7 +111,7 @@
                 </div>
                 <p class="mt-1 truncate text-micro font-mono text-muted-foreground">{volume.mount_point}</p>
               </div>
-              <Button variant="ghost" size="icon" class="h-7 w-7" ariaLabel="Show volume in file manager" title="Show in File Manager" onclick={() => tauriRevealInFinder(volume.mount_point)}>
+              <Button variant="ghost" size="icon" class="h-7 w-7" ariaLabel="Show volume in file manager" title="Show in File Manager" onclick={() => tauriShowInFileManager(volume.mount_point)}>
                 <FolderOpen size={13} />
               </Button>
             </div>

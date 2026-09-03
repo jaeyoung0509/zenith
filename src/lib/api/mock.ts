@@ -908,7 +908,7 @@ export const mockApi = {
     ];
   },
 
-  async openDiskUtility(): Promise<void> {
+  async openStorageSettings(): Promise<void> {
     // No-op in browser mock
   },
 
@@ -1083,7 +1083,7 @@ export const mockApi = {
     }
   },
 
-  async revealInFinder(_path: string): Promise<void> {
+  async showInFileManager(_path: string): Promise<void> {
     // No-op in browser mock
   },
 

@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::safety::Blacklist;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -346,18 +347,57 @@ fn is_eligible_safety_root(root: &Path) -> bool {
         return false;
     }
     let canonical = match root.canonicalize() {
-        Ok(c) => c,
+        Ok(value) => Blacklist::normalize_path(&value),
         Err(_) => return false,
     };
     if canonical.parent().is_none() {
         return false;
     }
-    if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
-        if canonical == home {
+    #[cfg(target_os = "windows")]
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    if let Some(home) = home {
+        let normalized_home = home
+            .canonicalize()
+            .map(|value| Blacklist::normalize_path(&value))
+            .unwrap_or_else(|_| Blacklist::normalize_path(&home));
+        if paths_equal_for_safety(&canonical, &normalized_home) {
             return false;
         }
     }
-    let canonical_str = canonical.to_string_lossy();
+    let canonical_str = canonical.to_string_lossy().replace('\\', "/");
+    let canonical_str = canonical_str.trim_end_matches('/');
+
+    #[cfg(target_os = "windows")]
+    if canonical_str.len() == 2
+        && canonical_str.as_bytes()[0].is_ascii_alphabetic()
+        && canonical_str.ends_with(':')
+    {
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    if canonical_str.len() >= 3
+        && canonical_str.as_bytes()[0].is_ascii_alphabetic()
+        && canonical_str.as_bytes()[1] == b':'
+        && [
+            "/Users",
+            "/Windows",
+            "/Program Files",
+            "/Program Files (x86)",
+            "/ProgramData",
+        ]
+        .iter()
+        .any(|denied| canonical_str[2..].eq_ignore_ascii_case(denied))
+    {
+        return false;
+    }
+
     let broad_denylist = [
         "/",
         "/Users",
@@ -376,7 +416,11 @@ fn is_eligible_safety_root(root: &Path) -> bool {
         "/opt",
     ];
     for denied in broad_denylist {
-        if canonical_str == denied || canonical_str == format!("{}/", denied) {
+        #[cfg(target_os = "windows")]
+        let matches = canonical_str.eq_ignore_ascii_case(denied);
+        #[cfg(not(target_os = "windows"))]
+        let matches = canonical_str == denied;
+        if matches {
             return false;
         }
     }
@@ -384,6 +428,18 @@ fn is_eligible_safety_root(root: &Path) -> bool {
         return false;
     }
     true
+}
+
+fn paths_equal_for_safety(left: &Path, right: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        left == right
+    }
 }
 
 fn strip_jsonc_comments(value: &str) -> String {
@@ -558,8 +614,24 @@ mod tests {
             assert!(!is_eligible_safety_root(Path::new("/Users")));
             assert!(!is_eligible_safety_root(Path::new("/System")));
         }
-        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+        #[cfg(target_os = "windows")]
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from);
+        #[cfg(not(target_os = "windows"))]
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from);
+        if let Some(home) = home {
             assert!(!is_eligible_safety_root(&home));
+
+            #[cfg(target_os = "windows")]
+            {
+                let users_root = home.parent().expect("user profile has a parent");
+                assert!(!is_eligible_safety_root(users_root));
+                let drive_root = home.ancestors().last().expect("user profile has a root");
+                assert!(!is_eligible_safety_root(drive_root));
+            }
         }
     }
 }

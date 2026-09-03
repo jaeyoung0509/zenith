@@ -466,4 +466,12 @@ Windows `std::fs::canonicalize` returns verbatim paths such as `\\?\C:\...`.
 Safety comparisons normalize the verbatim drive or UNC prefix before applying
 drive-root, protected-directory, traversal, and alternate-data-stream rules.
 Backend records may retain canonical paths for filesystem identity and long-path
-operations, but serialized display paths must use the normalized form.
+operations, but serialized display paths must use the normalized form. The
+automatic AI safety scanner applies the same normalization and resolves
+`USERPROFILE` before `HOME` on Windows so drive roots, the user profile, and
+broad operating-system roots can never become recursive scan scopes.
+
+Cross-platform system actions use capability and IPC names that describe the
+intent (`open_storage_settings`, `show_in_file_manager`) rather than a specific
+macOS application. Native adapters remain responsible for choosing the platform's
+file manager and storage settings pane at runtime.

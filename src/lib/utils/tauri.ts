@@ -178,8 +178,8 @@ export function tauriGetDiskVolumes(): Promise<DiskVolume[]> {
   return api.getDiskVolumes();
 }
 
-export function tauriOpenDiskUtility(): Promise<void> {
-  return api.openDiskUtility();
+export function tauriOpenStorageSettings(): Promise<void> {
+  return api.openStorageSettings();
 }
 
 export function tauriGetDockerStatus(): Promise<DockerStatus> {
@@ -225,8 +225,8 @@ export function tauriSaveSettings(settings: ZenithSettings): Promise<void> {
   return api.saveSettings(settings);
 }
 
-export function tauriRevealInFinder(path: string): Promise<void> {
-  return api.revealInFinder(path);
+export function tauriShowInFileManager(path: string): Promise<void> {
+  return api.showInFileManager(path);
 }
 
 export function tauriOpenDashboard(): Promise<void> {
