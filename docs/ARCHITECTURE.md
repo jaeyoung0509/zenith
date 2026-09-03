@@ -439,7 +439,10 @@ Only the final job has `contents: write`; platform jobs can build and upload
 workflow artifacts but cannot create competing GitHub Releases. Public filenames
 are stable, while their download URLs remain immutable because the version is
 part of the tag path. Each platform emits separate build metadata and checksums,
-and the publisher also emits their combined checksum file.
+and the publisher also emits their combined checksum file. Both platform jobs
+use `scripts/release_checksums.cjs` rather than shell-specific text writers.
+The publisher normalizes any incoming CRLF to LF, validates every checksum line,
+and runs `shasum -c` against the merged artifacts before it can create a release.
 
 The Windows job generates a WinGet community-repository multi-file manifest
 from the exact NSIS bytes and computed SHA256 hash. v0.2.0 is the explicitly

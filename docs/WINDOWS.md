@@ -58,6 +58,12 @@ unknown-publisher state. Users should verify `SHA256SUMS.txt` before overriding
 Microsoft Defender SmartScreen. A self-signed certificate is not an acceptable
 public-release substitute.
 
+Checksum manifests are generated and combined by
+`scripts/release_checksums.cjs`. The script writes LF-only text on every runner,
+normalizes imported CRLF manifests, and validates their entry shape. The final
+publisher must run `shasum -c SHA256SUMS.txt` against both release binaries
+before uploading any public assets.
+
 After that first installer exists, Zenith can satisfy SignPath Foundation's
 "already released" eligibility condition and apply for free open-source code
 signing. The approval-dependent identifiers must not be guessed or committed.

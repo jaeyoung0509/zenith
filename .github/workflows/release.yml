@@ -39,7 +39,7 @@ jobs:
           workspaces: '. -> target'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
@@ -73,7 +73,7 @@ jobs:
           pnpm build
 
       - name: Upload verified frontend
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-frontend-dist
           path: dist
@@ -99,7 +99,7 @@ jobs:
           workspaces: '. -> target'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
@@ -114,7 +114,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download verified frontend
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: release-frontend-dist
           path: dist
@@ -153,10 +153,12 @@ jobs:
           Notarized: no
           Build Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
-          (cd artifacts && shasum -a 256 Zenith-macos-arm64.dmg > SHA256SUMS-macos-arm64.txt)
+          node scripts/release_checksums.cjs write \
+            --file artifacts/Zenith-macos-arm64.dmg \
+            --output artifacts/SHA256SUMS-macos-arm64.txt
 
       - name: Upload macOS release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zenith-release-macos-arm64
           path: |
@@ -185,7 +187,7 @@ jobs:
           workspaces: '. -> target'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
@@ -200,7 +202,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download verified frontend
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: release-frontend-dist
           path: dist
@@ -243,15 +245,16 @@ jobs:
           Build Date: $buildDate
           "@ | Set-Content -Path artifacts/BUILD_INFO-windows-x64.txt -Encoding utf8
 
-          $hash = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash
-          "$hash  $artifactName" | Set-Content -Path artifacts/SHA256SUMS-windows-x64.txt -Encoding ascii
+          node scripts/release_checksums.cjs write `
+            --file $artifactPath `
+            --output artifacts/SHA256SUMS-windows-x64.txt
           node scripts/generate_winget_manifest.cjs `
             --version $version `
             --installer $artifactPath `
             --output artifacts/winget
 
       - name: Upload Windows release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zenith-release-windows-x64
           path: |
@@ -269,15 +272,23 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release scripts
+        uses: actions/checkout@v5
+
       - name: Download platform artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: zenith-release-*
           path: artifacts
           merge-multiple: true
 
       - name: Combine platform checksums
-        run: cat artifacts/SHA256SUMS-*.txt > artifacts/SHA256SUMS.txt
+        run: |
+          node scripts/release_checksums.cjs combine \
+            --output artifacts/SHA256SUMS.txt \
+            artifacts/SHA256SUMS-macos-arm64.txt \
+            artifacts/SHA256SUMS-windows-x64.txt
+          (cd artifacts && shasum -a 256 -c SHA256SUMS.txt)
 
       - name: Create one prerelease with macOS and Windows assets
         uses: softprops/action-gh-release@v2
@@ -298,4 +309,4 @@ jobs:
 
             The macOS ARM64 build is not notarized and the Windows x64 NSIS installer is not yet code signed. Windows users should expect Microsoft Defender SmartScreen to show an unknown-publisher warning. Verify the published SHA256 checksum before running the installer.
 
-            Zenith is applying for SignPath Foundation open-source code signing after this first Windows release. A future release will replace the transition build with a verified, timestamped signature; immutable assets for this version will not be overwritten.
+            Zenith is applying for SignPath Foundation open-source code signing after this first Windows release. A future release will replace the transition build with a verified, timestamped signature; installer binaries for this version will not be overwritten.

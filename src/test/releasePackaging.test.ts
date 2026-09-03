@@ -83,4 +83,60 @@ describe('release packaging contracts', () => {
     expect(localeManifest).toContain('License: MIT');
     expect(localeManifest).toContain('ManifestType: defaultLocale');
   });
+
+  it('writes and combines portable LF-only checksum manifests', () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'zenith-checksums-'));
+    temporaryDirectories.push(fixtureRoot);
+    const macArtifact = join(fixtureRoot, 'Zenith-macos-arm64.dmg');
+    const windowsArtifact = join(fixtureRoot, 'Zenith-windows-x64-setup.exe');
+    const macManifest = join(fixtureRoot, 'SHA256SUMS-macos-arm64.txt');
+    const windowsManifest = join(fixtureRoot, 'SHA256SUMS-windows-x64.txt');
+    const combinedManifest = join(fixtureRoot, 'SHA256SUMS.txt');
+    writeFileSync(macArtifact, 'mac fixture');
+    writeFileSync(windowsArtifact, 'windows fixture');
+
+    for (const [artifact, manifest] of [
+      [macArtifact, macManifest],
+      [windowsArtifact, windowsManifest],
+    ]) {
+      execFileSync(
+        process.execPath,
+        ['scripts/release_checksums.cjs', 'write', '--file', artifact, '--output', manifest],
+        { cwd: repositoryRoot, stdio: 'pipe' },
+      );
+    }
+
+    const windowsChecksum = readFileSync(windowsManifest, 'utf8');
+    writeFileSync(windowsManifest, windowsChecksum.replace(/\n/g, '\r\n'));
+    execFileSync(
+      process.execPath,
+      [
+        'scripts/release_checksums.cjs',
+        'combine',
+        '--output',
+        combinedManifest,
+        macManifest,
+        windowsManifest,
+      ],
+      { cwd: repositoryRoot, stdio: 'pipe' },
+    );
+
+    const combined = readFileSync(combinedManifest, 'utf8');
+    expect(combined).not.toContain('\r');
+    expect(combined).toMatch(/Zenith-macos-arm64\.dmg\n/);
+    expect(combined).toMatch(/Zenith-windows-x64-setup\.exe\n$/);
+  });
+
+  it('uses Node 24-based artifact actions in CI and release workflows', () => {
+    const workflows = ['.github/workflows/ci.yml', '.github/workflows/release.yml']
+      .map((workflow) => readFileSync(join(repositoryRoot, workflow), 'utf8'))
+      .join('\n');
+
+    expect(workflows).toContain('pnpm/action-setup@v6');
+    expect(workflows).toContain('actions/upload-artifact@v7');
+    expect(workflows).toContain('actions/download-artifact@v8');
+    expect(workflows).not.toMatch(/pnpm\/action-setup@v4/);
+    expect(workflows).not.toMatch(/actions\/upload-artifact@v4/);
+    expect(workflows).not.toMatch(/actions\/download-artifact@v5/);
+  });
 });
