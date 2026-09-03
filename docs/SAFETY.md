@@ -124,7 +124,7 @@ blacklisted for generic signature-based cleanup.
 ## Developer Artifact Review
 
 Developer Artifact Review is manual inventory, not Quick Clean. `Scan this
-Mac` registers the canonical current-user home as a backend-owned scan scope;
+computer` registers the canonical current-user home as a backend-owned scan scope;
 the frontend receives only its opaque workspace ID and cannot submit a path,
 scope, or cleanup rule. The native picker remains available for narrower
 user-owned folders beneath home.
@@ -220,9 +220,9 @@ and requires a fresh inspection rather than weakening the fail-closed check.
 
 ## Native Trash semantics
 
-Large Files and App Uninstaller move reviewed targets to the macOS Trash through
-the dedicated Trash adapter. They do not call the generic tree deleter, `rm`, or
-`remove_dir_all`.
+Large Files and App Uninstaller move reviewed targets to the platform's native
+Trash or Recycle Bin through the dedicated Trash adapter. They do not call the
+generic tree deleter, `rm`, or `remove_dir_all`.
 
 Trash plans expire after five minutes and are removed from the backend plan map
 before execution, making them one-shot. Every target is revalidated immediately

@@ -107,7 +107,7 @@ describe('Project Cockpit', () => {
     expect(rendered.body).toContain('Development Services');
     expect(rendered.body).toContain('Developer Storage');
     expect(rendered.body).toContain('localhost:5173');
-    expect(rendered.body).toContain('Reveal in Finder');
+    expect(rendered.body).toContain('Show in File Manager');
     expect(rendered.body).toContain('Open in Terminal');
     expect(rendered.body).toContain('Stop');
   });

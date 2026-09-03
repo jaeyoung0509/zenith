@@ -160,7 +160,7 @@
           {/if}
         </div>
         <p class="text-xs text-muted-foreground mt-0.5">
-          Prevent idle sleep during long AI sessions, builds, and renders using macOS IOKit power assertions.
+          Prevent idle sleep during long AI sessions, builds, and renders using native power-management APIs.
         </p>
       </div>
     </div>
@@ -215,11 +215,11 @@
         <p class="text-xs text-muted-foreground leading-relaxed">
           {#if awakeState.is_active}
             {#if awakeState.manual_expires_at != null}
-              <span>Manual session • <strong class="text-foreground font-mono">{formatCountdown(awakeState.manual_expires_at)}</strong> (until {new Date(awakeState.manual_expires_at * 1000).toLocaleTimeString()}) • {awakeState.behavior === 'keep_display_awake' ? 'Display kept awake' : 'Mac awake (display may sleep)'}</span>
+              <span>Manual session • <strong class="text-foreground font-mono">{formatCountdown(awakeState.manual_expires_at)}</strong> (until {new Date(awakeState.manual_expires_at * 1000).toLocaleTimeString()}) • {awakeState.behavior === 'keep_display_awake' ? 'Display kept awake' : 'Computer awake (display may sleep)'}</span>
             {:else if awakeState.trigger_source?.includes('Manual')}
-              <span>Manual indefinite session active • {awakeState.behavior === 'keep_display_awake' ? 'Display kept awake' : 'Mac awake (display may sleep)'}</span>
+              <span>Manual indefinite session active • {awakeState.behavior === 'keep_display_awake' ? 'Display kept awake' : 'Computer awake (display may sleep)'}</span>
             {:else if activeRule}
-              <span><strong class="text-foreground">{activeRule.app_name}</strong> is running • {activeRule.power_condition === 'ac_power_only' ? 'Plugged In (AC)' : 'Always'} • {activeRule.behavior === 'keep_display_awake' ? 'Display kept awake' : 'Mac awake (display may sleep)'}</span>
+              <span><strong class="text-foreground">{activeRule.app_name}</strong> is running • {activeRule.power_condition === 'ac_power_only' ? 'Plugged In (AC)' : 'Always'} • {activeRule.behavior === 'keep_display_awake' ? 'Display kept awake' : 'Computer awake (display may sleep)'}</span>
             {:else}
               <span>{awakeState.trigger_source || 'System sleep is currently prevented by Zenith.'}</span>
             {/if}
@@ -247,15 +247,15 @@
     </div>
   </Card>
 
-  <!-- Quick Manual Timers (Caffeinate) -->
+  <!-- Quick manual keep-awake timers -->
   <div class="space-y-3">
     <div class="flex items-center justify-between">
       <div>
         <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Quick Manual Duration (Caffeinate)
+          Quick Manual Duration
         </h3>
         <p class="text-meta text-muted-foreground mt-0.5">
-          Temporarily keep your Mac awake regardless of background rules.
+          Temporarily keep your computer awake regardless of background rules.
         </p>
       </div>
 
@@ -267,15 +267,15 @@
           class="px-2.5 py-1 rounded text-meta font-medium transition-all {manualBehavior === 'prevent_system_sleep' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
           title="Work continues while you're away; display may turn off"
         >
-          Keep Mac Awake
+          Keep Computer Awake
         </button>
         <button
           type="button"
           onclick={() => (manualBehavior = 'keep_display_awake')}
           class="px-2.5 py-1 rounded text-meta font-medium transition-all {manualBehavior === 'keep_display_awake' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-          title="Keeps both Mac and display awake while idle"
+          title="Keeps both the computer and display awake while idle"
         >
-          Keep Mac + Display Awake
+          Keep Computer + Display Awake
         </button>
       </div>
     </div>
@@ -333,7 +333,7 @@
         <div class="space-y-1 flex-1">
           <div class="text-xs font-semibold text-foreground">Enable Recommended Keep Awake Rules?</div>
           <p class="text-meta text-muted-foreground leading-relaxed">
-            Zenith can automatically keep your Mac awake while you are actively working with development tools (Codex, Claude Code, Docker) and plugged into AC power. Rules stay disabled by default until you explicitly opt in.
+            Zenith can automatically keep your computer awake while you are actively working with development tools (Codex, Claude Code, Docker) and plugged into AC power. Rules stay disabled by default until you explicitly opt in.
           </p>
           <div class="pt-2">
             <Button variant="primary" size="sm" onclick={handleEnableRecommendedRules}>
@@ -376,7 +376,7 @@
         <div class="space-y-1">
           <h4 class="text-sm font-semibold text-foreground">Keep long-running work alive while you're away</h4>
           <p class="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
-            Zenith can watch Codex, Claude Code, long builds, 3D renders, and other processes and keep your Mac awake only when needed.
+            Zenith can watch Codex, Claude Code, long builds, 3D renders, and other processes and keep your computer awake only when needed.
           </p>
         </div>
         <Button variant="primary" size="sm" onclick={() => (showAddModal = true)} class="gap-1.5">
@@ -402,7 +402,7 @@
                       Running (Standby)
                     </span>
                   {:else if evaluation.status === 'waiting_power'}
-                    <span class="px-2 py-0.5 rounded-full text-caption font-medium border border-warning/30 bg-warning/10 text-warning" title="Process is running, but rule requires AC Power while Mac is on battery.">
+                    <span class="px-2 py-0.5 rounded-full text-caption font-medium border border-warning/30 bg-warning/10 text-warning" title="Process is running, but the rule requires AC power while the computer is on battery.">
                       Waiting for AC power
                     </span>
                   {:else if evaluation.status === 'waiting_process'}
@@ -424,7 +424,7 @@
                 <span>•</span>
                 <span>{rule.power_condition === 'always' ? 'Always (AC & Battery)' : 'Plugged In (AC) Only'}</span>
                 <span>•</span>
-                <span>{rule.behavior === 'prevent_system_sleep' ? 'Keep Mac awake' : 'Keep Mac + display awake'}</span>
+                <span>{rule.behavior === 'prevent_system_sleep' ? 'Keep computer awake' : 'Keep computer + display awake'}</span>
               </div>
             </div>
 
@@ -472,7 +472,7 @@
           <div class="min-w-0 flex-1">
             <p class="text-xs font-medium text-foreground">{isPickingApp ? 'Opening Applications…' : 'Choose from Applications'}</p>
             <p class="mt-0.5 truncate text-caption text-muted-foreground">
-              {selectedAppPath || 'Select an installed macOS app to auto-fill its executable pattern.'}
+              {selectedAppPath || 'Select an installed application to auto-fill its executable pattern.'}
             </p>
           </div>
           <FolderOpen size={15} class="shrink-0 text-muted-foreground" />
@@ -565,7 +565,7 @@
               >
                 <div class="font-medium flex items-center gap-1.5">
                   <Moon size={13} class="text-indigo-400" />
-                  <span>Keep Mac Awake</span>
+                  <span>Keep Computer Awake</span>
                 </div>
                 <div class="text-caption text-muted-foreground mt-0.5">Work continues while you're away. The display may turn off.</div>
               </button>
@@ -577,7 +577,7 @@
               >
                 <div class="font-medium flex items-center gap-1.5">
                   <Monitor size={13} class="text-blue-400" />
-                  <span>Keep Mac + Display Awake</span>
+                  <span>Keep Computer + Display Awake</span>
                 </div>
                 <div class="text-caption text-muted-foreground mt-0.5">Work continues and the display stays on while idle.</div>
               </button>

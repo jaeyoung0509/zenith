@@ -23,12 +23,25 @@ impl std::fmt::Display for SubprocessError {
 
 impl std::error::Error for SubprocessError {}
 
-/// Resolves command-line tools from both the inherited PATH and common macOS
-/// installation locations. Finder-launched applications receive a minimal PATH,
-/// so relying on `Command::new("tool")` alone makes installed tools disappear.
+/// Resolves command-line tools from both the inherited PATH and common platform
+/// installation locations. Desktop-launched applications can receive a minimal
+/// PATH, so relying on `Command::new("tool")` alone makes installed tools disappear.
 pub fn command(name: &str) -> Command {
-    Command::new(resolve(name).unwrap_or_else(|| PathBuf::from(name)))
+    let mut command = Command::new(resolve(name).unwrap_or_else(|| PathBuf::from(name)));
+    configure_background_command(&mut command);
+    command
 }
+
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_command: &mut Command) {}
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -37,6 +50,9 @@ use std::sync::mpsc;
 /// Runs a command in an isolated process group or Windows Job Object with a strict timeout and pipe draining to prevent deadlock.
 pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, SubprocessError> {
     let program = cmd.get_program().to_string_lossy().to_string();
+    // Callers may construct a Command directly (for example a native picker).
+    // Keep all timeout-managed subprocesses headless on Windows.
+    configure_background_command(&mut cmd);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -319,12 +335,16 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::is_executable;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    #[cfg(unix)]
     #[test]
     fn resolver_rejects_non_executable_files() {
         let directory = tempfile::tempdir().unwrap();
@@ -337,6 +357,20 @@ mod tests {
         assert!(is_executable(&file));
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn background_command_captures_output_without_a_console() {
+        let mut cmd = std::process::Command::new("cmd.exe");
+        cmd.args(["/D", "/C", "echo hello world"]);
+        let output = super::run_with_timeout(cmd, std::time::Duration::from_secs(2)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "hello world"
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn run_with_timeout_captures_output() {
         let mut cmd = std::process::Command::new("echo");
@@ -349,6 +383,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn run_with_timeout_terminates_slow_process() {
         let mut cmd = std::process::Command::new("sleep");

@@ -54,7 +54,7 @@ returns to the Projects list.
   path. Process-only observations never claim detailed agent state.
 
 ### Level 2: Project Cockpit
-- **Repository Actions**: Open in Terminal and Reveal in Finder controls.
+- **Repository Actions**: Open in Terminal and Show in File Manager controls.
 - **Active Agent Sessions**: Truthful lifecycle status, evidence classification, elapsed
   runtime, CPU %, memory usage, and graceful stop controls for eligible sessions.
 - **Correlated Development Services**: List of running ports with deep links to the

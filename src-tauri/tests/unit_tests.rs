@@ -315,6 +315,37 @@ fn test_windows_blacklist_and_path_defense() {
     assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder ")));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
+    use std::path::{Path, PathBuf};
+    use zenith_lib::safety::Blacklist;
+
+    let user_cache = Path::new(r"\\?\C:\Users\테스트\.gemini\antigravity-cli\log");
+    assert_eq!(
+        Blacklist::normalize_path(user_cache),
+        PathBuf::from(r"C:\Users\테스트\.gemini\antigravity-cli\log")
+    );
+    assert_eq!(
+        Blacklist::normalize_path(Path::new(r"\\?\UNC\server\share\cache")),
+        PathBuf::from(r"\\server\share\cache")
+    );
+    assert!(!Blacklist::is_blacklisted(user_cache));
+    assert!(Blacklist::validate(user_cache).is_ok());
+
+    assert!(Blacklist::is_blacklisted(Path::new(r"\\?\C:\")));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        r"\\?\C:\Windows\System32"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        r"\\?\C:\safe\file.txt:stream"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new(
+        r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new(r"\\.\PhysicalDrive0")));
+}
+
 #[test]
 fn test_windows_reparse_point_symlink_defense() {
     use std::path::Path;

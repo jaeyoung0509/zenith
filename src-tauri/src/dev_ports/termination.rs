@@ -180,9 +180,9 @@ impl DevPortSystem for RealDevPortSystem {
                 }
                 crate::diagnostics::log_error(
                     "dev_ports",
-                    "Zenith could not request termination from macOS",
+                    "Zenith could not request process termination",
                 );
-                return Err("Zenith could not request termination from macOS.".to_string());
+                return Err("Zenith could not request process termination.".to_string());
             }
             Ok(())
         }

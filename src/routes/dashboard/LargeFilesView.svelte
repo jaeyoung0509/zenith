@@ -539,8 +539,8 @@
                 variant="ghost"
                 size="icon"
                 onclick={() => tauriRevealInFinder(`${item.display_parent}/${item.name}`)}
-                ariaLabel={`Reveal ${item.name} in Finder`}
-                title="Reveal in Finder"
+                ariaLabel={`Show ${item.name} in file manager`}
+                title="Show in File Manager"
               >
                 <FolderOpen size={14} />
               </Button>

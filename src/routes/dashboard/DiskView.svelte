@@ -60,7 +60,7 @@
     <div class="flex items-center gap-2">
       <Button variant="outline" size="sm" class="gap-1.5" onclick={() => tauriOpenDiskUtility()}>
         <ExternalLink size={13} />
-        Disk Utility
+        Storage Settings
       </Button>
       <Button variant="outline" size="sm" class="gap-1.5" disabled={isLoading} onclick={refresh}>
         <RefreshCw size={13} class={isLoading ? 'animate-gentle-spin' : ''} />
@@ -76,7 +76,7 @@
       <div class="flex items-start justify-between gap-6">
         <div>
           <p class="text-caption uppercase tracking-wider text-muted-foreground">Primary storage</p>
-          <p class="mt-1 text-sm font-semibold">{primary.name || 'Macintosh HD'}</p>
+          <p class="mt-1 text-sm font-semibold">{primary.name || 'Primary Volume'}</p>
           <p class="mt-0.5 text-caption font-mono text-muted-foreground">{primary.mount_point} · {primary.file_system} · {primary.disk_type}</p>
         </div>
         <div class="text-right">
@@ -111,7 +111,7 @@
                 </div>
                 <p class="mt-1 truncate text-micro font-mono text-muted-foreground">{volume.mount_point}</p>
               </div>
-              <Button variant="ghost" size="icon" class="h-7 w-7" ariaLabel="Reveal volume in Finder" title="Reveal in Finder" onclick={() => tauriRevealInFinder(volume.mount_point)}>
+              <Button variant="ghost" size="icon" class="h-7 w-7" ariaLabel="Show volume in file manager" title="Show in File Manager" onclick={() => tauriRevealInFinder(volume.mount_point)}>
                 <FolderOpen size={13} />
               </Button>
             </div>

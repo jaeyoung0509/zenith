@@ -131,10 +131,10 @@
         variant="outline"
         size="sm"
         onclick={() => handleRevealInFinder(project.identity.display_path)}
-        title="Reveal repository folder in Finder"
+        title="Show repository folder in file manager"
       >
         <FolderOpen size={13} />
-        Reveal in Finder
+        Show in File Manager
       </Button>
       <Button
         variant="outline"

@@ -788,7 +788,7 @@
     </h3>
     <Card class="p-4 bg-card/70 text-xs space-y-2">
       <div class="flex items-center justify-between">
-        <span class="font-medium text-foreground">Zenith macOS Developer System Manager</span>
+        <span class="font-medium text-foreground">Zenith Developer System Manager</span>
         <Badge variant="outline" class="font-mono">{formatVersion(APP_VERSION)}</Badge>
       </div>
       <p class="text-muted-foreground leading-relaxed">

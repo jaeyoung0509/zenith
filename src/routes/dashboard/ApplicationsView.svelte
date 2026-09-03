@@ -369,7 +369,7 @@
               class="gap-1.5"
             >
               <FolderOpen size={13} />
-              Finder
+              File Manager
             </Button>
           </div>
 
