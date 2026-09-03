@@ -2,6 +2,61 @@ use crate::models::{Category, RiskTier};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheManagementMode {
+    #[default]
+    Zenith,
+    ToolManaged,
+    Advisory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheArtifactKind {
+    #[default]
+    Temporary,
+    DownloadCache,
+    PackageStore,
+    BuildArtifact,
+    CompiledKernel,
+    OptimizedEngine,
+    Autotune,
+    ModelWeight,
+    PromptOrSessionState,
+    RuntimeMemory,
+    Log,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheUsageConfidence {
+    Exact,
+    Approximate,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheSizeSemantics {
+    #[default]
+    PhysicalReclaimable,
+    ConservativeLowerBound,
+    Informational,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+pub struct CacheMetadata {
+    pub provider: String,
+    pub management_mode: CacheManagementMode,
+    pub artifact_kind: CacheArtifactKind,
+    pub consequence: String,
+    pub size_semantics: CacheSizeSemantics,
+    #[serde(default)]
+    pub last_used_confidence: CacheUsageConfidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 pub struct FileSize {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
@@ -32,6 +87,8 @@ pub struct ScanItem {
     pub size: FileSize,
     pub file_count: usize,
     pub description: String,
+    #[serde(default)]
+    pub cache_metadata: CacheMetadata,
     pub is_selected: bool,
     #[serde(with = "crate::ipc_numeric::option_u64")]
     #[specta(type = Option<u64>)]
@@ -107,4 +164,42 @@ pub enum ScanEvent {
     Error {
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_metadata_and_large_numbers_survive_ipc_serialization() {
+        const MAX_SAFE: u64 = 9_007_199_254_740_991;
+        let item = ScanItem {
+            id: "dev.uv.cache".into(),
+            signature_id: "dev.uv.cache".into(),
+            name: "uv cache".into(),
+            category: Category::Developer,
+            risk: RiskTier::Rebuild,
+            path: "/Users/test/Library/Caches/uv".into(),
+            size: FileSize::new(MAX_SAFE, Some(MAX_SAFE - 1)),
+            file_count: 1,
+            description: "owner managed".into(),
+            cache_metadata: CacheMetadata {
+                provider: "uv".into(),
+                management_mode: CacheManagementMode::ToolManaged,
+                artifact_kind: CacheArtifactKind::PackageStore,
+                consequence: "re-download".into(),
+                size_semantics: CacheSizeSemantics::ConservativeLowerBound,
+                last_used_confidence: CacheUsageConfidence::Unknown,
+            },
+            is_selected: false,
+            last_modified: Some(MAX_SAFE - 2),
+            exists: true,
+        };
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["size"]["logical"], MAX_SAFE);
+        assert_eq!(json["size"]["allocated"], MAX_SAFE - 1);
+        assert_eq!(json["last_modified"], MAX_SAFE - 2);
+        assert_eq!(json["cache_metadata"]["management_mode"], "tool_managed");
+        assert_eq!(json["cache_metadata"]["artifact_kind"], "package_store");
+    }
 }

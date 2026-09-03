@@ -302,6 +302,25 @@ produces an error and leaves the target untouched where possible. Cleanup events
 report per-target results instead of converting a partial failure into a
 success.
 
+## Tool-managed cache safety
+
+Package stores and AI runtime roots are not authorized merely because their
+paths are known. When an owner exposes locking, garbage collection, revision
+selection, or project-aware purge, Zenith must use a typed fixed-argument
+adapter or remain advisory. `external_command` targets rediscover and
+canonicalize their path immediately before mutation, require current-user
+containment, reject symlinks/reparse points and untrusted executables, and fail
+if the owning process is active or the location changed. Frontend values can
+never select executables, arguments, paths, environment variables, packages,
+or model revisions.
+
+GPU/JIT signatures cover only independently rebuildable per-user defaults.
+Driver packages, ProgramData, WSL VHDX files, container volumes, models,
+datasets, optimized engines, performance databases, prompt/session state, and
+mixed runtime roots remain out of generic deletion. Allocated bytes for shared,
+hard-linked, cloned, sparse, or deduplicated stores are labeled as a lower
+bound rather than promised reclaimed space.
+
 ## Regression tests
 
 Changes to a safety boundary require a temporary-fixture or pure-scope regression

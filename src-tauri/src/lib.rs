@@ -2,6 +2,7 @@ pub mod agent_activity;
 pub mod ai_control_center;
 pub mod ai_usage;
 pub mod applications;
+pub mod cache_providers;
 pub mod cleaner;
 pub mod commands;
 pub mod dev_ports;

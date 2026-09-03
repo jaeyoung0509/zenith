@@ -470,7 +470,10 @@ fn same_directory_identity(path: &Path, expected: &FileIdentity) -> bool {
 
 fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) -> bool {
     let expected = match kind {
-        DeveloperArtifactKind::CargoTarget | DeveloperArtifactKind::MavenTarget => "target",
+        DeveloperArtifactKind::CargoTarget
+        | DeveloperArtifactKind::MavenTarget
+        | DeveloperArtifactKind::SbtTarget
+        | DeveloperArtifactKind::ClojureTarget => "target",
         DeveloperArtifactKind::NodeModules => "node_modules",
         DeveloperArtifactKind::PythonVenv => {
             return relative == Path::new(".venv") || relative == Path::new("venv")
@@ -486,6 +489,10 @@ fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) ->
         DeveloperArtifactKind::FlutterTooling => ".dart_tool",
         DeveloperArtifactKind::ElixirBuild => "_build",
         DeveloperArtifactKind::ElixirDeps => "deps",
+        DeveloperArtifactKind::ErlangBuild => "_build",
+        DeveloperArtifactKind::HaskellStackWork => ".stack-work",
+        DeveloperArtifactKind::HaskellDistNewstyle => "dist-newstyle",
+        DeveloperArtifactKind::ZigCache => ".zig-cache",
         DeveloperArtifactKind::TerraformCache => ".terraform",
         DeveloperArtifactKind::GoModuleCache => return relative == Path::new("pkg/mod"),
     };

@@ -1,3 +1,4 @@
+use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::metrics::DiskMetricsCollector;
 use crate::models::{
@@ -122,6 +123,22 @@ impl CleanExecutor {
         }
 
         let path = &target.path;
+
+        if crate::cache_providers::mutation_blocked_by_active_runtime(&target.signature_id) {
+            return CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().into_owned(),
+                status: CleanStatus::Failed,
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(CleanFailureReason::ExternalCommandFailed),
+                error_message: Some(
+                    "A matching AI compiler or Python runtime is active. Close it and scan again."
+                        .to_string(),
+                ),
+            };
+        }
 
         // 1. Blacklist check (lexical & canonical)
         if let Err(e) = Blacklist::validate(path) {
@@ -262,7 +279,28 @@ impl CleanExecutor {
                 };
             }
             CleanStrategy::ExternalCommand => {
-                SafeTreeDeleter::delete_contents(path, &target.exclusions)
+                return match CacheProviderRegistry::prune(&target.signature_id, path) {
+                    Ok(reclaimed) => CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                        status: CleanStatus::Success,
+                        success: true,
+                        bytes_reclaimed: reclaimed,
+                        failure_reason: None,
+                        error_message: None,
+                    },
+                    Err(error) => CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ExternalCommandFailed),
+                        error_message: Some(error),
+                    },
+                };
             }
             CleanStrategy::DockerPrune => unreachable!(),
         };

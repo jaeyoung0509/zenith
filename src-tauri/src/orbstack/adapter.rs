@@ -60,6 +60,7 @@ impl OrbStackAdapter {
             description:
                 "Active container and Linux VM data. Inspect or compact it in OrbStack; Zenith will not delete it."
                     .to_string(),
+            cache_metadata: Default::default(),
             is_selected: false,
             last_modified,
             exists: true,

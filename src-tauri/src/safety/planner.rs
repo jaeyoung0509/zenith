@@ -182,6 +182,7 @@ mod tests {
             size: FileSize::new(1024, Some(512)),
             file_count: 1,
             description: String::new(),
+            cache_metadata: Default::default(),
             is_selected: true,
             last_modified: None,
             exists: true,
