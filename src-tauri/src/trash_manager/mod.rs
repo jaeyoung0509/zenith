@@ -119,41 +119,49 @@ impl TrashPlanner {
         inspection: &AppInspectionRecord,
         selected_related_ids: &[String],
     ) -> Result<TrashPlan, String> {
-        let mut targets = Vec::new();
-        let app_size = &inspection.inspection.app;
-        targets.push(TrashTarget {
-            item_id: inspection.inspection.app.id.clone(),
-            path: inspection.app_path.clone(),
-            identity: inspection.app_identity.clone(),
-            logical_size: app_size.logical_size,
-            allocated_size: app_size.allocated_size,
-            scope: TrashScope::AppBundle,
-        });
-
-        let mut seen = HashSet::with_capacity(selected_related_ids.len());
-        for id in selected_related_ids {
-            if !seen.insert(id) {
-                continue;
-            }
-            let record = inspection.related.get(id).ok_or_else(|| {
-                "The app inspection changed. Review the uninstall again.".to_string()
-            })?;
-            targets.push(TrashTarget {
-                item_id: id.clone(),
-                path: record.path.clone(),
-                identity: record.identity.clone(),
-                logical_size: record.item.logical_size,
-                allocated_size: record.item.allocated_size,
-                scope: TrashScope::AppRelated,
-            });
+        #[cfg(target_os = "windows")]
+        {
+            let _ = (inspection, selected_related_ids);
+            return Err("Application uninstallation is not supported on Windows.".to_string());
         }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut targets = Vec::new();
+            let app_size = &inspection.inspection.app;
+            targets.push(TrashTarget {
+                item_id: inspection.inspection.app.id.clone(),
+                path: inspection.app_path.clone(),
+                identity: inspection.app_identity.clone(),
+                logical_size: app_size.logical_size,
+                allocated_size: app_size.allocated_size,
+                scope: TrashScope::AppBundle,
+            });
 
-        Ok(TrashPlan {
-            id: Uuid::new_v4(),
-            created_at: unix_timestamp(),
-            inventory_id: inspection.inspection.inspection_id.clone(),
-            targets,
-        })
+            let mut seen = HashSet::with_capacity(selected_related_ids.len());
+            for id in selected_related_ids {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let record = inspection.related.get(id).ok_or_else(|| {
+                    "The app inspection changed. Review the uninstall again.".to_string()
+                })?;
+                targets.push(TrashTarget {
+                    item_id: id.clone(),
+                    path: record.path.clone(),
+                    identity: record.identity.clone(),
+                    logical_size: record.item.logical_size,
+                    allocated_size: record.item.allocated_size,
+                    scope: TrashScope::AppRelated,
+                });
+            }
+
+            Ok(TrashPlan {
+                id: Uuid::new_v4(),
+                created_at: unix_timestamp(),
+                inventory_id: inspection.inspection.inspection_id.clone(),
+                targets,
+            })
+        }
     }
 
     pub fn from_developer_artifacts(
@@ -500,14 +508,22 @@ fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) ->
 }
 
 fn application_root_for_path(path: &Path) -> Option<PathBuf> {
-    let parent = path.parent()?;
-    if parent == Path::new("/Applications") {
-        return Some(PathBuf::from("/Applications"));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
     }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join("Applications"))
-        .filter(|root| parent == root)
+    #[cfg(target_os = "macos")]
+    {
+        let parent = path.parent()?;
+        if parent == Path::new("/Applications") {
+            return Some(PathBuf::from("/Applications"));
+        }
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("Applications"))
+            .filter(|root| parent == root)
+    }
 }
 
 fn is_allowed_app_data_path(path: &Path) -> bool {
@@ -515,23 +531,31 @@ fn is_allowed_app_data_path(path: &Path) -> bool {
 }
 
 fn app_data_root_for_path(path: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    const ROOTS: [&str; 10] = [
-        "Library/Application Support",
-        "Library/Caches",
-        "Library/Logs",
-        "Library/Preferences",
-        "Library/Saved Application State",
-        "Library/Containers",
-        "Library/Group Containers",
-        "Library/Application Scripts",
-        "Library/HTTPStorages",
-        "Library/WebKit",
-    ];
-    ROOTS
-        .iter()
-        .map(|root| home.join(root))
-        .find(|root| path.parent() == Some(root.as_path()))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        const ROOTS: [&str; 10] = [
+            "Library/Application Support",
+            "Library/Caches",
+            "Library/Logs",
+            "Library/Preferences",
+            "Library/Saved Application State",
+            "Library/Containers",
+            "Library/Group Containers",
+            "Library/Application Scripts",
+            "Library/HTTPStorages",
+            "Library/WebKit",
+        ];
+        ROOTS
+            .iter()
+            .map(|root| home.join(root))
+            .find(|root| path.parent() == Some(root.as_path()))
+    }
 }
 
 fn validate_no_symlink_components(path: &Path, root: &Path) -> Result<(), String> {
@@ -579,6 +603,12 @@ mod tests {
         assert!(application_root_for_path(Path::new("/Applications/Example.app")).is_some());
         assert!(application_root_for_path(Path::new("/Applications/Nested/Example.app")).is_none());
         assert!(application_root_for_path(Path::new("/System/Applications/Mail.app")).is_none());
+    }
+
+    #[test]
+    fn application_root_rejects_windows_paths() {
+        assert!(application_root_for_path(Path::new("C:\\Program Files\\App")).is_none());
+        assert!(application_root_for_path(Path::new("C:\\Users\\test\\AppData\\Local\\Programs\\App")).is_none());
     }
 
     #[test]

@@ -40,8 +40,15 @@ mod macos_iokit {
 pub struct PowerAssertion {
     #[cfg(target_os = "macos")]
     id: macos_iokit::IOPMAssertionID,
+    #[cfg(target_os = "windows")]
+    pub(crate) handle: windows_sys::Win32::Foundation::HANDLE,
     pub behavior: AwakeBehavior,
 }
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for PowerAssertion {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for PowerAssertion {}
 
 impl PowerAssertion {
     /// Creates a macOS power assertion using IOKit, preventing system sleep or keeping display awake.
@@ -103,22 +110,47 @@ impl PowerAssertion {
 
         #[cfg(target_os = "windows")]
         {
+            use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::Power::*;
-            let _ = reason;
-            let flags = match behavior {
-                AwakeBehavior::PreventSystemSleep => ES_CONTINUOUS | ES_SYSTEM_REQUIRED,
+            use windows_sys::Win32::System::Threading::{
+                POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0,
+            };
+
+            let reason_wide: Vec<u16> = reason.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut context = REASON_CONTEXT {
+                Version: 0,
+                Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+                Reason: REASON_CONTEXT_0 {
+                    SimpleReasonString: reason_wide.as_ptr() as *mut u16,
+                },
+            };
+            let handle = unsafe { PowerCreateRequest(&context) };
+            if handle.is_null() || handle == -1isize as _ {
+                return Err(ZenithError::Io(
+                    "PowerCreateRequest failed on Windows".to_string(),
+                ));
+            }
+
+            let (sys_ok, disp_ok) = match behavior {
+                AwakeBehavior::PreventSystemSleep => {
+                    let ok = unsafe { PowerSetRequest(handle, PowerRequestSystemRequired) };
+                    (ok != 0, true)
+                }
                 AwakeBehavior::KeepDisplayAwake => {
-                    ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+                    let s_ok = unsafe { PowerSetRequest(handle, PowerRequestSystemRequired) };
+                    let d_ok = unsafe { PowerSetRequest(handle, PowerRequestDisplayRequired) };
+                    (s_ok != 0, d_ok != 0)
                 }
             };
-            let prev = unsafe { SetThreadExecutionState(flags) };
-            if prev == 0 {
-                Err(ZenithError::Io(
-                    "SetThreadExecutionState failed on Windows".to_string(),
-                ))
-            } else {
-                Ok(PowerAssertion { behavior })
+
+            if !sys_ok || !disp_ok {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                return Err(ZenithError::Io("PowerSetRequest failed on Windows".to_string()));
             }
+
+            Ok(PowerAssertion { handle, behavior })
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -135,6 +167,8 @@ impl PowerAssertion {
         Self {
             #[cfg(target_os = "macos")]
             id: 1,
+            #[cfg(target_os = "windows")]
+            handle: std::ptr::null_mut(),
             behavior,
         }
     }
@@ -158,9 +192,21 @@ impl Drop for PowerAssertion {
 
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::System::Power::*;
-            unsafe {
-                SetThreadExecutionState(ES_CONTINUOUS);
+            if !self.handle.is_null() {
+                use windows_sys::Win32::Foundation::CloseHandle;
+                use windows_sys::Win32::System::Power::*;
+                unsafe {
+                    match self.behavior {
+                        AwakeBehavior::PreventSystemSleep => {
+                            PowerClearRequest(self.handle, PowerRequestSystemRequired);
+                        }
+                        AwakeBehavior::KeepDisplayAwake => {
+                            PowerClearRequest(self.handle, PowerRequestDisplayRequired);
+                            PowerClearRequest(self.handle, PowerRequestSystemRequired);
+                        }
+                    }
+                    CloseHandle(self.handle);
+                }
             }
         }
     }
@@ -190,6 +236,31 @@ mod native_tests {
     fn native_assertion_succeeds_with_adapter() {
         let result = PowerAssertion::acquire(AwakeBehavior::PreventSystemSleep, "test");
         assert!(result.is_ok());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_power_request_handle_survives_across_threads() {
+        let assertion =
+            PowerAssertion::acquire(AwakeBehavior::PreventSystemSleep, "Zenith Worker Test")
+                .unwrap();
+        assert!(!assertion.handle.is_null());
+        let handle = std::thread::spawn(move || {
+            assert!(!assertion.handle.is_null());
+            drop(assertion);
+        });
+        handle.join().unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_power_request_lifecycle_and_behavior_changes() {
+        let a1 = PowerAssertion::acquire(AwakeBehavior::PreventSystemSleep, "Test Sleep").unwrap();
+        assert!(!a1.handle.is_null());
+        drop(a1);
+        let a2 = PowerAssertion::acquire(AwakeBehavior::KeepDisplayAwake, "Test Display").unwrap();
+        assert!(!a2.handle.is_null());
+        drop(a2);
     }
 }
 

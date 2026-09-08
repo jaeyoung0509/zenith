@@ -22,6 +22,7 @@
     tauriPrepareAppUninstall,
     tauriShowInFileManager,
   } from '../../lib/utils/tauri';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import {
     AlertCircle,
     AppWindow,
@@ -52,6 +53,14 @@
   let plan = $state<TrashPlanPreview | null>(null);
   let trashResult = $state<TrashResult | null>(null);
   let error = $state<string | null>(null);
+
+  let isUninstallAvailable = $derived(
+    platformCapabilitiesStore.isAvailable('app_uninstall')
+  );
+  let uninstallReason = $derived(
+    platformCapabilitiesStore.feature('app_uninstall')?.reason ??
+      'Application uninstallation is not supported on this platform.'
+  );
 
   let now = $state(Date.now());
   let remainingSecs = $derived(plan ? ttlRemaining(plan.expires_at, now) : 0);
@@ -163,7 +172,7 @@
   }
 
   async function reviewUninstall() {
-    if (!inspection) return;
+    if (!inspection || !isUninstallAvailable) return;
     isPreparing = true;
     error = null;
     trashResult = null;
@@ -388,7 +397,15 @@
             </div>
           {/if}
 
-          {#if plan}
+          {#if !isUninstallAvailable}
+            <div class="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5 text-xs text-muted-foreground">
+              <div class="flex items-center gap-1.5 font-medium text-foreground">
+                <AlertCircle size={14} class="text-muted-foreground" />
+                Uninstallation unavailable
+              </div>
+              <p>{uninstallReason}</p>
+            </div>
+          {:else if plan}
             <div class={`rounded-xl border p-4 space-y-3 ${isExpired ? 'border-destructive/40 bg-destructive/5' : isExpiringSoon ? 'border-warning/50 bg-warning/10' : 'border-warning/30 bg-warning/5'}`}>
               <div class="flex flex-col gap-3">
                 <div>

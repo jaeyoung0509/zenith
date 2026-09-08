@@ -436,21 +436,29 @@ pub fn prepare_app_uninstall(
     selected_related_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<TrashPlanPreview, String> {
-    let inspection = state
-        .storage_state
-        .app_inspection
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
-        .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
-        .filter(|inspection| {
-            is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
-        })
-        .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
-    let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
-    let preview = plan.preview();
-    state.storage_state.store_plan(plan);
-    Ok(preview)
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (inspection_id, selected_related_ids, state);
+        return Err("Application uninstallation is not supported on Windows.".to_string());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let inspection = state
+            .storage_state
+            .app_inspection
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
+            .filter(|inspection| {
+                is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
+            })
+            .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
+        let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
+        let preview = plan.preview();
+        state.storage_state.store_plan(plan);
+        Ok(preview)
+    }
 }
 
 #[tauri::command]

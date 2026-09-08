@@ -97,7 +97,7 @@ impl TerminationSystem for RealTerminationSystem {
         }
         #[cfg(not(unix))]
         {
-            0
+            1000
         }
     }
 
@@ -108,15 +108,34 @@ impl TerminationSystem for RealTerminationSystem {
     fn get_process_info(&self, pid: u32) -> Option<ProcessCheckInfo> {
         let mut sys = sysinfo::System::new();
         sys.refresh_processes_specifics(
-            sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+            sysinfo::ProcessesToUpdate::Some(&[
+                sysinfo::Pid::from_u32(pid),
+                sysinfo::Pid::from_u32(std::process::id()),
+            ]),
             true,
             sysinfo::ProcessRefreshKind::everything(),
         );
         let process = sys.process(sysinfo::Pid::from_u32(pid))?;
+        #[cfg(unix)]
         let uid = process
             .effective_user_id()
             .or_else(|| process.user_id())
             .and_then(|u| u.to_string().parse().ok())?;
+        #[cfg(not(unix))]
+        let uid = {
+            let own_sid = sys
+                .process(sysinfo::Pid::from_u32(std::process::id()))
+                .and_then(|p| p.effective_user_id().or_else(|| p.user_id()))
+                .map(|u| u.to_string());
+            let proc_sid = process
+                .effective_user_id()
+                .or_else(|| process.user_id())
+                .map(|u| u.to_string());
+            match (own_sid, proc_sid) {
+                (Some(own), Some(proc)) if own == proc => self.current_uid(),
+                _ => return None,
+            }
+        };
         Some(ProcessCheckInfo {
             pid,
             uid,

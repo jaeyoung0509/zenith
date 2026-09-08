@@ -84,20 +84,43 @@ pub fn collect_registry_with_inactivity_threshold(
         true,
         ProcessRefreshKind::everything(),
     );
+    let own_pid = sysinfo::get_current_pid().ok();
+    let own_sid = if cfg!(windows) {
+        own_pid
+            .and_then(|pid| system.process(pid))
+            .and_then(|p| p.effective_user_id().or_else(|| p.user_id()))
+            .map(|u| u.to_string())
+    } else {
+        None
+    };
     let records = system
         .processes()
         .iter()
-        .map(|(pid, process)| ProcessRecord {
-            pid: pid.as_u32(),
-            uid: process
-                .effective_user_id()
-                .or_else(|| process.user_id())
-                .and_then(|uid| uid.to_string().parse().ok()),
-            started_at: process.start_time(),
-            executable: process.exe().map(PathBuf::from),
-            cwd: process.cwd().map(PathBuf::from),
-            cpu_percent: process.cpu_usage(),
-            memory_bytes: process.memory(),
+        .map(|(pid, process)| {
+            let uid = if cfg!(windows) {
+                let proc_sid = process
+                    .effective_user_id()
+                    .or_else(|| process.user_id())
+                    .map(|u| u.to_string());
+                match (&own_sid, &proc_sid) {
+                    (Some(own), Some(proc)) if own == proc => Some(current_uid),
+                    _ => None,
+                }
+            } else {
+                process
+                    .effective_user_id()
+                    .or_else(|| process.user_id())
+                    .and_then(|uid| uid.to_string().parse().ok())
+            };
+            ProcessRecord {
+                pid: pid.as_u32(),
+                uid,
+                started_at: process.start_time(),
+                executable: process.exe().map(PathBuf::from),
+                cwd: process.cwd().map(PathBuf::from),
+                cpu_percent: process.cpu_usage(),
+                memory_bytes: process.memory(),
+            }
         })
         .collect::<Vec<_>>();
 
@@ -402,7 +425,7 @@ fn current_user_uid() -> u32 {
     }
     #[cfg(not(unix))]
     {
-        0
+        1000
     }
 }
 
@@ -623,5 +646,26 @@ mod tests {
             &mut store,
         );
         assert!(expired.snapshot.projects.is_empty());
+    }
+
+    #[test]
+    fn windows_agent_activity_matches_with_supported_path() {
+        let mut store = store::AgentActivityStore::new();
+        let registry = registry_from_records(
+            vec![record(
+                "C:\\Program Files\\Antigravity\\bin\\antigravity.exe",
+                Some(1000),
+                10,
+                None,
+            )],
+            1000,
+            100,
+            &mut store,
+        );
+        assert_eq!(registry.snapshot.unassigned_sessions.len(), 1);
+        assert_eq!(
+            registry.snapshot.unassigned_sessions[0].tool_id,
+            "antigravity"
+        );
     }
 }

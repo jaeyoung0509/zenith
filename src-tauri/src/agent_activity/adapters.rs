@@ -61,21 +61,110 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
 ];
 
 pub fn adapter_for_executable(path: &Path) -> Option<&'static AgentToolAdapter> {
-    if !is_supported_install_path(path) {
-        return None;
-    }
-    let executable = path.file_name()?.to_str()?;
-    ADAPTERS
-        .iter()
-        .find(|adapter| adapter.executables.contains(&executable))
+    adapter_for_executable_with_home(
+        path,
+        crate::platform::NativePlatformPaths::new().home().as_deref(),
+    )
 }
 
-fn is_supported_install_path(path: &Path) -> bool {
-    if !path.is_absolute() {
+pub fn adapter_for_executable_with_home(
+    path: &Path,
+    home: Option<&Path>,
+) -> Option<&'static AgentToolAdapter> {
+    if !is_supported_install_path_internal(path, home) {
+        return None;
+    }
+    let file_name = path_file_name(path)?;
+    ADAPTERS
+        .iter()
+        .find(|adapter| {
+            adapter
+                .executables
+                .iter()
+                .any(|candidate| executable_name_matches(file_name, candidate))
+        })
+}
+
+pub fn is_supported_install_path(path: &Path) -> bool {
+    is_supported_install_path_internal(
+        path,
+        crate::platform::NativePlatformPaths::new().home().as_deref(),
+    )
+}
+
+pub fn is_supported_install_path_with_home(path: &Path, home: Option<&Path>) -> bool {
+    is_supported_install_path_internal(path, home)
+}
+
+fn path_file_name(path: &Path) -> Option<&str> {
+    let s = path.to_str()?;
+    let trimmed = s.trim_end_matches(['/', '\\']);
+    let name = trimmed.rsplit(['/', '\\']).next()?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn executable_name_matches(file_name: &str, candidate: &str) -> bool {
+    if file_name.eq_ignore_ascii_case(candidate) {
+        return true;
+    }
+    if let Some((stem, ext)) = file_name.rsplit_once('.') {
+        if ext.eq_ignore_ascii_case("exe") && stem.eq_ignore_ascii_case(candidate) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_absolute_path(path_str: &str) -> bool {
+    if path_str.starts_with('/') || path_str.starts_with('\\') {
+        return true;
+    }
+    if path_str.len() >= 3 {
+        let bytes = path_str.as_bytes();
+        if bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_supported_install_path_internal(path: &Path, home: Option<&Path>) -> bool {
+    let path_str = match path.to_str() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    if !is_absolute_path(path_str) {
         return false;
     }
 
-    const SYSTEM_ROOTS: &[&str] = &[
+    // Reject parent traversal '..'
+    if path_str.split(['/', '\\']).any(|part| part == "..") {
+        return false;
+    }
+
+    let normalized = path_str.replace('\\', "/");
+    let segments = normalized.split('/').collect::<Vec<_>>();
+
+    // Reject unapproved user-content or temporary directories
+    if segments.iter().any(|&s| {
+        s.eq_ignore_ascii_case("downloads")
+            || s.eq_ignore_ascii_case("desktop")
+            || s.eq_ignore_ascii_case("temp")
+            || s.eq_ignore_ascii_case("tmp")
+    }) {
+        return false;
+    }
+
+    // Unix system roots
+    const UNIX_SYSTEM_ROOTS: &[&str] = &[
         "/usr/bin",
         "/usr/local/bin",
         "/opt/homebrew/bin",
@@ -83,26 +172,85 @@ fn is_supported_install_path(path: &Path) -> bool {
         "/run/current-system/sw/bin",
         "/Applications",
     ];
-    if SYSTEM_ROOTS.iter().any(|root| path.starts_with(root)) {
+    if UNIX_SYSTEM_ROOTS.iter().any(|root| normalized.starts_with(root)) {
         return true;
     }
 
-    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
-        return false;
+    // Windows system & Program Files roots
+    if is_windows_system_or_program_path(&normalized) {
+        return true;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let roots = crate::platform::NativePlatformPaths::new().application_roots();
+        if roots.iter().any(|root| path.starts_with(root)) {
+            return true;
+        }
+    }
+
+    // User home roots
+    let home = home
+        .map(|p| p.to_path_buf())
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .or_else(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from));
+
+    if let Some(home) = home {
+        if let Some(home_str) = home.to_str() {
+            let normalized_home = home_str.replace('\\', "/").trim_end_matches('/').to_string();
+            if normalized.starts_with(&normalized_home) {
+                let rel = &normalized[normalized_home.len()..];
+                let rel = rel.strip_prefix('/').unwrap_or(rel);
+                const USER_INSTALL_SUBDIRS: &[&str] = &[
+                    ".local/bin",
+                    ".local/share/mise/installs",
+                    ".cargo/bin",
+                    ".bun/bin",
+                    ".volta/bin",
+                    ".asdf/installs",
+                    ".nvm/versions",
+                    "Library/pnpm",
+                    "Library/Application Support",
+                    "AppData/Local/Programs",
+                    "AppData/Roaming/npm",
+                    "AppData/Local/npm",
+                    "AppData/Local/pnpm",
+                    "AppData/Local/yarn/bin",
+                    "scoop/shims",
+                    "scoop/apps",
+                ];
+                if USER_INSTALL_SUBDIRS.iter().any(|sub| rel.starts_with(sub)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn is_windows_system_or_program_path(normalized: &str) -> bool {
+    let without_drive = if normalized.len() >= 3
+        && normalized.as_bytes()[0].is_ascii_alphabetic()
+        && normalized.as_bytes()[1] == b':'
+        && normalized.as_bytes()[2] == b'/'
+    {
+        &normalized[2..]
+    } else {
+        normalized
     };
-    [
-        ".local/bin",
-        ".local/share/mise/installs",
-        ".cargo/bin",
-        ".bun/bin",
-        ".volta/bin",
-        ".asdf/installs",
-        ".nvm/versions",
-        "Library/pnpm",
-        "Library/Application Support",
-    ]
-    .iter()
-    .any(|root| path.starts_with(home.join(root)))
+
+    const WINDOWS_SYSTEM_ROOTS: &[&str] = &[
+        "/Program Files",
+        "/Program Files (x86)",
+        "/ProgramW6432",
+        "/ProgramData/scoop/shims",
+        "/Windows/System32",
+    ];
+
+    WINDOWS_SYSTEM_ROOTS
+        .iter()
+        .any(|root| without_drive.starts_with(root))
 }
 
 pub fn health(observed_ids: &std::collections::HashSet<&str>) -> Vec<AgentAdapterHealth> {
@@ -177,10 +325,11 @@ pub fn health_with_integrations(
         .collect()
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn exact_executable_match_rejects_substrings_and_cursor_app() {
         assert_eq!(
@@ -201,6 +350,133 @@ mod tests {
                 .unwrap()
                 .id,
             "cursor"
+        );
+    }
+
+    #[test]
+    fn test_windows_cli_recognition_korean_spaces() {
+        let home = Path::new("D:\\Users\\홍 길동");
+
+        assert_eq!(
+            adapter_for_executable_with_home(
+                Path::new("D:\\Users\\홍 길동\\.cargo\\bin\\codex.exe"),
+                Some(home)
+            )
+            .unwrap()
+            .id,
+            "codex"
+        );
+
+        assert_eq!(
+            adapter_for_executable_with_home(
+                Path::new("D:\\Users\\홍 길동\\AppData\\Roaming\\npm\\claude.exe"),
+                Some(home)
+            )
+            .unwrap()
+            .id,
+            "claude"
+        );
+
+        assert_eq!(
+            adapter_for_executable_with_home(
+                Path::new("D:\\Users\\홍 길동\\AppData\\Local\\Programs\\cursor\\cursor-agent.exe"),
+                Some(home)
+            )
+            .unwrap()
+            .id,
+            "cursor"
+        );
+
+        assert_eq!(
+            adapter_for_executable_with_home(
+                Path::new("D:\\Users\\홍 길동\\scoop\\shims\\agy.exe"),
+                Some(home)
+            )
+            .unwrap()
+            .id,
+            "antigravity"
+        );
+    }
+
+    #[test]
+    fn test_windows_cli_rejection_downloads_and_lookalikes() {
+        let home = Path::new("D:\\Users\\홍 길동");
+
+        // Reject downloads, desktop, and temp locations
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\Downloads\\codex.exe"),
+            Some(home)
+        )
+        .is_none());
+
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\Desktop\\codex.exe"),
+            Some(home)
+        )
+        .is_none());
+
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\AppData\\Local\\Temp\\codex.exe"),
+            Some(home)
+        )
+        .is_none());
+
+        // Reject lookalikes and substrings
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\.cargo\\bin\\codex-helper.exe"),
+            Some(home)
+        )
+        .is_none());
+
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\.cargo\\bin\\mycodex.exe"),
+            Some(home)
+        )
+        .is_none());
+
+        // Reject non-exe scripts / files
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\.cargo\\bin\\codex.cmd"),
+            Some(home)
+        )
+        .is_none());
+
+        // Reject directory traversal
+        assert!(adapter_for_executable_with_home(
+            Path::new("D:\\Users\\홍 길동\\.cargo\\bin\\..\\Downloads\\codex.exe"),
+            Some(home)
+        )
+        .is_none());
+
+        // Reject relative paths
+        assert!(adapter_for_executable_with_home(Path::new("codex.exe"), Some(home)).is_none());
+    }
+
+    #[test]
+    fn test_windows_program_files_and_system_recognition() {
+        assert_eq!(
+            adapter_for_executable(Path::new(
+                "C:\\Program Files\\Antigravity\\bin\\antigravity.exe"
+            ))
+            .unwrap()
+            .id,
+            "antigravity"
+        );
+
+        assert_eq!(
+            adapter_for_executable(Path::new(
+                "C:\\Program Files (x86)\\GitHub Copilot\\copilot.exe"
+            ))
+            .unwrap()
+            .id,
+            "copilot"
+        );
+
+        assert_eq!(
+            adapter_for_executable(Path::new("C:\\ProgramData\\scoop\\shims\\opencode.exe"))
+                .unwrap()
+                .id,
+            "opencode"
         );
     }
 }
