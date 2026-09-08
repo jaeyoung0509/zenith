@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import AiUsageCards from '../AiUsageCards.svelte';
   import Card from '../Card.svelte';
   import { usageStore } from '../../stores/usage.svelte';
+
+  // Revalidate the TTL cache while this tab stays open; hidden panels never poll.
+  onMount(() => usageStore.observeAutoRefresh());
 
   let usageSnapshot = $derived(usageStore.snapshot);
   let providers = $derived(usageStore.providers);
