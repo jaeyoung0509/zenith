@@ -185,7 +185,9 @@ impl PlatformCapabilities {
             large_files: PlatformFeatureCapability::available(),
             developer_artifacts: PlatformFeatureCapability::available(),
             installed_apps: PlatformFeatureCapability::available(),
-            app_uninstall: PlatformFeatureCapability::available(),
+            app_uninstall: PlatformFeatureCapability::unavailable(
+                "Windows application uninstallation is not supported. Use Windows Settings or the application's uninstaller.",
+            ),
             memory_metrics: PlatformFeatureCapability::available(),
             process_termination: PlatformFeatureCapability::available(),
             development_ports: PlatformFeatureCapability::available(),

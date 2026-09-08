@@ -84,15 +84,18 @@ pub fn collect_registry_with_inactivity_threshold(
         true,
         ProcessRefreshKind::everything(),
     );
+    let own_uid = system
+        .process(sysinfo::Pid::from_u32(std::process::id()))
+        .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
     let records = system
         .processes()
         .iter()
         .map(|(pid, process)| ProcessRecord {
             pid: pid.as_u32(),
-            uid: process
-                .effective_user_id()
-                .or_else(|| process.user_id())
-                .and_then(|uid| uid.to_string().parse().ok()),
+            uid: verified_process_uid(
+                process.effective_user_id().or_else(|| process.user_id()),
+                own_uid,
+            ),
             started_at: process.start_time(),
             executable: process.exe().map(PathBuf::from),
             cwd: process.cwd().map(PathBuf::from),
@@ -395,6 +398,29 @@ fn now() -> u64 {
         .as_secs()
 }
 
+// The portable registry uses a numeric ownership marker. On Windows this value
+// is issued only after comparing real SIDs; it is not a Windows user identifier.
+#[cfg(not(unix))]
+const VERIFIED_CURRENT_ACCOUNT: u32 = 1000;
+
+fn verified_process_uid(
+    candidate: Option<&sysinfo::Uid>,
+    own: Option<&sysinfo::Uid>,
+) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        let _ = own;
+        candidate?.to_string().parse().ok()
+    }
+    #[cfg(not(unix))]
+    {
+        match (candidate, own) {
+            (Some(candidate), Some(own)) if candidate == own => Some(VERIFIED_CURRENT_ACCOUNT),
+            _ => None,
+        }
+    }
+}
+
 fn current_user_uid() -> u32 {
     #[cfg(unix)]
     unsafe {
@@ -402,13 +428,28 @@ fn current_user_uid() -> u32 {
     }
     #[cfg(not(unix))]
     {
-        0
+        VERIFIED_CURRENT_ACCOUNT
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn sid_ownership_rejects_other_and_missing_accounts() {
+        let own: sysinfo::Uid = "S-1-5-18".parse().unwrap();
+        let other: sysinfo::Uid = "S-1-5-19".parse().unwrap();
+        assert_eq!(
+            verified_process_uid(Some(&own), Some(&own)),
+            Some(VERIFIED_CURRENT_ACCOUNT)
+        );
+        assert_eq!(verified_process_uid(Some(&other), Some(&own)), None);
+        assert_eq!(verified_process_uid(None, Some(&own)), None);
+        assert_eq!(verified_process_uid(Some(&own), None), None);
+        assert_eq!(verified_process_uid(None, None), None);
+    }
 
     fn record(
         executable: &str,
@@ -623,5 +664,27 @@ mod tests {
             &mut store,
         );
         assert!(expired.snapshot.projects.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_agent_activity_matches_with_supported_path() {
+        let mut store = store::AgentActivityStore::new();
+        let registry = registry_from_records(
+            vec![record(
+                "C:\\Program Files\\Antigravity\\bin\\antigravity.exe",
+                Some(1000),
+                10,
+                None,
+            )],
+            1000,
+            100,
+            &mut store,
+        );
+        assert_eq!(registry.snapshot.unassigned_sessions.len(), 1);
+        assert_eq!(
+            registry.snapshot.unassigned_sessions[0].tool_id,
+            "antigravity"
+        );
     }
 }

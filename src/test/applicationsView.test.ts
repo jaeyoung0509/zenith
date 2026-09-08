@@ -1,8 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'svelte/server';
 import ApplicationsView from '../routes/dashboard/ApplicationsView.svelte';
+import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { mockApi } from '../lib/api/mock';
 
 describe('ApplicationsView responsive layout contract', () => {
+  afterEach(() => platformCapabilitiesStore.reset());
+
+  it('explains Windows inspection-only support before an app is selected', async () => {
+    platformCapabilitiesStore.capabilities = {
+      ...await mockApi.getPlatformCapabilities(),
+      platform: 'windows',
+      app_uninstall: { status: 'unavailable', reason: 'Use Windows Settings to uninstall applications.' },
+    };
+    const { body } = render(ApplicationsView, { props: { onBack: vi.fn() } });
+    expect(body).toContain('Use Windows Settings to uninstall applications.');
+    expect(body).not.toContain('Moves to Trash, never permanently deletes');
+    expect(body).not.toContain('/Applications and ~/Applications');
+  });
   it('bounds the inventory and reserves a desktop detail pane at the 960px baseline', () => {
     const rendered = render(ApplicationsView, {
       props: {

@@ -51,13 +51,27 @@ Cross-platform fixture tests cover conflicting account variables, Korean paths,
 redirected token scopes, and system-drive selection. These automated checks do
 not replace interactive installer/UI and account-switch testing.
 
-## Separate domain gaps
+## Completed domain adapters (#123)
 
-Issue #123 tracks incomplete Windows App Uninstaller authorization,
-Unix-only AI Activity executable recognition, and thread-local Keep Awake request
-ownership. These need dedicated adapter work; the folder fixes do not establish
-that every Windows feature works. Application inventory remains a directory-based
-approximation and is not a complete registry/MSIX installation inventory.
+Issue #123 completes the platform adapter boundaries identified during the initial Windows port:
+
+1. **Keep Awake (`PowerAssertion`):**
+   - Migrated from thread-local `SetThreadExecutionState` to owned `PowerCreateRequest`, `PowerSetRequest`, and `PowerClearRequest` handles.
+   - Standard Rust `OwnedHandle` manages the process-scoped handle. RAII clears successfully enabled requests, including partial acquisition failures, before closing it on any worker thread.
+   - Verified via unit tests covering acquisition, display/system request behavior changes, expiration, and multi-thread lifecycle.
+
+2. **AI Activity (`agent_activity::adapters` & `agent_activity::mod`):**
+   - Added Windows `.exe` binary recognition and stem matching.
+   - Typed Unix/Windows path parsing uses configured installation roots and reviewed user subdirectories. It recognizes verbatim paths and ASCII case variants, and rejects prefix lookalikes such as `Program Files-evil` and `.cargo/bin-evil`.
+   - Discovery and termination share one typed SID comparison. Missing or different SIDs fail closed; Windows ownership checks do not parse SIDs as numbers.
+   - Retained strict fail-closed CWD matching and directory traversal rejection.
+   - Verified with Korean usernames and spaces (`D:\Users\홍 길동\.cargo\bin\codex.exe`) as well as lookalike and traversal rejection.
+
+3. **App Uninstaller Boundary:**
+   - Deleting `Program Files` or trashing Windows directories is prohibited.
+   - `PlatformCapabilities::windows()` explicitly marks `app_uninstall` as `Unavailable` with an explanatory reason, while keeping `installed_apps` available for inventory inspection.
+   - `ApplicationsView.svelte` renders an informational banner explaining that uninstallation is not supported on Windows rather than prompting for a trash review.
+   - Backend `prepare_app_uninstall` and `trash_manager::from_app_inspection` fail closed on Windows.
 
 Microsoft references: [Known Folders](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders),
 [user profiles](https://learn.microsoft.com/en-us/windows/win32/shell/about-user-profiles),
