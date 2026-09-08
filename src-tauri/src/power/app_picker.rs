@@ -6,6 +6,35 @@ use std::process::Command;
 
 pub struct ApplicationPicker;
 
+#[cfg(any(windows, test))]
+const WINDOWS_APP_PICKER_SCRIPT: &str = r#"
+    $ErrorActionPreference = 'Stop'
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog
+    try {
+        $dialog.Filter = 'Executable files (*.exe)|*.exe'
+        $dialog.Title = 'Choose an application for Keep Awake'
+        $dialog.InitialDirectory = [Environment]::GetFolderPath('ProgramFiles')
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            [Console]::Write($dialog.FileName)
+        }
+    } finally {
+        $dialog.Dispose()
+    }
+"#;
+
+#[cfg(any(windows, test))]
+fn decode_picker_path(bytes: Vec<u8>) -> Result<Option<std::path::PathBuf>, String> {
+    let value = String::from_utf8(bytes)
+        .map_err(|_| "The application picker returned invalid UTF-8".to_string())?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(value)))
+    }
+}
+
 impl ApplicationPicker {
     #[cfg(target_os = "macos")]
     pub fn pick() -> Result<Option<SelectedApplication>, String> {
@@ -34,29 +63,27 @@ impl ApplicationPicker {
 
     #[cfg(target_os = "windows")]
     pub fn pick() -> Result<Option<SelectedApplication>, String> {
-        let script = r#"
-            Add-Type -AssemblyName System.Windows.Forms
-            $dialog = New-Object System.Windows.Forms.OpenFileDialog
-            $dialog.Filter = "Executable files (*.exe)|*.exe|All files (*.*)|*.*"
-            $dialog.Title = "Choose an application for Keep Awake"
-            $progFiles = [Environment]::GetFolderPath("ProgramFiles")
-            $dialog.InitialDirectory = $progFiles
-            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                Write-Output $dialog.FileName
-            }
-        "#;
-        let mut cmd = Command::new("powershell.exe");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-        let output = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(60))
+        let output = crate::tooling::command("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-STA",
+                "-Command",
+                WINDOWS_APP_PICKER_SCRIPT,
+            ])
+            .output()
             .map_err(|error| format!("Could not open the application picker: {error}"))?;
-
-        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path_str.is_empty() {
-            return Ok(None);
+        if !output.status.success() {
+            return Err(format!(
+                "Could not open the application picker: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
         }
-        let path = std::path::PathBuf::from(path_str);
-        if !path.is_file() {
+        let Some(path) = decode_picker_path(output.stdout)? else {
             return Ok(None);
+        };
+        if !path.is_file() {
+            return Err("The selected application no longer exists".into());
         }
         Self::selection_from_windows_exe(&path).map(Some)
     }
@@ -98,6 +125,12 @@ impl ApplicationPicker {
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn selection_from_windows_exe(path: &Path) -> Result<SelectedApplication, String> {
+        if !path
+            .extension()
+            .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+        {
+            return Err("Please choose a Windows .exe application".into());
+        }
         let name = path
             .file_stem()
             .and_then(|value| value.to_str())
@@ -122,6 +155,41 @@ mod tests {
     use super::ApplicationPicker;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn picker_preserves_korean_and_distinguishes_invalid_encoding_from_cancel() {
+        let path = "D:\\사용자\\홍 길동\\도구 앱.exe";
+        assert_eq!(
+            super::decode_picker_path(path.as_bytes().to_vec()).unwrap(),
+            Some(path.into())
+        );
+        assert!(super::decode_picker_path(vec![]).unwrap().is_none());
+        assert!(super::decode_picker_path(vec![0xff, 0xfe]).is_err());
+        assert!(super::WINDOWS_APP_PICKER_SCRIPT.contains("[Console]::OutputEncoding"));
+        let dir = tempdir().unwrap();
+        let selection =
+            ApplicationPicker::selection_from_windows_exe(&dir.path().join("한글 도구.EXE"))
+                .unwrap();
+        assert_eq!(selection.executable_pattern, "한글 도구.EXE");
+        assert!(
+            ApplicationPicker::selection_from_windows_exe(&dir.path().join("도구.txt")).is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_powershell_emits_korean_paths_as_utf8() {
+        let script = r#"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::Write('D:\사용자\홍 길동\도구 앱.exe')"#;
+        let mut command = crate::tooling::command("powershell.exe");
+        command.args(["-NoLogo", "-NoProfile", "-Command", script]);
+        let output =
+            crate::tooling::run_with_timeout(command, std::time::Duration::from_secs(15)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            super::decode_picker_path(output.stdout).unwrap(),
+            Some(r"D:\사용자\홍 길동\도구 앱.exe".into())
+        );
+    }
 
     #[test]
     fn rejects_non_application_paths() {
