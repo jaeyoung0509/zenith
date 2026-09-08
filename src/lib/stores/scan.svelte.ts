@@ -50,8 +50,10 @@ export class ScanStore {
         if (document.visibilityState !== 'visible') return;
         this.updateFreshness();
         void this.init();
-        // Local clock only. Never scan or poll the filesystem on this timer.
-        timer = setInterval(() => this.updateFreshness(), 1000);
+        // Visible-only auto-rescan (#128): when the TTL lapses while the
+        // surface stays open, refresh automatically instead of leaving a
+        // stale warning for a manual click. Hidden panels never scan.
+        timer = setInterval(() => this.tickFreshness(), 1000);
       };
       window.addEventListener('focus', activate);
       document.addEventListener('visibilitychange', activate);
@@ -93,6 +95,19 @@ export class ScanStore {
   updateFreshness() {
     this.clock = Date.now();
     if (this.lastScan && !this.freshAt(this.clock)) this.invalidate();
+  }
+
+  private tickFreshness() {
+    this.updateFreshness();
+    this.maybeAutoRescan();
+  }
+
+  private maybeAutoRescan() {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (this.isScanning || this.isCleaning) return;
+    // A failed scan stays manual: the user retries explicitly via Scan Again.
+    if (this.freshness !== 'stale' && this.freshness !== 'empty') return;
+    void this.runScan();
   }
 
   private invalidate() {

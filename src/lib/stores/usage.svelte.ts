@@ -50,13 +50,43 @@ export function projectProviderSlots(
     .filter((provider): provider is AiProviderUsage => Boolean(provider));
 }
 
-class UsageStore {
+export class UsageStore {
   snapshot = $state<AiUsageSnapshot | null>(null);
   loadingProviders = $state<string[]>([]);
   isLoading = $state(false);
   error = $state<string | null>(null);
   connectingProvider = $state<string | null>(null);
   private refreshPromise: Promise<void> | null = null;
+  private autoRefreshSubscribers = 0;
+  private stopAutoRefresh: (() => void) | null = null;
+
+  /**
+   * Visible-only auto-refresh (#128): revalidate the TTL cache while a
+   * subscriber surface stays open instead of leaving stale usage data.
+   * Failed snapshots stay manual until the user retries explicitly.
+   */
+  observeAutoRefresh(ttlMs = 60_000, intervalMs = 10_000): () => void {
+    this.autoRefreshSubscribers++;
+    if (this.autoRefreshSubscribers === 1) {
+      const tick = () => {
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+        if (this.error) return;
+        void this.refreshIfStale(ttlMs);
+      };
+      tick();
+      const timer = setInterval(tick, intervalMs);
+      this.stopAutoRefresh = () => clearInterval(timer);
+    }
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      if (--this.autoRefreshSubscribers === 0) {
+        this.stopAutoRefresh?.();
+        this.stopAutoRefresh = null;
+      }
+    };
+  }
 
   get providers(): AiProviderUsage[] {
     return projectProviderSlots(

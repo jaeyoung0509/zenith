@@ -141,22 +141,35 @@ describe('cleanup freshness and recovery', () => {
     expect(tauriScan).not.toHaveBeenCalled();
   });
 
-  it('owns one visible timer, revalidates on resume, and disposes idempotently', async () => {
+  it('owns one visible timer, auto-rescans stale results, and disposes idempotently', async () => {
     const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
     const windowEvents = new EventTarget();
     vi.stubGlobal('document', page);
     vi.stubGlobal('window', windowEvents);
+    vi.mocked(tauriScan).mockImplementation(async () => fixture('new', Math.floor(Date.now() / 1000)));
     const store = await loaded();
     const first = store.observeFreshness();
     const second = store.observeFreshness();
     await store.init();
     expect(vi.getTimerCount()).toBe(1);
+    // The TTL (300s) lapses while visible: the timer rescans automatically
+    // instead of leaving a stale warning for a manual click.
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    expect(store.lastScan?.scan_id).toBe('new');
+    expect(store.freshness).toBe('fresh');
+    // Fresh results are not rescanned.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    // Hidden panels never scan.
     page.visibilityState = 'hidden';
     page.dispatchEvent(new Event('visibilitychange'));
     expect(vi.getTimerCount()).toBe(0);
-    const calls = vi.mocked(tauriGetLastScan).mock.calls.length;
+    vi.setSystemTime(1000_000 + 600_000);
+    store.updateFreshness();
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(tauriGetLastScan).toHaveBeenCalledTimes(calls);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    // Resume revalidates via the cached scan without a hidden tick.
     page.visibilityState = 'visible';
     page.dispatchEvent(new Event('visibilitychange'));
     await store.init();
@@ -165,6 +178,21 @@ describe('cleanup freshness and recovery', () => {
     expect(vi.getTimerCount()).toBe(1);
     second();
     expect(vi.getTimerCount()).toBe(0);
-    expect(tauriScan).not.toHaveBeenCalled();
+  });
+
+  it('leaves failed scans for an explicit manual retry', async () => {
+    const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    const windowEvents = new EventTarget();
+    vi.stubGlobal('document', page);
+    vi.stubGlobal('window', windowEvents);
+    vi.mocked(tauriScan).mockRejectedValue(new Error('Scan worker failed'));
+    const store = await loaded();
+    const stop = store.observeFreshness();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    expect(store.freshness).toBe('failed');
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    stop();
   });
 });
