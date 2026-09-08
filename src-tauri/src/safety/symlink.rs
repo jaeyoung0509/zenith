@@ -74,15 +74,37 @@ impl SymlinkGuard {
         }
         let normalized_target = crate::safety::Blacklist::normalize_path(target);
         let normalized_base = crate::safety::Blacklist::normalize_path(base);
-        let relative = normalized_target
-            .strip_prefix(&normalized_base)
-            .map_err(|_| {
-                ZenithError::SymlinkEscape(format!(
-                    "Target {} is not within base {}",
-                    target.display(),
-                    base.display()
-                ))
-            })?;
+        let outside_base = || {
+            ZenithError::SymlinkEscape(format!(
+                "Target {} is not within base {}",
+                target.display(),
+                base.display()
+            ))
+        };
+        let relative = match normalized_target.strip_prefix(&normalized_base) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) => {
+                #[cfg(not(windows))]
+                return Err(outside_base());
+                #[cfg(windows)]
+                {
+                    // TEMP can contain an 8.3 account alias (RUNNER~1) while
+                    // canonicalize returns its long name. Check both original
+                    // paths from their roots BEFORE resolving aliases, so a
+                    // junction cannot disappear during canonicalization.
+                    for path in [target, base] {
+                        let root = path.ancestors().last().ok_or_else(outside_base)?;
+                        Self::validate_components_between(path, root)?;
+                    }
+                    let canonical_target = fs::canonicalize(target).map_err(|_| outside_base())?;
+                    let canonical_base = fs::canonicalize(base).map_err(|_| outside_base())?;
+                    canonical_target
+                        .strip_prefix(&canonical_base)
+                        .map_err(|_| outside_base())?
+                        .to_path_buf()
+                }
+            }
+        };
 
         let mut current = base.to_path_buf();
         for component in relative.components() {
@@ -168,13 +190,36 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         let canonical_profile = profile.canonicalize().unwrap();
         let plain_workspace = crate::safety::Blacklist::normalize_path(&workspace);
-        assert!(
-            SymlinkGuard::validate_components_between(&plain_workspace, &canonical_profile).is_ok()
-        );
+        SymlinkGuard::validate_components_between(&plain_workspace, &canonical_profile)
+            .unwrap_or_else(|error| {
+                panic!("target={plain_workspace:?}, base={canonical_profile:?}: {error}")
+            });
         assert!(SymlinkGuard::validate_components_between(&other, &canonical_profile).is_err());
         assert!(
             crate::developer_artifacts::validate_workspace_root(&plain_workspace, &profile).is_ok()
         );
         assert!(crate::developer_artifacts::validate_workspace_root(&other, &profile).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn alias_fallback_does_not_hide_a_junction_into_the_trusted_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("사용자 하나");
+        let workspace = profile.join("프로젝트");
+        let link = dir.path().join("다른 경로");
+        fs::create_dir_all(&workspace).unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&profile)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(SymlinkGuard::validate_components_between(
+            &link.join("프로젝트"),
+            &profile.canonicalize().unwrap()
+        )
+        .is_err());
     }
 }
