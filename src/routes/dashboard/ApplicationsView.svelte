@@ -244,14 +244,21 @@
         <h1 class="text-xl font-semibold tracking-tight">Applications</h1>
         <div class="flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground">
           <ShieldCheck size={14} class="text-success" />
-          <span>Moves to Trash, never permanently deletes</span>
+          <span>{isUninstallAvailable ? 'Moves to Trash, never permanently deletes' : 'Application inventory'}</span>
         </div>
       </div>
       <p class="mt-1 text-xs text-muted-foreground">
-        Review an app bundle and only the related Library data Zenith can identify with constrained rules.
+        Inspect installed applications and the related data Zenith can identify.
       </p>
     </div>
   </div>
+
+  {#if platformCapabilitiesStore.feature('app_uninstall') && !isUninstallAvailable}
+    <div class="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5 text-xs text-muted-foreground">
+      <p class="font-medium text-foreground">Uninstallation unavailable</p>
+      <p>{uninstallReason}</p>
+    </div>
+  {/if}
 
   {#if error}
     <div class="p-3.5 rounded-xl bg-destructive/15 border border-destructive/30 text-destructive flex items-center gap-2.5 text-xs">
@@ -284,7 +291,7 @@
       <div class="flex items-center justify-between gap-2">
         <div>
           <h2 class="text-sm font-semibold">Installed apps</h2>
-          <p class="text-caption text-muted-foreground mt-0.5">/Applications and ~/Applications</p>
+          <p class="text-caption text-muted-foreground mt-0.5">Configured application folders</p>
         </div>
         <Button variant="ghost" size="icon" onclick={loadApps} disabled={isLoading} ariaLabel="Refresh applications">
           <RefreshCw size={14} class={isLoading ? 'animate-gentle-spin' : ''} />
@@ -398,13 +405,7 @@
           {/if}
 
           {#if !isUninstallAvailable}
-            <div class="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5 text-xs text-muted-foreground">
-              <div class="flex items-center gap-1.5 font-medium text-foreground">
-                <AlertCircle size={14} class="text-muted-foreground" />
-                Uninstallation unavailable
-              </div>
-              <p>{uninstallReason}</p>
-            </div>
+            <p class="text-xs text-muted-foreground">Application details are available for inspection only.</p>
           {:else if plan}
             <div class={`rounded-xl border p-4 space-y-3 ${isExpired ? 'border-destructive/40 bg-destructive/5' : isExpiringSoon ? 'border-warning/50 bg-warning/10' : 'border-warning/30 bg-warning/5'}`}>
               <div class="flex flex-col gap-3">

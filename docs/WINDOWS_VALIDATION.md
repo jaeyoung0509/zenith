@@ -57,13 +57,13 @@ Issue #123 completes the platform adapter boundaries identified during the initi
 
 1. **Keep Awake (`PowerAssertion`):**
    - Migrated from thread-local `SetThreadExecutionState` to owned `PowerCreateRequest`, `PowerSetRequest`, and `PowerClearRequest` handles.
-   - Assertions are `Send + Sync`, surviving cross-thread acquisition and release across Tauri blocking-pool and worker threads.
+   - Standard Rust `OwnedHandle` manages the process-scoped handle. RAII clears successfully enabled requests, including partial acquisition failures, before closing it on any worker thread.
    - Verified via unit tests covering acquisition, display/system request behavior changes, expiration, and multi-thread lifecycle.
 
 2. **AI Activity (`agent_activity::adapters` & `agent_activity::mod`):**
    - Added Windows `.exe` binary recognition and stem matching.
-   - Expanded supported install roots to include Windows system locations (`Program Files`, `ProgramData/scoop/shims`, etc.) and user roots (`.cargo\bin`, `AppData\Roaming\npm`, `AppData\Local\Programs`, `scoop\shims`, etc.).
-   - Audited process ownership via Windows process token SID matching against Zenith's token SID, ensuring multi-user isolation without failing on non-numeric SIDs.
+   - Typed Unix/Windows path parsing uses configured installation roots and reviewed user subdirectories. It recognizes verbatim paths and ASCII case variants, and rejects prefix lookalikes such as `Program Files-evil` and `.cargo/bin-evil`.
+   - Discovery and termination share one typed SID comparison. Missing or different SIDs fail closed; Windows ownership checks do not parse SIDs as numbers.
    - Retained strict fail-closed CWD matching and directory traversal rejection.
    - Verified with Korean usernames and spaces (`D:\Users\홍 길동\.cargo\bin\codex.exe`) as well as lookalike and traversal rejection.
 

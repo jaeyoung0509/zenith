@@ -91,14 +91,7 @@ pub struct RealTerminationSystem;
 
 impl TerminationSystem for RealTerminationSystem {
     fn current_uid(&self) -> u32 {
-        #[cfg(unix)]
-        unsafe {
-            libc::geteuid()
-        }
-        #[cfg(not(unix))]
-        {
-            1000
-        }
+        super::current_user_uid()
     }
 
     fn current_pid(&self) -> u32 {
@@ -116,26 +109,13 @@ impl TerminationSystem for RealTerminationSystem {
             sysinfo::ProcessRefreshKind::everything(),
         );
         let process = sys.process(sysinfo::Pid::from_u32(pid))?;
-        #[cfg(unix)]
-        let uid = process
-            .effective_user_id()
-            .or_else(|| process.user_id())
-            .and_then(|u| u.to_string().parse().ok())?;
-        #[cfg(not(unix))]
-        let uid = {
-            let own_sid = sys
-                .process(sysinfo::Pid::from_u32(std::process::id()))
-                .and_then(|p| p.effective_user_id().or_else(|| p.user_id()))
-                .map(|u| u.to_string());
-            let proc_sid = process
-                .effective_user_id()
-                .or_else(|| process.user_id())
-                .map(|u| u.to_string());
-            match (own_sid, proc_sid) {
-                (Some(own), Some(proc)) if own == proc => self.current_uid(),
-                _ => return None,
-            }
-        };
+        let own_uid = sys
+            .process(sysinfo::Pid::from_u32(std::process::id()))
+            .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
+        let uid = super::verified_process_uid(
+            process.effective_user_id().or_else(|| process.user_id()),
+            own_uid,
+        )?;
         Some(ProcessCheckInfo {
             pid,
             uid,

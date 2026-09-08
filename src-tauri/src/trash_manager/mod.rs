@@ -122,7 +122,7 @@ impl TrashPlanner {
         #[cfg(target_os = "windows")]
         {
             let _ = (inspection, selected_related_ids);
-            return Err("Application uninstallation is not supported on Windows.".to_string());
+            Err("Application uninstallation is not supported on Windows.".to_string())
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -608,7 +608,10 @@ mod tests {
     #[test]
     fn application_root_rejects_windows_paths() {
         assert!(application_root_for_path(Path::new("C:\\Program Files\\App")).is_none());
-        assert!(application_root_for_path(Path::new("C:\\Users\\test\\AppData\\Local\\Programs\\App")).is_none());
+        assert!(application_root_for_path(Path::new(
+            "C:\\Users\\test\\AppData\\Local\\Programs\\App"
+        ))
+        .is_none());
     }
 
     #[test]

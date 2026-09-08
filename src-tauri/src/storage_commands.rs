@@ -439,7 +439,7 @@ pub fn prepare_app_uninstall(
     #[cfg(target_os = "windows")]
     {
         let _ = (inspection_id, selected_related_ids, state);
-        return Err("Application uninstallation is not supported on Windows.".to_string());
+        Err("Application uninstallation is not supported on Windows.".to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
