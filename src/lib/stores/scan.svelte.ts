@@ -14,6 +14,9 @@ import {
   tauriScan,
 } from '../utils/tauri';
 
+/** How the in-flight (or most recent) scan was started. Drives auto-refresh copy. */
+export type ScanTrigger = 'auto' | 'manual';
+
 export class ScanStore {
   isScanning = $state(false);
   isCleaning = $state(false);
@@ -33,6 +36,7 @@ export class ScanStore {
   });
   lastCleanResult = $state<CleanResult | null>(null);
   error = $state<string | null>(null);
+  lastScanTrigger = $state<ScanTrigger | null>(null);
   private clock = $state(Date.now());
   private invalidated = $state(false);
   private generation = 0;
@@ -107,7 +111,31 @@ export class ScanStore {
     if (this.isScanning || this.isCleaning) return;
     // A failed scan stays manual: the user retries explicitly via Scan Again.
     if (this.freshness !== 'stale' && this.freshness !== 'empty') return;
-    void this.runScan();
+    void this.revalidateOrRescan();
+  }
+
+  /**
+   * Cross-window guard (#131): another visible surface may have just
+   * finished a scan, which the backend shares via getLastScan. Adopt a
+   * fresh backend result instead of running a duplicate full scan against
+   * the serialized storage gate. Manual scans bypass this and always scan.
+   */
+  private async revalidateOrRescan() {
+    const generation = this.generation;
+    try {
+      const cached = await tauriGetLastScan();
+      if (generation !== this.generation || this.isScanning || this.isCleaning) return;
+      if (cached && cached.scan_id !== this.lastScan?.scan_id) {
+        this.acceptScan(cached);
+      }
+      this.updateFreshness();
+    } catch {
+      // Fall through with local state: a cache-fetch failure must not
+      // block the rescan below.
+    }
+    if (generation !== this.generation || this.isScanning || this.isCleaning) return;
+    if (this.freshness !== 'stale' && this.freshness !== 'empty') return;
+    void this.runScan(undefined, 'auto');
   }
 
   private invalidate() {
@@ -321,16 +349,17 @@ export class ScanStore {
     return this.invalidated || !this.freshAt(Date.now());
   }
 
-  runScan(categories?: Category[]): Promise<ScanResult | null> {
+  runScan(categories?: Category[], trigger: ScanTrigger = 'manual'): Promise<ScanResult | null> {
     if (this.scanRequest) return this.scanRequest;
-    this.scanRequest = this.performScan(categories).finally(() => {
+    this.scanRequest = this.performScan(categories, trigger).finally(() => {
       this.scanRequest = null;
     });
     return this.scanRequest;
   }
 
-  private async performScan(categories?: Category[]): Promise<ScanResult | null> {
+  private async performScan(categories?: Category[], trigger: ScanTrigger = 'manual'): Promise<ScanResult | null> {
     this.generation++;
+    this.lastScanTrigger = trigger;
     this.invalidate();
     this.isScanning = true;
     this.error = null;

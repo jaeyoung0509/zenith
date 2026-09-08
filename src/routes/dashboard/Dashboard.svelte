@@ -89,19 +89,9 @@
       // has told us that the corresponding adapter is available.
       if (cleanupAvailable) {
         stopFreshness = scanStore.observeFreshness();
-        void scanStore.init().then(() => {
-          if (disposed || !scanStore.isStale()) return;
-          // Defer background revalidation so initial dashboard render is immediate
-          if (typeof requestIdleCallback !== 'undefined') {
-            requestIdleCallback(() => {
-              if (!disposed && document.visibilityState === 'visible') void scanStore.runScan();
-            }, { timeout: 1500 });
-          } else {
-            setTimeout(() => {
-              if (!disposed && document.visibilityState === 'visible') void scanStore.runScan();
-            }, 600);
-          }
-        });
+        // Show the cached scan immediately; the freshness timer (#128)
+        // auto-rescans within ~1s if it is stale, so no deferred scan here.
+        void scanStore.init();
       }
       if (awakeAvailable) void awakeStore.refresh();
 

@@ -287,8 +287,11 @@ The quick window is persistent but inactive while hidden:
 - opening reloads persistent preferences and displays cached data first;
 - disk metrics refresh once per activation;
 - memory polling starts only while visible and stops when hidden;
-- AI usage uses a 60-second backend cache;
-- scan data is reused until stale;
+- AI usage uses a 60-second backend cache, auto-refreshed while its tab stays
+  visible via a ref-counted subscriber; failures stay manual;
+- scan data is reused until stale; visible surfaces auto-rescan within ~1s of
+  expiry instead of waiting for a manual click, failed scans stay manual, and
+  hidden panels never scan;
 - Escape, Cmd+W, focus loss, and the close button hide rather than quit.
 
 Store constructors do not start I/O. A route or an explicit activation event

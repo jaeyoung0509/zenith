@@ -158,6 +158,7 @@ describe('cleanup freshness and recovery', () => {
     expect(tauriScan).toHaveBeenCalledTimes(1);
     expect(store.lastScan?.scan_id).toBe('new');
     expect(store.freshness).toBe('fresh');
+    expect(store.lastScanTrigger).toBe('auto');
     // Fresh results are not rescanned.
     await vi.advanceTimersByTimeAsync(60_000);
     expect(tauriScan).toHaveBeenCalledTimes(1);
@@ -193,6 +194,44 @@ describe('cleanup freshness and recovery', () => {
     expect(store.freshness).toBe('failed');
     await vi.advanceTimersByTimeAsync(300_000);
     expect(tauriScan).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('adopts a fresh backend scan from another window instead of rescanning', async () => {
+    const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    const windowEvents = new EventTarget();
+    vi.stubGlobal('document', page);
+    vi.stubGlobal('window', windowEvents);
+    const store = await loaded();
+    const stop = store.observeFreshness();
+    // Another visible window finishes a scan while this surface stays open.
+    vi.mocked(tauriGetLastScan).mockResolvedValue(fixture('other', 1250));
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(tauriScan).not.toHaveBeenCalled();
+    expect(store.lastScan?.scan_id).toBe('other');
+    expect(store.freshness).toBe('fresh');
+    expect(store.lastScanTrigger).toBeNull();
+    stop();
+  });
+
+  it('does not start a second scan when one begins during cache revalidation', async () => {
+    const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    const windowEvents = new EventTarget();
+    vi.stubGlobal('document', page);
+    vi.stubGlobal('window', windowEvents);
+    const store = await loaded();
+    const cache = deferred<ScanResult | null>();
+    vi.mocked(tauriGetLastScan).mockReturnValue(cache.promise);
+    vi.mocked(tauriScan).mockImplementation(async () => fixture('new', Math.floor(Date.now() / 1000)));
+    const stop = store.observeFreshness();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(tauriScan).not.toHaveBeenCalled();
+    await store.runScan();
+    cache.resolve(fixture('old'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    expect(store.lastScan?.scan_id).toBe('new');
+    expect(store.lastScanTrigger).toBe('manual');
     stop();
   });
 });
