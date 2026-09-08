@@ -408,8 +408,12 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
     let registry = SignatureRegistry::load_embedded().unwrap();
     let scan = ScanResult {
         scan_id: "trusted-scan".into(),
+        valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
         started_at: 1,
-        finished_at: 2,
+        finished_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         categories: vec![CategoryResult {
             category: Category::Developer,
             display_name: "Developer".into(),

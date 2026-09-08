@@ -98,6 +98,8 @@ function mockControlSnapshot(): AiControlCenterSnapshot {
   };
 }
 
+let lastMockScan: ScanResult | null = null;
+
 export const mockApi = {
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return {
@@ -650,6 +652,7 @@ export const mockApi = {
 
         const result: ScanResult = {
           scan_id: scanId,
+          valid_for_seconds: 300,
           started_at: Math.floor(Date.now() / 1000) - 1,
           finished_at: Math.floor(Date.now() / 1000),
           categories: [
@@ -737,6 +740,7 @@ export const mockApi = {
           manual_bytes: 0,
         };
 
+        lastMockScan = result;
         onEvent({ type: 'Finished', result });
         resolve(result);
       }, 450);
@@ -744,7 +748,7 @@ export const mockApi = {
   },
 
   async getLastScan(): Promise<ScanResult | null> {
-    return null;
+    return lastMockScan;
   },
 
   async createPlan(_scanId: string, items: ScanItem[]): Promise<PlanPreview> {

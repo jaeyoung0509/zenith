@@ -106,6 +106,7 @@ describe('quick clean eligibility and predicate consistency', () => {
 
     const mockScan = {
       scan_id: 'scan-123',
+      valid_for_seconds: 300,
       started_at: 1000,
       created_at: 1000,
       finished_at: 1005,

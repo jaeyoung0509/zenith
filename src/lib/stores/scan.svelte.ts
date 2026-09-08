@@ -14,7 +14,7 @@ import {
   tauriScan,
 } from '../utils/tauri';
 
-class ScanStore {
+export class ScanStore {
   isScanning = $state(false);
   isCleaning = $state(false);
   currentCategory = $state<Category | null>(null);
@@ -33,6 +33,79 @@ class ScanStore {
   });
   lastCleanResult = $state<CleanResult | null>(null);
   error = $state<string | null>(null);
+  private clock = $state(Date.now());
+  private invalidated = $state(false);
+  private generation = 0;
+  private scanRequest: Promise<ScanResult | null> | null = null;
+  private freshnessSubscribers = 0;
+  private stopFreshness: (() => void) | null = null;
+
+  observeFreshness(): () => void {
+    this.freshnessSubscribers++;
+    if (this.freshnessSubscribers === 1) {
+      let timer: ReturnType<typeof setInterval> | undefined;
+      const activate = () => {
+        if (timer !== undefined) clearInterval(timer);
+        timer = undefined;
+        if (document.visibilityState !== 'visible') return;
+        this.updateFreshness();
+        void this.init();
+        // Local clock only. Never scan or poll the filesystem on this timer.
+        timer = setInterval(() => this.updateFreshness(), 1000);
+      };
+      window.addEventListener('focus', activate);
+      document.addEventListener('visibilitychange', activate);
+      activate();
+      this.stopFreshness = () => {
+        if (timer !== undefined) clearInterval(timer);
+        window.removeEventListener('focus', activate);
+        document.removeEventListener('visibilitychange', activate);
+      };
+    }
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      if (--this.freshnessSubscribers === 0) {
+        this.stopFreshness?.();
+        this.stopFreshness = null;
+      }
+    };
+  }
+
+  get freshness(): 'empty' | 'fresh' | 'stale' | 'refreshing' | 'failed' {
+    if (this.isScanning) return 'refreshing';
+    if (this.invalidated && this.error) return 'failed';
+    if (!this.lastScan) return 'empty';
+    return this.invalidated || !this.freshAt(this.clock) ? 'stale' : 'fresh';
+  }
+
+  get canClean(): boolean {
+    return this.freshness === 'fresh' && !this.isCleaning;
+  }
+
+  private freshAt(nowMs: number): boolean {
+    if (!this.lastScan) return false;
+    const age = Math.floor(nowMs / 1000) - this.lastScan.finished_at;
+    return age >= 0 && age < this.lastScan.valid_for_seconds;
+  }
+
+  updateFreshness() {
+    this.clock = Date.now();
+    if (this.lastScan && !this.freshAt(this.clock)) this.invalidate();
+  }
+
+  private invalidate() {
+    this.invalidated = true;
+    if (Object.keys(this.selectedMap).length > 0) this.selectedMap = {};
+  }
+
+  private acceptScan(scan: ScanResult) {
+    this.lastScan = scan;
+    this.invalidated = false;
+    this.syncSelectionFromScan(scan);
+    this.updateFreshness();
+  }
 
   // Selected item IDs mapped to item objects
   selectedMap = $state<Record<string, boolean>>({});
@@ -107,14 +180,20 @@ class ScanStore {
   }
 
   private async loadCachedScan() {
+    const generation = this.generation;
     try {
       const cached = await tauriGetLastScan();
-      if (cached) {
-        this.lastScan = cached;
-        this.syncSelectionFromScan(cached);
+      if (generation !== this.generation || this.isScanning || this.isCleaning) return;
+      if (!cached) {
+        this.invalidate();
+      } else if (cached.scan_id !== this.lastScan?.scan_id) {
+        this.acceptScan(cached);
       }
-    } catch {
-      // ignore
+      this.updateFreshness();
+    } catch (error) {
+      if (generation !== this.generation || this.isScanning || this.isCleaning) return;
+      this.invalidate();
+      this.error = `Could not verify scan. Scan again before cleaning. ${String(error)}`;
     }
   }
 
@@ -140,13 +219,13 @@ class ScanStore {
 
   toggleItem(id: string) {
     const item = this.findItem(id);
-    if (item && item.risk === 'manual') return;
+    if (!item || item.risk === 'manual') return;
     this.selectedMap[id] = !this.selectedMap[id];
   }
 
   setItemSelected(id: string, selected: boolean) {
     const item = this.findItem(id);
-    if (item && item.risk === 'manual') return;
+    if (!item || item.risk === 'manual') return;
     this.selectedMap[id] = selected;
   }
 
@@ -223,13 +302,21 @@ class ScanStore {
     }
   }
 
-  isStale(maxAgeSeconds = 300) {
-    if (!this.lastScan) return true;
-    return Math.floor(Date.now() / 1000) - this.lastScan.finished_at >= maxAgeSeconds;
+  isStale() {
+    return this.invalidated || !this.freshAt(Date.now());
   }
 
-  async runScan(categories?: Category[]): Promise<ScanResult | null> {
-    if (this.isScanning) return null;
+  runScan(categories?: Category[]): Promise<ScanResult | null> {
+    if (this.scanRequest) return this.scanRequest;
+    this.scanRequest = this.performScan(categories).finally(() => {
+      this.scanRequest = null;
+    });
+    return this.scanRequest;
+  }
+
+  private async performScan(categories?: Category[]): Promise<ScanResult | null> {
+    this.generation++;
+    this.invalidate();
     this.isScanning = true;
     this.error = null;
 
@@ -248,8 +335,6 @@ class ScanStore {
           case 'CategoryFinished':
             break;
           case 'Finished':
-            this.lastScan = event.result;
-            this.syncSelectionFromScan(event.result);
             this.currentCategory = null;
             this.currentScanningItem = null;
             break;
@@ -259,8 +344,7 @@ class ScanStore {
         }
       }, categories);
 
-      this.lastScan = result;
-      this.syncSelectionFromScan(result);
+      this.acceptScan(result);
       return result;
     } catch (e: any) {
       this.error = e?.toString() || 'Scan failed';
@@ -278,7 +362,12 @@ class ScanStore {
   }
 
   async cleanItems(items: ScanItem[]): Promise<CleanResult | null> {
-    if (this.isCleaning) return null;
+    if (this.isCleaning || this.isScanning) return null;
+    this.updateFreshness();
+    if (!this.canClean) {
+      this.error = 'Scan results are out of date. Scan again and review the new results before cleaning.';
+      return null;
+    }
     const selectedItems = items
       .filter((item) => this.selectedMap[item.id] && item.risk !== 'manual')
       .map((item) => ({ ...item, is_selected: true }));
@@ -296,6 +385,8 @@ class ScanStore {
       // 1. Create and verify safety plan
       if (!this.lastScan) throw new Error('Scan result is no longer available');
       const plan = await tauriCreatePlan(this.lastScan.scan_id, selectedItems);
+
+      if (this.isStale()) throw new Error('Scan expired. Scan again before cleaning.');
 
       // 2. Execute clean
       const result = await tauriExecuteClean(plan, (event: CleanEvent) => {
@@ -328,13 +419,15 @@ class ScanStore {
       });
 
       this.lastCleanResult = result;
+      this.invalidate();
 
       // Re-scan after clean to refresh metrics
       await this.runScan();
 
       return result;
     } catch (e: any) {
-      this.error = e?.toString() || 'Clean failed';
+      this.invalidate();
+      this.error = `${e?.toString() || 'Clean failed'} Scan again and review the results before retrying.`;
       return null;
     } finally {
       this.isCleaning = false;

@@ -7,6 +7,7 @@ import { scanStore } from '../lib/stores/scan.svelte';
 beforeEach(() => {
   scanStore.lastScan = {
     scan_id: 'sidebar-test',
+    valid_for_seconds: 300,
     started_at: Date.now() - 1000,
     finished_at: Date.now(),
     categories: [

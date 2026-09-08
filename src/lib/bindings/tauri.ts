@@ -35,6 +35,8 @@ export const commands = {
 	startScan: (onEvent: Channel<ScanEvent_Deserialize>, categories: Category[] | null) => typedError<ScanResult_Serialize, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
 	getLastScan: () => __TAURI_INVOKE<{
 	scan_id: string,
+	/**  Backend-owned lifetime of a cleanup observation, not a deletion lease. */
+	valid_for_seconds: number,
 	started_at: number,
 	finished_at: number,
 	categories: CategoryResult_Serialize[],
@@ -1651,6 +1653,8 @@ export type ScanResult = ScanResult_Serialize | ScanResult_Deserialize;
 
 export type ScanResult_Deserialize = {
 	scan_id: string,
+	/**  Backend-owned lifetime of a cleanup observation, not a deletion lease. */
+	valid_for_seconds: number,
 	started_at: number,
 	finished_at: number,
 	categories: CategoryResult_Deserialize[],
@@ -1662,6 +1666,8 @@ export type ScanResult_Deserialize = {
 
 export type ScanResult_Serialize = {
 	scan_id: string,
+	/**  Backend-owned lifetime of a cleanup observation, not a deletion lease. */
+	valid_for_seconds: number,
 	started_at: number,
 	finished_at: number,
 	categories: CategoryResult_Serialize[],

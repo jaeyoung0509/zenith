@@ -84,7 +84,11 @@ pub async fn create_delete_plan(
                 &registry,
             )
             .map_err(|error| error.to_string())?;
-            let preview = plan.preview(PLAN_TTL_SECS);
+            let mut preview = plan.preview(PLAN_TTL_SECS);
+            preview.expires_at = preview.expires_at.min(
+                scan.finished_at
+                    .saturating_add(u64::from(ScanResult::VALID_FOR_SECONDS)),
+            );
             let now = unix_timestamp();
             let mut plans = delete_plans.lock().expect("delete_plans poisoned");
             plans.retain(|_, stored| now.saturating_sub(stored.created_at) < PLAN_TTL_SECS);
@@ -123,18 +127,23 @@ pub async fn execute_clean(
                 .expect("delete_plans poisoned")
                 .remove(&plan_id)
                 .ok_or_else(|| "Delete plan not found or already used".to_string())?;
-            if unix_timestamp().saturating_sub(plan.created_at) >= PLAN_TTL_SECS {
+            if unix_timestamp()
+                .checked_sub(plan.created_at)
+                .is_none_or(|age| age >= PLAN_TTL_SECS)
+            {
                 return Err("Delete plan expired. Scan again before cleaning.".to_string());
             }
-            let scan_is_current = last_scan
-                .lock()
-                .expect("last_scan poisoned")
-                .as_ref()
-                .is_some_and(|scan| scan.scan_id == plan.scan_id);
-            if !scan_is_current {
-                return Err(
-                    "The scan changed after this plan was created. Review a new plan.".to_string(),
-                );
+            {
+                let mut scan = last_scan.lock().expect("last_scan poisoned");
+                scan.as_ref()
+                    .ok_or_else(|| {
+                        "The scan is no longer current. Scan again before cleaning.".to_string()
+                    })?
+                    .validate_for_cleanup(&plan.scan_id, unix_timestamp())
+                    .map_err(|error| error.to_string())?;
+                // Even a partial cleanup changes the observation. Other windows
+                // must not create another plan from the pre-cleanup inventory.
+                *scan = None;
             }
             Ok(CleanExecutor::execute(plan, |event| {
                 let _ = on_event.send(event);

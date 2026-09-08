@@ -18,11 +18,11 @@ impl SafetyPlanner {
         selected_item_ids: &[String],
         registry: &SignatureRegistry,
     ) -> Result<DeletePlan, ZenithError> {
-        if scan.scan_id != scan_id {
-            return Err(ZenithError::InvalidPlan(
-                "The scan is no longer current".into(),
-            ));
-        }
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        scan.validate_for_cleanup(scan_id, now)?;
         let requested: HashSet<&str> = selected_item_ids.iter().map(String::as_str).collect();
         if requested.is_empty() || requested.len() != selected_item_ids.len() {
             return Err(ZenithError::InvalidPlan(

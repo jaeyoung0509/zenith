@@ -41,6 +41,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     scanStore.lastScan = {
       scan_id: 'scan-1',
+      valid_for_seconds: 300,
       started_at: Date.now() - 1000,
       finished_at: Date.now(),
       categories: [mockCategory],
@@ -99,6 +100,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     scanStore.lastScan = {
       scan_id: 'scan-2',
+      valid_for_seconds: 300,
       started_at: Date.now() - 1000,
       finished_at: Date.now(),
       categories: [mockCategory],
@@ -157,6 +159,7 @@ describe('detected versus reclaimable storage copy', () => {
 
     scanStore.lastScan = {
       scan_id: 'scan-orbstack',
+      valid_for_seconds: 300,
       started_at: Date.now() - 1000,
       finished_at: Date.now(),
       categories: [category],

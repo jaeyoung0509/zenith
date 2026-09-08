@@ -75,6 +75,7 @@
         <div onclick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={allSelected}
+            disabled={!scanStore.canClean}
             onchange={handleToggleCheckbox}
             ariaLabel={`Select all ${categoryResult.display_name} items`}
           />
@@ -125,7 +126,7 @@
 
     <div class="flex shrink-0 items-center gap-3">
       <div class="w-[7rem] shrink-0 text-right">
-        <span class="block whitespace-nowrap text-sm font-semibold font-mono text-foreground">
+        <span class="block whitespace-nowrap text-sm font-semibold font-mono tabular-nums text-foreground">
           {formatBytes(categoryResult.total_bytes)}
         </span>
         <span class="block whitespace-nowrap text-micro text-muted-foreground">Detected</span>
