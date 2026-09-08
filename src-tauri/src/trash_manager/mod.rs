@@ -586,6 +586,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn personal_documents_are_not_app_data_scope() {
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -598,11 +599,38 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn app_bundle_must_be_a_direct_child_of_an_application_root() {
         assert!(application_root_for_path(Path::new("/Applications/Example.app")).is_some());
         assert!(application_root_for_path(Path::new("/Applications/Nested/Example.app")).is_none());
         assert!(application_root_for_path(Path::new("/System/Applications/Mail.app")).is_none());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn macos_application_scopes_are_rejected_on_other_platforms() {
+        for path in [
+            "/Applications/Example.app",
+            "/Applications/Nested/Example.app",
+            "/System/Applications/Mail.app",
+            "C:\\Program Files\\Example",
+        ] {
+            assert!(application_root_for_path(Path::new(path)).is_none());
+            assert!(!is_allowed_app_data_path(Path::new(path)));
+        }
+
+        // HOME may be set by a shell on Windows; it must not enable macOS scopes.
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/Users/example"));
+        assert!(application_root_for_path(&home.join("Applications/Example.app")).is_none());
+        assert!(!is_allowed_app_data_path(
+            &home.join("Library/Caches/com.example.app")
+        ));
+        assert!(!is_allowed_app_data_path(
+            &home.join("Documents/App Project")
+        ));
     }
 
     #[test]
