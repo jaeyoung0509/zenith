@@ -200,6 +200,7 @@ impl ScanEngine {
 
         let result = ScanResult {
             scan_id,
+            valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
             started_at,
             finished_at,
             categories: category_results,

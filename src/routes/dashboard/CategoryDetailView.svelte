@@ -13,6 +13,7 @@
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import Card from '../../lib/components/Card.svelte';
+  import ScanFreshnessNotice from '../../lib/components/ScanFreshnessNotice.svelte';
   import {
     ArrowLeft,
     Search,
@@ -78,6 +79,7 @@
 </script>
 
 <div class="space-y-5">
+  <ScanFreshnessNotice />
   <!-- Back Button & Category Header -->
   <div class="flex items-center justify-between pb-2 border-b border-border/60">
     <div class="flex items-center gap-3">
@@ -98,7 +100,7 @@
       <Button
         variant="outline"
         size="sm"
-        disabled={cleanableFilteredItems.length === 0}
+        disabled={cleanableFilteredItems.length === 0 || !scanStore.canClean}
         onclick={toggleAllFiltered}
         class="gap-1.5 text-xs"
       >
@@ -115,7 +117,7 @@
         variant="primary"
         size="sm"
         class="gap-1.5 min-w-[90px]"
-        disabled={categorySelectedBytes === 0 || scanStore.isCleaning}
+        disabled={categorySelectedBytes === 0 || !scanStore.canClean}
         onclick={cleanSelected}
       >
         {#if scanStore.isCleaning}

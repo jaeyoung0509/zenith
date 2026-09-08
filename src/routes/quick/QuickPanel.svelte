@@ -76,6 +76,7 @@
     if (scanStore.isScanning) {
       return 'refreshing';
     }
+    if (scanStore.freshness !== 'fresh') return 'stale';
     if (quickCleanableBytes > 0) {
       return 'ready';
     }
@@ -91,6 +92,8 @@
   function hasSection(section: typeof settings.quick_panel_sections[number]) {
     return settings.quick_panel_sections.includes(section);
   }
+
+  let stopFreshness: (() => void) | undefined;
 
   async function activatePanel() {
     if (panelActive) return;
@@ -120,6 +123,7 @@
       });
     }
     if ((hasSection('cleanup') || hasSection('categories')) && cleanupAvailable) {
+      stopFreshness = scanStore.observeFreshness();
       await scanStore.init();
       if (panelActive && scanStore.isStale()) void scanStore.runScan();
     }
@@ -128,6 +132,8 @@
   function deactivatePanel() {
     if (!panelActive) return;
     panelActive = false;
+    stopFreshness?.();
+    stopFreshness = undefined;
     if (hasSection('memory')) memoryStore.stopPolling();
   }
 
@@ -291,6 +297,8 @@
                 <span class="text-muted-foreground">Checking development caches</span>
               {:else if cleanupState === 'refreshing'}
                 <span class="text-warning">Refreshing scan…</span>
+              {:else if cleanupState === 'stale'}
+                <span class="text-warning">Out of date · Scan Again before cleaning</span>
               {:else if cleanupState === 'ready'}
                 <span class="text-success">Safe cleanup available</span>
               {:else}
@@ -301,7 +309,7 @@
           <Button
             variant="primary"
             size="sm"
-            disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning || !scan || quickCleanableBytes === 0}
+            disabled={!cleanupAvailable || !scanStore.canClean || quickCleanableBytes === 0}
             onclick={handleCleanSafe}
             class="gap-1.5 min-w-[88px] text-xs font-semibold py-2 px-3"
           >

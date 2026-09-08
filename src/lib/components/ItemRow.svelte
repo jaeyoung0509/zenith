@@ -55,6 +55,7 @@
     {:else}
       <Checkbox
         checked={isSelected}
+        disabled={!scanStore.canClean}
         onchange={handleToggle}
         ariaLabel={`Select ${item.name}`}
         class="mt-0.5 shrink-0"
@@ -103,7 +104,7 @@
   </div>
 
   <div class="flex items-center gap-2 shrink-0">
-    <span class="min-w-[5rem] whitespace-nowrap text-right text-xs font-mono font-semibold text-foreground">
+    <span class="w-[12ch] whitespace-nowrap text-right text-xs font-mono tabular-nums font-semibold text-foreground">
       {cacheMetadata.size_semantics === 'conservative_lower_bound' ? '≥ ' : cacheMetadata.size_semantics === 'informational' ? '~ ' : ''}{formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
 

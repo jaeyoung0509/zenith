@@ -1,6 +1,6 @@
-import type { DiskMetrics, MemoryMetrics } from '../models/types';
+import type { DiskMetrics, DiskVolume, MemoryMetrics } from '../models/types';
 import {
-  tauriGetDiskMetrics,
+  tauriGetDiskVolumes,
   tauriGetMemoryMetrics,
   tauriTerminateProcessGroup,
 } from '../utils/tauri';
@@ -8,6 +8,7 @@ import {
 export class MemoryStore {
   memory = $state<MemoryMetrics | null>(null);
   disk = $state<DiskMetrics | null>(null);
+  volumes = $state<DiskVolume[]>([]);
   isLoading = $state(false);
   isDiskLoading = $state(false);
   isPolling = $state(false);
@@ -17,13 +18,22 @@ export class MemoryStore {
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private subscriberCount = 0;
+  private diskRequest: Promise<void> | null = null;
+  private memoryRequest: Promise<void> | null = null;
 
   async refresh() {
     await Promise.all([this.refreshMemory(), this.refreshDisk()]);
   }
 
-  async refreshMemory() {
-    if (this.isLoading) return;
+  refreshMemory(): Promise<void> {
+    if (this.memoryRequest) return this.memoryRequest;
+    this.memoryRequest = this.loadMemory().finally(() => {
+      this.memoryRequest = null;
+    });
+    return this.memoryRequest;
+  }
+
+  private async loadMemory() {
     this.isLoading = true;
     this.error = null;
     try {
@@ -35,11 +45,28 @@ export class MemoryStore {
     }
   }
 
-  async refreshDisk() {
-    if (this.isDiskLoading) return;
+  refreshDisk(): Promise<void> {
+    if (this.diskRequest) return this.diskRequest;
+    this.diskRequest = this.loadDisk().finally(() => {
+      this.diskRequest = null;
+    });
+    return this.diskRequest;
+  }
+
+  private async loadDisk() {
     this.isDiskLoading = true;
     try {
-      this.disk = await tauriGetDiskMetrics();
+      const volumes = await tauriGetDiskVolumes();
+      const primary = volumes.find((volume) => volume.is_primary);
+      this.volumes = volumes;
+      this.disk = primary ? {
+        mount_point: primary.mount_point,
+        total_bytes: primary.total_bytes,
+        used_bytes: primary.used_bytes,
+        free_bytes: primary.available_bytes,
+        available_bytes: primary.available_bytes,
+        percent_used: primary.percent_used,
+      } : null;
     } catch (e: any) {
       this.error = e?.toString() || 'Failed to fetch disk metrics';
     } finally {

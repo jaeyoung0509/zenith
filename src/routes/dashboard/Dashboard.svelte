@@ -5,7 +5,6 @@
   import { prefersReducedMotion } from 'svelte/motion';
   import type { CategoryResult, DashboardRoute, DashboardTab } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
-  import { memoryStore } from '../../lib/stores/memory.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
@@ -77,6 +76,7 @@
 
   onMount(() => {
     let disposed = false;
+    let stopFreshness: (() => void) | undefined;
 
     void platformCapabilitiesStore.load().then(() => {
       if (disposed) return;
@@ -88,17 +88,17 @@
       // Do not mount or invoke platform-sensitive workflows until the backend
       // has told us that the corresponding adapter is available.
       if (cleanupAvailable) {
-        void memoryStore.refreshDisk();
+        stopFreshness = scanStore.observeFreshness();
         void scanStore.init().then(() => {
           if (disposed || !scanStore.isStale()) return;
           // Defer background revalidation so initial dashboard render is immediate
           if (typeof requestIdleCallback !== 'undefined') {
             requestIdleCallback(() => {
-              if (!disposed) void scanStore.runScan();
+              if (!disposed && document.visibilityState === 'visible') void scanStore.runScan();
             }, { timeout: 1500 });
           } else {
             setTimeout(() => {
-              if (!disposed) void scanStore.runScan();
+              if (!disposed && document.visibilityState === 'visible') void scanStore.runScan();
             }, 600);
           }
         });
@@ -118,6 +118,7 @@
 
     return () => {
       disposed = true;
+      stopFreshness?.();
     };
   });
 
@@ -152,7 +153,7 @@
   }
 </script>
 
-<div class="flex h-screen w-screen bg-background text-foreground overflow-hidden font-sans select-none relative">
+<div class="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans select-none relative">
   <!-- Window drag region for macOS Overlay title bar -->
   <div
     class="titlebar-drag-region absolute top-0 left-0 right-0 h-7 z-30"
@@ -288,7 +289,7 @@
   </aside>
 
   <!-- Main Content Area with fluid native transition -->
-  <main class="flex-1 h-full overflow-y-auto p-8 pt-10">
+  <main class="min-w-0 flex-1 h-full overflow-y-auto p-8 pt-10">
     {#if !capabilitiesReady}
       <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Loading platform capabilities…</div>
     {:else}
@@ -296,7 +297,7 @@
         <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>
           {#if selectedCategory}
             <CategoryDetailView
-              categoryResult={selectedCategory}
+              categoryResult={scanStore.lastScan?.categories.find((category) => category.category === selectedCategory?.category) ?? { ...selectedCategory, items: [], total_bytes: 0, safe_bytes: 0, rebuild_bytes: 0, manual_bytes: 0 }}
               onBack={() => (selectedCategory = null)}
               onNavigateTab={(tab) => selectTab(tab)}
             />

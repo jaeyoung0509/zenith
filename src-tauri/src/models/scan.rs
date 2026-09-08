@@ -118,6 +118,8 @@ pub struct CategoryResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ScanResult {
     pub scan_id: String,
+    /// Backend-owned lifetime of a cleanup observation, not a deletion lease.
+    pub valid_for_seconds: u32,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub started_at: u64,
@@ -137,6 +139,32 @@ pub struct ScanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub manual_bytes: u64,
+}
+
+impl ScanResult {
+    pub const VALID_FOR_SECONDS: u32 = 300;
+
+    pub fn is_fresh_at(&self, now: u64) -> bool {
+        now.checked_sub(self.finished_at)
+            .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS))
+    }
+
+    pub fn validate_for_cleanup(
+        &self,
+        scan_id: &str,
+        now: u64,
+    ) -> Result<(), crate::models::ZenithError> {
+        use crate::models::ZenithError;
+        match (self.scan_id == scan_id, self.is_fresh_at(now)) {
+            (false, _) => Err(ZenithError::InvalidPlan(
+                "The scan is no longer current. Scan again before cleaning.".into(),
+            )),
+            (_, false) => Err(ZenithError::InvalidPlan(
+                "Scan expired. Scan again and review the new results before cleaning.".into(),
+            )),
+            (true, true) => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -169,6 +197,31 @@ pub enum ScanEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_observation_expiry_and_clock_rollback_fail_closed() {
+        let scan = ScanResult {
+            scan_id: "fixture".into(),
+            valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
+            started_at: 999,
+            finished_at: 1000,
+            categories: vec![],
+            total_bytes: 0,
+            safe_bytes: 0,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+        };
+        assert!(scan.is_fresh_at(1000));
+        assert!(scan.is_fresh_at(1299));
+        assert!(!scan.is_fresh_at(1300));
+        assert!(!scan.is_fresh_at(999));
+        assert!(scan.validate_for_cleanup("fixture", 1299).is_ok());
+        assert!(scan.validate_for_cleanup("unknown", 1000).is_err());
+        assert!(scan.validate_for_cleanup("fixture", 1300).is_err());
+        assert!(scan.validate_for_cleanup("fixture", 999).is_err());
+        let serialized = serde_json::to_value(&scan).unwrap();
+        assert_eq!(serialized["valid_for_seconds"], 300);
+    }
 
     #[test]
     fn cache_metadata_and_large_numbers_survive_ipc_serialization() {

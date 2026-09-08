@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import type { CategoryResult, DiskVolume } from '../../lib/models/types';
+  import { untrack } from 'svelte';
+  import type { CategoryResult } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
   import {
-    tauriGetDiskVolumes,
     tauriOpenStorageSettings,
     tauriShowInFileManager,
   } from '../../lib/utils/tauri';
@@ -15,6 +14,8 @@
   import CategoryCard from '../../lib/components/CategoryCard.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
+  import ScanFreshnessNotice from '../../lib/components/ScanFreshnessNotice.svelte';
+  import ByteValue from '../../lib/components/ByteValue.svelte';
   import {
     RotateCw,
     Trash2,
@@ -36,27 +37,17 @@
   let disk = $derived(memoryStore.disk);
   let scan = $derived(scanStore.lastScan);
   let showResultModal = $state(false);
-  let volumes = $state<DiskVolume[]>([]);
-  let isLoadingVolumes = $state(false);
+  let volumes = $derived(memoryStore.volumes);
 
   let safeSelectedBytes = $derived(scanStore.safeSelectedBytes);
   let rebuildSelectedBytes = $derived(scanStore.rebuildSelectedBytes);
   let manualSelectedBytes = $derived(scanStore.manualSelectedBytes);
   let hasRebuildSelected = $derived(scanStore.rebuildSelectedBytes > 0);
 
-  async function loadVolumes() {
-    isLoadingVolumes = true;
-    try {
-      volumes = await tauriGetDiskVolumes();
-    } catch {
-      // Ignore or fallback
-    } finally {
-      isLoadingVolumes = false;
-    }
-  }
-
-  onMount(() => {
-    void loadVolumes();
+  $effect(() => {
+    // One snapshot on activation and after a scan replaces the inventory.
+    scanStore.lastScan?.scan_id;
+    untrack(() => { void memoryStore.refreshDisk(); });
   });
 
   function handleCleanSelected() {
@@ -67,27 +58,30 @@
 </script>
 
 <div class="space-y-6">
+  <ScanFreshnessNotice />
   <!-- Storage & Cleanable Overview Card -->
   <Card class="p-6 bg-card/70 border-border/80 relative overflow-hidden space-y-6">
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
       <!-- Left: Primary Disk Space -->
-      <div class="flex-1 space-y-2">
-        <div class="flex justify-between items-baseline">
+      <div class="min-w-0 flex-1 space-y-2">
+        <div class="flex flex-wrap justify-between items-baseline gap-x-3 gap-y-1">
           <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
             <HardDrive size={13} class="text-cyan-400" />
             Primary Storage
           </span>
           {#if disk}
-            <span class="whitespace-nowrap font-mono text-sm font-semibold text-foreground">
-              {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({disk.percent_used?.toFixed(1) ?? '—'}%)
+            <span class="flex flex-wrap gap-x-1 font-mono tabular-nums text-sm font-semibold text-foreground">
+              <ByteValue bytes={disk.used_bytes} />
+              <span class="whitespace-nowrap">/ <ByteValue bytes={disk.total_bytes} /></span>
+              <span class="whitespace-nowrap">({disk.percent_used?.toFixed(1) ?? '—'}%)</span>
             </span>
           {/if}
         </div>
         {#if disk}
           <ProgressBar value={disk.percent_used ?? 0} height="h-2.5" />
-          <div class="flex justify-between text-meta text-muted-foreground font-mono">
-            <span>Free: {formatBytes(disk.free_bytes)}</span>
-            <span>Used: {formatBytes(disk.used_bytes)}</span>
+          <div class="flex flex-wrap justify-between gap-x-3 text-meta text-muted-foreground font-mono">
+            <span>Free: <ByteValue bytes={disk.free_bytes} /></span>
+            <span>Used: <ByteValue bytes={disk.used_bytes} /></span>
           </div>
         {/if}
       </div>
@@ -101,7 +95,7 @@
           Selected Reclaimable
         </span>
         <div class="whitespace-nowrap text-3xl font-bold font-mono text-foreground">
-          {formatBytes(scanStore.reclaimableBytes)}
+          <ByteValue bytes={scanStore.reclaimableBytes} />
         </div>
         <div class="text-meta text-muted-foreground">
           {#if scan}
@@ -132,8 +126,10 @@
                     <span class="px-1 py-0.2 rounded text-micro bg-secondary text-muted-foreground border border-border">External</span>
                   {/if}
                 </div>
-                <p class="whitespace-nowrap text-caption font-mono text-muted-foreground mt-0.5">
-                  {formatBytes(volume.used_bytes)} / {formatBytes(volume.total_bytes)} ({volume.percent_used != null ? `${volume.percent_used.toFixed(0)}%` : '—'})
+                <p class="flex flex-wrap gap-x-1 text-caption font-mono tabular-nums text-muted-foreground mt-0.5">
+                  <ByteValue bytes={volume.used_bytes} />
+                  <span class="whitespace-nowrap">/ <ByteValue bytes={volume.total_bytes} /></span>
+                  <span class="whitespace-nowrap">({volume.percent_used != null ? `${volume.percent_used.toFixed(1)}%` : '—'})</span>
                 </p>
               </div>
               <Button
@@ -158,7 +154,7 @@
         <Button
           variant="ghost"
           size="sm"
-          disabled={scanStore.isCleaning}
+          disabled={!scanStore.canClean}
           onclick={() => scanStore.selectAllSafe()}
           class="text-xs px-2.5"
         >
@@ -169,7 +165,7 @@
         <Button
           variant="ghost"
           size="sm"
-          disabled={scanStore.isCleaning}
+          disabled={!scanStore.canClean}
           onclick={() => scanStore.deselectAll()}
           class="text-xs text-muted-foreground px-2.5"
         >
@@ -205,7 +201,7 @@
         <Button
           variant="primary"
           size="md"
-          disabled={scanStore.isScanning || scanStore.isCleaning || scanStore.reclaimableBytes === 0}
+          disabled={!scanStore.canClean || scanStore.reclaimableBytes === 0}
           onclick={handleCleanSelected}
           class="gap-2 px-5 min-w-[130px]"
         >

@@ -9,6 +9,7 @@
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
+  import ByteValue from '../../lib/components/ByteValue.svelte';
   import {
     Activity,
     RotateCw,
@@ -22,8 +23,12 @@
   } from 'lucide-svelte';
 
   onMount(() => {
+    let subscribed = false;
     function updatePolling() {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      const visible = document.visibilityState === 'visible';
+      if (visible === subscribed) return;
+      subscribed = visible;
+      if (visible) {
         memoryStore.startPolling(2500);
       } else {
         memoryStore.stopPolling();
@@ -35,7 +40,7 @@
 
     return () => {
       document.removeEventListener('visibilitychange', updatePolling);
-      memoryStore.stopPolling();
+      if (subscribed) memoryStore.stopPolling();
     };
   });
 
@@ -145,24 +150,25 @@
 
   {#if memory}
     <!-- Key Memory Gauges -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div class="memory-gauges grid gap-3">
       <!-- Total / Used RAM -->
       <Card class="p-4 space-y-2 bg-card/60">
         <div class="flex items-center justify-between text-xs text-muted-foreground font-medium">
           <span>Physical Memory</span>
           <Cpu size={15} />
         </div>
-        <div class="text-2xl font-bold font-mono text-foreground">
-          {formatBytes(memory.used_bytes)} / {formatBytes(memory.total_bytes)}
+        <div class="min-h-16 text-2xl font-bold text-foreground">
+          <ByteValue bytes={memory.used_bytes} />
+          <div class="whitespace-nowrap text-xs font-normal text-muted-foreground">/ <ByteValue bytes={memory.total_bytes} /> total</div>
         </div>
         <ProgressBar
           value={(memory.used_bytes / memory.total_bytes) * 100}
           height="h-2"
           color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
         />
-        <div class="flex justify-between text-caption text-muted-foreground font-mono">
-          <span>Available: {formatBytes(memory.available_bytes)}</span>
-          <span>Free: {formatBytes(memory.free_bytes)}</span>
+        <div class="flex flex-wrap justify-between gap-x-3 text-caption text-muted-foreground">
+          <span>Available: <ByteValue bytes={memory.available_bytes} /></span>
+          <span>Free: <ByteValue bytes={memory.free_bytes} /></span>
         </div>
       </Card>
 
@@ -172,8 +178,8 @@
           <span>Compressed Memory</span>
           <Layers size={15} class="text-purple-400" />
         </div>
-        <div class="text-2xl font-bold font-mono text-foreground">
-          {formatBytes(memory.compressed_bytes)}
+        <div class="min-h-16 text-2xl font-bold font-mono text-foreground">
+          <ByteValue bytes={memory.compressed_bytes} />
         </div>
         <p class="text-meta text-muted-foreground mt-1">
           In-memory compression can reduce slower disk swap activity.
@@ -186,10 +192,10 @@
           <span>Swap Space Used</span>
           <Database size={15} class="text-blue-400" />
         </div>
-        <div class="text-2xl font-bold font-mono text-foreground">
-          {formatBytes(memory.swap_used_bytes)}
+        <div class="min-h-16 text-2xl font-bold font-mono text-foreground">
+          <ByteValue bytes={memory.swap_used_bytes} />
           {#if memory.swap_total_bytes > 0}
-            <span class="text-xs font-normal text-muted-foreground">/ {formatBytes(memory.swap_total_bytes)}</span>
+            <div class="whitespace-nowrap text-xs font-normal text-muted-foreground">/ <ByteValue bytes={memory.swap_total_bytes} /> total</div>
           {/if}
         </div>
         {#if memory.swap_total_bytes > 0}
@@ -242,7 +248,7 @@
       {#if filteredProcesses.length > 0}
         <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
           {#each filteredProcesses as proc (proc.name)}
-            <div class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
+            <div data-process-row class="group flex items-center justify-between p-3 text-xs hover:bg-secondary/30 transition-colors">
               <div class="flex items-center gap-3 min-w-0 pr-2">
                 <div
                   class="font-mono text-meta text-muted-foreground w-12 shrink-0"
@@ -261,9 +267,8 @@
               </div>
 
               <div class="flex items-center gap-4 shrink-0">
-                <span class="font-mono font-semibold text-foreground">
-                  {formatBytes(proc.memory_bytes)}
-                </span>
+                <ByteValue bytes={proc.memory_bytes} class="w-[10ch] text-right font-semibold text-foreground" />
+                <div class="w-16 shrink-0">
                 {#if proc.can_terminate}
                   <Button
                     variant="outline"
@@ -276,6 +281,7 @@
                     Quit
                   </Button>
                 {/if}
+                </div>
               </div>
             </div>
           {/each}
@@ -331,3 +337,9 @@
   {/if}
 
 </div>
+
+<style>
+  .memory-gauges {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  }
+</style>
