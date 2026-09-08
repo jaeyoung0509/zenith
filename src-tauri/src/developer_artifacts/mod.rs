@@ -453,13 +453,15 @@ pub fn register_home_workspace(
 ) -> Result<DeveloperWorkspace, String> {
     let home = crate::platform::paths::NativePlatformPaths::new()
         .home()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
+    if SymlinkGuard::is_symlink(&home) {
+        return Err("The user home directory must not be a symbolic link or reparse point.".into());
+    }
     let canonical = fs::canonicalize(&home)
         .map_err(|_| "Could not resolve the user home directory".to_string())?;
     let metadata = fs::symlink_metadata(&canonical)
         .map_err(|_| "Could not inspect the user home directory".to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() || SymlinkGuard::is_symlink(&canonical) {
         return Err("The user home directory is not a stable directory.".to_string());
     }
     #[cfg(unix)]
@@ -476,7 +478,6 @@ pub fn register_workspace_path(
 ) -> Result<DeveloperWorkspaceRecord, String> {
     let home = crate::platform::paths::NativePlatformPaths::new()
         .home()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     let canonical = validate_workspace_root(path, &home)?;
     let name = canonical
@@ -533,7 +534,7 @@ pub fn validate_workspace_root(path: &Path, home: &Path) -> Result<PathBuf, Stri
     let metadata = fs::symlink_metadata(path).map_err(|_| {
         "Choose an existing workspace directory inside your home folder.".to_string()
     })?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() || SymlinkGuard::is_symlink(path) {
         return Err("The selected workspace must be a real directory.".to_string());
     }
     let canonical_home = fs::canonicalize(home)
@@ -625,7 +626,7 @@ fn discover_workspace<F>(
                 *skipped_entries = skipped_entries.saturating_add(1);
                 continue;
             };
-            if metadata.file_type().is_symlink() {
+            if SymlinkGuard::is_symlink(&path) {
                 *skipped_entries = skipped_entries.saturating_add(1);
                 continue;
             }
@@ -713,9 +714,7 @@ fn global_go_module_candidate(
     workspace: &DeveloperWorkspaceRecord,
     seen_paths: &mut HashSet<PathBuf>,
 ) -> Option<Candidate> {
-    let home = crate::platform::paths::NativePlatformPaths::new()
-        .home()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
+    let home = crate::platform::paths::NativePlatformPaths::new().home()?;
     let canonical_home = fs::canonicalize(&home).ok()?;
     let expected_root = fs::canonicalize(home.join("go")).ok()?;
     if workspace.path != expected_root && workspace.path != canonical_home {
@@ -723,7 +722,7 @@ fn global_go_module_candidate(
     }
     let path = expected_root.join("pkg/mod");
     let metadata = fs::symlink_metadata(&path).ok()?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() || !seen_paths.insert(path.clone()) {
+    if !metadata.is_dir() || SymlinkGuard::is_symlink(&path) || !seen_paths.insert(path.clone()) {
         return None;
     }
     Some(Candidate {
@@ -1308,7 +1307,7 @@ fn measure_tree(path: &Path, _root_device: u64, cancel: &AtomicBool, depth: usiz
         stats.safety_blocked = true;
         return stats;
     }
-    if metadata.file_type().is_symlink() {
+    if SymlinkGuard::is_symlink(path) {
         stats.complete = false;
         // A nested link is not followed and only makes aggregate size/count
         // partial. The reviewed artifact root itself is still rejected by

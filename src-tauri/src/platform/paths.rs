@@ -94,7 +94,7 @@ pub trait PlatformPathsProvider: Send + Sync {
 }
 
 fn is_broad_root(path: &Path) -> bool {
-    if path == Path::new("/") {
+    if path.parent().is_none() {
         return true;
     }
     #[cfg(windows)]
@@ -120,13 +120,93 @@ impl NativePlatformPaths {
     pub fn home(&self) -> Option<PathBuf> {
         self.user_home()
     }
+
+    /// Only fixed user-content tokens may cross the IPC boundary.
+    pub fn content_dir(&self, token: &str) -> Option<PathBuf> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::Shell::*;
+            let id = match token {
+                "downloads" => FOLDERID_Downloads,
+                "desktop" => FOLDERID_Desktop,
+                "documents" => FOLDERID_Documents,
+                "movies" => FOLDERID_Videos,
+                _ => return None,
+            };
+            windows_known_folder(&id)
+        }
+        #[cfg(not(windows))]
+        {
+            let name = match token {
+                "downloads" => "Downloads",
+                "desktop" => "Desktop",
+                "documents" => "Documents",
+                "movies" => "Movies",
+                _ => return None,
+            };
+            Some(self.home()?.join(name))
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn application_roots(&self) -> Vec<PathBuf> {
+        let mut roots = ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"]
+            .into_iter()
+            .filter_map(|key| std::env::var_os(key).map(PathBuf::from))
+            .filter(|path| path.is_absolute())
+            .collect::<Vec<_>>();
+        if let Some(local) = self.local_app_data() {
+            roots.push(local.join("Programs"));
+        }
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+}
+
+#[cfg(windows)]
+fn windows_known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DONT_VERIFY};
+    let mut value = std::ptr::null_mut();
+    // Null token selects the current account, including redirected known folders.
+    let status = unsafe {
+        SHGetKnownFolderPath(
+            id,
+            KF_FLAG_DONT_VERIFY as u32,
+            std::ptr::null_mut(),
+            &mut value,
+        )
+    };
+    if value.is_null() {
+        return None;
+    }
+    if status < 0 {
+        unsafe {
+            CoTaskMemFree(value.cast());
+        }
+        return None;
+    }
+    let path = unsafe {
+        let mut len = 0;
+        while *value.add(len) != 0 {
+            len += 1;
+        }
+        let path = PathBuf::from(std::ffi::OsString::from_wide(std::slice::from_raw_parts(
+            value, len,
+        )));
+        CoTaskMemFree(value.cast());
+        path
+    };
+    (path.is_absolute() && !is_broad_root(&path)).then_some(path)
 }
 
 impl PlatformPathsProvider for NativePlatformPaths {
     fn user_home(&self) -> Option<PathBuf> {
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
+        // Windows HOME may belong to Git/MSYS or another account. Never use it
+        // as an alternate scan authority when USERPROFILE is missing.
+        resolve_user_home(cfg!(windows), |key| std::env::var_os(key))
     }
 
     fn local_app_data(&self) -> Option<PathBuf> {
@@ -216,6 +296,15 @@ impl PlatformPathsProvider for NativePlatformPaths {
     }
 }
 
+fn resolve_user_home(
+    windows: bool,
+    get: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    get(if windows { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && !is_broad_root(path))
+}
+
 #[cfg(test)]
 pub struct MockPlatformPaths {
     pub home: PathBuf,
@@ -255,6 +344,46 @@ impl PlatformPathsProvider for MockPlatformPaths {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn windows_profile_does_not_follow_another_accounts_shell_home() {
+        let dir = tempdir().unwrap();
+        let profile = dir.path().join("사용자 하나");
+        let other = dir.path().join("다른 계정");
+        let get = |key: &str| match key {
+            "USERPROFILE" => Some(profile.clone().into_os_string()),
+            "HOME" => Some(other.clone().into_os_string()),
+            _ => None,
+        };
+        assert_eq!(resolve_user_home(true, get), Some(profile.clone()));
+        assert_eq!(resolve_user_home(false, get), Some(other.clone()));
+        assert_eq!(
+            resolve_user_home(true, |key| (key == "HOME")
+                .then(|| other.clone().into_os_string())),
+            None
+        );
+        assert_eq!(resolve_user_home(true, |_| Some("".into())), None);
+        assert_eq!(
+            resolve_user_home(true, |_| Some("relative/profile".into())),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_profile_preserves_non_c_drive_and_korean_name() {
+        assert_eq!(
+            resolve_user_home(true, |_| Some(r"D:\Users\홍 길동".into())),
+            Some(PathBuf::from(r"D:\Users\홍 길동"))
+        );
+        assert!(resolve_user_home(true, |_| Some(r"D:\".into())).is_none());
+        assert!(resolve_user_home(true, |_| Some(r"\\server\share\".into())).is_none());
+        let paths = NativePlatformPaths::new();
+        assert!(paths
+            .content_dir("documents")
+            .is_some_and(|path| path.is_absolute()));
+        assert!(paths.content_dir("../../other-user").is_none());
+    }
 
     #[test]
     fn mock_platform_paths_expands_allowlisted_placeholders() {

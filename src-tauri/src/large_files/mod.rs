@@ -14,7 +14,7 @@ use std::os::unix::fs::MetadataExt;
 
 const MAX_RESULTS: usize = 10_000;
 const MAX_THRESHOLD: u64 = 64 * 1024 * 1024 * 1024;
-const LARGE_FILE_ROOTS: [&str; 4] = ["Downloads", "Desktop", "Documents", "Movies"];
+const LARGE_FILE_ROOTS: [&str; 4] = ["downloads", "desktop", "documents", "movies"];
 
 #[derive(Debug, Clone)]
 pub struct LargeFileRecord {
@@ -44,29 +44,38 @@ pub struct FileIdentity {
 impl FileIdentity {
     pub fn from_path(path: &Path) -> Option<Self> {
         let meta = fs::symlink_metadata(path).ok()?;
-        if meta.file_type().is_symlink() {
+        if crate::safety::SymlinkGuard::is_symlink(path) {
             return None;
         }
         #[cfg(unix)]
         let (device, inode) = (meta.dev(), meta.ino());
         #[cfg(windows)]
-        let (device, inode) = if let Ok(file) = std::fs::File::open(path) {
+        let (device, inode) = {
+            use std::os::windows::fs::OpenOptionsExt;
             use std::os::windows::io::AsRawHandle;
             use windows_sys::Win32::Storage::FileSystem::{
-                GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+                GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_FLAG_OPEN_REPARSE_POINT,
             };
+            // Directories need BACKUP_SEMANTICS. Failed identity reads must not
+            // collapse every inaccessible directory to the same (0, 0) identity.
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+                .ok()?;
             unsafe {
                 let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
-                if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0 {
+                if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0
+                    && info.dwFileAttributes & 0x400 == 0
+                {
                     let dev = info.dwVolumeSerialNumber as u64;
                     let ino = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
                     (dev, ino)
                 } else {
-                    (0, 0)
+                    return None;
                 }
             }
-        } else {
-            (0, 0)
         };
         #[cfg(not(any(unix, windows)))]
         let (device, inode) = (0, 0);
@@ -92,13 +101,12 @@ pub fn is_allowed_large_file_path(path: &Path) -> bool {
 }
 
 pub fn allowed_large_file_root(path: &Path) -> Option<PathBuf> {
-    let home = crate::platform::paths::NativePlatformPaths::new()
-        .home()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
+    let paths = crate::platform::NativePlatformPaths::new();
+    let normalized = crate::safety::Blacklist::normalize_path(path);
     LARGE_FILE_ROOTS
         .iter()
-        .map(|root| home.join(root))
-        .find(|root| path.starts_with(root))
+        .filter_map(|token| paths.content_dir(token))
+        .find(|root| normalized.starts_with(crate::safety::Blacklist::normalize_path(root)))
 }
 
 pub struct LargeFileScanner;
@@ -116,6 +124,7 @@ impl LargeFileScanner {
             .min_size_bytes
             .clamp(request.filter.minimum_threshold(), MAX_THRESHOLD);
         let roots = resolve_roots(&request.roots)?;
+        let approved_roots = roots.clone();
         let scan_id = Uuid::new_v4().to_string();
         on_event(LargeFileScanEvent::Started {
             scan_id: scan_id.clone(),
@@ -192,7 +201,11 @@ impl LargeFileScanner {
                         });
                     }
 
-                    if !is_allowed_large_file_path(&path) {
+                    if !approved_roots.iter().any(|root| path.starts_with(root))
+                        || path
+                            .components()
+                            .any(|component| component.as_os_str().eq_ignore_ascii_case(".git"))
+                    {
                         skipped_entries += 1;
                         continue;
                     }
@@ -205,7 +218,7 @@ impl LargeFileScanner {
                         }
                     };
 
-                    if meta.file_type().is_symlink() {
+                    if crate::safety::SymlinkGuard::is_symlink(&path) {
                         skipped_entries += 1;
                         continue;
                     }
@@ -364,14 +377,28 @@ fn inventory_from_retained(
 }
 
 fn resolve_roots(tokens: &[String]) -> Result<Vec<PathBuf>, String> {
-    let home = crate::platform::paths::NativePlatformPaths::new()
-        .home()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
-    resolve_roots_for_home(tokens, &home)
+    let paths = crate::platform::NativePlatformPaths::new();
+    resolve_roots_with(tokens, |token| paths.content_dir(token))
 }
 
+#[cfg(test)]
 fn resolve_roots_for_home(tokens: &[String], home: &Path) -> Result<Vec<PathBuf>, String> {
+    resolve_roots_with(tokens, |token| {
+        let name = match token {
+            "downloads" => "Downloads",
+            "desktop" => "Desktop",
+            "documents" => "Documents",
+            "movies" => "Movies",
+            _ => return None,
+        };
+        Some(home.join(name))
+    })
+}
+
+fn resolve_roots_with(
+    tokens: &[String],
+    resolve: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<Vec<PathBuf>, String> {
     let requested = if tokens.is_empty() {
         vec!["downloads", "desktop", "documents", "movies"]
     } else {
@@ -380,14 +407,13 @@ fn resolve_roots_for_home(tokens: &[String], home: &Path) -> Result<Vec<PathBuf>
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
     for token in requested {
-        let name = match token.to_ascii_lowercase().as_str() {
-            "downloads" => "Downloads",
-            "desktop" => "Desktop",
-            "documents" => "Documents",
-            "movies" => "Movies",
-            _ => return Err(format!("Unsupported large-file scan root: {token}")),
+        let token = token.to_ascii_lowercase();
+        if !LARGE_FILE_ROOTS.contains(&token.as_str()) {
+            return Err(format!("Unsupported large-file scan root: {token}"));
+        }
+        let Some(root) = resolve(&token) else {
+            continue;
         };
-        let root = home.join(name);
         if seen.insert(root.clone()) && safe_scan_root_metadata(&root).is_some() {
             roots.push(root);
         }
@@ -402,9 +428,10 @@ fn resolve_roots_for_home(tokens: &[String], home: &Path) -> Result<Vec<PathBuf>
 
 fn safe_scan_root_metadata(path: &Path) -> Option<fs::Metadata> {
     let metadata = fs::symlink_metadata(path).ok()?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if !metadata.is_dir() || crate::safety::SymlinkGuard::is_symlink(path) {
         return None;
     }
+    crate::safety::SymlinkGuard::validate_anchored_path(path).ok()?;
     Some(metadata)
 }
 
@@ -449,6 +476,62 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redirected_korean_content_roots_remain_token_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = dir.path().join("다른 드라이브/사용자 하나/OneDrive/문서");
+        let other = dir.path().join("사용자 둘/문서");
+        std::fs::create_dir_all(&documents).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let resolve = |token: &str| (token == "documents").then(|| documents.clone());
+        assert_eq!(
+            super::resolve_roots_with(&["documents".into()], resolve).unwrap(),
+            vec![documents.clone()]
+        );
+        assert!(super::resolve_roots_with(&[other.display().to_string()], resolve).is_err());
+        assert!(super::resolve_roots_with(&["../사용자 둘".into()], resolve).is_err());
+    }
+
+    #[test]
+    fn directory_identities_distinguish_korean_profile_fixtures() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("계정 하나");
+        let second = dir.path().join("계정 둘");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let first_id = super::FileIdentity::from_path(&first).unwrap();
+        let second_id = super::FileIdentity::from_path(&second).unwrap();
+        assert_ne!(
+            (first_id.device, first_id.inode),
+            (second_id.device, second_id.inode)
+        );
+        assert!(super::FileIdentity::from_path(&dir.path().join("없는 폴더")).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_cannot_become_a_large_file_or_workspace_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("다른 계정");
+        let link = dir.path().join("연결");
+        std::fs::create_dir(&target).unwrap();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(super::safe_scan_root_metadata(&link).is_none());
+        std::fs::create_dir(target.join("문서")).unwrap();
+        assert!(super::safe_scan_root_metadata(&link.join("문서")).is_none());
+        assert!(super::FileIdentity::from_path(&link).is_none());
+        assert!(crate::developer_artifacts::validate_workspace_root(&link, dir.path()).is_err());
+    }
     use super::*;
     use crate::models::LargeFileFilter;
 

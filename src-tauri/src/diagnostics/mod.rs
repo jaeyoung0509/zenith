@@ -10,7 +10,14 @@ static LOG_MUTEX: Mutex<()> = Mutex::new(());
 const MAX_LOG_BYTES: u64 = 1_000_000; // 1 MB rotation threshold
 
 pub fn log_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    #[cfg(windows)]
+    {
+        use crate::platform::PlatformPathsProvider;
+        if let Some(local) = crate::platform::NativePlatformPaths::new().local_app_data() {
+            return local.join("Zenith/Logs");
+        }
+    }
+    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
         #[cfg(target_os = "macos")]
         {
             return home.join("Library/Logs/Zenith");
@@ -138,7 +145,7 @@ pub fn get_recent_errors(limit: usize) -> Vec<String> {
 }
 
 pub fn normalized_log_path() -> String {
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
         let full = log_file_path();
         if let Ok(rel) = full.strip_prefix(&home) {
             return format!("~/{}", rel.display());

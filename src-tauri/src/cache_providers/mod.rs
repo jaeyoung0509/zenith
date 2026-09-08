@@ -240,7 +240,6 @@ fn validate_cache_path(path: PathBuf) -> Result<PathBuf, String> {
     }
     let home = crate::platform::paths::NativePlatformPaths::new()
         .home()
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the current user profile".to_string())?;
     let canonical_home = std::fs::canonicalize(home)
@@ -292,10 +291,7 @@ fn validate_executable(path: &Path) -> Result<(), String> {
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/opt/homebrew"),
     ];
-    if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-    {
+    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
         roots.extend([
             home.join(".local/bin"),
             home.join(".local/share/uv"),

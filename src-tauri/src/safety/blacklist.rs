@@ -23,14 +23,7 @@ impl Blacklist {
         let normalized_path = Self::normalize_path(path);
         #[cfg(target_os = "windows")]
         let path = normalized_path.as_path();
-        #[cfg(target_os = "windows")]
-        let home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from);
-        #[cfg(not(target_os = "windows"))]
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from);
+        let home = crate::platform::NativePlatformPaths::new().home();
         #[cfg(target_os = "windows")]
         let home = home.map(|value| Self::normalize_path(&value));
 

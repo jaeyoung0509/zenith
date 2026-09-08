@@ -51,9 +51,8 @@ pub struct ApplicationScanner;
 impl ApplicationScanner {
     pub fn scan() -> AppInventory {
         let mut records = HashMap::new();
-        let home = crate::platform::paths::NativePlatformPaths::new()
-            .home()
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+        #[cfg(not(target_os = "windows"))]
+        let home = crate::platform::paths::NativePlatformPaths::new().home();
 
         #[cfg(not(target_os = "windows"))]
         let mut roots = vec![PathBuf::from("/Applications")];
@@ -63,14 +62,7 @@ impl ApplicationScanner {
         }
 
         #[cfg(target_os = "windows")]
-        let mut roots = vec![
-            PathBuf::from("C:\\Program Files"),
-            PathBuf::from("C:\\Program Files (x86)"),
-        ];
-        #[cfg(target_os = "windows")]
-        if let Some(home) = &home {
-            roots.push(home.join("AppData\\Local\\Programs"));
-        }
+        let roots = crate::platform::NativePlatformPaths::new().application_roots();
 
         let mut system = System::new_all();
         system.refresh_processes(ProcessesToUpdate::All, true);
@@ -206,7 +198,6 @@ impl ApplicationScanner {
 
         let home = crate::platform::paths::NativePlatformPaths::new()
             .home()
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
         let bundle_id = record.app.bundle_id.clone();
         let normalized_name = record.app.name.trim().to_string();
