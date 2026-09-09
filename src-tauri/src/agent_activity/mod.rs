@@ -30,7 +30,7 @@ pub struct AgentActivityRegistry {
 #[derive(Debug, Clone)]
 pub struct ProcessRecord {
     pub pid: u32,
-    pub uid: Option<u32>,
+    pub owner: Option<crate::process_owner::ProcessOwner>,
     pub started_at: u64,
     pub executable: Option<PathBuf>,
     pub cwd: Option<PathBuf>,
@@ -77,7 +77,7 @@ pub fn collect_registry_with_inactivity_threshold(
     inactivity_threshold_seconds: u64,
 ) -> AgentActivityRegistry {
     let observed_at = now();
-    let current_uid = current_user_uid();
+    let current_owner = crate::process_owner::ProcessOwner::current();
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -86,15 +86,17 @@ pub fn collect_registry_with_inactivity_threshold(
     );
     let own_uid = system
         .process(sysinfo::Pid::from_u32(std::process::id()))
-        .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
+        .and_then(|process| process.effective_user_id().or_else(|| process.user_id()))
+        .cloned();
+    let own_uid_ref = own_uid.as_ref();
     let records = system
         .processes()
         .iter()
         .map(|(pid, process)| ProcessRecord {
             pid: pid.as_u32(),
-            uid: verified_process_uid(
+            owner: crate::process_owner::ProcessOwner::verified(
                 process.effective_user_id().or_else(|| process.user_id()),
-                own_uid,
+                own_uid_ref,
             ),
             started_at: process.start_time(),
             executable: process.exe().map(PathBuf::from),
@@ -108,7 +110,7 @@ pub fn collect_registry_with_inactivity_threshold(
     let mut store_guard = store.lock().unwrap();
     registry_from_records_with_inactivity_threshold(
         records,
-        current_uid,
+        current_owner,
         observed_at,
         &mut store_guard,
         inactivity_threshold_seconds,
@@ -117,13 +119,13 @@ pub fn collect_registry_with_inactivity_threshold(
 
 pub fn registry_from_records(
     records: Vec<ProcessRecord>,
-    current_uid: u32,
+    current_owner: crate::process_owner::ProcessOwner,
     observed_at: u64,
     store: &mut store::AgentActivityStore,
 ) -> AgentActivityRegistry {
     registry_from_records_with_inactivity_threshold(
         records,
-        current_uid,
+        current_owner,
         observed_at,
         store,
         DEFAULT_INACTIVITY_THRESHOLD_SECONDS,
@@ -132,7 +134,7 @@ pub fn registry_from_records(
 
 fn registry_from_records_with_inactivity_threshold(
     records: Vec<ProcessRecord>,
-    current_uid: u32,
+    current_owner: crate::process_owner::ProcessOwner,
     observed_at: u64,
     store: &mut store::AgentActivityStore,
     inactivity_threshold_seconds: u64,
@@ -151,7 +153,7 @@ fn registry_from_records_with_inactivity_threshold(
         .filter_map(|record| {
             let executable = record.executable.as_deref()?;
             let adapter = adapter_for_executable(executable)?;
-            if record.uid != Some(current_uid)
+            if record.owner != Some(current_owner.clone())
                 || record.started_at == 0
                 || record.pid <= 1
                 || record.pid == std::process::id()
@@ -209,7 +211,7 @@ fn registry_from_records_with_inactivity_threshold(
             record.started_at,
             executable.to_path_buf(),
             record.cwd.clone(),
-            current_uid,
+            current_owner.clone(),
             observed_at,
         );
 
@@ -398,40 +400,6 @@ fn now() -> u64 {
         .as_secs()
 }
 
-// The portable registry uses a numeric ownership marker. On Windows this value
-// is issued only after comparing real SIDs; it is not a Windows user identifier.
-#[cfg(not(unix))]
-const VERIFIED_CURRENT_ACCOUNT: u32 = 1000;
-
-fn verified_process_uid(
-    candidate: Option<&sysinfo::Uid>,
-    own: Option<&sysinfo::Uid>,
-) -> Option<u32> {
-    #[cfg(unix)]
-    {
-        let _ = own;
-        candidate?.to_string().parse().ok()
-    }
-    #[cfg(not(unix))]
-    {
-        match (candidate, own) {
-            (Some(candidate), Some(own)) if candidate == own => Some(VERIFIED_CURRENT_ACCOUNT),
-            _ => None,
-        }
-    }
-}
-
-fn current_user_uid() -> u32 {
-    #[cfg(unix)]
-    unsafe {
-        libc::geteuid()
-    }
-    #[cfg(not(unix))]
-    {
-        VERIFIED_CURRENT_ACCOUNT
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,27 +407,28 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn sid_ownership_rejects_other_and_missing_accounts() {
+        use crate::process_owner::ProcessOwner;
         let own: sysinfo::Uid = "S-1-5-18".parse().unwrap();
         let other: sysinfo::Uid = "S-1-5-19".parse().unwrap();
         assert_eq!(
-            verified_process_uid(Some(&own), Some(&own)),
-            Some(VERIFIED_CURRENT_ACCOUNT)
+            ProcessOwner::verified(Some(&own), Some(&own)),
+            Some(ProcessOwner::Windows("S-1-5-18".to_string()))
         );
-        assert_eq!(verified_process_uid(Some(&other), Some(&own)), None);
-        assert_eq!(verified_process_uid(None, Some(&own)), None);
-        assert_eq!(verified_process_uid(Some(&own), None), None);
-        assert_eq!(verified_process_uid(None, None), None);
+        assert_eq!(ProcessOwner::verified(Some(&other), Some(&own)), None);
+        assert_eq!(ProcessOwner::verified(None, Some(&own)), None);
+        assert_eq!(ProcessOwner::verified(Some(&own), None), None);
+        assert_eq!(ProcessOwner::verified(None, None), None);
     }
 
     fn record(
         executable: &str,
-        uid: Option<u32>,
+        owner: Option<crate::process_owner::ProcessOwner>,
         started_at: u64,
         cwd: Option<PathBuf>,
     ) -> ProcessRecord {
         ProcessRecord {
             pid: 4242,
-            uid,
+            owner,
             started_at,
             executable: Some(PathBuf::from(executable)),
             cwd,
@@ -478,7 +447,7 @@ mod tests {
     ) -> ProcessRecord {
         ProcessRecord {
             pid,
-            uid: Some(501),
+            owner: Some(crate::process_owner::ProcessOwner::Unix(501)),
             started_at,
             executable: Some(PathBuf::from(executable)),
             cwd,
@@ -493,11 +462,11 @@ mod tests {
         let mut store = store::AgentActivityStore::new();
         let registry = registry_from_records(
             vec![
-                record("/tmp/codex-helper", Some(501), 10, Some(temp.path().into())),
-                record("/usr/bin/codex", Some(502), 10, Some(temp.path().into())),
-                record("/usr/bin/claude", Some(501), 0, Some(temp.path().into())),
+                record("/tmp/codex-helper", Some(crate::process_owner::ProcessOwner::Unix(501)), 10, Some(temp.path().into())),
+                record("/usr/bin/codex", Some(crate::process_owner::ProcessOwner::Unix(502)), 10, Some(temp.path().into())),
+                record("/usr/bin/claude", Some(crate::process_owner::ProcessOwner::Unix(501)), 0, Some(temp.path().into())),
             ],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
         );
@@ -517,10 +486,10 @@ mod tests {
         let mut store = store::AgentActivityStore::new();
         let registry = registry_from_records(
             vec![
-                record("/usr/bin/codex", Some(501), 10, Some(repo.join("src"))),
-                record("/usr/bin/claude", Some(501), 11, Some(repo.clone())),
+                record("/usr/bin/codex", Some(crate::process_owner::ProcessOwner::Unix(501)), 10, Some(repo.join("src"))),
+                record("/usr/bin/claude", Some(crate::process_owner::ProcessOwner::Unix(501)), 11, Some(repo.clone())),
             ],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
         );
@@ -569,7 +538,7 @@ mod tests {
                 record_with_pid(41, "/usr/bin/claude", 10, Some(first), 1.0),
                 record_with_pid(42, "/usr/bin/claude", 11, Some(second), 1.0),
             ],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
         );
@@ -608,7 +577,7 @@ mod tests {
                 Some(temp.path().into()),
                 0.0,
             )],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             10_000,
             &mut store,
         );
@@ -625,7 +594,7 @@ mod tests {
                 Some(temp.path().into()),
                 0.0,
             )],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             10_000 + DEFAULT_INACTIVITY_THRESHOLD_SECONDS,
             &mut store,
         );
@@ -646,11 +615,11 @@ mod tests {
 
         registry_from_records(
             vec![record_with_pid(42, "/usr/bin/codex", 10, Some(repo), 1.0)],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
         );
-        let exited = registry_from_records(vec![], 501, 110, &mut store);
+        let exited = registry_from_records(vec![], crate::process_owner::ProcessOwner::Unix(501), 110, &mut store);
         assert_eq!(exited.snapshot.projects.len(), 1);
         assert_eq!(
             exited.snapshot.projects[0].sessions[0].status,
@@ -659,7 +628,7 @@ mod tests {
 
         let expired = registry_from_records(
             vec![],
-            501,
+            crate::process_owner::ProcessOwner::Unix(501),
             110 + store::EXITED_SESSION_RETENTION_SECS,
             &mut store,
         );
@@ -673,11 +642,11 @@ mod tests {
         let registry = registry_from_records(
             vec![record(
                 "C:\\Program Files\\Antigravity\\bin\\antigravity.exe",
-                Some(1000),
+                Some(crate::process_owner::ProcessOwner::Windows("S-1-5-21-100".to_string())),
                 10,
                 None,
             )],
-            1000,
+            crate::process_owner::ProcessOwner::Windows("S-1-5-21-100".to_string()),
             100,
             &mut store,
         );

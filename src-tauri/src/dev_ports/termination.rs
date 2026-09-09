@@ -6,6 +6,7 @@ use super::store::{CreateLeaseParams, DevelopmentPortStore};
 use crate::models::{
     DevelopmentListener, ReleaseDevelopmentListenerResult, ReleaseMode, ReleaseOutcome,
 };
+use crate::process_owner::ProcessOwner;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -15,17 +16,20 @@ const GRACEFUL_TERMINATION_SIGNAL: i32 = libc::SIGTERM;
 #[cfg(unix)]
 const FORCE_TERMINATION_SIGNAL: i32 = libc::SIGKILL;
 
-// Unsupported platforms still compile deterministic fake-system tests, but
-// the real adapter rejects these opaque requests before any process operation.
-#[cfg(not(unix))]
+// Windows only supports force termination via TerminateProcess. Graceful mode
+// is reported as unavailable before any signal is sent, so TerminateProcess
+// is never labeled as graceful.
+#[cfg(target_os = "windows")]
+const FORCE_TERMINATION_SIGNAL: i32 = 9;
+#[cfg(not(any(unix, target_os = "windows")))]
 const GRACEFUL_TERMINATION_SIGNAL: i32 = 15;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_os = "windows")))]
 const FORCE_TERMINATION_SIGNAL: i32 = 9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessSnapshot {
     pub pid: u32,
-    pub uid: Option<u32>,
+    pub owner: Option<ProcessOwner>,
     pub start_time: u64,
     pub raw_command: String,
     pub process_name: String,
@@ -36,7 +40,7 @@ pub struct ProcessSnapshot {
 
 /// Abstract system trait to enable 100% deterministic unit testing without executing real commands or killing processes.
 pub trait DevPortSystem: Send + Sync {
-    fn current_uid(&self) -> u32;
+    fn current_owner(&self) -> ProcessOwner;
     fn own_pid(&self) -> u32;
     fn discover_listeners(&self) -> Result<Vec<RawListenerRecord>, String>;
     fn get_process_info(&self, pid: u32) -> Option<ProcessSnapshot>;
@@ -64,15 +68,8 @@ impl RealDevPortSystem {
 }
 
 impl DevPortSystem for RealDevPortSystem {
-    fn current_uid(&self) -> u32 {
-        #[cfg(unix)]
-        {
-            unsafe { libc::getuid() }
-        }
-        #[cfg(not(unix))]
-        {
-            1000
-        }
+    fn current_owner(&self) -> ProcessOwner {
+        ProcessOwner::current()
     }
 
     fn own_pid(&self) -> u32 {
@@ -113,15 +110,29 @@ impl DevPortSystem for RealDevPortSystem {
     }
 
     fn get_process_info(&self, pid: u32) -> Option<ProcessSnapshot> {
-        let mut guard = self.sys.lock().expect("sysinfo lock poisoned");
+        let mut guard = self
+            .sys
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let sys = guard.get_or_insert_with(sysinfo::System::new);
 
-        let sys_pid = sysinfo::Pid::from_u32(pid);
+        let own_pid = sysinfo::Pid::from_u32(std::process::id());
+        // Refresh the candidate plus our own process so Windows SID comparison
+        // uses the current process token SID.
         sys.refresh_processes_specifics(
-            sysinfo::ProcessesToUpdate::Some(&[sys_pid]),
+            sysinfo::ProcessesToUpdate::Some(&[
+                sysinfo::Pid::from_u32(pid),
+                own_pid,
+            ]),
             true,
             sysinfo::ProcessRefreshKind::everything(),
         );
+
+        let own_uid = sys
+            .process(own_pid)
+            .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
+
+        let sys_pid = sysinfo::Pid::from_u32(pid);
 
         let process = sys.process(sys_pid)?;
 
@@ -135,27 +146,16 @@ impl DevPortSystem for RealDevPortSystem {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         let start_time = process.start_time();
-        let uid = {
-            #[cfg(unix)]
-            {
-                process
-                    .effective_user_id()
-                    .or_else(|| process.user_id())
-                    .and_then(|u| u.to_string().parse::<u32>().ok())
-            }
-            #[cfg(target_os = "windows")]
-            {
-                Some(1000)
-            }
-            #[cfg(not(any(unix, target_os = "windows")))]
-            {
-                None
-            }
-        };
+        let owner = ProcessOwner::verified(
+            process
+                .effective_user_id()
+                .or_else(|| process.user_id()),
+            own_uid,
+        );
 
         Some(ProcessSnapshot {
             pid,
-            uid,
+            owner,
             start_time,
             raw_command,
             process_name,
@@ -193,6 +193,16 @@ impl DevPortSystem for RealDevPortSystem {
                 OpenProcess, TerminateProcess, PROCESS_TERMINATE,
             };
 
+            // Windows exposes only force termination. Graceful mode is rejected
+            // in release_listener before reaching this adapter, so a graceful
+            // signal value can never arrive here on Windows.
+            if signal != FORCE_TERMINATION_SIGNAL {
+                return Err(
+                    "Graceful termination is unavailable on Windows for this process type."
+                        .to_string(),
+                );
+            }
+
             unsafe {
                 let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
                 if handle.is_null() {
@@ -203,8 +213,7 @@ impl DevPortSystem for RealDevPortSystem {
                     return Ok(()); // Process already exited
                 }
 
-                let exit_code = if signal == 9 { 1 } else { 0 };
-                let success = TerminateProcess(handle, exit_code);
+                let success = TerminateProcess(handle, 1);
                 CloseHandle(handle);
 
                 if success == 0 {
@@ -285,7 +294,7 @@ fn discover_windows_tcp_listeners() -> Result<Vec<RawListenerRecord>, String> {
                         records.push(RawListenerRecord {
                             pid: row.dwOwningPid,
                             command: String::new(),
-                            uid: Some(1000),
+                            owner: None,
                             port,
                             bind_address: ip_str,
                             exposure,
@@ -342,7 +351,7 @@ fn discover_windows_tcp_listeners() -> Result<Vec<RawListenerRecord>, String> {
                         records.push(RawListenerRecord {
                             pid: row.dwOwningPid,
                             command: String::new(),
-                            uid: Some(1000),
+                            owner: None,
                             port,
                             bind_address: ip_str,
                             exposure,
@@ -364,18 +373,22 @@ pub fn list_listeners(
 ) -> Result<Vec<DevelopmentListener>, String> {
     let raw_records = system.discover_listeners()?;
     let now = system.now();
-    let current_uid = system.current_uid();
+    let current_owner = system.current_owner();
     let own_pid = system.own_pid();
 
     let mut listeners = Vec::new();
 
     for record in raw_records {
-        // The feature is intentionally scoped to listeners whose ownership was
-        // positively identified as the current user by lsof.
-        if record.uid != Some(current_uid) {
-            continue;
-        }
         let proc_info = system.get_process_info(record.pid);
+        // Unix discovery carries the lsof UID; Windows discovery leaves the
+        // owner empty until the process-token SID is resolved below.
+        let effective_record_owner = record.owner.clone();
+
+        if let Some(ref owner) = effective_record_owner {
+            if *owner != current_owner {
+                continue;
+            }
+        }
 
         let (
             server_name,
@@ -385,12 +398,22 @@ pub fn list_listeners(
             blocked_reason,
             started_at,
             exe_path,
-            uid,
+            owner,
         ) = if let Some(ref proc) = proc_info {
+            let effective_owner = proc.owner.clone().or(effective_record_owner.clone());
+            if let Some(ref owner) = effective_owner {
+                if *owner != current_owner {
+                    continue;
+                }
+            } else {
+                // Ownership could not be positively verified; the classifier
+                // will mark this listener as blocked, but we still list it so
+                // the outcome is explicit rather than silently hidden.
+            }
             let classification = classify_listener(&ProcessClassificationInput {
                 pid: record.pid,
-                uid: proc.uid.or(record.uid),
-                current_user_uid: current_uid,
+                owner: effective_owner.clone(),
+                current_owner: current_owner.clone(),
                 zenith_pid: own_pid,
                 port: record.port,
                 raw_command: &proc.raw_command,
@@ -408,13 +431,18 @@ pub fn list_listeners(
                 classification.blocked_reason,
                 Some(proc.start_time),
                 proc.exe_path.clone(),
-                proc.uid.or(record.uid).unwrap_or(current_uid),
+                effective_owner.unwrap_or_else(|| current_owner.clone()),
             )
         } else {
+            if let Some(ref owner) = effective_record_owner {
+                if *owner != current_owner {
+                    continue;
+                }
+            }
             let classification = classify_listener(&ProcessClassificationInput {
                 pid: record.pid,
-                uid: record.uid,
-                current_user_uid: current_uid,
+                owner: effective_record_owner.clone(),
+                current_owner: current_owner.clone(),
                 zenith_pid: own_pid,
                 port: record.port,
                 raw_command: &record.command,
@@ -432,19 +460,19 @@ pub fn list_listeners(
                 classification.blocked_reason,
                 None,
                 None,
-                record.uid.unwrap_or(current_uid),
+                effective_record_owner.unwrap_or_else(|| current_owner.clone()),
             )
         };
 
         let lease_id = store
             .lock()
-            .expect("store lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .create_lease(CreateLeaseParams {
                 pid: record.pid,
                 port: record.port,
                 protocol: record.protocol,
                 bind_address: record.bind_address.clone(),
-                uid,
+                owner,
                 started_at,
                 exe_path,
                 server_name: server_name.clone(),
@@ -486,11 +514,25 @@ pub fn release_listener(
     lease_id: &str,
     mode: ReleaseMode,
 ) -> Result<ReleaseDevelopmentListenerResult, String> {
+    // Windows never labels TerminateProcess as graceful.
+    #[cfg(target_os = "windows")]
+    if mode == ReleaseMode::Graceful {
+        return Err(
+            "Graceful release is unavailable on Windows for this process type.".to_string(),
+        );
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    if mode == ReleaseMode::Graceful {
+        return Err("Graceful release is only supported on Unix or Windows systems.".to_string());
+    }
+
     let now = system.now();
 
     // 1. One-shot consumption: take lease from store
     let lease = {
-        let mut store_guard = store.lock().expect("store lock poisoned");
+        let mut store_guard = store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         store_guard
             .take_lease(lease_id, now)
             .ok_or_else(|| "Listener snapshot expired; refresh and try again.".to_string())?
@@ -549,8 +591,8 @@ pub fn release_listener(
         }
     };
 
-    // Verify UID, start time, and executable path
-    if proc_info.uid.unwrap_or(0) != lease.uid
+    // Verify owner SID/UID, start time, and executable path
+    if proc_info.owner != Some(lease.owner.clone())
         || proc_info.start_time != lease.started_at.unwrap_or(0)
         || proc_info.exe_path != lease.exe_path
     {
@@ -562,12 +604,12 @@ pub fn release_listener(
     }
 
     // Re-run classifier on current process info
-    let current_uid = system.current_uid();
+    let current_owner = system.current_owner();
     let own_pid = system.own_pid();
     let reclassification = classify_listener(&ProcessClassificationInput {
         pid: lease.pid,
-        uid: proc_info.uid,
-        current_user_uid: current_uid,
+        owner: proc_info.owner.clone(),
+        current_owner: current_owner.clone(),
         zenith_pid: own_pid,
         port: lease.port,
         raw_command: &proc_info.raw_command,
@@ -582,9 +624,20 @@ pub fn release_listener(
         return Err("This listener is protected and cannot be released.".to_string());
     }
 
-    // 5. Send Signal
+    // 5. Send Signal (graceful is Unix-only; Windows force uses TerminateProcess)
     let sig = match mode {
-        ReleaseMode::Graceful => GRACEFUL_TERMINATION_SIGNAL,
+        ReleaseMode::Graceful => {
+            #[cfg(unix)]
+            {
+                GRACEFUL_TERMINATION_SIGNAL
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(
+                    "Graceful release is unavailable on this platform.".to_string(),
+                );
+            }
+        }
         ReleaseMode::Force => FORCE_TERMINATION_SIGNAL,
     };
 
@@ -651,17 +704,19 @@ pub fn release_listener(
         if let Some(post_proc) = system.get_process_info(lease.pid) {
             if post_proc.start_time == lease.started_at.unwrap_or(0)
                 && post_proc.exe_path == lease.exe_path
-                && post_proc.uid.unwrap_or(0) == lease.uid
+                && post_proc.owner == Some(lease.owner.clone())
             {
                 // Same process remains listening! Create a fresh lease for possible Force action.
-                let mut store_guard = store.lock().expect("store lock poisoned");
+                let mut store_guard = store
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 let fresh_now = system.now();
                 let new_id = store_guard.create_lease(CreateLeaseParams {
                     pid: lease.pid,
                     port: lease.port,
                     protocol: lease.protocol,
                     bind_address: lease.bind_address.clone(),
-                    uid: lease.uid,
+                    owner: lease.owner.clone(),
                     started_at: lease.started_at,
                     exe_path: lease.exe_path.clone(),
                     server_name: lease.server_name.clone(),
@@ -709,7 +764,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct FakeDevPortSystem {
-        uid: u32,
+        owner: ProcessOwner,
         pid: u32,
         listeners: Mutex<Vec<RawListenerRecord>>,
         processes: Mutex<HashMap<u32, ProcessSnapshot>>,
@@ -722,7 +777,7 @@ mod tests {
     impl FakeDevPortSystem {
         fn new() -> Self {
             Self {
-                uid: 501,
+                owner: ProcessOwner::Unix(501),
                 pid: 1000,
                 listeners: Mutex::new(Vec::new()),
                 processes: Mutex::new(HashMap::new()),
@@ -743,7 +798,7 @@ mod tests {
             guard.push(RawListenerRecord {
                 pid,
                 command: command.to_string(),
-                uid: Some(self.uid),
+                owner: Some(self.owner.clone()),
                 port,
                 bind_address: bind_address.to_string(),
                 exposure,
@@ -758,8 +813,8 @@ mod tests {
     }
 
     impl DevPortSystem for FakeDevPortSystem {
-        fn current_uid(&self) -> u32 {
-            self.uid
+        fn current_owner(&self) -> ProcessOwner {
+            self.owner.clone()
         }
 
         fn own_pid(&self) -> u32 {
@@ -797,7 +852,7 @@ mod tests {
         fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
         fake.add_process(ProcessSnapshot {
             pid: 32892,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700000000,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -835,7 +890,7 @@ mod tests {
         fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
         fake.add_process(ProcessSnapshot {
             pid: 32892,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700000000,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -867,7 +922,7 @@ mod tests {
         fake.add_listener(40000, 3000, "node", "127.0.0.1", ListenerExposure::Loopback);
         fake.add_process(ProcessSnapshot {
             pid: 40000,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700000000,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -912,7 +967,7 @@ mod tests {
         fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
         fake.add_process(ProcessSnapshot {
             pid: 32892,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700000000,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -928,7 +983,7 @@ mod tests {
         // Simulate PID reuse: PID 32892 was recycled by OS and now has start_time 1700009999
         fake.add_process(ProcessSnapshot {
             pid: 32892,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700009999,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -949,7 +1004,7 @@ mod tests {
         fake.add_listener(11111, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
         fake.add_process(ProcessSnapshot {
             pid: 11111,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700000000,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -992,7 +1047,7 @@ mod tests {
         for pid in [11111, 22222] {
             fake.add_process(ProcessSnapshot {
                 pid,
-                uid: Some(501),
+                owner: Some(ProcessOwner::Unix(501)),
                 start_time: 1700000000 + u64::from(pid),
                 raw_command: "node".to_string(),
                 process_name: "node".to_string(),
@@ -1030,7 +1085,7 @@ mod tests {
         );
         fake.add_process(ProcessSnapshot {
             pid: 5432,
-            uid: Some(501),
+            owner: Some(ProcessOwner::Unix(501)),
             start_time: 1700000000,
             raw_command: "postgres".to_string(),
             process_name: "postgres".to_string(),
@@ -1047,6 +1102,178 @@ mod tests {
 
         let err = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap_err();
         assert!(err.contains("protected"));
+        assert!(fake.signaled_pids.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_lease_is_rejected_without_signaling() {
+        let fake = FakeDevPortSystem::new();
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let result = release_listener(&store, &fake, "missing-lease", ReleaseMode::Graceful);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expired"));
+        assert!(fake.signaled_pids.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn lease_consumption_is_one_shot() {
+        let fake = FakeDevPortSystem::new();
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Unix(501)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("/opt/homebrew/bin/node")),
+            cwd: Some(PathBuf::from("/Users/apple/app")),
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        let first =
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        assert_eq!(first.outcome, ReleaseOutcome::Released);
+        let second = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful);
+        assert!(second.is_err());
+    }
+
+    #[test]
+    fn owner_change_sends_no_signal() {
+        let fake = FakeDevPortSystem::new();
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Unix(501)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("/opt/homebrew/bin/node")),
+            cwd: Some(PathBuf::from("/Users/apple/app")),
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Unix(502)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("/opt/homebrew/bin/node")),
+            cwd: Some(PathBuf::from("/Users/apple/app")),
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let result =
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
+        assert!(fake.signaled_pids.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn executable_change_sends_no_signal() {
+        let fake = FakeDevPortSystem::new();
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Unix(501)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("/opt/homebrew/bin/node")),
+            cwd: Some(PathBuf::from("/Users/apple/app")),
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Unix(501)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("/tmp/evil-node")),
+            cwd: Some(PathBuf::from("/Users/apple/app")),
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let result =
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
+        assert!(fake.signaled_pids.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn self_and_system_targets_are_rejected() {
+        for pid in [0, 1, 1000] {
+            let input = crate::dev_ports::classifier::ProcessClassificationInput {
+                pid,
+                owner: Some(ProcessOwner::Unix(501)),
+                current_owner: ProcessOwner::Unix(501),
+                zenith_pid: 1000,
+                port: 5173,
+                raw_command: "node",
+                process_name: "node",
+                exe_path: Some(std::path::Path::new("/opt/homebrew/bin/node")),
+                cwd: None,
+                argv: &["node".to_string(), "vite.js".to_string()],
+                started_at: Some(1700000000),
+            };
+            let result = crate::dev_ports::classifier::classify_listener(&input);
+            assert!(!result.can_release, "pid {pid} must be blocked");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sid_ownership_compares_real_sids() {
+        use crate::process_owner::ProcessOwner;
+        let current = ProcessOwner::Windows("S-1-5-21-100".to_string());
+        let other = ProcessOwner::Windows("S-1-5-21-200".to_string());
+        assert_ne!(current, other);
+        let fake = FakeDevPortSystem {
+            owner: current.clone(),
+            pid: 1000,
+            listeners: Mutex::new(Vec::new()),
+            processes: Mutex::new(HashMap::new()),
+            signaled_pids: Mutex::new(Vec::new()),
+            auto_exit_on_signal: AtomicBool::new(true),
+        };
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(other),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("C:\\tools\\node.exe")),
+            cwd: None,
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let store = Mutex::new(DevelopmentPortStore::default());
+        // Other-SID listeners are never listed for the current owner.
+        assert!(list_listeners(&store, &fake).unwrap().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_graceful_release_is_unavailable() {
+        let fake = FakeDevPortSystem::new();
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Windows("S-1-5-21-100".to_string())),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from("C:\\tools\\node.exe")),
+            cwd: None,
+            argv: vec!["node".to_string(), "vite.js".to_string()],
+        });
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unavailable on Windows"));
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
 }

@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
   "description": "Full dashboard access, including explicitly reviewed destructive operations.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-hide",
@@ -30,7 +32,7 @@
     "allow-create-delete-plan",
     "allow-execute-clean",
     "allow-get-memory-metrics",
-    "allow-terminate-process-group",
+    "allow-terminate-memory-group",
     "allow-pick-keep-awake-application",
     "allow-get-disk-metrics",
     "allow-get-disk-volumes",

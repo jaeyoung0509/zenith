@@ -20,8 +20,8 @@ describe('numeric layout contract', () => {
       total_bytes: 16 * 1024 ** 3, used_bytes: 10 * 1024 ** 3, available_bytes: 3 * 1024 ** 3,
       free_bytes: 610 * 1024 ** 2, compressed_bytes: 2.4 * 1024 ** 3, swap_used_bytes: 0,
       swap_total_bytes: 0, pressure: 'normal', top_processes: [
-        { pid: 1, pids: [1], name: '한국어 개발 앱', memory_bytes: 100 * 1024 ** 3, process_count: 100, can_terminate: true },
-        { pid: 2, pids: [2], name: 'Protected', memory_bytes: 9 * 1024 ** 2, process_count: 1, can_terminate: false },
+        { pid: 1, pids: [1], name: '한국어 개발 앱', memory_bytes: 100 * 1024 ** 3, process_count: 100, can_terminate: true, termination_lease_id: 'mock-lease-test' },
+        { pid: 2, pids: [2], name: 'Protected', memory_bytes: 9 * 1024 ** 2, process_count: 1, can_terminate: false, termination_lease_id: null },
       ],
     };
     const { body } = render(MemoryView);

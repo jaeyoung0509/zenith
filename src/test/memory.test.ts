@@ -37,6 +37,7 @@ describe('filterProcesses memory search utility', () => {
       memory_bytes: 1024 * 1024 * 500,
       process_count: 4,
       can_terminate: true,
+      termination_lease_id: 'mock-lease-test',
     },
     {
       pid: 2048,
@@ -45,6 +46,7 @@ describe('filterProcesses memory search utility', () => {
       memory_bytes: 1024 * 1024 * 300,
       process_count: 2,
       can_terminate: true,
+      termination_lease_id: 'mock-lease-test',
     },
     {
       pid: 5096,
@@ -53,6 +55,7 @@ describe('filterProcesses memory search utility', () => {
       memory_bytes: 1024 * 1024 * 1200,
       process_count: 1,
       can_terminate: true,
+      termination_lease_id: 'mock-lease-test',
     },
     {
       pid: 88,
@@ -61,6 +64,7 @@ describe('filterProcesses memory search utility', () => {
       memory_bytes: 1024 * 1024 * 800,
       process_count: 1,
       can_terminate: false,
+      termination_lease_id: null,
     },
   ];
 
@@ -129,6 +133,7 @@ describe('filterProcesses memory search utility', () => {
         memory_bytes: 1024 * 1024 * 50,
         process_count: 1,
         can_terminate: true,
+        termination_lease_id: 'mock-lease-ollama-cli',
       },
     ];
 

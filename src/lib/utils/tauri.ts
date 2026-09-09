@@ -29,6 +29,8 @@ import type {
   LargeFileScanResult,
   LocalModelItem,
   MemoryMetrics,
+  MemoryTerminationMode,
+  MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
   RecommendationPreview,
@@ -151,8 +153,11 @@ export function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
   return api.getMemoryMetrics();
 }
 
-export function tauriTerminateProcessGroup(name: string, force: boolean): Promise<number> {
-  return api.terminateProcessGroup(name, force);
+export function tauriTerminateMemoryGroup(
+  leaseId: string,
+  mode: MemoryTerminationMode
+): Promise<MemoryTerminationResult> {
+  return api.terminateMemoryGroup(leaseId, mode);
 }
 
 export function tauriListDevelopmentListeners(): Promise<DevelopmentListener[]> {

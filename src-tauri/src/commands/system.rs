@@ -6,8 +6,9 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AwakeBehavior, AwakeRule, AwakeState, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, PlatformCapabilities,
-    ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
+    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, MemoryTerminationMode,
+    MemoryTerminationResult, PlatformCapabilities, ReleaseDevelopmentListenerResult, ReleaseMode,
+    SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::power::ApplicationPicker;
@@ -19,16 +20,34 @@ use tauri::{AppHandle, Manager, State};
 #[specta::specta]
 pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetrics, String> {
     let sampler = state.memory_sampler.clone();
-    tauri::async_runtime::spawn_blocking(move || sampler.sample())
-        .await
-        .map_err(|e| e.to_string())
+    let lease_store = state.memory_termination_store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut metrics = sampler.sample();
+        let system = crate::metrics::memory::RealMemorySystem::default();
+        MemoryInspector::attach_termination_leases(
+            &mut metrics,
+            &lease_store,
+            &system,
+        );
+        metrics
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn terminate_process_group(name: String, force: bool) -> Result<usize, String> {
+pub async fn terminate_memory_group(
+    lease_id: String,
+    mode: MemoryTerminationMode,
+    state: State<'_, AppState>,
+) -> Result<MemoryTerminationResult, String> {
+    let lease_store = state.memory_termination_store.clone();
     run_blocking(
-        move || MemoryInspector::terminate_group(&name, force),
+        move || {
+            let system = crate::metrics::memory::RealMemorySystem::default();
+            MemoryInspector::execute_termination(&lease_id, mode, &lease_store, &system)
+        },
         "Process termination worker panicked",
     )
     .await

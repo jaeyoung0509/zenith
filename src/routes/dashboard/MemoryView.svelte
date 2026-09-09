@@ -87,11 +87,26 @@
     }
   }
 
-  async function terminatePending(force: boolean) {
+  async function terminatePending(mode: 'graceful' | 'force') {
     if (!pendingProcess) return;
-    const name = pendingProcess.name;
+    const proc = pendingProcess;
+    const leaseId = proc.termination_lease_id;
+    if (!leaseId) {
+      memoryStore.error = `Could not terminate ${proc.name}: termination snapshot expired; refresh and try again.`;
+      pendingProcess = null;
+      return;
+    }
     pendingProcess = null;
-    await memoryStore.terminateProcessGroup(name, force);
+    const result = await memoryStore.terminateMemoryGroup(leaseId, mode, proc.name);
+    // A graceful attempt may return a fresh force-authorized lease. Refresh the
+    // pending dialog state implicitly via the store's refreshed metrics, which
+    // carry new lease IDs for the next attempt.
+    if (result?.outcome === 'still_listening' && result.fresh_lease_id) {
+      const refreshed = memoryStore.memory?.top_processes.find((p) => p.name === proc.name);
+      if (refreshed) {
+        pendingProcess = refreshed;
+      }
+    }
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -276,7 +291,7 @@
               <div class="flex items-center gap-4 shrink-0">
                 <ByteValue bytes={proc.memory_bytes} class="w-[10ch] text-right font-semibold text-foreground" />
                 <div class="w-16 shrink-0">
-                {#if proc.can_terminate}
+                {#if proc.can_terminate && proc.termination_lease_id}
                   <Button
                     variant="outline"
                     size="sm"
@@ -336,8 +351,8 @@
 
         <div class="flex justify-end gap-2 pt-1">
           <Button variant="ghost" size="sm" onclick={() => (pendingProcess = null)}>Cancel</Button>
-          <Button variant="outline" size="sm" onclick={() => terminatePending(false)}>Quit Normally</Button>
-          <Button variant="destructive" size="sm" onclick={() => terminatePending(true)}>Force Quit</Button>
+          <Button variant="outline" size="sm" onclick={() => terminatePending('graceful')}>Quit Normally</Button>
+          <Button variant="destructive" size="sm" onclick={() => terminatePending('force')}>Force Quit</Button>
         </div>
       </Card>
     </div>

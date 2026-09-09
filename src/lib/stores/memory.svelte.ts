@@ -1,8 +1,8 @@
-import type { DiskMetrics, DiskVolume, MemoryMetrics } from '../models/types';
+import type { DiskMetrics, DiskVolume, MemoryMetrics, MemoryTerminationMode } from '../models/types';
 import {
   tauriGetDiskVolumes,
   tauriGetMemoryMetrics,
-  tauriTerminateProcessGroup,
+  tauriTerminateMemoryGroup,
 } from '../utils/tauri';
 
 export class MemoryStore {
@@ -74,18 +74,30 @@ export class MemoryStore {
     }
   }
 
-  async terminateProcessGroup(name: string, force: boolean) {
-    if (this.terminating) return;
-    this.terminating = name;
+  async terminateMemoryGroup(leaseId: string, mode: MemoryTerminationMode, displayName: string) {
+    if (this.terminating) return null;
+    if (!leaseId) {
+      this.error = `Could not terminate ${displayName}: termination snapshot expired; refresh and try again.`;
+      return null;
+    }
+    this.terminating = displayName;
     this.error = null;
     this.lastAction = null;
     try {
-      const count = await tauriTerminateProcessGroup(name, force);
-      this.lastAction = `${force ? 'Force quit' : 'Quit'} requested for ${name} (${count} processes).`;
-      await new Promise((resolve) => window.setTimeout(resolve, force ? 300 : 900));
+      const result = await tauriTerminateMemoryGroup(leaseId, mode);
+      if (result.outcome === 'released') {
+        this.lastAction = `${mode === 'force' ? 'Force quit' : 'Quit'} requested for ${displayName} (${result.terminated_count} processes).`;
+      } else if (result.outcome === 'still_listening') {
+        this.lastAction = `${displayName} is still running after a graceful quit. Use Force Quit to stop it.`;
+      } else {
+        this.error = `${displayName} changed while quitting (process identity changed). Refresh and try again; no signal was sent.`;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, mode === 'force' ? 300 : 900));
       await this.refreshMemory();
+      return result;
     } catch (error: any) {
-      this.error = error?.toString() || `Could not terminate ${name}`;
+      this.error = error?.toString() || `Could not terminate ${displayName}`;
+      return null;
     } finally {
       this.terminating = null;
     }
