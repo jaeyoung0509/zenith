@@ -1,9 +1,10 @@
+use crate::process_owner::ProcessOwner;
 use std::path::{Path, PathBuf};
 
 pub struct ProcessClassificationInput<'a> {
     pub pid: u32,
-    pub uid: Option<u32>,
-    pub current_user_uid: u32,
+    pub owner: Option<ProcessOwner>,
+    pub current_owner: ProcessOwner,
     pub zenith_pid: u32,
     pub port: u16,
     pub raw_command: &'a str,
@@ -53,18 +54,25 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
         };
     }
 
-    // 3. User / Ownership checks
-    if let Some(uid) = input.uid {
-        if uid == 0 {
+    // 3. User / Ownership checks compare real platform identities. Windows
+    // SIDs are compared as opaque strings; they are never reduced to a fake
+    // Unix UID.
+    if let Some(owner) = &input.owner {
+        if owner.is_privileged() {
+            // Unix root (UID 0) or an unavailable Windows SID fails closed.
+            let reason = match owner {
+                ProcessOwner::Unix(0) => "Root-owned system process",
+                _ => "Process identity is unavailable",
+            };
             return ClassificationResult {
                 server_name: clean_process_display_name(input.process_name, input.raw_command),
                 project_name,
                 working_directory,
                 can_release: false,
-                blocked_reason: Some("Root-owned system process".to_string()),
+                blocked_reason: Some(reason.to_string()),
             };
         }
-        if uid != input.current_user_uid {
+        if *owner != input.current_owner {
             return ClassificationResult {
                 server_name: clean_process_display_name(input.process_name, input.raw_command),
                 project_name,
@@ -78,7 +86,7 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
     // Releasing requires stable fields that can be compared immediately before
     // signaling. Missing identity data must never be treated as an allowlisted
     // development server.
-    if input.uid.is_none()
+    if input.owner.is_none()
         || input.started_at.is_none_or(|started_at| started_at == 0)
         || input.exe_path.is_none()
     {
@@ -130,8 +138,13 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
     }
 }
 
-/// Checks if a process belongs to protected categories (shells, terminals, system daemons, databases, container engines).
+/// Checks if a process belongs to protected categories (shared terminals/
+/// shells/system plus databases and container engines specific to dev ports).
 fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Path>) -> bool {
+    if crate::process_protection::is_protected_process(process_name, Some(raw_cmd), exe_path) {
+        return true;
+    }
+
     let name_lower = process_name.to_ascii_lowercase();
     let cmd_lower = raw_cmd.to_ascii_lowercase();
     let exe_name = exe_path
@@ -150,94 +163,6 @@ fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Pat
                 || name_lower.starts_with(&format!("{t}."))
         })
     };
-
-    // Shells & remote access
-    const SHELLS_AND_SSH: &[&str] = &[
-        "sh",
-        "bash",
-        "zsh",
-        "fish",
-        "csh",
-        "tcsh",
-        "dash",
-        "nu",
-        "xonsh",
-        "powershell",
-        "pwsh",
-        "cmd",
-        "ssh",
-        "sshd",
-        "mosh-server",
-        "mosh-client",
-        "tmux",
-        "screen",
-    ];
-    if matches_any(SHELLS_AND_SSH) {
-        return true;
-    }
-
-    // Terminal applications
-    const TERMINALS: &[&str] = &[
-        "terminal",
-        "iterm2",
-        "iterm",
-        "alacritty",
-        "kitty",
-        "ghostty",
-        "wezterm-gui",
-        "wezterm",
-        "warp",
-        "hyper",
-        "rio",
-        "wt",
-        "conhost",
-        "mintty",
-    ];
-    if matches_any(TERMINALS) {
-        return true;
-    }
-
-    // System daemons & OS services
-    const SYSTEM_DAEMONS: &[&str] = &[
-        "launchd",
-        "systemd",
-        "loginwindow",
-        "securityagent",
-        "coreauthd",
-        "sudo",
-        "su",
-        "windowserver",
-        "mds",
-        "mdworker",
-        "opendirectoryd",
-        "syslogd",
-        "notifyd",
-        "configd",
-        "diskarbitrationd",
-        "distnoted",
-        "cfprefsd",
-        "rapportd",
-        "controlcenter",
-        "universalaccessd",
-        "sharingd",
-        "finder",
-        "dock",
-        "systemsettings",
-        "svchost",
-        "csrss",
-        "services",
-        "lsass",
-        "smss",
-        "wininit",
-        "winlogon",
-        "taskmgr",
-        "explorer",
-        "msmpeng",
-        "securityhealthservice",
-    ];
-    if matches_any(SYSTEM_DAEMONS) {
-        return true;
-    }
 
     // Databases & message brokers
     const DATABASES: &[&str] = &[
@@ -617,8 +542,8 @@ mod tests {
         ];
         let input = ProcessClassificationInput {
             pid: 32892,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 5173,
             raw_command: "node",
@@ -645,8 +570,8 @@ mod tests {
         ];
         let input = ProcessClassificationInput {
             pid: 40001,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 3000,
             raw_command: "node",
@@ -674,8 +599,8 @@ mod tests {
         ];
         let input1 = ProcessClassificationInput {
             pid: 50001,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 8000,
             raw_command: "python3",
@@ -696,8 +621,8 @@ mod tests {
         ];
         let input2 = ProcessClassificationInput {
             pid: 50002,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 8080,
             raw_command: "uvicorn",
@@ -720,8 +645,8 @@ mod tests {
         ];
         let agent_input = ProcessClassificationInput {
             pid: 24449,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 62849,
             raw_command: "agent-browser-darwin-arm64",
@@ -745,8 +670,8 @@ mod tests {
         ];
         let chrome_input = ProcessClassificationInput {
             pid: 24450,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 62850,
             raw_command: "Google Chrome for Testing",
@@ -768,8 +693,8 @@ mod tests {
         let fake_agent_argv = vec!["/tmp/agent-browser-darwin-arm64".to_string()];
         let fake_agent = ProcessClassificationInput {
             pid: 30001,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 60001,
             raw_command: "agent-browser-darwin-arm64",
@@ -788,8 +713,8 @@ mod tests {
         ];
         let standard_chrome = ProcessClassificationInput {
             pid: 30002,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 9222,
             raw_command: "Google Chrome",
@@ -809,8 +734,8 @@ mod tests {
         ];
         let incomplete_testing_browser = ProcessClassificationInput {
             pid: 30003,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 9223,
             raw_command: "Google Chrome for Testing",
@@ -830,8 +755,8 @@ mod tests {
         ];
         let testing_browser_helper = ProcessClassificationInput {
             pid: 30004,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 9224,
             raw_command: "Google Chrome for Testing Helper",
@@ -849,8 +774,8 @@ mod tests {
         let argv = vec!["node".to_string(), "long_running_worker.js".to_string()];
         let input = ProcessClassificationInput {
             pid: 32000,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 5000,
             raw_command: "node",
@@ -878,8 +803,8 @@ mod tests {
             let argv = vec!["node".to_string(), script.to_string()];
             let input = ProcessClassificationInput {
                 pid: 32000,
-                uid: Some(501),
-                current_user_uid: 501,
+                owner: Some(ProcessOwner::Unix(501)),
+                current_owner: ProcessOwner::Unix(501),
                 zenith_pid: 1000,
                 port: 5000,
                 raw_command: "node",
@@ -897,19 +822,23 @@ mod tests {
     #[test]
     fn reject_listener_without_stable_process_identity() {
         let argv = vec!["node".to_string(), "vite.js".to_string()];
-        for (uid, started_at, exe_path) in [
+        for (owner, started_at, exe_path) in [
             (
                 None,
                 Some(1700000000),
                 Some(Path::new("/opt/homebrew/bin/node")),
             ),
-            (Some(501), None, Some(Path::new("/opt/homebrew/bin/node"))),
-            (Some(501), Some(1700000000), None),
+            (
+                Some(ProcessOwner::Unix(501)),
+                None,
+                Some(Path::new("/opt/homebrew/bin/node")),
+            ),
+            (Some(ProcessOwner::Unix(501)), Some(1700000000), None),
         ] {
             let input = ProcessClassificationInput {
                 pid: 32892,
-                uid,
-                current_user_uid: 501,
+                owner,
+                current_owner: ProcessOwner::Unix(501),
                 zenith_pid: 1000,
                 port: 5173,
                 raw_command: "node",
@@ -933,8 +862,8 @@ mod tests {
     fn reject_root_system_and_other_user_processes() {
         let input_root = ProcessClassificationInput {
             pid: 1234,
-            uid: Some(0),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(0)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 8080,
             raw_command: "nginx",
@@ -953,8 +882,8 @@ mod tests {
 
         let input_other = ProcessClassificationInput {
             pid: 2345,
-            uid: Some(502),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(502)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 8080,
             raw_command: "node",
@@ -977,8 +906,8 @@ mod tests {
         let argv = vec!["node".to_string(), "vite.js".to_string()];
         let input = ProcessClassificationInput {
             pid: 3000,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 80,
             raw_command: "node",
@@ -1001,8 +930,8 @@ mod tests {
         // PostgreSQL
         let input_pg = ProcessClassificationInput {
             pid: 5432,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 5432,
             raw_command: "postgres",
@@ -1022,8 +951,8 @@ mod tests {
         // Terminal / SSH / Dockerd
         let input_ssh = ProcessClassificationInput {
             pid: 2222,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 2222,
             raw_command: "sshd",
@@ -1038,8 +967,8 @@ mod tests {
         // Zenith itself
         let input_zenith = ProcessClassificationInput {
             pid: 1000,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 9000,
             raw_command: "Zenith",
@@ -1064,8 +993,8 @@ mod tests {
         ];
         let input = ProcessClassificationInput {
             pid: 32892,
-            uid: Some(501),
-            current_user_uid: 501,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
             zenith_pid: 1000,
             port: 5173,
             raw_command: "node",

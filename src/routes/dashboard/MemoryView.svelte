@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { ProcessMemory } from '../../lib/models/types';
   import { memoryStore } from '../../lib/stores/memory.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import { withMinimumDuration } from '../../lib/utils/async';
   import { filterProcesses } from '../../lib/utils/memory';
@@ -48,8 +49,15 @@
 
   let memory = $derived(memoryStore.memory);
   let pendingProcess = $state<ProcessMemory | null>(null);
+  let forceAuthorized = $state(false);
   let isRefreshing = $state(false);
   let searchQuery = $state('');
+  let isWindows = $derived(platformCapabilitiesStore.capabilities?.platform === 'windows');
+
+  function openTerminationDialog(proc: ProcessMemory) {
+    pendingProcess = proc;
+    forceAuthorized = isWindows;
+  }
 
   let filteredProcesses = $derived(
     filterProcesses(memory?.top_processes ?? [], searchQuery)
@@ -87,16 +95,32 @@
     }
   }
 
-  async function terminatePending(force: boolean) {
+  async function terminatePending(mode: 'graceful' | 'force') {
     if (!pendingProcess) return;
-    const name = pendingProcess.name;
+    const proc = pendingProcess;
+    const leaseId = proc.termination_lease_id;
+    if (!leaseId) {
+      memoryStore.error = `Could not terminate ${proc.name}: termination snapshot expired; refresh and try again.`;
+      pendingProcess = null;
+      return;
+    }
     pendingProcess = null;
-    await memoryStore.terminateProcessGroup(name, force);
+    forceAuthorized = false;
+    const result = await memoryStore.terminateMemoryGroup(leaseId, mode, proc.name);
+    // Preserve the exact force-authorized lease returned by the graceful
+    // attempt; the store refresh intentionally creates ordinary leases.
+    if (result?.outcome === 'still_listening' && result.fresh_lease_id) {
+      pendingProcess = { ...proc, termination_lease_id: result.fresh_lease_id };
+      forceAuthorized = true;
+    }
   }
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
-      if (pendingProcess) pendingProcess = null;
+      if (pendingProcess) {
+        pendingProcess = null;
+        forceAuthorized = false;
+      }
     }
   }
 
@@ -276,13 +300,13 @@
               <div class="flex items-center gap-4 shrink-0">
                 <ByteValue bytes={proc.memory_bytes} class="w-[10ch] text-right font-semibold text-foreground" />
                 <div class="w-16 shrink-0">
-                {#if proc.can_terminate}
+                {#if proc.can_terminate && proc.termination_lease_id}
                   <Button
                     variant="outline"
                     size="sm"
                     class="gap-1.5 opacity-70 group-hover:opacity-100"
                     disabled={memoryStore.terminating !== null}
-                    onclick={() => (pendingProcess = proc)}
+                    onclick={() => openTerminationDialog(proc)}
                   >
                     <LogOut size={12} />
                     Quit
@@ -331,13 +355,22 @@
         </div>
 
         <div class="rounded-lg border border-border/70 bg-secondary/40 px-3 py-2.5 text-meta leading-relaxed text-muted-foreground">
-          Try normal Quit first. Force Quit stops every matching process immediately and should only be used when the app does not respond.
+          {#if isWindows}
+            Windows does not provide a safe generic graceful action for this process group. Force Quit stops every verified process immediately.
+          {:else if forceAuthorized}
+            The normal quit request did not stop every process. Force Quit immediately stops only the members that still match the verified snapshot.
+          {:else}
+            Try normal Quit first. Force Quit becomes available only if the verified processes do not respond.
+          {/if}
         </div>
 
         <div class="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="sm" onclick={() => (pendingProcess = null)}>Cancel</Button>
-          <Button variant="outline" size="sm" onclick={() => terminatePending(false)}>Quit Normally</Button>
-          <Button variant="destructive" size="sm" onclick={() => terminatePending(true)}>Force Quit</Button>
+          <Button variant="ghost" size="sm" onclick={() => { pendingProcess = null; forceAuthorized = false; }}>Cancel</Button>
+          {#if !forceAuthorized}
+            <Button variant="outline" size="sm" onclick={() => terminatePending('graceful')}>Quit Normally</Button>
+          {:else}
+            <Button variant="destructive" size="sm" onclick={() => terminatePending('force')}>Force Quit</Button>
+          {/if}
         </div>
       </Card>
     </div>

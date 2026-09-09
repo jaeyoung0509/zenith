@@ -23,7 +23,7 @@ fn main() {
         "create_delete_plan",
         "execute_clean",
         "get_memory_metrics",
-        "terminate_process_group",
+        "terminate_memory_group",
         "pick_keep_awake_application",
         "get_disk_metrics",
         "get_disk_volumes",

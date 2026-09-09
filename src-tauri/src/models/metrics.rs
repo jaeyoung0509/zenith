@@ -29,6 +29,30 @@ pub struct ProcessMemory {
     pub memory_bytes: u64,
     pub process_count: usize,
     pub can_terminate: bool,
+    #[serde(default)]
+    pub termination_lease_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTerminationMode {
+    Graceful,
+    Force,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTerminationOutcome {
+    Released,
+    StillListening,
+    OwnershipChanged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct MemoryTerminationResult {
+    pub terminated_count: usize,
+    pub outcome: MemoryTerminationOutcome,
+    pub fresh_lease_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

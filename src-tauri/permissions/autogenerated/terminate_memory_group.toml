@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terminate-memory-group"
+description = "Enables the terminate_memory_group command without any pre-configured scope."
+commands.allow = ["terminate_memory_group"]
+
+[[permission]]
+identifier = "deny-terminate-memory-group"
+description = "Denies the terminate_memory_group command without any pre-configured scope."
+commands.deny = ["terminate_memory_group"]

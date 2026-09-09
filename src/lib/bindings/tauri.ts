@@ -48,7 +48,7 @@ export const commands = {
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
-	terminateProcessGroup: (name: string, force: boolean) => typedError<number, string>(__TAURI_INVOKE("terminate_process_group", { name, force })),
+	terminateMemoryGroup: (leaseId: string, mode: MemoryTerminationMode) => typedError<MemoryTerminationResult, string>(__TAURI_INVOKE("terminate_memory_group", { leaseId, mode })),
 	pickKeepAwakeApplication: () => typedError<{
 	name: string,
 	executable_pattern: string,
@@ -1185,6 +1185,16 @@ export type MemoryMetrics_Serialize = {
 
 export type MemoryPressure = "normal" | "warning" | "critical";
 
+export type MemoryTerminationMode = "graceful" | "force";
+
+export type MemoryTerminationOutcome = "released" | "still_listening" | "ownership_changed";
+
+export type MemoryTerminationResult = {
+	terminated_count: number,
+	outcome: MemoryTerminationOutcome,
+	fresh_lease_id: string | null,
+};
+
 export type ModelSource = "ollama" | "huggingface" | "lmstudio" | "mlx";
 
 export type MoneyMicros = {
@@ -1328,6 +1338,7 @@ export type ProcessMemory_Deserialize = {
 	memory_bytes: number,
 	process_count: number,
 	can_terminate: boolean,
+	termination_lease_id?: string | null,
 };
 
 export type ProcessMemory_Serialize = {
@@ -1337,6 +1348,7 @@ export type ProcessMemory_Serialize = {
 	memory_bytes: number,
 	process_count: number,
 	can_terminate: boolean,
+	termination_lease_id: string | null,
 };
 
 export type ProjectContext = ProjectContext_Serialize | ProjectContext_Deserialize;

@@ -24,6 +24,8 @@ import type {
   DockerStatus,
   LocalModelItem,
   MemoryMetrics,
+  MemoryTerminationMode,
+  MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
   RecommendationPreview,
@@ -167,8 +169,11 @@ export const nativeApi = {
     return await unwrap(commands.getMemoryMetrics());
   },
 
-  async terminateProcessGroup(name: string, force: boolean): Promise<number> {
-    return await unwrap(commands.terminateProcessGroup(name, force));
+  async terminateMemoryGroup(
+    leaseId: string,
+    mode: MemoryTerminationMode
+  ): Promise<MemoryTerminationResult> {
+    return await unwrap(commands.terminateMemoryGroup(leaseId, mode));
   },
 
   async pickKeepAwakeApplication(): Promise<SelectedApplication | null> {

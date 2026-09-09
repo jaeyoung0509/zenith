@@ -407,12 +407,15 @@ fn test_windows_platform_capabilities_batch2() {
 fn test_windows_dev_ports_classification_defense() {
     use std::path::Path;
     use zenith_lib::dev_ports::{classify_listener, ProcessClassificationInput};
+    use zenith_lib::process_owner::ProcessOwner;
+
+    let current_owner = ProcessOwner::Windows("S-1-5-21-test".to_string());
 
     // Protected PowerShell / Windows Terminal
     let input_ps = ProcessClassificationInput {
         pid: 4500,
-        uid: Some(1000),
-        current_user_uid: 1000,
+        owner: Some(current_owner.clone()),
+        current_owner: current_owner.clone(),
         zenith_pid: 9999,
         port: 8080,
         raw_command: "powershell.exe",
@@ -431,8 +434,8 @@ fn test_windows_dev_ports_classification_defense() {
     // Allowlisted Vite dev server on Windows
     let input_vite = ProcessClassificationInput {
         pid: 5600,
-        uid: Some(1000),
-        current_user_uid: 1000,
+        owner: Some(current_owner.clone()),
+        current_owner,
         zenith_pid: 9999,
         port: 5173,
         raw_command: "node.exe",

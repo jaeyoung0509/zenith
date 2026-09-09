@@ -5,6 +5,7 @@
     developmentPortsStore,
     filterDevelopmentListeners,
   } from '../../lib/stores/developmentPorts.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { formatProcessAge } from '../../lib/utils/format';
   import { withMinimumDuration } from '../../lib/utils/async';
   import Button from '../../lib/components/Button.svelte';
@@ -29,6 +30,7 @@
   let pendingReleaseListener = $state<DevelopmentListener | null>(null);
   let pendingForceListener = $state<DevelopmentListener | null>(null);
   let releaseReturnFocusId = $state<string | null>(null);
+  let isWindows = $derived(platformCapabilitiesStore.capabilities?.platform === 'windows');
 
   let filteredListeners = $derived(
     filterDevelopmentListeners(developmentPortsStore.listeners, searchQuery)
@@ -99,9 +101,9 @@
 
   function openReleaseDialog(listener: DevelopmentListener) {
     releaseReturnFocusId = releaseButtonId(listener);
-    pendingReleaseListener = listener;
-    pendingForceListener = null;
-    void focusDialog('release-cancel');
+    pendingReleaseListener = isWindows ? null : listener;
+    pendingForceListener = isWindows ? listener : null;
+    void focusDialog(isWindows ? 'force-release-cancel' : 'release-cancel');
   }
 
   async function focusDialog(id: string) {
@@ -238,7 +240,7 @@
                   class="gap-1 text-xs opacity-80 hover:border-destructive/40 hover:text-destructive group-hover:opacity-100"
                   disabled={developmentPortsStore.releasingId !== null}
                   onclick={() => openReleaseDialog(listener)}
-                  title="Request graceful release of port {listener.port}"
+                  title={isWindows ? `Force release port ${listener.port}` : `Request graceful release of port ${listener.port}`}
                 >
                   <LogOut size={12} /> Release
                 </Button>
@@ -293,10 +295,13 @@
           <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive"><TriangleAlert size={17} /></div>
           <div>
             <h3 id="force-release-title" class="text-sm font-semibold text-destructive">Force Release Port {pendingForceListener.port}?</h3>
-            <p class="mt-1 text-xs leading-relaxed text-muted-foreground"><span class="font-semibold text-foreground">{pendingForceListener.server_name}</span> (PID {pendingForceListener.pid}) did not exit after the graceful stop request.</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+              <span class="font-semibold text-foreground">{pendingForceListener.server_name}</span> (PID {pendingForceListener.pid})
+              {isWindows ? ' can only be forcefully terminated on Windows.' : ' did not exit after the graceful stop request.'}
+            </p>
           </div>
         </div>
-        <div class="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-meta leading-relaxed text-destructive/90">Force release sends SIGKILL immediately. Unsaved work or open database transactions in this server process may not shut down cleanly.</div>
+        <div class="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-meta leading-relaxed text-destructive/90">Force release {isWindows ? 'terminates the process immediately' : 'sends SIGKILL immediately'}. Unsaved work or open database transactions in this server process may not shut down cleanly.</div>
         <div class="flex justify-end gap-2 pt-1">
           <Button id="force-release-cancel" variant="ghost" size="sm" onclick={closeDialogs}>Cancel</Button>
           <Button variant="destructive" size="sm" disabled={developmentPortsStore.releasingId !== null} onclick={handleForceRelease}>Force Release</Button>

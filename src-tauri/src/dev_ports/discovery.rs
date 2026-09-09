@@ -1,11 +1,12 @@
 use crate::models::{ListenerExposure, ListenerProtocol};
+use crate::process_owner::ProcessOwner;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawListenerRecord {
     pub pid: u32,
     pub command: String,
-    pub uid: Option<u32>,
+    pub owner: Option<ProcessOwner>,
     pub port: u16,
     pub bind_address: String,
     pub exposure: ListenerExposure,
@@ -17,7 +18,7 @@ pub fn parse_lsof_output(raw_bytes: &[u8]) -> Vec<RawListenerRecord> {
     let mut records = Vec::new();
     let mut current_pid: Option<u32> = None;
     let mut current_cmd = String::new();
-    let mut current_uid: Option<u32> = None;
+    let mut current_owner: Option<ProcessOwner> = None;
 
     // Split on NUL bytes
     for chunk in raw_bytes.split(|&b| b == 0) {
@@ -42,14 +43,14 @@ pub fn parse_lsof_output(raw_bytes: &[u8]) -> Vec<RawListenerRecord> {
                 if let Ok(pid) = value.parse::<u32>() {
                     current_pid = Some(pid);
                     current_cmd.clear();
-                    current_uid = None;
+                    current_owner = None;
                 }
             }
             "c" => {
                 current_cmd = value.to_string();
             }
             "u" => {
-                current_uid = value.parse::<u32>().ok();
+                current_owner = value.parse::<u32>().ok().map(ProcessOwner::Unix);
             }
             "n" => {
                 if let Some(pid) = current_pid {
@@ -57,7 +58,7 @@ pub fn parse_lsof_output(raw_bytes: &[u8]) -> Vec<RawListenerRecord> {
                         records.push(RawListenerRecord {
                             pid,
                             command: current_cmd.clone(),
-                            uid: current_uid,
+                            owner: current_owner.clone(),
                             port,
                             bind_address,
                             exposure,
@@ -166,7 +167,7 @@ mod tests {
         assert_eq!(records[0].bind_address, "127.0.0.1");
         assert_eq!(records[0].exposure, ListenerExposure::Loopback);
         assert_eq!(records[0].command, "node");
-        assert_eq!(records[0].uid, Some(501));
+        assert_eq!(records[0].owner, Some(ProcessOwner::Unix(501)));
 
         assert_eq!(records[1].pid, 620);
         assert_eq!(records[1].port, 65491);

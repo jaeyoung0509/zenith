@@ -22,6 +22,7 @@ pub struct AppState {
     pub storage_operation_gate: StorageOperationGate,
     pub storage_state: Arc<crate::storage_commands::StorageWorkflowState>,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
+    pub memory_termination_store: Arc<Mutex<crate::metrics::MemoryTerminationStore>>,
     pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
     pub agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
     pub activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,

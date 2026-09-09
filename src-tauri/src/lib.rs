@@ -21,6 +21,8 @@ pub mod operation_gate;
 pub mod orbstack;
 pub mod platform;
 pub mod power;
+pub mod process_owner;
+pub mod process_protection;
 pub mod runtime_metrics;
 pub mod safety;
 pub mod scanner;
@@ -140,6 +142,8 @@ pub fn run() {
     let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
+    let memory_termination_store =
+        Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
     let agent_activity_cache = Arc::new(Mutex::new(None));
     let activity_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(
@@ -178,6 +182,7 @@ pub fn run() {
         storage_operation_gate,
         storage_state,
         memory_sampler: memory_sampler.clone(),
+        memory_termination_store: memory_termination_store.clone(),
         dev_port_store: dev_port_store.clone(),
         agent_activity_cache: agent_activity_cache.clone(),
         activity_singleflight,
@@ -346,7 +351,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::create_delete_plan,
             commands::execute_clean,
             commands::get_memory_metrics,
-            commands::terminate_process_group,
+            commands::terminate_memory_group,
             commands::pick_keep_awake_application,
             commands::get_disk_metrics,
             commands::get_disk_volumes,

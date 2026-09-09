@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use crate::process_owner::ProcessOwner;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 pub const LEASE_TTL_SECS: u64 = 30;
+pub const MAX_STOP_LEASES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StopLease {
@@ -11,13 +13,14 @@ pub struct StopLease {
     pub start_time: u64,
     pub executable: PathBuf,
     pub cwd: Option<PathBuf>,
-    pub uid: u32,
+    pub owner: ProcessOwner,
     pub expires_at: u64,
 }
 
 #[derive(Debug, Default)]
 pub struct StopLeaseStore {
     leases: HashMap<String, StopLease>, // keyed by session_id
+    order: VecDeque<String>,
 }
 
 impl StopLeaseStore {
@@ -29,7 +32,7 @@ impl StopLeaseStore {
         start_time: u64,
         executable: PathBuf,
         cwd: Option<PathBuf>,
-        uid: u32,
+        owner: ProcessOwner,
         now: u64,
     ) -> String {
         let lease_id = format!("lease-{}", uuid::Uuid::new_v4());
@@ -40,10 +43,19 @@ impl StopLeaseStore {
             start_time,
             executable,
             cwd,
-            uid,
+            owner,
             expires_at: now + LEASE_TTL_SECS,
         };
         self.leases.retain(|_, l| l.expires_at > now);
+        self.order.retain(|id| self.leases.contains_key(id));
+        while self.leases.len() >= MAX_STOP_LEASES {
+            if let Some(oldest) = self.order.pop_front() {
+                self.leases.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        self.order.push_back(session_id.to_string());
         self.leases.insert(session_id.to_string(), lease);
         lease_id
     }
@@ -55,6 +67,7 @@ impl StopLeaseStore {
         now: u64,
     ) -> Result<StopLease, String> {
         self.leases.retain(|_, l| l.expires_at > now);
+        self.order.retain(|id| self.leases.contains_key(id));
         let lease = self.leases.get(session_id).ok_or_else(|| {
             "Stop lease expired or not found. Please refresh and try again.".to_string()
         })?;
@@ -62,16 +75,19 @@ impl StopLeaseStore {
         if lease.lease_id != lease_id {
             return Err("Invalid stop lease token.".to_string());
         }
-        self.leases
+        let lease = self
+            .leases
             .remove(session_id)
-            .ok_or_else(|| "Stop lease is no longer available.".to_string())
+            .ok_or_else(|| "Stop lease is no longer available.".to_string())?;
+        self.order.retain(|id| id != session_id);
+        Ok(lease)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ProcessCheckInfo {
     pub pid: u32,
-    pub uid: u32,
+    pub owner: ProcessOwner,
     pub start_time: u64,
     pub executable: Option<PathBuf>,
     pub cwd: Option<PathBuf>,
@@ -80,7 +96,7 @@ pub struct ProcessCheckInfo {
 }
 
 pub trait TerminationSystem: Send + Sync {
-    fn current_uid(&self) -> u32;
+    fn current_owner(&self) -> ProcessOwner;
     fn current_pid(&self) -> u32;
     fn get_process_info(&self, pid: u32) -> Option<ProcessCheckInfo>;
     fn is_terminal_or_protected(&self, info: &ProcessCheckInfo) -> bool;
@@ -90,8 +106,8 @@ pub trait TerminationSystem: Send + Sync {
 pub struct RealTerminationSystem;
 
 impl TerminationSystem for RealTerminationSystem {
-    fn current_uid(&self) -> u32 {
-        super::current_user_uid()
+    fn current_owner(&self) -> ProcessOwner {
+        ProcessOwner::current()
     }
 
     fn current_pid(&self) -> u32 {
@@ -111,14 +127,15 @@ impl TerminationSystem for RealTerminationSystem {
         let process = sys.process(sysinfo::Pid::from_u32(pid))?;
         let own_uid = sys
             .process(sysinfo::Pid::from_u32(std::process::id()))
-            .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
-        let uid = super::verified_process_uid(
+            .and_then(|process| process.effective_user_id().or_else(|| process.user_id()))
+            .cloned();
+        let owner = ProcessOwner::verified(
             process.effective_user_id().or_else(|| process.user_id()),
-            own_uid,
+            own_uid.as_ref(),
         )?;
         Some(ProcessCheckInfo {
             pid,
-            uid,
+            owner,
             start_time: process.start_time(),
             executable: process.exe().map(PathBuf::from),
             cwd: process.cwd().map(PathBuf::from),
@@ -128,22 +145,17 @@ impl TerminationSystem for RealTerminationSystem {
     }
 
     fn is_terminal_or_protected(&self, info: &ProcessCheckInfo) -> bool {
-        const PROTECTED_NAMES: &[&str] = &[
-            "Terminal",
-            "iTerm2",
-            "ghostty",
-            "alacritty",
-            "kitty",
-            "warp",
-            "wezterm",
-            "login",
-            "launchd",
-            "systemd",
-            "zsh",
-            "bash",
-            "fish",
-            "sh",
-        ];
+        if crate::process_protection::is_protected_process(
+            &info.name,
+            Some(&info.name),
+            info.executable.as_deref(),
+        ) {
+            return true;
+        }
+        // Agent-specific executable guard stays local; the shared module owns
+        // the terminal/shell/system deny-list so workflows cannot drift.
+        const PROTECTED_NAMES: &[&str] =
+            &["login", "launchd", "systemd", "zsh", "bash", "fish", "sh"];
         let name_lower = info.name.to_lowercase();
         if PROTECTED_NAMES
             .iter()
@@ -197,9 +209,9 @@ pub fn execute_graceful_stop(
         return Err("Cannot terminate system or Zenith process.".to_string());
     }
 
-    // 3. UID check
-    if info.uid != system.current_uid() || info.uid != lease.uid {
-        return Err("Process UID mismatch or process belongs to another user.".to_string());
+    // 3. Owner identity check compares real platform identities.
+    if info.owner != system.current_owner() || info.owner != lease.owner {
+        return Err("Process owner mismatch or process belongs to another user.".to_string());
     }
 
     // 4. Start time check (CRITICAL TOCTOU PID-reuse prevention!)
@@ -242,15 +254,15 @@ mod tests {
     use std::sync::Mutex;
 
     struct FakeSystem {
-        current_uid: u32,
+        current_owner: ProcessOwner,
         current_pid: u32,
         process: Option<ProcessCheckInfo>,
         signaled: Mutex<Vec<u32>>,
     }
 
     impl TerminationSystem for FakeSystem {
-        fn current_uid(&self) -> u32 {
-            self.current_uid
+        fn current_owner(&self) -> ProcessOwner {
+            self.current_owner.clone()
         }
 
         fn current_pid(&self) -> u32 {
@@ -279,7 +291,7 @@ mod tests {
             start_time,
             executable: PathBuf::from(exe),
             cwd: cwd.map(PathBuf::from),
-            uid: 501,
+            owner: ProcessOwner::Unix(501),
             expires_at: 1000,
         }
     }
@@ -288,11 +300,11 @@ mod tests {
     #[test]
     fn succeeds_on_exact_matching_eligible_process() {
         let system = FakeSystem {
-            current_uid: 501,
+            current_owner: ProcessOwner::Unix(501),
             current_pid: 100,
             process: Some(ProcessCheckInfo {
                 pid: 42,
-                uid: 501,
+                owner: ProcessOwner::Unix(501),
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
                 cwd: Some(PathBuf::from("/workspace/repo")),
@@ -311,11 +323,11 @@ mod tests {
     #[test]
     fn rejects_pid_reuse_when_start_time_differs() {
         let system = FakeSystem {
-            current_uid: 501,
+            current_owner: ProcessOwner::Unix(501),
             current_pid: 100,
             process: Some(ProcessCheckInfo {
                 pid: 42,
-                uid: 501,
+                owner: ProcessOwner::Unix(501),
                 start_time: 250, // Different start time!
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
                 cwd: Some(PathBuf::from("/workspace/repo")),
@@ -335,11 +347,11 @@ mod tests {
     #[test]
     fn rejects_other_user_process() {
         let system = FakeSystem {
-            current_uid: 501,
+            current_owner: ProcessOwner::Unix(501),
             current_pid: 100,
             process: Some(ProcessCheckInfo {
                 pid: 42,
-                uid: 502, // Other user
+                owner: ProcessOwner::Unix(502), // Other user
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
                 cwd: Some(PathBuf::from("/workspace/repo")),
@@ -352,18 +364,22 @@ mod tests {
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
         let res = execute_graceful_stop(&lease, &system);
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("UID mismatch"));
+        let message = res.unwrap_err();
+        assert!(
+            message.contains("owner mismatch") || message.contains("another user"),
+            "unexpected error: {message}"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn protects_terminal_ancestry() {
         let system = FakeSystem {
-            current_uid: 501,
+            current_owner: ProcessOwner::Unix(501),
             current_pid: 100,
             process: Some(ProcessCheckInfo {
                 pid: 42,
-                uid: 501,
+                owner: ProcessOwner::Unix(501),
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
                 cwd: Some(PathBuf::from("/workspace/repo")),
@@ -388,7 +404,7 @@ mod tests {
             100,
             PathBuf::from("/usr/local/bin/claude"),
             None,
-            501,
+            ProcessOwner::Unix(501),
             10,
         );
 
@@ -407,7 +423,7 @@ mod tests {
             100,
             PathBuf::from("/usr/local/bin/claude"),
             None,
-            501,
+            ProcessOwner::Unix(501),
             10,
         );
         let expired = store.consume_lease("session-2", &lease_id2, 10 + LEASE_TTL_SECS + 5);
@@ -423,7 +439,7 @@ mod tests {
             100,
             PathBuf::from("/usr/local/bin/claude"),
             None,
-            501,
+            ProcessOwner::Unix(501),
             10,
         );
 
@@ -435,11 +451,11 @@ mod tests {
     #[test]
     fn rejects_when_a_leased_cwd_becomes_unavailable() {
         let system = FakeSystem {
-            current_uid: 501,
+            current_owner: ProcessOwner::Unix(501),
             current_pid: 100,
             process: Some(ProcessCheckInfo {
                 pid: 42,
-                uid: 501,
+                owner: ProcessOwner::Unix(501),
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
                 cwd: None,

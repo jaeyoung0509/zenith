@@ -519,10 +519,10 @@
           "markdownDescription": "Enables the start_scan command without any pre-configured scope."
         },
         {
-          "description": "Enables the terminate_process_group command without any pre-configured scope.",
+          "description": "Enables the terminate_memory_group command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-terminate-process-group",
-          "markdownDescription": "Enables the terminate_process_group command without any pre-configured scope."
+          "const": "allow-terminate-memory-group",
+          "markdownDescription": "Enables the terminate_memory_group command without any pre-configured scope."
         },
         {
           "description": "Enables the toggle_quick_panel command without any pre-configured scope.",
@@ -873,10 +873,10 @@
           "markdownDescription": "Denies the start_scan command without any pre-configured scope."
         },
         {
-          "description": "Denies the terminate_process_group command without any pre-configured scope.",
+          "description": "Denies the terminate_memory_group command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-terminate-process-group",
-          "markdownDescription": "Denies the terminate_process_group command without any pre-configured scope."
+          "const": "deny-terminate-memory-group",
+          "markdownDescription": "Denies the terminate_memory_group command without any pre-configured scope."
         },
         {
           "description": "Denies the toggle_quick_panel command without any pre-configured scope.",

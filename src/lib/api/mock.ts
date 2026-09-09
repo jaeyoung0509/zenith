@@ -855,18 +855,36 @@ export const mockApi = {
       swap_total_bytes: 2 * 1024 * 1024 * 1024,
       pressure: 'normal',
       top_processes: [
-        { pid: 102, pids: [102, 106, 107, 108], name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true },
-        { pid: 101, pids: [101, 109], name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true },
-        { pid: 103, pids: [103, 110, 111, 112], name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true },
-        { pid: 104, pids: [104, 113], name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true },
-        { pid: 105, pids: [105, 114, 115], name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true },
+        { pid: 102, pids: [102, 106, 107, 108], name: 'Google Chrome', memory_bytes: 6.9 * 1024 * 1024 * 1024, process_count: 109, can_terminate: true, termination_lease_id: 'mock-lease-chrome' },
+        { pid: 101, pids: [101, 109], name: 'Cursor', memory_bytes: 2.8 * 1024 * 1024 * 1024, process_count: 14, can_terminate: true, termination_lease_id: 'mock-lease-cursor' },
+        { pid: 103, pids: [103, 110, 111, 112], name: 'Docker Desktop', memory_bytes: 1.6 * 1024 * 1024 * 1024, process_count: 4, can_terminate: true, termination_lease_id: 'mock-lease-docker' },
+        { pid: 104, pids: [104, 113], name: 'Claude', memory_bytes: 840 * 1024 * 1024, process_count: 2, can_terminate: true, termination_lease_id: 'mock-lease-claude' },
+        { pid: 105, pids: [105, 114, 115], name: 'Xcode', memory_bytes: 1.4 * 1024 * 1024 * 1024, process_count: 6, can_terminate: true, termination_lease_id: 'mock-lease-xcode' },
       ],
       timestamp: Math.floor(Date.now() / 1000),
     };
   },
 
-  async terminateProcessGroup(name: string, _force: boolean): Promise<number> {
-    return name === 'Google Chrome' ? 109 : 1;
+  async terminateMemoryGroup(
+    leaseId: string,
+    mode: 'graceful' | 'force'
+  ): Promise<{ terminated_count: number; outcome: 'released' | 'still_listening' | 'ownership_changed'; fresh_lease_id: string | null }> {
+    if (!leaseId.startsWith('mock-lease-')) {
+      throw new Error('Termination snapshot expired; refresh and try again.');
+    }
+    // Simulate a graceful attempt on Cursor that needs force escalation.
+    if (leaseId === 'mock-lease-cursor' && mode === 'graceful') {
+      return {
+        terminated_count: 1,
+        outcome: 'still_listening',
+        fresh_lease_id: `mock-lease-cursor-force-${Date.now()}`,
+      };
+    }
+    return {
+      terminated_count: leaseId.includes('chrome') ? 109 : 1,
+      outcome: 'released',
+      fresh_lease_id: null,
+    };
   },
 
   async pickKeepAwakeApplication(): Promise<SelectedApplication | null> {

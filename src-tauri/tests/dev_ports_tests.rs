@@ -8,6 +8,7 @@ use zenith_lib::dev_ports::{
     list_listeners, release_listener, DevelopmentPortStore, RawListenerRecord, RealDevPortSystem,
 };
 use zenith_lib::models::{ListenerExposure, ListenerProtocol, ReleaseMode, ReleaseOutcome};
+use zenith_lib::process_owner::ProcessOwner;
 
 struct ChildGuard {
     child: Child,
@@ -62,8 +63,8 @@ fn test_controlled_integration_ephemeral_loopback_release() {
     }
 
     impl zenith_lib::dev_ports::DevPortSystem for TestIntegrationSystem {
-        fn current_uid(&self) -> u32 {
-            self.real.current_uid()
+        fn current_owner(&self) -> ProcessOwner {
+            self.real.current_owner()
         }
 
         fn own_pid(&self) -> u32 {
@@ -78,7 +79,7 @@ fn test_controlled_integration_ephemeral_loopback_release() {
                 Ok(vec![RawListenerRecord {
                     pid: self.test_pid,
                     command: "python3".to_string(),
-                    uid: Some(self.real.current_uid()),
+                    owner: Some(self.real.current_owner()),
                     port: self.test_port,
                     bind_address: "127.0.0.1".to_string(),
                     exposure: ListenerExposure::Loopback,
