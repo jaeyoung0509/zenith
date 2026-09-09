@@ -166,6 +166,43 @@ impl SymlinkGuard {
         }
         Ok(())
     }
+
+    /// Strict variant for mutation paths: canonicalization failure aborts the
+    /// affected mutation instead of being treated as safe.
+    pub fn validate_canonical_blacklist_strict(path: &Path) -> Result<(), ZenithError> {
+        let canonical = fs::canonicalize(path).map_err(|error| {
+            ZenithError::ChangedSinceScan(format!(
+                "Could not verify canonical location for {}: {}",
+                path.display(),
+                error
+            ))
+        })?;
+        crate::safety::Blacklist::validate(&canonical)?;
+        Ok(())
+    }
+
+    /// Strict symlink/reparse-point check for mutation paths. Metadata failure
+    /// fails closed instead of reporting "not a symlink".
+    pub fn is_symlink_strict(path: &Path) -> Result<bool, ZenithError> {
+        let meta = fs::symlink_metadata(path).map_err(|error| {
+            ZenithError::ChangedSinceScan(format!(
+                "Could not read link metadata for {}: {}",
+                path.display(),
+                error
+            ))
+        })?;
+        if meta.file_type().is_symlink() {
+            return Ok(true);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
