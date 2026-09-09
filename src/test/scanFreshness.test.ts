@@ -214,6 +214,49 @@ describe('cleanup freshness and recovery', () => {
     stop();
   });
 
+  it.each(['hidden', 'disposed'])('does not rescan after becoming %s during revalidation', async (reason) => {
+    const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    vi.stubGlobal('document', page);
+    vi.stubGlobal('window', new EventTarget());
+    const store = await loaded();
+    const stop = store.observeFreshness();
+    await store.init();
+    const cache = deferred<ScanResult | null>();
+    vi.mocked(tauriGetLastScan).mockReturnValue(cache.promise);
+    await vi.advanceTimersByTimeAsync(300_000);
+    if (reason === 'hidden') {
+      page.visibilityState = 'hidden';
+      page.dispatchEvent(new Event('visibilitychange'));
+    } else {
+      stop();
+    }
+    cache.resolve(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tauriScan).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('coalesces slow cache revalidation across timer ticks and retries after failure', async () => {
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
+    vi.stubGlobal('window', new EventTarget());
+    const store = await loaded();
+    const stop = store.observeFreshness();
+    await store.init();
+    vi.mocked(tauriGetLastScan).mockClear();
+    const cache = deferred<ScanResult | null>();
+    vi.mocked(tauriGetLastScan).mockReturnValue(cache.promise);
+    vi.mocked(tauriScan).mockImplementation(async () => fixture('new', Math.floor(Date.now() / 1000)));
+    await vi.advanceTimersByTimeAsync(305_000);
+    expect(tauriGetLastScan).toHaveBeenCalledTimes(1);
+    cache.resolve(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tauriScan).toHaveBeenCalledTimes(1);
+    vi.mocked(tauriGetLastScan).mockRejectedValue(new Error('Cache unavailable'));
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(tauriScan).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
   it('does not start a second scan when one begins during cache revalidation', async () => {
     const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
     const windowEvents = new EventTarget();

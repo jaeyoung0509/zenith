@@ -42,6 +42,7 @@ export class ScanStore {
   private generation = 0;
   private scanRequest: Promise<ScanResult | null> | null = null;
   private freshnessSubscribers = 0;
+  private revalidating = false;
   private stopFreshness: (() => void) | null = null;
 
   observeFreshness(): () => void {
@@ -107,6 +108,7 @@ export class ScanStore {
   }
 
   private maybeAutoRescan() {
+    if (this.revalidating) return;
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     if (this.isScanning || this.isCleaning) return;
     // A failed scan stays manual: the user retries explicitly via Scan Again.
@@ -121,21 +123,29 @@ export class ScanStore {
    * the serialized storage gate. Manual scans bypass this and always scan.
    */
   private async revalidateOrRescan() {
+    this.revalidating = true;
     const generation = this.generation;
+    const canContinue = () => generation === this.generation
+      && !this.isScanning && !this.isCleaning
+      && this.freshnessSubscribers > 0
+      && (typeof document === 'undefined' || document.visibilityState === 'visible');
     try {
-      const cached = await tauriGetLastScan();
-      if (generation !== this.generation || this.isScanning || this.isCleaning) return;
-      if (cached && cached.scan_id !== this.lastScan?.scan_id) {
-        this.acceptScan(cached);
+      try {
+        const cached = await tauriGetLastScan();
+        if (!canContinue()) return;
+        if (cached && cached.scan_id !== this.lastScan?.scan_id) {
+          this.acceptScan(cached);
+        }
+        this.updateFreshness();
+      } catch {
+        // A cache-fetch failure must not block a visible surface's rescan.
       }
-      this.updateFreshness();
-    } catch {
-      // Fall through with local state: a cache-fetch failure must not
-      // block the rescan below.
+      if (!canContinue()) return;
+      if (this.freshness !== 'stale' && this.freshness !== 'empty') return;
+      void this.runScan(undefined, 'auto');
+    } finally {
+      this.revalidating = false;
     }
-    if (generation !== this.generation || this.isScanning || this.isCleaning) return;
-    if (this.freshness !== 'stale' && this.freshness !== 'empty') return;
-    void this.runScan(undefined, 'auto');
   }
 
   private invalidate() {
