@@ -37,10 +37,7 @@ impl ProcessOwner {
     /// candidate SID must exactly equal the current process SID; otherwise
     /// `None` is returned. This reuses the proven sysinfo SID comparison
     /// pattern already used by agent activity.
-    pub fn verified(
-        candidate: Option<&Uid>,
-        own: Option<&Uid>,
-    ) -> Option<Self> {
+    pub fn verified(candidate: Option<&Uid>, own: Option<&Uid>) -> Option<Self> {
         #[cfg(unix)]
         {
             let _ = own;
@@ -88,9 +85,7 @@ fn current_process_sid() -> Option<String> {
         ProcessRefreshKind::everything(),
     );
     let process = sys.process(own_pid)?;
-    let uid = process
-        .effective_user_id()
-        .or_else(|| process.user_id())?;
+    let uid = process.effective_user_id().or_else(|| process.user_id())?;
     Some(uid.to_string())
 }
 

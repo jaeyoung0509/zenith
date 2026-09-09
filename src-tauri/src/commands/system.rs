@@ -24,11 +24,7 @@ pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetr
     tauri::async_runtime::spawn_blocking(move || {
         let mut metrics = sampler.sample();
         let system = crate::metrics::memory::RealMemorySystem::default();
-        MemoryInspector::attach_termination_leases(
-            &mut metrics,
-            &lease_store,
-            &system,
-        );
+        MemoryInspector::attach_termination_leases(&mut metrics, &lease_store, &system);
         metrics
     })
     .await

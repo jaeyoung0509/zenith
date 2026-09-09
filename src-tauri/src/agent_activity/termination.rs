@@ -130,9 +130,7 @@ impl TerminationSystem for RealTerminationSystem {
             .and_then(|process| process.effective_user_id().or_else(|| process.user_id()))
             .cloned();
         let owner = ProcessOwner::verified(
-            process
-                .effective_user_id()
-                .or_else(|| process.user_id()),
+            process.effective_user_id().or_else(|| process.user_id()),
             own_uid.as_ref(),
         )?;
         Some(ProcessCheckInfo {
@@ -156,7 +154,8 @@ impl TerminationSystem for RealTerminationSystem {
         }
         // Agent-specific executable guard stays local; the shared module owns
         // the terminal/shell/system deny-list so workflows cannot drift.
-        const PROTECTED_NAMES: &[&str] = &["login", "launchd", "systemd", "zsh", "bash", "fish", "sh"];
+        const PROTECTED_NAMES: &[&str] =
+            &["login", "launchd", "systemd", "zsh", "bash", "fish", "sh"];
         let name_lower = info.name.to_lowercase();
         if PROTECTED_NAMES
             .iter()

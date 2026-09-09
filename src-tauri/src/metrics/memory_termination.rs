@@ -145,7 +145,9 @@ mod tests {
             pid,
             owner: ProcessOwner::Unix(501),
             start_time: 1000,
-            exe: Some(PathBuf::from("/Applications/Cursor.app/Contents/MacOS/Cursor")),
+            exe: Some(PathBuf::from(
+                "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            )),
             group: "Cursor".to_string(),
         }
     }
@@ -167,7 +169,9 @@ mod tests {
         assert!(store
             .peek_lease(&id, t0 + Duration::from_secs(30))
             .is_none());
-        assert!(store.take_lease(&id, t0 + Duration::from_secs(31)).is_none());
+        assert!(store
+            .take_lease(&id, t0 + Duration::from_secs(31))
+            .is_none());
     }
 
     #[test]

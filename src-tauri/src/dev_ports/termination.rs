@@ -120,10 +120,7 @@ impl DevPortSystem for RealDevPortSystem {
         // Refresh the candidate plus our own process so Windows SID comparison
         // uses the current process token SID.
         sys.refresh_processes_specifics(
-            sysinfo::ProcessesToUpdate::Some(&[
-                sysinfo::Pid::from_u32(pid),
-                own_pid,
-            ]),
+            sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid), own_pid]),
             true,
             sysinfo::ProcessRefreshKind::everything(),
         );
@@ -147,9 +144,7 @@ impl DevPortSystem for RealDevPortSystem {
             .collect();
         let start_time = process.start_time();
         let owner = ProcessOwner::verified(
-            process
-                .effective_user_id()
-                .or_else(|| process.user_id()),
+            process.effective_user_id().or_else(|| process.user_id()),
             own_uid,
         );
 
@@ -477,7 +472,9 @@ pub fn list_listeners(
                 exe_path,
                 server_name: server_name.clone(),
                 can_release,
-                force_authorized: false,
+                // Windows has no generic graceful process adapter. The UI
+                // presents the initial action explicitly as force-only there.
+                force_authorized: cfg!(target_os = "windows"),
                 now,
             });
 
@@ -633,9 +630,7 @@ pub fn release_listener(
             }
             #[cfg(not(unix))]
             {
-                return Err(
-                    "Graceful release is unavailable on this platform.".to_string(),
-                );
+                return Err("Graceful release is unavailable on this platform.".to_string());
             }
         }
         ReleaseMode::Force => FORCE_TERMINATION_SIGNAL,
@@ -776,8 +771,12 @@ mod tests {
 
     impl FakeDevPortSystem {
         fn new() -> Self {
+            Self::with_owner(ProcessOwner::Unix(501))
+        }
+
+        fn with_owner(owner: ProcessOwner) -> Self {
             Self {
-                owner: ProcessOwner::Unix(501),
+                owner,
                 pid: 1000,
                 listeners: Mutex::new(Vec::new()),
                 processes: Mutex::new(HashMap::new()),
@@ -1131,8 +1130,7 @@ mod tests {
         });
         let store = Mutex::new(DevelopmentPortStore::default());
         let listener = list_listeners(&store, &fake).unwrap().remove(0);
-        let first =
-            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let first = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
         assert_eq!(first.outcome, ReleaseOutcome::Released);
         let second = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful);
         assert!(second.is_err());
@@ -1164,8 +1162,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/apple/app")),
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
-        let result =
-            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1196,8 +1193,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/apple/app")),
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
-        let result =
-            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1257,11 +1253,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_graceful_release_is_unavailable() {
-        let fake = FakeDevPortSystem::new();
+        let owner = ProcessOwner::Windows("S-1-5-21-100".to_string());
+        let fake = FakeDevPortSystem::with_owner(owner.clone());
         fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
         fake.add_process(ProcessSnapshot {
             pid: 32892,
-            owner: Some(ProcessOwner::Windows("S-1-5-21-100".to_string())),
+            owner: Some(owner),
             start_time: 1700000000,
             raw_command: "node".to_string(),
             process_name: "node".to_string(),
@@ -1275,5 +1272,14 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unavailable on Windows"));
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
+
+        // The rejected graceful request does not consume the force-authorized
+        // Windows lease. A separately confirmed force action can still use it.
+        let forced = release_listener(&store, &fake, &listener.id, ReleaseMode::Force).unwrap();
+        assert_eq!(forced.outcome, ReleaseOutcome::Released);
+        assert_eq!(
+            fake.signaled_pids.lock().unwrap().as_slice(),
+            &[(32892, FORCE_TERMINATION_SIGNAL)]
+        );
     }
 }

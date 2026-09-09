@@ -238,9 +238,7 @@ impl MemoryTerminationSystem for RealMemorySystem {
             let own_pid = std::process::id();
             let own_uid = sys
                 .process(sysinfo::Pid::from_u32(own_pid))
-                .and_then(|process| {
-                    process.effective_user_id().or_else(|| process.user_id())
-                });
+                .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
             let current_owner = ProcessOwner::current();
             let mut members = Vec::new();
             for (pid, process) in sys.processes() {
@@ -249,8 +247,7 @@ impl MemoryTerminationSystem for RealMemorySystem {
                     continue;
                 }
                 let raw_name = process.name().to_string_lossy();
-                let norm_name =
-                    MemoryInspector::normalize_process_name(&raw_name, process.exe());
+                let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
                 if norm_name != group {
                     continue;
                 }
@@ -265,9 +262,7 @@ impl MemoryTerminationSystem for RealMemorySystem {
                     continue;
                 }
                 let Some(owner) = ProcessOwner::verified(
-                    process
-                        .effective_user_id()
-                        .or_else(|| process.user_id()),
+                    process.effective_user_id().or_else(|| process.user_id()),
                     own_uid,
                 ) else {
                     continue;
@@ -302,18 +297,14 @@ impl MemoryTerminationSystem for RealMemorySystem {
             );
             let own_uid = sys
                 .process(own_pid)
-                .and_then(|process| {
-                    process.effective_user_id().or_else(|| process.user_id())
-                })
+                .and_then(|process| process.effective_user_id().or_else(|| process.user_id()))
                 .cloned();
             let own_uid_ref = own_uid.as_ref();
             let process = sys.process(sys_pid)?;
             let raw_name = process.name().to_string_lossy();
             let group = MemoryInspector::normalize_process_name(&raw_name, process.exe());
             let owner = ProcessOwner::verified(
-                process
-                    .effective_user_id()
-                    .or_else(|| process.user_id()),
+                process.effective_user_id().or_else(|| process.user_id()),
                 own_uid_ref,
             )?;
             Some(MemoryLeaseMember {
@@ -348,8 +339,10 @@ impl MemoryTerminationSystem for RealMemorySystem {
                     if delivered {
                         Ok(())
                     } else {
-                        Err("The operating system did not allow Zenith to terminate the process"
-                            .to_string())
+                        Err(
+                            "The operating system did not allow Zenith to terminate the process"
+                                .to_string(),
+                        )
                     }
                 }
                 #[cfg(not(unix))]
@@ -373,8 +366,10 @@ impl MemoryTerminationSystem for RealMemorySystem {
                 if delivered {
                     Ok(())
                 } else {
-                    Err("The operating system did not allow Zenith to terminate the process"
-                        .to_string())
+                    Err(
+                        "The operating system did not allow Zenith to terminate the process"
+                            .to_string(),
+                    )
                 }
             }
         }
@@ -417,7 +412,10 @@ impl MemoryInspector {
                 group: process.name.clone(),
                 members,
                 can_terminate: true,
-                force_authorized: false,
+                // Windows has no safe generic graceful adapter. Its UI presents
+                // the only supported action explicitly as Force Quit, while the
+                // backend still requires this short-lived verified lease.
+                force_authorized: cfg!(target_os = "windows"),
                 now,
             });
             process.termination_lease_id = Some(lease_id);
@@ -437,8 +435,7 @@ impl MemoryInspector {
         #[cfg(target_os = "windows")]
         if mode == MemoryTerminationMode::Graceful {
             return Err(
-                "Graceful termination is unavailable on Windows for this process type."
-                    .to_string(),
+                "Graceful termination is unavailable on Windows for this process type.".to_string(),
             );
         }
         #[cfg(not(unix))]
@@ -452,18 +449,16 @@ impl MemoryInspector {
             let mut guard = store
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.take_lease(lease_id, now).ok_or_else(|| {
-                "Termination snapshot expired; refresh and try again.".to_string()
-            })?
+            guard
+                .take_lease(lease_id, now)
+                .ok_or_else(|| "Termination snapshot expired; refresh and try again.".to_string())?
         };
 
         if !lease.can_terminate {
             return Err("This process group is protected and cannot be terminated.".to_string());
         }
         if mode == MemoryTerminationMode::Force && !lease.force_authorized {
-            return Err(
-                "Force termination requires a fresh failed graceful attempt.".to_string(),
-            );
+            return Err("Force termination requires a fresh failed graceful attempt.".to_string());
         }
         if lease.members.is_empty() {
             return Ok(MemoryTerminationResult {
@@ -526,11 +521,26 @@ impl MemoryInspector {
         }
 
         // Filter to members that still exist; missing members already exited.
-        let live: Vec<&MemoryLeaseMember> = lease
-            .members
-            .iter()
-            .filter(|member| system.lookup(member.pid).is_some())
-            .collect();
+        let mut live = Vec::new();
+        for member in &lease.members {
+            let Some(current) = system.lookup(member.pid) else {
+                continue;
+            };
+            if current.owner != member.owner
+                || current.owner != current_owner
+                || current.start_time != member.start_time
+                || current.exe != member.exe
+                || current.group != member.group
+                || current.group != lease.group
+            {
+                return Ok(MemoryTerminationResult {
+                    terminated_count: 0,
+                    outcome: MemoryTerminationOutcome::OwnershipChanged,
+                    fresh_lease_id: None,
+                });
+            }
+            live.push(member);
+        }
         if live.is_empty() {
             return Ok(MemoryTerminationResult {
                 terminated_count: 0,
@@ -541,8 +551,25 @@ impl MemoryInspector {
 
         let mut signaled = 0usize;
         for member in &live {
-            // Revalidation above guarantees identity; a signaling failure is a
-            // graceful failure that may authorize a fresh force lease below.
+            // Revalidate each member again immediately before its signal. Group
+            // validation cannot be atomic, so never rely on the earlier pass
+            // after another member has taken time to terminate.
+            let Some(current) = system.lookup(member.pid) else {
+                continue;
+            };
+            if current.owner != member.owner
+                || current.owner != current_owner
+                || current.start_time != member.start_time
+                || current.exe != member.exe
+                || current.group != member.group
+                || current.group != lease.group
+            {
+                return Ok(MemoryTerminationResult {
+                    terminated_count: signaled,
+                    outcome: MemoryTerminationOutcome::OwnershipChanged,
+                    fresh_lease_id: None,
+                });
+            }
             match system.signal(member.pid, mode) {
                 Ok(()) => signaled += 1,
                 Err(error) => {
@@ -601,25 +628,37 @@ impl MemoryInspector {
         }
 
         // Same verified members are still listening after graceful signaling.
-        let still_verified: Vec<MemoryLeaseMember> = lease
-            .members
-            .iter()
-            .filter_map(|member| {
-                let current = system.lookup(member.pid)?;
-                if current.owner == member.owner
-                    && current.start_time == member.start_time
-                    && current.exe == member.exe
-                    && current.group == member.group
-                {
-                    Some(member.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if still_verified.len() == lease.members.len()
-            && mode == MemoryTerminationMode::Graceful
-        {
+        let mut still_verified = Vec::new();
+        let mut identity_drifted = false;
+        for member in &lease.members {
+            let Some(current) = system.lookup(member.pid) else {
+                continue;
+            };
+            if current.owner == member.owner
+                && current.start_time == member.start_time
+                && current.exe == member.exe
+                && current.group == member.group
+            {
+                still_verified.push(member.clone());
+            } else {
+                identity_drifted = true;
+            }
+        }
+        if identity_drifted {
+            return Ok(MemoryTerminationResult {
+                terminated_count: signaled,
+                outcome: MemoryTerminationOutcome::OwnershipChanged,
+                fresh_lease_id: None,
+            });
+        }
+        if still_verified.is_empty() {
+            return Ok(MemoryTerminationResult {
+                terminated_count: signaled,
+                outcome: MemoryTerminationOutcome::Released,
+                fresh_lease_id: None,
+            });
+        }
+        if mode == MemoryTerminationMode::Graceful {
             let mut guard = store
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -638,10 +677,11 @@ impl MemoryInspector {
             });
         }
 
-        // Partial progress or identity drift after the grace period.
+        // A force signal was delivered but at least one verified member is
+        // still running. Do not mint another force-authorized lease.
         Ok(MemoryTerminationResult {
             terminated_count: signaled,
-            outcome: MemoryTerminationOutcome::OwnershipChanged,
+            outcome: MemoryTerminationOutcome::StillListening,
             fresh_lease_id: None,
         })
     }
@@ -860,7 +900,7 @@ mod tests {
     };
     use crate::models::{MemoryTerminationMode, MemoryTerminationOutcome};
     use crate::process_owner::ProcessOwner;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::Instant;
@@ -871,6 +911,7 @@ mod tests {
         members: Mutex<HashMap<u32, MemoryLeaseMember>>,
         signaled: Mutex<Vec<(u32, MemoryTerminationMode)>>,
         auto_exit_on_signal: std::sync::atomic::AtomicBool,
+        surviving_pids: Mutex<HashSet<u32>>,
     }
 
     impl FakeMemorySystem {
@@ -881,6 +922,7 @@ mod tests {
                 members: Mutex::new(HashMap::new()),
                 signaled: Mutex::new(Vec::new()),
                 auto_exit_on_signal: std::sync::atomic::AtomicBool::new(true),
+                surviving_pids: Mutex::new(HashSet::new()),
             }
         }
 
@@ -932,6 +974,7 @@ mod tests {
             if self
                 .auto_exit_on_signal
                 .load(std::sync::atomic::Ordering::SeqCst)
+                && !self.surviving_pids.lock().unwrap().contains(&pid)
             {
                 self.members.lock().unwrap().remove(&pid);
             }
@@ -948,16 +991,13 @@ mod tests {
     ) -> String {
         let members = system.group_members(group);
         assert!(!members.is_empty());
-        store
-            .lock()
-            .unwrap()
-            .create_lease(CreateMemoryLeaseParams {
-                group: group.to_string(),
-                members,
-                can_terminate: true,
-                force_authorized: false,
-                now: Instant::now(),
-            })
+        store.lock().unwrap().create_lease(CreateMemoryLeaseParams {
+            group: group.to_string(),
+            members,
+            can_terminate: true,
+            force_authorized: false,
+            now: Instant::now(),
+        })
     }
 
     #[test]
@@ -1070,7 +1110,12 @@ mod tests {
     #[test]
     fn stale_lease_is_rejected_without_signaling() {
         let system = FakeMemorySystem::new();
-        system.add_member(200, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            200,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let result = MemoryInspector::execute_termination(
             "missing-lease",
@@ -1086,7 +1131,12 @@ mod tests {
     #[test]
     fn lease_consumption_is_one_shot() {
         let system = FakeMemorySystem::new();
-        system.add_member(201, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            201,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let lease = lease_for(&store, &system, "Cursor");
         let first = MemoryInspector::execute_termination(
@@ -1109,7 +1159,12 @@ mod tests {
     #[test]
     fn pid_reuse_with_changed_start_time_sends_no_signal() {
         let system = FakeMemorySystem::new();
-        system.add_member(202, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            202,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let lease = lease_for(&store, &system, "Cursor");
         // Simulate PID reuse with a new start time.
@@ -1139,7 +1194,12 @@ mod tests {
     #[test]
     fn owner_change_sends_no_signal() {
         let system = FakeMemorySystem::new();
-        system.add_member(203, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            203,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let lease = lease_for(&store, &system, "Cursor");
         system.members.lock().unwrap().insert(
@@ -1168,7 +1228,12 @@ mod tests {
     #[test]
     fn executable_change_sends_no_signal() {
         let system = FakeMemorySystem::new();
-        system.add_member(204, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            204,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let lease = lease_for(&store, &system, "Cursor");
         system.members.lock().unwrap().insert(
@@ -1235,7 +1300,12 @@ mod tests {
         system
             .auto_exit_on_signal
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        system.add_member(205, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            205,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let lease = lease_for(&store, &system, "Cursor");
         let graceful = MemoryInspector::execute_termination(
@@ -1249,7 +1319,12 @@ mod tests {
         let fresh = graceful.fresh_lease_id.expect("fresh lease");
         assert_ne!(fresh, lease);
         // Force without the fresh lease must fail.
-        system.add_member(206, "Cursor", 1001, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            206,
+            "Cursor",
+            1001,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let stale_force_lease = store.lock().unwrap().create_lease(CreateMemoryLeaseParams {
             group: "Cursor".to_string(),
             members: system.group_members("Cursor"),
@@ -1291,10 +1366,52 @@ mod tests {
             .any(|(pid, mode)| *pid == 205 && *mode == MemoryTerminationMode::Force));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn partial_graceful_exit_authorizes_only_verified_survivors() {
+        let system = FakeMemorySystem::new();
+        system.add_member(
+            209,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
+        system.add_member(
+            210,
+            "Cursor",
+            1001,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
+        system.surviving_pids.lock().unwrap().insert(210);
+        let store = Mutex::new(MemoryTerminationStore::default());
+        let lease = lease_for(&store, &system, "Cursor");
+
+        let graceful = MemoryInspector::execute_termination(
+            &lease,
+            MemoryTerminationMode::Graceful,
+            &store,
+            &system,
+        )
+        .unwrap();
+
+        assert_eq!(graceful.outcome, MemoryTerminationOutcome::StillListening);
+        let fresh = graceful.fresh_lease_id.expect("force lease for survivor");
+        let guard = store.lock().unwrap();
+        let fresh_lease = guard.peek_lease(&fresh, Instant::now()).unwrap();
+        assert!(fresh_lease.force_authorized);
+        assert_eq!(fresh_lease.members.len(), 1);
+        assert_eq!(fresh_lease.members[0].pid, 210);
+    }
+
     #[test]
     fn force_requires_prior_graceful_attempt() {
         let system = FakeMemorySystem::new();
-        system.add_member(207, "Cursor", 1000, "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        system.add_member(
+            207,
+            "Cursor",
+            1000,
+            "/Applications/Cursor.app/Contents/MacOS/Cursor",
+        );
         let store = Mutex::new(MemoryTerminationStore::default());
         let lease = lease_for(&store, &system, "Cursor");
         let result = MemoryInspector::execute_termination(
@@ -1324,6 +1441,35 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unavailable on Windows"));
         assert!(system.signaled.lock().unwrap().is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_explicit_force_uses_a_force_authorized_verified_lease() {
+        let system = FakeMemorySystem::new();
+        system.add_member(211, "Cursor", 1000, "C:\\Program Files\\Cursor\\Cursor.exe");
+        let store = Mutex::new(MemoryTerminationStore::default());
+        let lease = store.lock().unwrap().create_lease(CreateMemoryLeaseParams {
+            group: "Cursor".to_string(),
+            members: system.group_members("Cursor"),
+            can_terminate: true,
+            force_authorized: true,
+            now: Instant::now(),
+        });
+
+        let result = MemoryInspector::execute_termination(
+            &lease,
+            MemoryTerminationMode::Force,
+            &store,
+            &system,
+        )
+        .unwrap();
+
+        assert_eq!(result.outcome, MemoryTerminationOutcome::Released);
+        assert_eq!(
+            system.signaled.lock().unwrap().as_slice(),
+            &[(211, MemoryTerminationMode::Force)]
+        );
     }
 
     #[test]

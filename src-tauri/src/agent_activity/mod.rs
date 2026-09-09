@@ -204,16 +204,19 @@ fn registry_from_records_with_inactivity_threshold(
         let session_id = session_id(adapter.id, record.pid, record.started_at);
         current_observed_session_ids.insert(session_id.clone());
 
-        // Create stop lease
-        let lease_id = store.stop_leases.create_lease(
-            &session_id,
-            record.pid,
-            record.started_at,
-            executable.to_path_buf(),
-            record.cwd.clone(),
-            current_owner.clone(),
-            observed_at,
-        );
+        // Agent stop is SIGTERM-only. Do not advertise or mint an unusable
+        // lease on platforms without that graceful adapter.
+        let stop_lease_id = cfg!(unix).then(|| {
+            store.stop_leases.create_lease(
+                &session_id,
+                record.pid,
+                record.started_at,
+                executable.to_path_buf(),
+                record.cwd.clone(),
+                current_owner.clone(),
+                observed_at,
+            )
+        });
 
         let elapsed = observed_at.saturating_sub(record.started_at);
 
@@ -277,8 +280,8 @@ fn registry_from_records_with_inactivity_threshold(
             project_id: None,
             worktree_id: None,
             detail,
-            can_stop: true,
-            stop_lease_id: Some(lease_id),
+            can_stop: stop_lease_id.is_some(),
+            stop_lease_id,
         };
 
         session_inputs.push((record.cwd, session));
@@ -462,9 +465,24 @@ mod tests {
         let mut store = store::AgentActivityStore::new();
         let registry = registry_from_records(
             vec![
-                record("/tmp/codex-helper", Some(crate::process_owner::ProcessOwner::Unix(501)), 10, Some(temp.path().into())),
-                record("/usr/bin/codex", Some(crate::process_owner::ProcessOwner::Unix(502)), 10, Some(temp.path().into())),
-                record("/usr/bin/claude", Some(crate::process_owner::ProcessOwner::Unix(501)), 0, Some(temp.path().into())),
+                record(
+                    "/tmp/codex-helper",
+                    Some(crate::process_owner::ProcessOwner::Unix(501)),
+                    10,
+                    Some(temp.path().into()),
+                ),
+                record(
+                    "/usr/bin/codex",
+                    Some(crate::process_owner::ProcessOwner::Unix(502)),
+                    10,
+                    Some(temp.path().into()),
+                ),
+                record(
+                    "/usr/bin/claude",
+                    Some(crate::process_owner::ProcessOwner::Unix(501)),
+                    0,
+                    Some(temp.path().into()),
+                ),
             ],
             crate::process_owner::ProcessOwner::Unix(501),
             100,
@@ -486,8 +504,18 @@ mod tests {
         let mut store = store::AgentActivityStore::new();
         let registry = registry_from_records(
             vec![
-                record("/usr/bin/codex", Some(crate::process_owner::ProcessOwner::Unix(501)), 10, Some(repo.join("src"))),
-                record("/usr/bin/claude", Some(crate::process_owner::ProcessOwner::Unix(501)), 11, Some(repo.clone())),
+                record(
+                    "/usr/bin/codex",
+                    Some(crate::process_owner::ProcessOwner::Unix(501)),
+                    10,
+                    Some(repo.join("src")),
+                ),
+                record(
+                    "/usr/bin/claude",
+                    Some(crate::process_owner::ProcessOwner::Unix(501)),
+                    11,
+                    Some(repo.clone()),
+                ),
             ],
             crate::process_owner::ProcessOwner::Unix(501),
             100,
@@ -506,10 +534,16 @@ mod tests {
             registry.snapshot.projects[0].sessions[0].status,
             AgentActivityStatus::Working | AgentActivityStatus::Active
         ));
-        assert!(registry.snapshot.projects[0].sessions[0].can_stop);
-        assert!(registry.snapshot.projects[0].sessions[0]
-            .stop_lease_id
-            .is_some());
+        assert_eq!(
+            registry.snapshot.projects[0].sessions[0].can_stop,
+            cfg!(unix)
+        );
+        assert_eq!(
+            registry.snapshot.projects[0].sessions[0]
+                .stop_lease_id
+                .is_some(),
+            cfg!(unix)
+        );
     }
 
     #[cfg(unix)]
@@ -619,7 +653,12 @@ mod tests {
             100,
             &mut store,
         );
-        let exited = registry_from_records(vec![], crate::process_owner::ProcessOwner::Unix(501), 110, &mut store);
+        let exited = registry_from_records(
+            vec![],
+            crate::process_owner::ProcessOwner::Unix(501),
+            110,
+            &mut store,
+        );
         assert_eq!(exited.snapshot.projects.len(), 1);
         assert_eq!(
             exited.snapshot.projects[0].sessions[0].status,
@@ -642,7 +681,9 @@ mod tests {
         let registry = registry_from_records(
             vec![record(
                 "C:\\Program Files\\Antigravity\\bin\\antigravity.exe",
-                Some(crate::process_owner::ProcessOwner::Windows("S-1-5-21-100".to_string())),
+                Some(crate::process_owner::ProcessOwner::Windows(
+                    "S-1-5-21-100".to_string(),
+                )),
                 10,
                 None,
             )],

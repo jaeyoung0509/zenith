@@ -142,9 +142,8 @@ pub fn run() {
     let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
-    let memory_termination_store = Arc::new(Mutex::new(
-        crate::metrics::MemoryTerminationStore::default(),
-    ));
+    let memory_termination_store =
+        Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
     let agent_activity_cache = Arc::new(Mutex::new(None));
     let activity_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(

@@ -141,11 +141,7 @@ pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationRe
 /// Checks if a process belongs to protected categories (shared terminals/
 /// shells/system plus databases and container engines specific to dev ports).
 fn is_protected_process(process_name: &str, raw_cmd: &str, exe_path: Option<&Path>) -> bool {
-    if crate::process_protection::is_protected_process(
-        process_name,
-        Some(raw_cmd),
-        exe_path,
-    ) {
+    if crate::process_protection::is_protected_process(process_name, Some(raw_cmd), exe_path) {
         return true;
     }
 

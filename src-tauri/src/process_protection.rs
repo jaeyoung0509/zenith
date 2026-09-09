@@ -151,11 +151,7 @@ mod tests {
                 "expected {name} to be protected"
             );
         }
-        assert!(is_protected_process(
-            "wezterm-gui",
-            None,
-            None
-        ));
+        assert!(is_protected_process("wezterm-gui", None, None));
     }
 
     #[test]
