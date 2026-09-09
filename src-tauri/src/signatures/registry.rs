@@ -237,5 +237,9 @@ mod tests {
             registry.get("dev.pnpm.store").unwrap().strategy,
             crate::models::CleanStrategy::ExternalCommand
         );
+        assert_eq!(
+            registry.get("dev.npm.cache").unwrap().strategy,
+            crate::models::CleanStrategy::ExternalCommand
+        );
     }
 }

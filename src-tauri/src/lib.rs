@@ -1,14 +1,17 @@
 pub mod agent_activity;
 pub mod ai_control_center;
+pub mod ai_snapshots;
 pub mod ai_usage;
 pub mod applications;
 pub mod cache_providers;
 pub mod cleaner;
+pub mod collection;
 pub mod commands;
 pub mod dev_ports;
 pub mod developer_artifacts;
 pub mod diagnostics;
 pub mod docker;
+pub mod execution_budget;
 pub mod ipc_numeric;
 pub mod large_files;
 pub mod metrics;
@@ -18,6 +21,7 @@ pub mod operation_gate;
 pub mod orbstack;
 pub mod platform;
 pub mod power;
+pub mod runtime_metrics;
 pub mod safety;
 pub mod scanner;
 pub mod settings_store;
@@ -127,13 +131,22 @@ pub fn run() {
     let last_scan = Arc::new(Mutex::new(None));
     let openrouter_key = Arc::new(Mutex::new(None));
     let ai_usage_cache = Arc::new(Mutex::new(None));
-    let ai_usage_refresh_lock = Arc::new(Mutex::new(()));
+    let runtime_metrics = Arc::new(crate::runtime_metrics::RuntimeMetrics::new());
+    let usage_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(
+        runtime_metrics.clone(),
+    ));
+    let usage_generation = Arc::new(std::sync::atomic::AtomicU64::new(1));
     let delete_plans = Arc::new(Mutex::new(HashMap::new()));
     let storage_operation_gate = operation_gate::StorageOperationGate::default();
     let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
     let agent_activity_cache = Arc::new(Mutex::new(None));
+    let activity_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(
+        runtime_metrics.clone(),
+    ));
+    let activity_generation = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let execution_budgets = Arc::new(crate::execution_budget::ExecutionBudgets::new());
     let ai_control_state = Arc::new(Mutex::new(
         crate::ai_control_center::state::AiControlCenterState::default(),
     ));
@@ -142,6 +155,9 @@ pub fn run() {
         memory_sampler.clone(),
         dev_port_store.clone(),
         agent_activity_cache.clone(),
+        activity_singleflight.clone(),
+        activity_generation.clone(),
+        runtime_metrics.clone(),
         ai_control_state.clone(),
         awake_manager.clone(),
         settings.clone(),
@@ -156,17 +172,22 @@ pub fn run() {
         last_scan,
         openrouter_key,
         ai_usage_cache,
-        ai_usage_refresh_lock,
+        usage_singleflight,
+        usage_generation,
         delete_plans,
         storage_operation_gate,
         storage_state,
         memory_sampler: memory_sampler.clone(),
         dev_port_store: dev_port_store.clone(),
         agent_activity_cache: agent_activity_cache.clone(),
+        activity_singleflight,
+        activity_generation,
         ai_control_state: ai_control_state.clone(),
         ai_control_refresh_lock,
         ai_control_runtime: ai_control_runtime.clone(),
         platform_capabilities,
+        runtime_metrics,
+        execution_budgets,
     };
 
     tauri::Builder::default()

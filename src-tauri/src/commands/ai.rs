@@ -1,8 +1,9 @@
 //! AI usage, agent activity, and AI Control Center command handlers.
 
 use super::state::AppState;
-use super::support::{run_blocking, unix_timestamp, usage_snapshot_matches_selection, user_home};
-use crate::ai_usage::{connect_openrouter, AiUsageCollector};
+use super::support::{run_blocking, unix_timestamp, user_home};
+use crate::ai_snapshots::{enrich_activity_for_project_view, fetch_activity_registry};
+use crate::ai_usage::connect_openrouter;
 use crate::models::{
     AgentActivitySnapshot, AgentActivityStatus, AgentIntegrationInfo, AgentIntegrationResult,
     AgentQuickSessionRow, AgentQuickSummary, AiControlCenterSnapshot, AiControlPreferences,
@@ -20,61 +21,33 @@ pub async fn get_ai_usage(
     force: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<AiUsageSnapshot, String> {
-    const CACHE_TTL_SECS: u64 = 60;
-    let provider_ids = state
-        .settings
-        .lock()
-        .expect("settings poisoned")
-        .ai_accounts_quota_providers
-        .clone();
-    if !force.unwrap_or(false) {
-        if let Some(snapshot) = state
-            .ai_usage_cache
+    let (provider_ids, openrouter_key) = {
+        let settings_providers = state
+            .settings
             .lock()
-            .expect("ai_usage_cache poisoned")
-            .as_ref()
-        {
-            if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS)
-                && usage_snapshot_matches_selection(snapshot, &provider_ids)
-            {
-                for p in &snapshot.providers {
-                    let _ = on_event.send(p.clone());
-                }
-                return Ok(snapshot.clone());
-            }
-        }
-    }
-
-    let openrouter_key = state
-        .openrouter_key
-        .lock()
-        .expect("openrouter_key poisoned")
-        .clone();
-    let cache = state.ai_usage_cache.clone();
-    let refresh_lock = state.ai_usage_refresh_lock.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _refresh_guard = refresh_lock.lock().expect("ai_usage_refresh_lock poisoned");
-        if !force.unwrap_or(false) {
-            if let Some(snapshot) = cache.lock().expect("ai_usage_cache poisoned").as_ref() {
-                if snapshot.is_fresh_at(unix_timestamp(), CACHE_TTL_SECS)
-                    && usage_snapshot_matches_selection(snapshot, &provider_ids)
-                {
-                    for p in &snapshot.providers {
-                        let _ = on_event.send(p.clone());
-                    }
-                    return snapshot.clone();
-                }
-            }
-        }
-        let snapshot =
-            AiUsageCollector::collect_parallel(openrouter_key, &provider_ids, |provider| {
-                let _ = on_event.send(provider);
-            });
-        *cache.lock().expect("ai_usage_cache poisoned") = Some(snapshot.clone());
-        snapshot
-    })
+            .expect("settings poisoned")
+            .ai_accounts_quota_providers
+            .clone();
+        let key = state
+            .openrouter_key
+            .lock()
+            .expect("openrouter_key poisoned")
+            .clone();
+        (settings_providers, key)
+    };
+    crate::ai_snapshots::fetch_usage_snapshot(
+        &state.ai_usage_cache,
+        &state.usage_singleflight,
+        &state.usage_generation,
+        &state.runtime_metrics,
+        provider_ids,
+        openrouter_key,
+        force.unwrap_or(false),
+        move |provider| {
+            let _ = on_event.send(provider);
+        },
+    )
     .await
-    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -84,59 +57,29 @@ pub async fn get_project_context(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AgentActivitySnapshot, String> {
-    let should_force = force.unwrap_or(false);
-    if !should_force {
-        if let Some(snapshot) = state
-            .agent_activity_cache
-            .lock()
-            .expect("agent_activity_cache poisoned")
-            .as_ref()
-        {
-            if unix_timestamp().saturating_sub(snapshot.snapshot.observed_at)
-                < crate::agent_activity::SNAPSHOT_TTL_SECONDS
-            {
-                return Ok(snapshot.snapshot.clone());
-            }
-        }
-    }
-
-    let cache = state.agent_activity_cache.clone();
-    let dev_store = state.dev_port_store.clone();
-    let storage_state = state.storage_state.clone();
     let notification_preferences = state
         .settings
         .lock()
         .expect("settings poisoned")
         .agent_notifications
         .clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut registry = crate::agent_activity::collect_registry_with_inactivity_threshold(
-            u64::from(notification_preferences.inactivity_threshold_minutes) * 60,
-        );
-        let listeners = crate::dev_ports::list_listeners(
-            &dev_store,
-            &crate::dev_ports::RealDevPortSystem::default(),
-        )
-        .unwrap_or_default();
-        let artifact_sizes = storage_state.cached_developer_artifact_sizes();
-        for project in &mut registry.snapshot.projects {
-            if let Some(root) = registry.project_roots.get(&project.identity.id) {
-                project.artifact_size_bytes = artifact_sizes.get(root).copied();
-                for listener in &listeners {
-                    if let Some(dir) = listener.working_directory.as_deref() {
-                        if let Ok(canon) = std::path::Path::new(dir).canonicalize() {
-                            if canon.starts_with(root)
-                                && !project.dev_ports.contains(&listener.port)
-                            {
-                                project.dev_ports.push(listener.port);
-                            }
-                        }
-                    }
-                }
-                project.dev_ports.sort_unstable();
-            }
-        }
-        let snapshot = registry.snapshot.clone();
+    let threshold_secs = u64::from(notification_preferences.inactivity_threshold_minutes) * 60;
+    // Shared raw registry; enrichment stays explicit so a raw refresh never
+    // replaces the enriched snapshot required by this view.
+    let raw = fetch_activity_registry(
+        &state.agent_activity_cache,
+        &state.activity_singleflight,
+        &state.activity_generation,
+        &state.runtime_metrics,
+        threshold_secs,
+        force.unwrap_or(false),
+    )
+    .await?;
+    let dev_store = state.dev_port_store.clone();
+    let storage_state = state.storage_state.clone();
+    let enriched = tauri::async_runtime::spawn_blocking(move || {
+        let enriched_registry = enrich_activity_for_project_view(raw, &dev_store, &storage_state);
+        let snapshot = enriched_registry.snapshot.clone();
         {
             let store = crate::agent_activity::global_store();
             let mut guard = store.lock().expect("agent activity store poisoned");
@@ -147,11 +90,11 @@ pub async fn get_project_context(
                 &mut guard.notification_filter,
             );
         }
-        *cache.lock().expect("agent_activity_cache poisoned") = Some(registry);
         snapshot
     })
     .await
-    .map_err(|error| format!("Agent activity refresh failed: {error}"))
+    .map_err(|error| format!("Agent activity refresh failed: {error}"))?;
+    Ok(enriched)
 }
 
 #[tauri::command]
@@ -247,26 +190,21 @@ pub async fn remove_agent_integration(tool_id: String) -> Result<AgentIntegratio
 pub async fn get_agent_quick_summary(
     state: State<'_, AppState>,
 ) -> Result<Option<AgentQuickSummary>, String> {
-    let cached = state
-        .agent_activity_cache
+    let threshold_secs = state
+        .settings
         .lock()
-        .map_err(|_| "Agent activity cache is unavailable.".to_string())?
-        .clone();
-    let registry = if let Some(registry) = cached {
-        registry
-    } else {
-        let cache = state.agent_activity_cache.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            let fresh = crate::agent_activity::collect_registry();
-            *cache
-                .lock()
-                .map_err(|_| "Agent activity cache is unavailable.".to_string())? =
-                Some(fresh.clone());
-            Ok::<_, String>(fresh)
-        })
-        .await
-        .map_err(|error| format!("Agent activity refresh failed: {error}"))??
-    };
+        .map(|settings| u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60)
+        .unwrap_or(crate::agent_activity::DEFAULT_INACTIVITY_THRESHOLD_SECONDS);
+    let registry = fetch_activity_registry(
+        &state.agent_activity_cache,
+        &state.activity_singleflight,
+        &state.activity_generation,
+        &state.runtime_metrics,
+        threshold_secs,
+        false,
+    )
+    .await
+    .map_err(|_| "Agent activity cache is unavailable.".to_string())?;
     let mut active_count = 0;
     let mut attention_count = 0;
     let mut rows = Vec::new();
@@ -336,9 +274,10 @@ pub fn post_agent_event(
     let store = crate::agent_activity::global_store();
     let mut guard = store.lock().unwrap();
     guard.record_event(event);
-    if let Ok(mut cache_guard) = state.agent_activity_cache.lock() {
-        *cache_guard = None;
-    }
+    crate::ai_snapshots::invalidate_snapshot(
+        &state.agent_activity_cache,
+        &state.activity_generation,
+    );
     Ok(())
 }
 
@@ -349,73 +288,110 @@ pub async fn get_ai_control_center(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AiControlCenterSnapshot, String> {
-    if !force.unwrap_or(false) {
-        if let Some(snapshot) = state
+    let force_refresh = force.unwrap_or(false);
+    // Fast path under a short lock: a warm snapshot never enters blocking work.
+    if !force_refresh {
+        let fresh = state
             .ai_control_state
             .lock()
             .expect("ai control poisoned")
             .last_snapshot
             .as_ref()
-        {
-            if unix_timestamp().saturating_sub(snapshot.observed_at) < 10 {
-                return Ok(snapshot.clone());
-            }
+            .filter(|snapshot| unix_timestamp().saturating_sub(snapshot.observed_at) < 10)
+            .cloned();
+        if let Some(snapshot) = fresh {
+            state.runtime_metrics.record_cache_hit();
+            return Ok(snapshot);
         }
     }
-    let refresh_lock = state.ai_control_refresh_lock.clone();
-    let control = state.ai_control_state.clone();
-    let activity_cache = state.agent_activity_cache.clone();
-    let usage_cache = state.ai_usage_cache.clone();
+    // Clone settings-derived inputs under short locks; no I/O held.
+    let (preferences, provider_ids, inactivity_threshold_secs) = {
+        let settings = state.settings.lock().expect("settings poisoned");
+        (
+            settings.ai_control.clone(),
+            settings.ai_accounts_quota_providers.clone(),
+            u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60,
+        )
+    };
     let openrouter_key = state
         .openrouter_key
         .lock()
         .expect("openrouter key poisoned")
         .clone();
-    let memory_sampler = state.memory_sampler.clone();
-    let awake = state.awake_manager.clone();
-    let dev_store = state.dev_port_store.clone();
-    let (preferences, provider_ids) = {
-        let settings = state.settings.lock().expect("settings poisoned");
-        (
-            settings.ai_control.clone(),
-            settings.ai_accounts_quota_providers.clone(),
-        )
-    };
     let config_dir = app_handle
         .path()
         .app_config_dir()
         .map_err(|error| error.to_string())?;
+
+    // Reuse the shared single-flight collections instead of invoking collectors
+    // independently. Forced control refreshes join running compatible
+    // sub-collections; completed sub-caches keep their own TTL semantics.
+    let activity = fetch_activity_registry(
+        &state.agent_activity_cache,
+        &state.activity_singleflight,
+        &state.activity_generation,
+        &state.runtime_metrics,
+        inactivity_threshold_secs,
+        false,
+    )
+    .await?;
+    let usage = crate::ai_snapshots::fetch_usage_snapshot(
+        &state.ai_usage_cache,
+        &state.usage_singleflight,
+        &state.usage_generation,
+        &state.runtime_metrics,
+        provider_ids.clone(),
+        openrouter_key,
+        false,
+        |_| {},
+    )
+    .await?;
+
+    // Acquire the subprocess budget before dispatching blocking Git/listener
+    // work. Cheap metrics/cache reads never take a budget and stay responsive.
+    // The worker owns its permit until the blocking assembly actually exits,
+    // including when the request awaiting it is cancelled.
+    let subprocess_permit = state
+        .execution_budgets
+        .acquire_subprocess()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let refresh_lock = state.ai_control_refresh_lock.clone();
+    let control = state.ai_control_state.clone();
+    let memory_sampler = state.memory_sampler.clone();
+    let awake = state.awake_manager.clone();
+    let dev_store = state.dev_port_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = refresh_lock.lock().expect("ai control refresh poisoned");
-        let now = unix_timestamp();
-        let activity = {
-            let cached = activity_cache
+        // Running blocking work survives request cancellation, so its permit
+        // must live in the worker rather than in the awaiting request.
+        let _subprocess_permit = subprocess_permit;
+        let _refresh_guard = refresh_lock.lock().expect("ai control refresh poisoned");
+        // Recheck after acquiring the refresh lock: a concurrent refresh may
+        // have published while we collected shared snapshots.
+        if !force_refresh {
+            let fresh = control
                 .lock()
-                .expect("activity cache poisoned")
-                .clone();
-            if let Some(value) = cached.filter(|value| {
-                now.saturating_sub(value.snapshot.observed_at)
-                    < crate::agent_activity::SNAPSHOT_TTL_SECONDS
-            }) {
-                value
-            } else {
-                let value = crate::agent_activity::collect_registry();
-                *activity_cache.lock().expect("activity cache poisoned") = Some(value.clone());
-                value
+                .expect("ai control poisoned")
+                .last_snapshot
+                .as_ref()
+                .filter(|snapshot| unix_timestamp().saturating_sub(snapshot.observed_at) < 10)
+                .cloned();
+            if let Some(snapshot) = fresh {
+                return snapshot;
             }
+        }
+        let now = unix_timestamp();
+        // Snapshot the smallest Git inputs under a short lock; Git commands
+        // and filesystem fingerprinting run outside the shared state lock.
+        let (git_baselines, git_generation) = {
+            let guard = control.lock().expect("ai control poisoned");
+            (
+                guard.git.snapshot_baselines(),
+                guard.git.baseline_generation(),
+            )
         };
-        let usage = {
-            let cached = usage_cache.lock().expect("usage cache poisoned").clone();
-            if let Some(value) = cached.filter(|value| {
-                value.is_fresh_at(now, 60) && usage_snapshot_matches_selection(value, &provider_ids)
-            }) {
-                value
-            } else {
-                let value = AiUsageCollector::collect(openrouter_key, &provider_ids);
-                *usage_cache.lock().expect("usage cache poisoned") = Some(value.clone());
-                value
-            }
-        };
+        // Blocking-safe observations outside the Control Center lock.
         let memory = memory_sampler.sample();
         let awake_state = awake.get_state();
         let listeners = crate::dev_ports::list_listeners(
@@ -430,88 +406,106 @@ pub async fn get_ai_control_center(
             awake_state.power_source,
             preferences.autopilot.keep_awake_ac_only,
         );
-        let mut control = control.lock().expect("ai control poisoned");
-        let providers = crate::ai_control_center::providers::normalize(&usage, &preferences);
-        let providers = crate::ai_control_center::providers::retain_last_success(
-            providers,
-            &mut control.providers_last_success,
-        );
+        let normalized = crate::ai_control_center::providers::normalize(&usage, &preferences);
         let budget_statuses =
-            crate::ai_control_center::budgets::statuses(&preferences.budgets, &providers);
-        let new_items = control.policy.evaluate(
-            &resources,
-            Some(memory.pressure),
-            awake_state.power_source,
-            &preferences.autopilot,
-            now,
-        );
-        if !new_items.is_empty() {
-            control.recommendations.extend(new_items);
-            control
-                .recommendations
-                .sort_by_key(|item| std::cmp::Reverse(item.created_at));
-            control.recommendations.truncate(64);
-        }
-        let recommendations = control.recommendations.clone();
-        let git_summaries = control.git.summaries(&activity.project_roots, now);
-        let safety = control.safety.clone();
-        let notification_errors: Vec<String> = Vec::new();
-        let partial_errors = providers
-            .iter()
-            .filter_map(|item| item.partial_error.clone())
-            .chain(activity.snapshot.partial_errors.clone())
-            .chain(notification_errors)
-            .collect::<Vec<_>>();
-        let quality = if !partial_errors.is_empty()
-            || safety.quality == crate::models::ObservationQuality::Partial
-        {
-            crate::models::ObservationQuality::Partial
-        } else {
-            crate::models::ObservationQuality::Fresh
-        };
-        let quick_summary = ControlCenterQuickSummary {
-            observed_at: now,
-            active_sessions: resources.len() as u32,
-            budget_alerts: budget_statuses
+            crate::ai_control_center::budgets::statuses(&preferences.budgets, &normalized);
+        let (git_summaries, git_collected) =
+            crate::ai_control_center::git::GitBaselineStore::collect_summaries(
+                &git_baselines,
+                &activity.project_roots,
+                now,
+            );
+        // Short final merge: no subprocess, disk I/O, or channel sends under
+        // the shared lock. Audit persistence happens after the lock is free.
+        let (snapshot, audit_store) = {
+            let mut guard = control.lock().expect("ai control poisoned");
+            let providers = crate::ai_control_center::providers::retain_last_success(
+                normalized,
+                &mut guard.providers_last_success,
+            );
+            let new_items = guard.policy.evaluate(
+                &resources,
+                Some(memory.pressure),
+                awake_state.power_source,
+                &preferences.autopilot,
+                now,
+            );
+            if !new_items.is_empty() {
+                guard.recommendations.extend(new_items);
+                guard
+                    .recommendations
+                    .sort_by_key(|item| std::cmp::Reverse(item.created_at));
+                guard.recommendations.truncate(64);
+            }
+            // Superseded Git observations are discarded, never applied over
+            // newer baselines or restored for removed projects.
+            let _ =
+                guard
+                    .git
+                    .commit_collected(git_generation, &activity.project_roots, git_collected);
+            let recommendations = guard.recommendations.clone();
+            let safety = guard.safety.clone();
+            let notification_errors: Vec<String> = Vec::new();
+            let partial_errors = providers
                 .iter()
-                .filter(|item| !item.crossed_thresholds.is_empty())
-                .count() as u32,
-            safety_findings: safety
-                .findings
-                .iter()
-                .filter(|item| !item.dismissed)
-                .count() as u32,
-            quality,
+                .filter_map(|item| item.partial_error.clone())
+                .chain(activity.snapshot.partial_errors.clone())
+                .chain(notification_errors)
+                .collect::<Vec<_>>();
+            let quality = if !partial_errors.is_empty()
+                || safety.quality == crate::models::ObservationQuality::Partial
+            {
+                crate::models::ObservationQuality::Partial
+            } else {
+                crate::models::ObservationQuality::Fresh
+            };
+            let quick_summary = ControlCenterQuickSummary {
+                observed_at: now,
+                active_sessions: resources.len() as u32,
+                budget_alerts: budget_statuses
+                    .iter()
+                    .filter(|item| !item.crossed_thresholds.is_empty())
+                    .count() as u32,
+                safety_findings: safety
+                    .findings
+                    .iter()
+                    .filter(|item| !item.dismissed)
+                    .count() as u32,
+                quality,
+            };
+            guard.audit.append(
+                now,
+                "refresh",
+                "ok",
+                None,
+                "AI Control Center local snapshot refreshed",
+                preferences.audit_retention_days,
+            );
+            let audit_entries = guard.audit.entries();
+            let audit_store = guard.audit.clone();
+            let snapshot = AiControlCenterSnapshot {
+                observed_at: now,
+                providers,
+                budget_statuses,
+                resources,
+                recommendations,
+                safety,
+                git_summaries,
+                audit: audit_entries,
+                quick_summary,
+                keep_awake_active: awake.get_state().active_rule_id.as_deref()
+                    == Some("ai-control.verified-session"),
+                partial_errors,
+            };
+            guard.last_snapshot = Some(snapshot.clone());
+            (snapshot, audit_store)
         };
-        control.audit.append(
-            now,
-            "refresh",
-            "ok",
-            None,
-            "AI Control Center local snapshot refreshed",
-            preferences.audit_retention_days,
-        );
-        let _ = control.audit.save(&config_dir);
-        let audit = control.audit.entries();
-        let snapshot = AiControlCenterSnapshot {
-            observed_at: now,
-            providers,
-            budget_statuses,
-            resources,
-            recommendations,
-            safety,
-            git_summaries,
-            audit,
-            quick_summary,
-            keep_awake_active: awake.get_state().active_rule_id.as_deref()
-                == Some("ai-control.verified-session"),
-            partial_errors,
-        };
-        control.last_snapshot = Some(snapshot.clone());
-        Ok(snapshot)
+        // Disk I/O outside the shared lock.
+        let _ = audit_store.save(&config_dir);
+        snapshot
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -565,17 +559,21 @@ pub async fn save_ai_control_preferences(
                 preferences.autopilot.keep_awake_for_verified_sessions,
                 preferences.autopilot.keep_awake_ac_only,
             );
-            let mut control = control_state.lock().expect("ai control poisoned");
-            control.last_snapshot = None;
-            control.audit.append(
-                unix_timestamp(),
-                "preferences",
-                "saved",
-                None,
-                "AI Control preferences updated",
-                retention,
-            );
-            control.audit.save(&config)
+            let audit_store = {
+                let mut control = control_state.lock().expect("ai control poisoned");
+                control.last_snapshot = None;
+                control.audit.append(
+                    unix_timestamp(),
+                    "preferences",
+                    "saved",
+                    None,
+                    "AI Control preferences updated",
+                    retention,
+                );
+                control.audit.clone()
+            };
+            // Disk I/O outside the shared lock.
+            audit_store.save(&config)
         },
         "AI Control preference worker panicked",
     )
@@ -590,60 +588,62 @@ pub async fn run_ai_safety_scan(
     app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<crate::models::SafetySnapshot, String> {
-    let cache = state.agent_activity_cache.clone();
     let control = state.ai_control_state.clone();
-    let preferences = state
-        .settings
-        .lock()
-        .expect("settings poisoned")
-        .ai_control
-        .clone();
+    let (preferences, inactivity_threshold_secs) = {
+        let settings = state.settings.lock().expect("settings poisoned");
+        (
+            settings.ai_control.clone(),
+            u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60,
+        )
+    };
     let config = app_handle
         .path()
         .app_config_dir()
         .map_err(|error| error.to_string())?;
+    // Shared activity collection; filesystem inspection stays outside the
+    // shared Control Center lock.
+    let registry = fetch_activity_registry(
+        &state.agent_activity_cache,
+        &state.activity_singleflight,
+        &state.activity_generation,
+        &state.runtime_metrics,
+        inactivity_threshold_secs,
+        false,
+    )
+    .await?;
     tauri::async_runtime::spawn_blocking(move || {
         let now = unix_timestamp();
-        let registry = {
-            let cached = cache.lock().expect("activity cache poisoned").clone();
-            if let Some(value) = cached.filter(|value| {
-                now.saturating_sub(value.snapshot.observed_at)
-                    < crate::agent_activity::SNAPSHOT_TTL_SECONDS
-            }) {
-                value
-            } else {
-                let value = crate::agent_activity::collect_registry();
-                *cache.lock().expect("activity cache poisoned") = Some(value.clone());
-                value
-            }
-        };
         let snapshot = crate::ai_control_center::safety::inspect(
             &registry.project_roots,
             &preferences.dismissed_findings,
             now,
         );
-        let mut control = control.lock().expect("ai control poisoned");
-        control.safety = snapshot.clone();
-        if let Some(last) = &mut control.last_snapshot {
-            last.safety = snapshot.clone();
-            last.quick_summary.safety_findings = snapshot
-                .findings
-                .iter()
-                .filter(|item| !item.dismissed)
-                .count() as u32;
-            if snapshot.quality == crate::models::ObservationQuality::Partial {
-                last.quick_summary.quality = crate::models::ObservationQuality::Partial;
+        let audit_store = {
+            let mut control = control.lock().expect("ai control poisoned");
+            control.safety = snapshot.clone();
+            if let Some(last) = &mut control.last_snapshot {
+                last.safety = snapshot.clone();
+                last.quick_summary.safety_findings = snapshot
+                    .findings
+                    .iter()
+                    .filter(|item| !item.dismissed)
+                    .count() as u32;
+                if snapshot.quality == crate::models::ObservationQuality::Partial {
+                    last.quick_summary.quality = crate::models::ObservationQuality::Partial;
+                }
             }
-        }
-        control.audit.append(
-            now,
-            "safety_scan",
-            "ok",
-            None,
-            &snapshot.status_message,
-            preferences.audit_retention_days,
-        );
-        let _ = control.audit.save(&config);
+            control.audit.append(
+                now,
+                "safety_scan",
+                "ok",
+                None,
+                &snapshot.status_message,
+                preferences.audit_retention_days,
+            );
+            control.audit.clone()
+        };
+        // Disk I/O outside the shared lock.
+        let _ = audit_store.save(&config);
         snapshot
     })
     .await
@@ -714,7 +714,10 @@ pub async fn dismiss_ai_safety_finding(
                 "Safety finding dismissed",
                 retention,
             );
-            control.audit.save(&config)
+            let audit_store = control.audit.clone();
+            drop(control);
+            // Disk I/O outside the shared lock.
+            audit_store.save(&config)
         },
         "Safety finding worker panicked",
     )
@@ -758,7 +761,10 @@ pub async fn preview_ai_recommendation(
                 .path()
                 .app_config_dir()
                 .map_err(|error| error.to_string())?;
-            let _ = control.audit.save(&config);
+            let audit_store = control.audit.clone();
+            drop(control);
+            // Disk I/O outside the shared lock.
+            let _ = audit_store.save(&config);
             Ok(preview)
         },
         "Recommendation preview worker panicked",
@@ -797,7 +803,10 @@ pub async fn consume_ai_recommendation_preview(
                 .path()
                 .app_config_dir()
                 .map_err(|error| error.to_string())?;
-            let _ = control.audit.save(&config);
+            let audit_store = control.audit.clone();
+            drop(control);
+            // Disk I/O outside the shared lock.
+            let _ = audit_store.save(&config);
             Ok(preview)
         },
         "Recommendation preview worker panicked",
@@ -828,27 +837,39 @@ pub async fn get_ai_control_git_diff(
         .audit_retention_days;
     let control_state = state.ai_control_state.clone();
     let diff = tauri::async_runtime::spawn_blocking(move || {
-        let (baseline_head, paths) = control_state
+        // Snapshot the baseline under a short lock; Git capture and diffing
+        // run outside the shared Control Center lock.
+        let baseline = control_state
             .lock()
             .expect("ai control poisoned")
             .git
-            .diff_context(&project_id, &root, unix_timestamp())?;
+            .baseline_snapshot(&project_id)
+            .ok_or_else(|| "Git baseline is stale or unavailable".to_string())?;
+        let now = unix_timestamp();
+        let (baseline_head, paths) =
+            crate::ai_control_center::git::GitBaselineStore::diff_context_with_baseline(
+                &baseline, &root, now,
+            );
         let diff =
             crate::ai_control_center::git::explicit_diff(&root, baseline_head.as_deref(), &paths)?;
         let config = app_handle
             .path()
             .app_config_dir()
             .map_err(|error| error.to_string())?;
-        let mut control = control_state.lock().expect("ai control poisoned");
-        control.audit.append(
-            unix_timestamp(),
-            "git_diff",
-            "viewed",
-            Some(project_id),
-            "Ephemeral Git diff viewed",
-            retention,
-        );
-        let _ = control.audit.save(&config);
+        let audit_store = {
+            let mut control = control_state.lock().expect("ai control poisoned");
+            control.audit.append(
+                unix_timestamp(),
+                "git_diff",
+                "viewed",
+                Some(project_id),
+                "Ephemeral Git diff viewed",
+                retention,
+            );
+            control.audit.clone()
+        };
+        // Disk I/O outside the shared lock.
+        let _ = audit_store.save(&config);
         Ok::<_, String>(diff)
     })
     .await
@@ -864,9 +885,6 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
         .await
         .map_err(|error| error.to_string())??;
     *openrouter_key.lock().expect("openrouter_key poisoned") = Some(key);
-    *state
-        .ai_usage_cache
-        .lock()
-        .expect("ai_usage_cache poisoned") = None;
+    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())
 }

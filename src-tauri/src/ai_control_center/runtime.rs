@@ -1,5 +1,9 @@
 use crate::ai_control_center::{notifications, resources};
+use crate::ai_snapshots::fetch_activity_registry;
+use crate::collection::SingleFlight;
 use crate::models::Recommendation;
+use crate::runtime_metrics::RuntimeMetrics;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
 use tauri::AppHandle;
@@ -15,6 +19,9 @@ pub struct AiControlRuntime {
     memory_sampler: Arc<crate::metrics::MemorySampler>,
     dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
     agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+    activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,
+    activity_generation: Arc<AtomicU64>,
+    runtime_metrics: Arc<RuntimeMetrics>,
     ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     awake_manager: Arc<crate::power::KeepAwakeManager>,
     settings: Arc<Mutex<crate::models::ZenithSettings>>,
@@ -22,10 +29,16 @@ pub struct AiControlRuntime {
 }
 
 impl AiControlRuntime {
+    // Nine shared handles wire the background tick into the same
+    // single-flight/cache/generation ownership as foreground commands.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         memory_sampler: Arc<crate::metrics::MemorySampler>,
         dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
         agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+        activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,
+        activity_generation: Arc<AtomicU64>,
+        runtime_metrics: Arc<RuntimeMetrics>,
         ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
         awake_manager: Arc<crate::power::KeepAwakeManager>,
         settings: Arc<Mutex<crate::models::ZenithSettings>>,
@@ -34,6 +47,9 @@ impl AiControlRuntime {
             memory_sampler,
             dev_port_store,
             agent_activity_cache,
+            activity_singleflight,
+            activity_generation,
+            runtime_metrics,
             ai_control_state,
             awake_manager,
             settings,
@@ -89,24 +105,32 @@ impl AiControlRuntime {
             return Vec::new();
         }
 
-        // 1. Collect or check local agent activity snapshot
+        // 1. Collect or check local agent activity snapshot through the shared
+        // single-flight so foreground and background callers execute one
+        // underlying collection. The inactivity threshold comes from settings
+        // so both paths publish identically configured results. This runs on
+        // a plain background OS thread (not the async executor), so blocking
+        // on the shared async service is safe here and never nests inside an
+        // executor callback.
+        let inactivity_threshold_secs = self
+            .settings
+            .lock()
+            .map(|settings| {
+                u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60
+            })
+            .unwrap_or(crate::agent_activity::DEFAULT_INACTIVITY_THRESHOLD_SECONDS);
         let activity = {
-            let cached = self
-                .agent_activity_cache
-                .lock()
-                .ok()
-                .and_then(|guard| guard.clone());
-            if let Some(val) = cached.filter(|val| {
-                now.saturating_sub(val.snapshot.observed_at)
-                    < crate::agent_activity::SNAPSHOT_TTL_SECONDS
-            }) {
-                val
-            } else {
-                let fresh = crate::agent_activity::collect_registry();
-                if let Ok(mut guard) = self.agent_activity_cache.lock() {
-                    *guard = Some(fresh.clone());
-                }
-                fresh
+            let fetched = tauri::async_runtime::block_on(fetch_activity_registry(
+                &self.agent_activity_cache,
+                &self.activity_singleflight,
+                &self.activity_generation,
+                &self.runtime_metrics,
+                inactivity_threshold_secs,
+                false,
+            ));
+            match fetched {
+                Ok(registry) => registry,
+                Err(_) => return Vec::new(),
             }
         };
 
@@ -184,6 +208,9 @@ mod tests {
             memory_sampler,
             Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
             agent_activity_cache,
+            Arc::new(SingleFlight::new()),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(RuntimeMetrics::new()),
             Arc::new(Mutex::new(
                 crate::ai_control_center::state::AiControlCenterState::default(),
             )),

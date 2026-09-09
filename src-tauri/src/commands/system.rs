@@ -186,16 +186,21 @@ pub async fn save_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let settings = settings.sanitize();
-    let provider_selection_changed = state
-        .settings
-        .lock()
-        .expect("settings poisoned")
-        .ai_accounts_quota_providers
-        != settings.ai_accounts_quota_providers;
+    let (provider_selection_changed, inactivity_threshold_changed) = {
+        let previous = state.settings.lock().expect("settings poisoned");
+        (
+            previous.ai_accounts_quota_providers != settings.ai_accounts_quota_providers,
+            previous.agent_notifications.inactivity_threshold_minutes
+                != settings.agent_notifications.inactivity_threshold_minutes,
+        )
+    };
     let awake_manager = state.awake_manager.clone();
     let settings_store_state = state.settings.clone();
     let ai_usage_cache = state.ai_usage_cache.clone();
+    let agent_activity_cache = state.agent_activity_cache.clone();
     let ai_control_state = state.ai_control_state.clone();
+    let usage_generation = state.usage_generation.clone();
+    let activity_generation = state.activity_generation.clone();
 
     run_blocking(
         move || {
@@ -210,11 +215,17 @@ pub async fn save_settings(
             awake_manager.set_rules(settings.awake_rules.clone());
             *settings_store_state.lock().expect("settings poisoned") = settings;
             if provider_selection_changed {
-                *ai_usage_cache.lock().expect("ai_usage_cache poisoned") = None;
+                crate::ai_snapshots::invalidate_snapshot(&ai_usage_cache, &usage_generation);
                 ai_control_state
                     .lock()
                     .expect("ai control poisoned")
                     .last_snapshot = None;
+            }
+            if inactivity_threshold_changed {
+                crate::ai_snapshots::invalidate_snapshot(
+                    &agent_activity_cache,
+                    &activity_generation,
+                );
             }
             Ok(())
         },
