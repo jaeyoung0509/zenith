@@ -20,6 +20,7 @@
   import SettingsView from './SettingsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { formatBytes } from '../../lib/utils/format';
+  import { normalizeDashboardTab } from '../../lib/utils/dashboardNavigation';
   import { tauriStartWindowDrag } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import {
@@ -113,7 +114,7 @@
         const definition = tabDefs[tab as DashboardTab];
         return !!definition && (!definition.capability || platformCapabilitiesStore.isAvailable(definition.capability));
       });
-      currentTab = firstAvailable === 'disk' ? 'disks' : (firstAvailable as Tab | undefined) ?? 'settings';
+      currentTab = normalizeDashboardTab(firstAvailable ?? 'settings') as Tab;
     });
 
     return () => {
@@ -127,13 +128,14 @@
     const capability = tabDefs[tab as DashboardTab]?.capability;
     if (capability && !platformCapabilitiesStore.isAvailable(capability)) return;
 
+    tab = normalizeDashboardTab(tab);
     if (tab === 'developer_artifacts' || tab === 'developer-artifacts') {
       currentTab = 'developer-artifacts';
     } else if (tab === 'large_files' || tab === 'large-files') {
       currentTab = 'large-files';
     } else if (tab === 'applications') {
       currentTab = 'applications';
-    } else if (tab === 'disks' || tab === 'disk') {
+    } else if (tab === 'disks') {
       currentTab = 'disks';
     } else if (tab === 'settings') {
       currentTab = 'settings';
@@ -235,7 +237,7 @@
                 ? `${def.label}, ${formatBytes(scanStore.reclaimableBytes)} reclaimable`
                 : def.label}
               title={tabAvailable ? (sidebarCollapsed ? def.label : undefined) : (capability?.reason ?? `${def.label} is unavailable`)}
-              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color,box-shadow] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
+              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
                 ? 'bg-secondary text-foreground shadow-xs font-semibold'
                 : tabAvailable
                   ? 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
@@ -284,7 +286,7 @@
           onclick={() => selectTab('settings')}
           aria-label="Settings"
           title={sidebarCollapsed ? 'Settings' : undefined}
-          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color,box-shadow] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
+          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
           'settings'
             ? 'bg-secondary text-foreground shadow-xs font-semibold'
             : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"

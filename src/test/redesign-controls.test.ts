@@ -5,6 +5,7 @@ import SelectionToolbar from '../lib/components/SelectionToolbar.svelte';
 import InlineNotice from '../lib/components/InlineNotice.svelte';
 import CleanupReviewDialog from '../lib/components/CleanupReviewDialog.svelte';
 import type { ScanItem } from '../lib/models/types';
+import { normalizeDashboardTab } from '../lib/utils/dashboardNavigation';
 
 const item = {
   id: 'fixture', signature_id: 'fixture', name: 'Build cache', category: 'developer',
@@ -23,12 +24,26 @@ describe('redesign interaction semantics', () => {
     expect(body.match(/aria-controls="storage-panel"/g)).toHaveLength(2);
   });
 
+  it('keeps the persisted singular disk route compatible with the Disks view', () => {
+    expect(normalizeDashboardTab('disk')).toBe('disks');
+    expect(normalizeDashboardTab('storage')).toBe('storage');
+  });
+
   it('blocks resubmission while a batch action is pending', () => {
     const { body } = render(SelectionToolbar, { props: {
       selectedCount: 1, isActionLoading: true, onAction: () => {},
     } });
     expect(body).toContain('disabled');
     expect(body).toContain('Working…');
+  });
+
+  it('shows manual bytes and blocks generic cleanup for manual selections', () => {
+    const { body } = render(SelectionToolbar, { props: {
+      selectedCount: 1, selectedBytes: 2048, manualBytes: 2048, onAction: () => {},
+    } });
+    expect(body).toContain('manual');
+    expect(body).toContain('Manual items require their dedicated management action');
+    expect(body).toContain('disabled');
   });
 
   it('announces informational notices politely and errors urgently', () => {

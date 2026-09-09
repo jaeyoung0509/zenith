@@ -1,6 +1,53 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Hallmark · genre: modern-minimal · tone: calm native developer utility · anchor hue: cyan · structure: compact sidebar + task workspace */
+/* Scan only the root app entrypoint and source tree. The onboarding site has a
+   separate Tailwind build and must not inflate the desktop bundle. */
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "./**/*.{svelte,js,ts}";
+
+/* Tailwind v4 uses media queries for `dark` by default. Zenith persists a
+   class-based theme so both the main window and Quick Panel can apply the same
+   setting without depending on the OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* CSS-first Tailwind v4 theme. Runtime values remain semantic HSL tokens so
+   the light/dark settings below can change them without rebuilding CSS. */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-ai: hsl(var(--ai));
+  --color-ai-foreground: hsl(var(--primary-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+  --text-micro: 0.5625rem;
+  --text-micro--line-height: 0.75rem;
+  --text-caption: 0.625rem;
+  --text-caption--line-height: 0.875rem;
+  --text-meta: 0.6875rem;
+  --text-meta--line-height: 1rem;
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
 
 @layer base {
   :root {
@@ -25,7 +72,8 @@
     --ai: 265 75% 55%;
     --border: 240 6% 88%;
     --input: 240 6% 88%;
-    --ring: 240 6% 10%;
+    /* Cyan focus stays above 3:1 on light/dark pages and primary surfaces. */
+    --ring: 190 90% 35%;
     --radius: 0.65rem;
 
     /* Purposeful Motion Tokens (Performance-conscious & WCAG AA reduced motion compliant) */
@@ -58,6 +106,7 @@
     --ai: 265 85% 68%;
     --border: 240 4% 18%;
     --input: 240 4% 18%;
+    --ring: 190 90% 35%;
   }
 }
 
@@ -83,6 +132,16 @@
 .focus-ring:focus-visible {
   outline: 2px solid hsl(var(--ring));
   outline-offset: 1px;
+}
+
+/* Tailwind's preflight no longer supplies the v3 default border color. Keep
+   unqualified borders consistent with Zenith's semantic token. */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: hsl(var(--border));
+  }
 }
 
 /* Custom Scrollbar for macOS look */

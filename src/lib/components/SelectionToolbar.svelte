@@ -94,13 +94,16 @@
       {/if}
     </span>
 
-    {#if safeBytes > 0 || rebuildBytes > 0}
+    {#if safeBytes > 0 || rebuildBytes > 0 || manualBytes > 0}
       <span class="inline-flex items-center gap-1.5 text-caption font-mono">
         {#if safeBytes > 0}
           <span class="text-success">✓ <ByteValue bytes={safeBytes} /> safe</span>
         {/if}
         {#if rebuildBytes > 0}
           <span class="text-warning">↻ <ByteValue bytes={rebuildBytes} /> rebuild</span>
+        {/if}
+        {#if manualBytes > 0}
+          <span class="text-destructive">! <ByteValue bytes={manualBytes} /> manual</span>
         {/if}
       </span>
     {/if}
@@ -115,7 +118,8 @@
       <Button
         variant={rebuildBytes > 0 ? "secondary" : "primary"}
         size="sm"
-        disabled={isActionDisabled || isActionLoading || selectedCount === 0}
+        disabled={isActionDisabled || isActionLoading || selectedCount === 0 || manualBytes > 0}
+        title={manualBytes > 0 ? "Manual items require their dedicated management action" : undefined}
         onclick={onAction}
         class="gap-1.5"
       >

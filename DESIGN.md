@@ -15,7 +15,13 @@ safety signals, and one obvious action per section.
 
 ## Foundation and semantic tokens
 
-The canonical color and motion tokens live in `src/app.css` and `tailwind.config.js`.
+The canonical color, typography, and motion tokens live in `src/app.css`, using
+Tailwind CSS 4's CSS-first `@theme` configuration. Tailwind's Vite plugin is the
+only build integration; there is no legacy JavaScript theme configuration.
+The root app targets the Tailwind 4 WebView baseline (Safari 16.4+, Chrome 111+,
+or Firefox 128+) and keeps the onboarding package on its own independent Vite
+pipeline. `pnpm build` verifies the generated CSS contains the utilities used by
+the redesign before a bundle is considered valid.
 
 ### Color and surface hierarchy
 
@@ -31,6 +37,11 @@ The canonical color and motion tokens live in `src/app.css` and `tailwind.config
   - Elevated surfaces & Secondary controls: `hsl(240 5% 94%)`
   - Borders: `hsl(240 6% 88%)`
   - Primary text: `hsl(240 10% 10%)`; secondary text: `hsl(240 4% 46%)` (`muted-foreground`)
+- **Keyboard focus**: `--ring` is `hsl(190 90% 35%)` in both themes. Its computed
+  contrast is approximately 3.64:1 against the light page background, 3.81:1
+  against light cards, 4.65:1 against light primary controls, 4.98:1 against the
+  dark page background, 4.68:1 against dark cards, and 3.65:1 against dark primary
+  controls. Keep these surfaces at or above the 3:1 boundary when changing tokens.
 
 ### Semantic safety and status palette
 
@@ -114,7 +125,7 @@ Each view follows:
 
 ## Components and interaction contract
 
-- **Button**: Semantic variants (`primary`, `secondary`, `outline`, `ghost`, `destructive`), standardized sizes (`xs`, `sm`, `md`, `icon`), visible `focus-visible:ring-2 focus-visible:ring-ring`, disabled explanation.
+- **Button**: Semantic variants (`primary`, `secondary`, `outline`, `ghost`, `destructive`), standardized sizes (`xs`, `sm`, `md`, `icon`), visible `focus-visible:ring-2 focus-visible:ring-ring`, disabled explanation. Focus uses the shared cyan `--ring` token in both themes.
 - **Card**: Clean surface separation with `border border-border/70 bg-card/60`, rounded-xl, no decorative glow or artificial blur.
 - **Badge**: Status indicators with text meaning beyond color (`variant="success"`, `variant="warning"`, `variant="outline"`).
 - **ProgressBar**: Restrained height (4–8 px), smooth progress without continuous looping shimmer.
