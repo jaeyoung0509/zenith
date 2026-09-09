@@ -9,6 +9,9 @@
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
+  import EmptyState from '../../lib/components/EmptyState.svelte';
   import {
     Boxes,
     RotateCw,
@@ -70,24 +73,17 @@
 </script>
 
 <div class="space-y-6">
-  <!-- Header Card -->
-  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-warning/10 text-warning flex items-center justify-center">
-        <Boxes size={20} />
-      </div>
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground tracking-tight">Local LLM Models</h2>
-          <Badge variant="outline" class="font-mono">{formatBytes(totalBytes)}</Badge>
-        </div>
-        <p class="text-xs text-muted-foreground mt-0.5">
-          Ollama, HuggingFace Hub, LM Studio, and Apple MLX downloaded model weights.
-        </p>
-      </div>
-    </div>
+  <!-- Page Header -->
+  <PageHeader
+    title="Local LLM Models"
+    subtitle="Ollama, HuggingFace Hub, LM Studio, and Apple MLX downloaded model weights."
+    icon={Boxes}
+  >
+    {#snippet badge()}
+      <Badge variant="outline" class="font-mono">{formatBytes(totalBytes)}</Badge>
+    {/snippet}
 
-    <div class="flex items-center gap-2">
+    {#snippet actions()}
       <Button
         variant="outline"
         size="sm"
@@ -98,14 +94,16 @@
         <RotateCw size={13} class={isRefreshing || localModelsStore.isLoading ? 'animate-gentle-spin' : ''} />
         <span>Rescan Models</span>
       </Button>
-    </div>
-  </div>
+    {/snippet}
+  </PageHeader>
 
   {#if localModelsStore.error}
-    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive flex items-center justify-between">
-      <span>{localModelsStore.error}</span>
-      <Button variant="ghost" size="sm" onclick={() => (localModelsStore.error = null)} class="text-xs h-6 px-2 text-destructive">Dismiss</Button>
-    </div>
+    <InlineNotice
+      variant="destructive"
+      title="Model Scanner Error"
+      message={localModelsStore.error}
+      onDismiss={() => (localModelsStore.error = null)}
+    />
   {/if}
 
   <!-- Search Toolbar -->
@@ -185,11 +183,11 @@
       {/each}
     </div>
   {:else}
-    <Card class="p-12 text-center text-xs text-muted-foreground space-y-2 bg-secondary/20">
-      <Boxes size={24} class="mx-auto opacity-40" />
-      <p class="font-medium text-foreground">No local models detected</p>
-      <p>Ollama, HuggingFace Hub, or LM Studio model weights will appear here once downloaded.</p>
-    </Card>
+    <EmptyState
+      icon={Boxes}
+      title="No local models detected"
+      description="Ollama, HuggingFace Hub, or LM Studio model weights will appear here once downloaded."
+    />
   {/if}
 
   <!-- Delete Confirmation Modal -->

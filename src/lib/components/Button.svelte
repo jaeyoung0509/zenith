@@ -3,7 +3,7 @@
 
   interface Props {
     variant?: 'primary' | 'secondary' | 'outline' | 'destructive' | 'ghost';
-    size?: 'sm' | 'md' | 'lg' | 'icon';
+    size?: 'xs' | 'sm' | 'md' | 'lg' | 'icon';
     disabled?: boolean;
     id?: string;
     class?: string;
@@ -39,6 +39,7 @@
   };
 
   const sizeStyles = {
+    xs: 'h-6 px-2 text-caption font-medium rounded-md gap-1',
     sm: 'h-7 px-2.5 text-xs rounded-md gap-1.5',
     md: 'h-9 px-3.5 text-xs font-medium rounded-lg gap-2',
     lg: 'h-10 px-4 text-sm font-medium rounded-lg gap-2',
@@ -53,7 +54,7 @@
   {onclick}
   aria-label={ariaLabel}
   {title}
-  class="inline-flex items-center justify-center whitespace-nowrap font-medium transition-[background-color,color,border-color,transform,opacity] duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 select-none {variantStyles[
+  class="inline-flex items-center justify-center whitespace-nowrap font-medium transition-[background-color,color,border-color,transform,opacity] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-45 select-none {variantStyles[
     variant
   ]} {sizeStyles[size]} {className}"
 >

@@ -9,18 +9,15 @@
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import StorageView from './StorageView.svelte';
-  import StorageTools from './StorageTools.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
   import MemoryView from './MemoryView.svelte';
   import DevelopmentServersView from './DevelopmentServersView.svelte';
   import ProjectCockpitView from './ProjectCockpitView.svelte';
+  import AiControlCenterView from './AiControlCenterView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
-  import LargeFilesView from './LargeFilesView.svelte';
-  import ApplicationsView from './ApplicationsView.svelte';
-  import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { formatBytes } from '../../lib/utils/format';
   import { tauriStartWindowDrag } from '../../lib/utils/tauri';
@@ -34,14 +31,13 @@
     ChevronsRight,
     HardDrive,
     Moon,
-    FolderGit2,
     Server,
     Settings,
     Shield,
     Sparkles,
   } from 'lucide-svelte';
 
-  type Tab = DashboardRoute | 'large-files' | 'applications' | 'developer-artifacts';
+  type Tab = DashboardRoute | 'large-files' | 'applications' | 'developer-artifacts' | 'disks';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -64,6 +60,7 @@
 
   const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any; capability?: DashboardCapability }>> = {
     storage: { label: 'Storage', icon: HardDrive, capability: 'cleanup' },
+    disk: { label: 'Disks', icon: HardDrive, capability: 'cleanup' },
     docker: { label: 'Containers', icon: Container, capability: 'docker' },
     models: { label: 'Local Models', icon: Boxes, capability: 'local_models' },
     memory: { label: 'Memory', icon: Activity, capability: 'memory_metrics' },
@@ -72,6 +69,19 @@
     ai_control: { label: 'AI Control', icon: Sparkles, capability: 'ai_integrations' },
     usage: { label: 'AI Usage', icon: ChartNoAxesCombined, capability: 'ai_integrations' },
     awake: { label: 'Keep Awake', icon: Moon, capability: 'keep_awake' },
+  };
+
+  const tabGroups: Record<DashboardTab, string> = {
+    storage: 'Storage',
+    disk: 'Storage',
+    docker: 'Storage',
+    models: 'Storage',
+    memory: 'Runtime',
+    development_servers: 'Runtime',
+    awake: 'Runtime',
+    projects: 'AI',
+    ai_control: 'AI',
+    usage: 'AI',
   };
 
   onMount(() => {
@@ -103,7 +113,7 @@
         const definition = tabDefs[tab as DashboardTab];
         return !!definition && (!definition.capability || platformCapabilitiesStore.isAvailable(definition.capability));
       });
-      currentTab = (firstAvailable as Tab | undefined) ?? 'settings';
+      currentTab = firstAvailable === 'disk' ? 'disks' : (firstAvailable as Tab | undefined) ?? 'settings';
     });
 
     return () => {
@@ -123,6 +133,8 @@
       currentTab = 'large-files';
     } else if (tab === 'applications') {
       currentTab = 'applications';
+    } else if (tab === 'disks' || tab === 'disk') {
+      currentTab = 'disks';
     } else if (tab === 'settings') {
       currentTab = 'settings';
     } else {
@@ -152,9 +164,9 @@
   ></div>
   <!-- Sidebar Navigation -->
   <aside
-    class="{sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between pt-9 relative transition-[width,padding] duration-200"
+    class="{sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between pt-9 relative transition-[width,padding] duration-150"
   >
-    <div class="space-y-6">
+    <div class="space-y-4 min-h-0 overflow-y-auto">
       <!-- Title & Branding -->
       <div class="flex items-center {sidebarCollapsed ? 'flex-col' : 'justify-between'} gap-2">
         <div
@@ -195,12 +207,26 @@
       </div>
 
       <!-- Navigation Links -->
-      <nav class="space-y-1 no-drag">
-        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'] as tabId}
+      <nav class="space-y-0.5 no-drag" aria-label="Main Navigation">
+        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'] as tabId, i}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
             {@const capability = def.capability ? platformCapabilitiesStore.feature(def.capability) : null}
             {@const tabAvailable = capabilitiesReady && (!capability || platformCapabilitiesStore.isAvailable(def.capability!))}
+            {@const currentGroup = tabGroups[tabId as DashboardTab]}
+            {@const prevTabId = (settings.dashboard_tabs ?? [])[i - 1]}
+            {@const prevGroup = prevTabId ? tabGroups[prevTabId as DashboardTab] : null}
+            {@const showGroupHeader = !sidebarCollapsed && currentGroup && currentGroup !== prevGroup}
+            {@const isTabActive = currentTab === tabId || (tabId === 'disk' && currentTab === 'disks') || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
+
+            {#if showGroupHeader}
+              <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
+                {currentGroup}
+              </div>
+            {:else if sidebarCollapsed && prevGroup && prevGroup !== currentGroup && i > 0}
+              <div class="my-1.5 mx-2 h-px bg-border/40" role="separator"></div>
+            {/if}
+
             <button
               type="button"
               onclick={() => selectTab(tabId as Tab)}
@@ -209,13 +235,15 @@
                 ? `${def.label}, ${formatBytes(scanStore.reclaimableBytes)} reclaimable`
                 : def.label}
               title={tabAvailable ? (sidebarCollapsed ? def.label : undefined) : (capability?.reason ?? `${def.label} is unavailable`)}
-              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
-              tabId
-                ? 'bg-secondary text-foreground shadow-sm'
+              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color,box-shadow] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
+                ? 'bg-secondary text-foreground shadow-xs font-semibold'
                 : tabAvailable
                   ? 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
                   : 'text-muted-foreground/40 cursor-not-allowed'}"
             >
+              {#if isTabActive && !sidebarCollapsed}
+                <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-foreground" aria-hidden="true"></span>
+              {/if}
               <def.icon size={15} />
               {#if !sidebarCollapsed}
                 <span class="truncate">{def.label}</span>
@@ -239,17 +267,31 @@
           {/if}
         {/each}
 
+        <!-- Group Separator for Settings -->
+        <div class="pt-2" role="separator">
+          {#if !sidebarCollapsed}
+            <div class="px-2.5 pt-1 pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
+              Preferences
+            </div>
+          {:else}
+            <div class="my-1 mx-2 h-px bg-border/40"></div>
+          {/if}
+        </div>
+
         <!-- Fixed Settings Tab -->
         <button
           type="button"
           onclick={() => selectTab('settings')}
           aria-label="Settings"
           title={sidebarCollapsed ? 'Settings' : undefined}
-          class="w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-colors {currentTab ===
+          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color,box-shadow] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
           'settings'
-            ? 'bg-secondary text-foreground shadow-sm'
+            ? 'bg-secondary text-foreground shadow-xs font-semibold'
             : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
         >
+          {#if currentTab === 'settings' && !sidebarCollapsed}
+            <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-foreground" aria-hidden="true"></span>
+          {/if}
           <Settings size={15} />
           {#if !sidebarCollapsed}
             <span>Settings</span>
@@ -291,32 +333,21 @@
               onBack={() => (selectedCategory = null)}
               onNavigateTab={(tab) => selectTab(tab)}
             />
-          {:else if currentTab === 'storage'}
-            <div class="space-y-6">
-              <StorageTools
-                onOpenLargeFiles={() => selectTab('large-files')}
-                onOpenApplications={() => selectTab('applications')}
-                onOpenDeveloperArtifacts={() => selectTab('developer-artifacts')}
-                onScanStorage={() => scanStore.runScan()}
-                isScanning={scanStore.isScanning}
-                isCleaning={scanStore.isCleaning}
-              />
-              <StorageView onSelectCategory={(cat) => (selectedCategory = cat)} />
-            </div>
-          {:else if currentTab === 'large-files'}
-            <LargeFilesView onBack={() => selectTab('storage')} />
-          {:else if currentTab === 'applications'}
-            <ApplicationsView onBack={() => selectTab('storage')} />
-          {:else if currentTab === 'developer-artifacts'}
-            <DeveloperArtifactsView onBack={() => selectTab('storage')} />
+          {:else if currentTab === 'storage' || currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'}
+            <StorageView
+              initialTab={currentTab === 'storage' ? 'cleanup' : currentTab}
+              onSelectCategory={(cat) => (selectedCategory = cat)}
+            />
           {:else if currentTab === 'docker'}
             <DockerView />
           {:else if currentTab === 'models'}
             <ModelsView />
           {:else if currentTab === 'memory'}
             <MemoryView />
-          {:else if currentTab === 'projects' || currentTab === 'usage' || currentTab === 'ai_control'}
+          {:else if currentTab === 'projects' || currentTab === 'usage'}
             <ProjectCockpitView onNavigateTab={(tab) => selectTab(tab)} />
+          {:else if currentTab === 'ai_control'}
+            <AiControlCenterView onNavigateTab={(tab) => selectTab(tab)} />
           {:else if currentTab === 'development_servers'}
             <DevelopmentServersView />
           {:else if currentTab === 'awake'}

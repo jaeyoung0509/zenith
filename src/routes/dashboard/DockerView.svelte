@@ -7,6 +7,9 @@
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
+  import EmptyState from '../../lib/components/EmptyState.svelte';
   import {
     Container,
     RotateCw,
@@ -47,60 +50,51 @@
 </script>
 
 <div class="space-y-6">
-  <!-- Header Card -->
-  <div class="flex items-center justify-between pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
-        <Container size={20} />
-      </div>
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground tracking-tight">Docker & Containers</h2>
-          {#if status?.is_running}
-            <Badge variant="success">Daemon Running</Badge>
-          {:else if status?.is_available}
-            <Badge variant="warning">Daemon Stopped</Badge>
-          {:else}
-            <Badge variant="secondary">Not Installed</Badge>
-          {/if}
-        </div>
-        <p class="text-xs text-muted-foreground mt-0.5">
-          {status?.version || 'Inspect and safely prune Docker containers, build cache, and dangling images.'}
-        </p>
-      </div>
-    </div>
+  <!-- Page Header -->
+  <PageHeader
+    title="Docker & Containers"
+    subtitle={status?.version || 'Inspect and safely prune Docker containers, build cache, and dangling images.'}
+    icon={Container}
+  >
+    {#snippet badge()}
+      {#if status?.is_running}
+        <Badge variant="success">Daemon Running</Badge>
+      {:else if status?.is_available}
+        <Badge variant="warning">Daemon Stopped</Badge>
+      {:else}
+        <Badge variant="secondary">Not Installed</Badge>
+      {/if}
+    {/snippet}
 
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={isRefreshing || dockerStore.isLoading || dockerStore.isPruning}
-      onclick={handleRefresh}
-      class="gap-1.5 text-xs"
-    >
-      <RotateCw size={13} class={isRefreshing || dockerStore.isLoading ? 'animate-gentle-spin' : ''} />
-      <span>Refresh</span>
-    </Button>
-  </div>
+    {#snippet actions()}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={isRefreshing || dockerStore.isLoading || dockerStore.isPruning}
+        onclick={handleRefresh}
+        class="gap-1.5 text-xs"
+      >
+        <RotateCw size={13} class={isRefreshing || dockerStore.isLoading ? 'animate-gentle-spin' : ''} />
+        <span>Refresh</span>
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   {#if dockerStore.error}
-    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive flex items-center justify-between">
-      <span>{dockerStore.error}</span>
-      <Button variant="ghost" size="sm" onclick={() => (dockerStore.error = null)} class="text-xs h-6 px-2 text-destructive">Dismiss</Button>
-    </div>
+    <InlineNotice
+      variant="destructive"
+      title="Docker Error"
+      message={dockerStore.error}
+      onDismiss={() => (dockerStore.error = null)}
+    />
   {/if}
 
   {#if !status?.is_running}
-    <Card class="p-8 text-center space-y-3 bg-secondary/30">
-      <div class="h-12 w-12 rounded-full bg-muted flex items-center justify-center mx-auto text-muted-foreground">
-        <Container size={24} />
-      </div>
-      <div class="space-y-1">
-        <h3 class="text-sm font-semibold text-foreground">Docker Daemon is Inactive</h3>
-        <p class="text-xs text-muted-foreground max-w-sm mx-auto">
-          Start Docker Desktop or Colima to inspect images, containers, and build cache storage.
-        </p>
-      </div>
-    </Card>
+    <EmptyState
+      icon={Container}
+      title="Docker Daemon is Inactive"
+      description="Start Docker Desktop or Colima to inspect images, containers, and build cache storage."
+    />
   {:else if overview}
     <!-- Storage Breakdown Grid -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">

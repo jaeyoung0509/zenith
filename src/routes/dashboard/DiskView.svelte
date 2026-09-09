@@ -11,13 +11,15 @@
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
-  import { ExternalLink, FolderOpen, HardDrive, RefreshCw } from 'lucide-svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import { ArrowLeft, ExternalLink, FolderOpen, HardDrive, RefreshCw } from 'lucide-svelte';
 
   interface Props {
     onReviewCategory: (category: CategoryResult) => void;
+    onBack?: () => void;
   }
 
-  let { onReviewCategory }: Props = $props();
+  let { onReviewCategory, onBack }: Props = $props();
   let volumes = $state<DiskVolume[]>([]);
   let isLoading = $state(false);
   let error = $state<string | null>(null);
@@ -47,17 +49,19 @@
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
-        <HardDrive size={20} />
-      </div>
-      <div>
-        <h2 class="text-base font-semibold tracking-tight">Disk Management</h2>
-        <p class="text-xs text-muted-foreground mt-0.5">Volumes, free space, and cleanup opportunities</p>
-      </div>
-    </div>
-    <div class="flex items-center gap-2">
+  <PageHeader
+    title="Disk Management"
+    subtitle="Volumes, free space, and cleanup opportunities"
+    icon={HardDrive}
+    badge="Disks"
+  >
+    {#snippet actions()}
+      {#if onBack}
+        <Button variant="ghost" size="sm" class="gap-1.5" onclick={onBack}>
+          <ArrowLeft size={13} />
+          Back to Cleanup
+        </Button>
+      {/if}
       <Button variant="outline" size="sm" class="gap-1.5" onclick={() => tauriOpenStorageSettings()}>
         <ExternalLink size={13} />
         Storage Settings
@@ -66,8 +70,8 @@
         <RefreshCw size={13} class={isLoading ? 'animate-gentle-spin' : ''} />
         Refresh
       </Button>
-    </div>
-  </div>
+    {/snippet}
+  </PageHeader>
 
   {#if error}
     <div class="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-xs text-destructive">{error}</div>

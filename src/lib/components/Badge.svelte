@@ -2,7 +2,7 @@
   import type { Snippet } from 'svelte';
 
   interface Props {
-    variant?: 'default' | 'secondary' | 'outline' | 'success' | 'warning' | 'danger';
+    variant?: 'default' | 'secondary' | 'outline' | 'success' | 'warning' | 'danger' | 'destructive' | 'ai';
     class?: string;
     children?: Snippet;
   }
@@ -20,6 +20,8 @@
     success: 'bg-success/15 text-success border border-success/20',
     warning: 'bg-warning/15 text-warning border border-warning/20',
     danger: 'bg-destructive/15 text-destructive border border-destructive/20',
+    destructive: 'bg-destructive/15 text-destructive border border-destructive/20',
+    ai: 'bg-ai/15 text-ai border border-ai/20',
   };
 </script>
 

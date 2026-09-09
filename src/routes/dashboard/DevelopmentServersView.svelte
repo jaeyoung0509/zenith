@@ -9,6 +9,9 @@
   import { withMinimumDuration } from '../../lib/utils/async';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
+  import EmptyState from '../../lib/components/EmptyState.svelte';
   import {
     Globe,
     LogOut,
@@ -127,36 +130,27 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="space-y-6">
-  <div class="flex flex-col gap-3 border-b border-border/60 pb-3 sm:flex-row sm:items-center sm:justify-between">
-    <div class="flex items-center gap-3">
-      <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
-        <Server size={20} />
-      </div>
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold tracking-tight text-foreground">Development Servers</h2>
-          <span class="rounded bg-secondary/80 px-1.5 py-0.5 font-mono text-caption text-muted-foreground">
-            TCP Listeners
-          </span>
-        </div>
-        <p class="mt-0.5 text-xs text-muted-foreground">
-          Inspect local development and testing ports, then release one verified listener at a time.
-        </p>
-      </div>
-    </div>
-
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={isRefreshing || developmentPortsStore.isLoading}
-      onclick={handleRefresh}
-      class="gap-1.5 text-xs"
-      title="Refresh development server listeners"
-    >
-      <RotateCw size={13} class={isRefreshing || developmentPortsStore.isLoading ? 'animate-gentle-spin' : ''} />
-      <span>Refresh</span>
-    </Button>
-  </div>
+  <!-- Page Header -->
+  <PageHeader
+    title="Development Servers"
+    subtitle="Inspect local development and testing ports, then release one verified listener at a time."
+    icon={Server}
+    badge="TCP Listeners"
+  >
+    {#snippet actions()}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={isRefreshing || developmentPortsStore.isLoading}
+        onclick={handleRefresh}
+        class="gap-1.5 text-xs"
+        title="Refresh development server listeners"
+      >
+        <RotateCw size={13} class={isRefreshing || developmentPortsStore.isLoading ? 'animate-gentle-spin' : ''} />
+        <span>Refresh</span>
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   <div class="flex justify-end">
     <div class="relative w-full sm:w-72">
@@ -182,15 +176,19 @@
   </div>
 
   {#if developmentPortsStore.error}
-    <div class="flex items-center justify-between rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
-      <span>{developmentPortsStore.error}</span>
-      <button type="button" onclick={() => developmentPortsStore.clearError()} class="ml-2 text-meta text-destructive/70 hover:text-destructive" aria-label="Dismiss error">Dismiss</button>
-    </div>
+    <InlineNotice
+      variant="destructive"
+      title="Development Server Error"
+      message={developmentPortsStore.error}
+      onDismiss={() => developmentPortsStore.clearError()}
+    />
   {:else if developmentPortsStore.lastAction}
-    <div class="flex items-center justify-between rounded-xl border border-success/20 bg-success/5 px-4 py-2.5 text-xs text-success">
-      <span>{developmentPortsStore.lastAction}</span>
-      <button type="button" onclick={() => developmentPortsStore.clearLastAction()} class="ml-2 text-meta text-success/70 hover:text-success" aria-label="Dismiss message">Dismiss</button>
-    </div>
+    <InlineNotice
+      variant="success"
+      title="Action Complete"
+      message={developmentPortsStore.lastAction}
+      onDismiss={() => developmentPortsStore.clearLastAction()}
+    />
   {/if}
 
   {#if filteredListeners.length > 0}
@@ -260,10 +258,11 @@
       <Button variant="ghost" size="sm" onclick={() => (searchQuery = '')} class="text-xs">Clear Search</Button>
     </div>
   {:else}
-    <div class="space-y-1 rounded-xl border border-border/80 bg-card/70 p-8 text-center text-xs text-muted-foreground">
-      <p class="font-medium text-foreground">No supported development or testing tools are listening.</p>
-      <p class="text-meta">Vite, Next.js, agent-browser, and other verified local listeners will appear here.</p>
-    </div>
+    <EmptyState
+      icon={Server}
+      title="No supported development or testing tools are listening."
+      description="Vite, Next.js, agent-browser, and other verified local listeners will appear here."
+    />
   {/if}
 
   {#if pendingReleaseListener}

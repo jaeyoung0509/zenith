@@ -9,6 +9,8 @@
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
   import Switch from '../../lib/components/Switch.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import {
     Moon,
     Sun,
@@ -138,57 +140,49 @@
 </script>
 
 <div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
-        <Moon size={20} />
-      </div>
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground tracking-tight">Keep Awake Engine</h2>
-          {#if awakeState.is_active}
-            <Badge variant="warning" class="gap-1.5 font-medium">
-              <span class="relative flex h-1.5 w-1.5">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-75"></span>
-                <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning"></span>
-              </span>
-              <span>Active</span>
-            </Badge>
-          {:else}
-            <Badge variant="secondary">Idle</Badge>
-          {/if}
-        </div>
-        <p class="text-xs text-muted-foreground mt-0.5">
-          Prevent idle sleep during long AI sessions, builds, and renders using native power-management APIs.
-        </p>
-      </div>
-    </div>
-
-    <!-- Power Source Badge -->
-    <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/70 bg-card/60 text-xs">
-      {#if awakeState.power_source === 'ac'}
-        <Zap size={14} class="text-success" />
-        <span class="font-medium text-foreground">Plugged In (AC)</span>
-      {:else if awakeState.power_source === 'battery'}
-        <Battery size={14} class="text-warning" />
-        <span class="font-medium text-foreground">Battery Power</span>
+  <!-- Page Header -->
+  <PageHeader
+    title="Keep Awake Engine"
+    subtitle="Prevent idle sleep during long AI sessions, builds, and renders using native power-management APIs."
+    icon={Moon}
+  >
+    {#snippet badge()}
+      {#if awakeState.is_active}
+        <Badge variant="warning" class="gap-1.5 font-medium">
+          <span class="relative flex h-1.5 w-1.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-warning"></span>
+          </span>
+          <span>Active</span>
+        </Badge>
       {:else}
-        <Shield size={14} class="text-muted-foreground" />
-        <span class="text-muted-foreground">Power: Unknown</span>
+        <Badge variant="secondary">Idle</Badge>
       {/if}
-    </div>
-  </div>
+    {/snippet}
+
+    {#snippet actions()}
+      <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border/70 bg-card/60 text-xs">
+        {#if awakeState.power_source === 'ac'}
+          <Zap size={14} class="text-success" />
+          <span class="font-medium text-foreground">Plugged In (AC)</span>
+        {:else if awakeState.power_source === 'battery'}
+          <Battery size={14} class="text-warning" />
+          <span class="font-medium text-foreground">Battery Power</span>
+        {:else}
+          <Shield size={14} class="text-muted-foreground" />
+          <span class="text-muted-foreground">Power: Unknown</span>
+        {/if}
+      </div>
+    {/snippet}
+  </PageHeader>
 
   <!-- Last Error Alert (if native assertion failed) -->
   {#if awakeState.last_error}
-    <div class="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-xs text-destructive">
-      <AlertCircle size={16} class="shrink-0 mt-0.5" />
-      <div class="space-y-1">
-        <div class="font-semibold">Native Power Assertion Error</div>
-        <div class="text-meta leading-relaxed opacity-90">{awakeState.last_error}</div>
-      </div>
-    </div>
+    <InlineNotice
+      variant="destructive"
+      title="Native Power Assertion Error"
+      message={awakeState.last_error}
+    />
   {/if}
 
   <!-- Active Status Banner -->
@@ -196,7 +190,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div class="space-y-1.5">
         <div class="flex items-center gap-2">
-          <Power size={16} class={awakeState.is_active ? 'text-warning animate-pulse-soft' : 'text-muted-foreground'} />
+          <Power size={16} class={awakeState.is_active ? 'text-warning' : 'text-muted-foreground'} />
           <h3 class="text-sm font-semibold text-foreground">
             {#if awakeState.is_active}
               {#if awakeState.manual_expires_at != null || awakeState.trigger_source?.includes('Manual')}
