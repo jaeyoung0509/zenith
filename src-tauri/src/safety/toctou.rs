@@ -33,7 +33,7 @@ impl ToctouGuard {
                 .map(|d| (d.as_secs(), d.subsec_nanos()))
                 .unwrap_or((0, 0));
 
-            let (device, inode) = windows_file_identity(path).unwrap_or((0, 0));
+            let (device, inode) = windows_file_identity(path)?;
 
             Some(FileIdentity {
                 device,
@@ -130,8 +130,7 @@ impl ToctouGuard {
         // stale-temp signatures (`min_age_days`): the executor re-measures the
         // full tree newest-mtime immediately before deletion instead of
         // relying on the single directory mtime captured at plan time.
-        if current.mtime_secs != expected.mtime_secs
-            || current.mtime_nanos != expected.mtime_nanos
+        if current.mtime_secs != expected.mtime_secs || current.mtime_nanos != expected.mtime_nanos
         {
             return Err(ZenithError::ChangedSinceScan(format!(
                 "{} was modified after scanning (mtime mismatch)",
@@ -166,16 +165,15 @@ fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
 
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
     // `\\?\` prefix allows long paths beyond MAX_PATH.
-    let wide_prefixed: Vec<u16> = if path.as_os_str().len() > 240
-        && !path.to_string_lossy().starts_with(r"\\?\")
-    {
-        format!(r"\\?\{}", path.display())
-            .encode_utf16()
-            .chain([0])
-            .collect()
-    } else {
-        wide
-    };
+    let wide_prefixed: Vec<u16> =
+        if path.as_os_str().len() > 240 && !path.to_string_lossy().starts_with(r"\\?\") {
+            format!(r"\\?\{}", path.display())
+                .encode_utf16()
+                .chain([0])
+                .collect()
+        } else {
+            wide
+        };
 
     unsafe {
         let handle = CreateFileW(

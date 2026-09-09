@@ -962,7 +962,9 @@ mod windows_safety {
     fn case_insensitive_protected_paths_are_rejected() {
         assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
         assert!(Blacklist::is_blacklisted(Path::new("c:\\windows")));
-        assert!(Blacklist::is_blacklisted(Path::new("C:\\WINDOWS\\System32")));
+        assert!(Blacklist::is_blacklisted(Path::new(
+            "C:\\WINDOWS\\System32"
+        )));
         assert!(Blacklist::validate(Path::new("c:\\windows\\system32")).is_err());
     }
 
@@ -980,8 +982,7 @@ mod windows_safety {
         let verbatim_path = PathBuf::from(&verbatim);
         // Blacklist normalization must not mistake the verbatim prefix for ADS.
         assert!(!Blacklist::is_blacklisted(&verbatim_path));
-        let report =
-            SafeTreeDeleter::delete_contents(&deep, &[]);
+        let report = SafeTreeDeleter::delete_contents(&deep, &[]);
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
     }

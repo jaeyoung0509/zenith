@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
 use crate::signatures::SignatureLoader;
 use std::ffi::OsStr;
@@ -38,32 +40,150 @@ struct PermissionSnapshot {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    directory: Option<WindowsDeleteHandle>,
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct WindowsDeleteHandle {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    device: u64,
+    inode: u64,
+    is_dir: bool,
+    is_reparse_point: bool,
+}
+
+#[cfg(windows)]
+impl Drop for WindowsDeleteHandle {
+    fn drop(&mut self) {
+        if !self.handle.is_null()
+            && self.handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+        {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl WindowsDeleteHandle {
+    fn open(path: &Path) -> io::Result<Self> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, DELETE,
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+        };
+
+        let path_text = path.to_string_lossy();
+        let wide: Vec<u16> = if path_text.starts_with(r"\\?\") {
+            path.as_os_str().encode_wide().chain([0]).collect()
+        } else if path_text.starts_with(r"\\") {
+            format!(r"\\?\UNC\{}", &path_text[2..])
+                .encode_utf16()
+                .chain([0])
+                .collect()
+        } else if path.as_os_str().encode_wide().count() > 240 {
+            format!(r"\\?\{}", path.display())
+                .encode_utf16()
+                .chain([0])
+                .collect()
+        } else {
+            path.as_os_str().encode_wide().chain([0]).collect()
+        };
+
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                DELETE | FILE_READ_ATTRIBUTES,
+                // Deliberately omit FILE_SHARE_DELETE. While this handle is
+                // retained, the verified entry cannot be renamed or replaced.
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                0,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut result = Self {
+            handle,
+            device: 0,
+            inode: 0,
+            is_dir: false,
+            is_reparse_point: false,
+        };
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(result.handle, &mut info) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        result.device = info.dwVolumeSerialNumber as u64;
+        result.inode = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+        if result.device == 0 && result.inode == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "filesystem returned an unverifiable zero file identity",
+            ));
+        }
+        result.is_dir = info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+        result.is_reparse_point = info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        Ok(result)
+    }
+
+    fn delete(self) -> io::Result<()> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+        };
+
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+        let ok = unsafe {
+            SetFileInformationByHandle(
+                self.handle,
+                FileDispositionInfo,
+                &disposition as *const FILE_DISPOSITION_INFO as *const std::ffi::c_void,
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl SafeTreeDeleter {
     pub fn delete_contents(root: &Path, exclusions: &[String]) -> TreeDeleteReport {
         let mut report = TreeDeleteReport::default();
-        match fs::symlink_metadata(root) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                Self::delete_entry(root, root, exclusions, &mut report);
-                return report;
-            }
-            Ok(meta) if !meta.is_dir() => {
-                Self::delete_entry(root, root, exclusions, &mut report);
-                return report;
-            }
-            Ok(_) => {}
+        let root_metadata = match fs::symlink_metadata(root) {
+            Ok(metadata) => metadata,
             Err(error) => {
                 // Fail closed: metadata failure aborts instead of being
                 // treated as "nothing to delete".
                 if !root.exists() {
                     return report;
                 }
-                report
-                    .errors
-                    .push(format!("{}: {}", root.display(), error));
+                report.errors.push(format!("{}: {}", root.display(), error));
                 return report;
             }
+        };
+        let root_is_link = match SymlinkGuard::is_symlink_strict(root) {
+            Ok(is_link) => is_link,
+            Err(error) => {
+                report.errors.push(error.to_string());
+                return report;
+            }
+        };
+        if root_is_link || !root_metadata.is_dir() {
+            Self::delete_entry(root, root, exclusions, &mut report);
+            return report;
         }
 
         if let Err(e) = Blacklist::validate(root) {
@@ -75,13 +195,6 @@ impl SafeTreeDeleter {
             return report;
         }
 
-        let root_metadata = match fs::symlink_metadata(root) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                report.errors.push(format!("{}: {}", root.display(), error));
-                return report;
-            }
-        };
         let permissions = match Self::prepare_directory(root, &root_metadata) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -131,9 +244,7 @@ impl SafeTreeDeleter {
                 if !root.exists() && !SymlinkGuard::is_symlink(root) {
                     return report;
                 }
-                report
-                    .errors
-                    .push(format!("{}: {}", root.display(), error));
+                report.errors.push(format!("{}: {}", root.display(), error));
                 return report;
             }
         }
@@ -186,8 +297,7 @@ impl SafeTreeDeleter {
                 continue;
             };
 
-            if Self::is_excluded(&child_path, &exclusions)
-                || Blacklist::is_blacklisted(&child_path)
+            if Self::is_excluded(&child_path, exclusions) || Blacklist::is_blacklisted(&child_path)
             {
                 report.skipped_files += 1;
                 continue;
@@ -203,15 +313,11 @@ impl SafeTreeDeleter {
                 }
             };
 
-            if let Err(error) =
-                Self::validate_verified_scope(&child_path, verified_root, &metadata)
-            {
+            if let Err(error) = Self::validate_verified_scope(&child_path, verified_root) {
                 report.errors.push(error);
                 continue;
             }
-            if let Err(error) =
-                SymlinkGuard::validate_canonical_blacklist_strict(&child_path)
-            {
+            if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(&child_path) {
                 report
                     .errors
                     .push(format!("{}: {}", child_path.display(), error));
@@ -234,7 +340,9 @@ impl SafeTreeDeleter {
                         report.deleted_files += 1;
                     }
                     Err(e) => {
-                        report.errors.push(format!("{}: {}", child_path.display(), e));
+                        report
+                            .errors
+                            .push(format!("{}: {}", child_path.display(), e));
                     }
                 }
                 continue;
@@ -252,8 +360,7 @@ impl SafeTreeDeleter {
                     continue;
                 }
             };
-            if let Err(error) = Self::verify_directory_identity(&child_path, &child_permissions)
-            {
+            if let Err(error) = Self::verify_directory_identity(&child_path, &child_permissions) {
                 report.errors.push(error);
                 Self::restore_directory_permissions(&child_path, child_permissions, report);
                 continue;
@@ -263,13 +370,11 @@ impl SafeTreeDeleter {
                     &child_path,
                     child_file,
                     verified_root,
-                    &exclusions,
+                    exclusions,
                     report,
                 );
             }
-            if let Err(error) =
-                Self::verify_directory_identity(&child_path, &child_permissions)
-            {
+            if let Err(error) = Self::verify_directory_identity(&child_path, &child_permissions) {
                 report.errors.push(error);
                 Self::restore_directory_permissions(&child_path, child_permissions, report);
                 continue;
@@ -279,13 +384,13 @@ impl SafeTreeDeleter {
             // implicitly by removing it; only restore on failure.
             match Self::unlink_via_parent(dir_file, file_name, true) {
                 Ok(()) => {}
-                Err(error)
-                    if error.kind() == io::ErrorKind::DirectoryNotEmpty =>
-                {
+                Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
                     Self::restore_directory_permissions(&child_path, child_permissions, report);
                 }
                 Err(error) => {
-                    report.errors.push(format!("{}: {}", child_path.display(), error));
+                    report
+                        .errors
+                        .push(format!("{}: {}", child_path.display(), error));
                     Self::restore_directory_permissions(&child_path, child_permissions, report);
                 }
             }
@@ -295,11 +400,7 @@ impl SafeTreeDeleter {
     /// Unlinks a child name relative to a verified parent directory
     /// descriptor. Never re-resolves the full path for the final mutation.
     #[cfg(unix)]
-    fn unlink_via_parent(
-        parent: &fs::File,
-        name: &OsStr,
-        is_dir: bool,
-    ) -> io::Result<()> {
+    fn unlink_via_parent(parent: &fs::File, name: &OsStr, is_dir: bool) -> io::Result<()> {
         use std::os::unix::ffi::OsStrExt;
 
         let bytes = name.as_bytes();
@@ -348,7 +449,7 @@ impl SafeTreeDeleter {
             }
         };
 
-        if let Err(error) = Self::validate_verified_scope(path, verified_root, &metadata) {
+        if let Err(error) = Self::validate_verified_scope(path, verified_root) {
             report.errors.push(error);
             return;
         }
@@ -361,12 +462,20 @@ impl SafeTreeDeleter {
             return;
         }
 
+        let is_link = match SymlinkGuard::is_symlink_strict(path) {
+            Ok(is_link) => is_link,
+            Err(error) => {
+                report.errors.push(format!("{}: {}", path.display(), error));
+                return;
+            }
+        };
+
         if let Err(error) = Self::validate_entry_owner(path, &metadata) {
             report.errors.push(error);
             return;
         }
 
-        if metadata.file_type().is_symlink() || metadata.is_file() {
+        if is_link || metadata.is_file() {
             if let Err(error) = Self::verify_entry_identity(path, &metadata) {
                 report.errors.push(error);
                 return;
@@ -388,9 +497,9 @@ impl SafeTreeDeleter {
                 }
                 return;
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                match fs::remove_file(path) {
+                match Self::delete_windows_entry(path, &metadata) {
                     Ok(()) => {
                         report.reclaimed_bytes += bytes;
                         report.deleted_files += 1;
@@ -398,6 +507,17 @@ impl SafeTreeDeleter {
                     Err(e) => {
                         report.errors.push(format!("{}: {}", path.display(), e));
                     }
+                }
+                return;
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                match fs::remove_file(path) {
+                    Ok(()) => {
+                        report.reclaimed_bytes += bytes;
+                        report.deleted_files += 1;
+                    }
+                    Err(e) => report.errors.push(format!("{}: {}", path.display(), e)),
                 }
                 return;
             }
@@ -468,6 +588,33 @@ impl SafeTreeDeleter {
             return;
         }
 
+        #[cfg(windows)]
+        {
+            let mut permissions = permissions;
+            let remove_result = permissions
+                .directory
+                .take()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "verified Windows directory handle is unavailable",
+                    )
+                })
+                .and_then(WindowsDeleteHandle::delete);
+            match remove_result {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                    Self::restore_directory_permissions(path, permissions, report);
+                }
+                Err(error) => {
+                    report.errors.push(format!("{}: {}", path.display(), error));
+                    Self::restore_directory_permissions(path, permissions, report);
+                }
+            }
+            return;
+        }
+
+        #[cfg(not(windows))]
         match fs::remove_dir(path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
@@ -478,6 +625,27 @@ impl SafeTreeDeleter {
                 Self::restore_directory_permissions(path, permissions, report);
             }
         }
+    }
+
+    #[cfg(windows)]
+    fn delete_windows_entry(path: &Path, expected: &fs::Metadata) -> io::Result<()> {
+        let expected_identity = ToctouGuard::capture(path).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "could not capture filesystem identity before deletion",
+            )
+        })?;
+        let handle = WindowsDeleteHandle::open(path)?;
+        if handle.device != expected_identity.device
+            || handle.inode != expected_identity.inode
+            || handle.is_dir != expected.is_dir()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "entry changed between verification and deletion",
+            ));
+        }
+        handle.delete()
     }
 
     /// Removes a single file/symlink relative to its verified parent
@@ -502,9 +670,9 @@ impl SafeTreeDeleter {
         let parent_path = path.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "path has no parent directory")
         })?;
-        let file_name = path.file_name().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "path has no file name")
-        })?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
         if file_name == "." || file_name == ".." {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -599,11 +767,16 @@ impl SafeTreeDeleter {
 
         #[cfg(not(unix))]
         {
-            // Windows prepares no permission snapshot; identity is captured
-            // per entry via no-follow handles in ToctouGuard. Fail closed if
-            // the directory cannot be metadata-verified as a real directory.
+            // Windows holds the same no-follow, non-share-delete handle from
+            // identity verification through recursive traversal and final
+            // disposition. The verified directory therefore cannot be
+            // renamed or replaced while cleanup is in progress.
             let current = fs::symlink_metadata(path).map_err(|error| {
-                format!("Could not verify cleanup directory {}: {}", path.display(), error)
+                format!(
+                    "Could not verify cleanup directory {}: {}",
+                    path.display(),
+                    error
+                )
             })?;
             if current.file_type().is_symlink() || !current.is_dir() {
                 return Err(format!(
@@ -611,6 +784,37 @@ impl SafeTreeDeleter {
                     path.display()
                 ));
             }
+            #[cfg(windows)]
+            {
+                let expected_identity = ToctouGuard::capture(path).ok_or_else(|| {
+                    format!(
+                        "Could not capture cleanup directory identity: {}",
+                        path.display()
+                    )
+                })?;
+                let directory = WindowsDeleteHandle::open(path).map_err(|error| {
+                    format!(
+                        "Could not retain cleanup directory handle {}: {}",
+                        path.display(),
+                        error
+                    )
+                })?;
+                if directory.device != expected_identity.device
+                    || directory.inode != expected_identity.inode
+                    || !directory.is_dir
+                    || directory.is_reparse_point
+                    || expected_metadata.is_dir() != directory.is_dir
+                {
+                    return Err(format!(
+                        "Directory changed during cleanup: {}",
+                        path.display()
+                    ));
+                }
+                return Ok(PermissionSnapshot {
+                    directory: Some(directory),
+                });
+            }
+            #[cfg(not(windows))]
             Ok(PermissionSnapshot::default())
         }
     }
@@ -715,10 +919,14 @@ impl SafeTreeDeleter {
             }
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            // Windows has no retained descriptor; re-verify symlink state and
-            // fail closed on metadata errors.
+            let directory = snapshot.directory.as_ref().ok_or_else(|| {
+                format!(
+                    "Verified directory handle is unavailable: {}",
+                    path.display()
+                )
+            })?;
             let is_link = SymlinkGuard::is_symlink_strict(path).map_err(|e| e.to_string())?;
             if is_link {
                 return Err(format!(
@@ -726,14 +934,18 @@ impl SafeTreeDeleter {
                     path.display()
                 ));
             }
-            let current = fs::symlink_metadata(path).map_err(|error| {
+            let current = ToctouGuard::capture(path).ok_or_else(|| {
                 format!(
                     "Could not re-verify cleanup directory {}: {}",
                     path.display(),
-                    error
+                    "filesystem identity unavailable"
                 )
             })?;
-            if !current.is_dir() {
+            if !current.is_dir
+                || current.device != directory.device
+                || current.inode != directory.inode
+                || directory.is_reparse_point
+            {
                 return Err(format!(
                     "Directory changed during cleanup: {}",
                     path.display()
@@ -741,14 +953,13 @@ impl SafeTreeDeleter {
             }
         }
 
+        #[cfg(not(any(unix, windows)))]
+        let _ = (path, snapshot);
+
         Ok(())
     }
 
-    fn validate_verified_scope(
-        path: &Path,
-        verified_root: &Path,
-        metadata: &fs::Metadata,
-    ) -> Result<(), String> {
+    fn validate_verified_scope(path: &Path, verified_root: &Path) -> Result<(), String> {
         let normalized_path = Blacklist::normalize_path(path);
         let normalized_root = Blacklist::normalize_path(verified_root);
         if normalized_path != normalized_root && !normalized_path.starts_with(&normalized_root) {
@@ -762,7 +973,8 @@ impl SafeTreeDeleter {
         // real files/directories, also compare canonical paths so a replaced
         // parent symlink cannot redirect cleanup outside the planned root.
         // Canonicalization failure fails closed on mutation paths.
-        if metadata.file_type().is_symlink() {
+        let is_link = SymlinkGuard::is_symlink_strict(path).map_err(|error| error.to_string())?;
+        if is_link {
             return Ok(());
         }
         let canonical_root = fs::canonicalize(verified_root).map_err(|error| {
@@ -817,7 +1029,24 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verified_handle_blocks_replacement_until_disposition() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("payload.bin");
+        let renamed = dir.path().join("renamed.bin");
+        std::fs::write(&target, b"payload").unwrap();
+
+        let handle = WindowsDeleteHandle::open(&target).unwrap();
+        assert!(
+            std::fs::rename(&target, &renamed).is_err(),
+            "a retained non-share-delete handle must prevent path replacement"
+        );
+        handle.delete().unwrap();
+        assert!(!target.exists());
+        assert!(!renamed.exists());
+    }
 
     #[cfg(unix)]
     #[test]
@@ -850,8 +1079,11 @@ mod tests {
         // The verified descriptor still points at the original directory, so
         // unlinking a stale basename through it must fail without touching
         // the outside target.
-        let result =
-            SafeTreeDeleter::unlink_via_parent(&parent_file, std::ffi::OsStr::new("child.bin"), false);
+        let result = SafeTreeDeleter::unlink_via_parent(
+            &parent_file,
+            std::ffi::OsStr::new("child.bin"),
+            false,
+        );
         assert!(result.is_err());
         assert_eq!(
             std::fs::read(&outside_target).unwrap(),

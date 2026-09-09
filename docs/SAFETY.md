@@ -47,10 +47,13 @@ validation cannot cause deletion outside the planned signature scope.
 On Windows, directory and file identity is captured through handles opened
 with `CreateFileW` using `FILE_FLAG_BACKUP_SEMANTICS |
 FILE_FLAG_OPEN_REPARSE_POINT` and compared as stable volume/file IDs before
-mutation. A missing or zero `(device, inode)` identity is a verification
-failure, never a skipped comparison. Reparse points and symlinks are never
-traversed; symlink, reparse-point, and canonicalization failures fail closed
-on mutation paths.
+mutation. The verified handle does not share delete access, remains open
+through validation, and applies final deletion with
+`SetFileInformationByHandle(FileDispositionInfo)` to the same filesystem
+object. A missing or zero `(device, inode)` identity is a verification failure,
+never a skipped comparison. Reparse points and symlinks are never traversed;
+symlink, reparse-point, and canonicalization failures fail closed on mutation
+paths.
 
 Execution-time freshness is fail closed by default: a planned file or
 directory target whose modification timestamp changed after scanning aborts
