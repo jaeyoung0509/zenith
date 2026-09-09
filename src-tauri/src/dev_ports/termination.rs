@@ -845,6 +845,27 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    fn initial_release_mode() -> ReleaseMode {
+        ReleaseMode::Force
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn initial_release_mode() -> ReleaseMode {
+        ReleaseMode::Graceful
+    }
+
+    #[cfg(target_os = "windows")]
+    fn initial_termination_signal() -> i32 {
+        FORCE_TERMINATION_SIGNAL
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn initial_termination_signal() -> i32 {
+        GRACEFUL_TERMINATION_SIGNAL
+    }
+
+    #[cfg(unix)]
     #[test]
     fn list_and_release_vite_graceful_success() {
         let fake = FakeDevPortSystem::new();
@@ -883,6 +904,7 @@ mod tests {
         assert_eq!(signals[0], (32892, GRACEFUL_TERMINATION_SIGNAL));
     }
 
+    #[cfg(unix)]
     #[test]
     fn force_release_cannot_skip_the_graceful_attempt() {
         let fake = FakeDevPortSystem::new();
@@ -913,6 +935,7 @@ mod tests {
             .is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn release_process_that_ignores_sigterm_returns_still_listening_with_fresh_lease() {
         let fake = FakeDevPortSystem::new();
@@ -991,7 +1014,7 @@ mod tests {
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
 
-        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
@@ -1026,7 +1049,7 @@ mod tests {
             ListenerExposure::Loopback,
         );
 
-        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
@@ -1063,12 +1086,12 @@ mod tests {
             .find(|listener| listener.pid == 11111)
             .unwrap();
 
-        let result = release_listener(&store, &fake, &loopback.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &loopback.id, initial_release_mode()).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert_eq!(
             fake.signaled_pids.lock().unwrap().as_slice(),
-            &[(11111, GRACEFUL_TERMINATION_SIGNAL)]
+            &[(11111, initial_termination_signal())]
         );
     }
 
@@ -1099,7 +1122,8 @@ mod tests {
 
         assert!(!listener.can_release);
 
-        let err = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap_err();
+        let err =
+            release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap_err();
         assert!(err.contains("protected"));
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1108,7 +1132,7 @@ mod tests {
     fn stale_lease_is_rejected_without_signaling() {
         let fake = FakeDevPortSystem::new();
         let store = Mutex::new(DevelopmentPortStore::default());
-        let result = release_listener(&store, &fake, "missing-lease", ReleaseMode::Graceful);
+        let result = release_listener(&store, &fake, "missing-lease", initial_release_mode());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("expired"));
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
@@ -1130,9 +1154,9 @@ mod tests {
         });
         let store = Mutex::new(DevelopmentPortStore::default());
         let listener = list_listeners(&store, &fake).unwrap().remove(0);
-        let first = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let first = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
         assert_eq!(first.outcome, ReleaseOutcome::Released);
-        let second = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful);
+        let second = release_listener(&store, &fake, &listener.id, initial_release_mode());
         assert!(second.is_err());
     }
 
@@ -1162,7 +1186,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/apple/app")),
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
-        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1193,7 +1217,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/apple/app")),
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
-        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
