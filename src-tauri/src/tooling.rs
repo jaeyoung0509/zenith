@@ -323,8 +323,10 @@ pub async fn run_with_timeout_async(
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
         if !job_handle.is_null() {
             // `tokio::process::Child` exposes the owned process handle via the
-            // inherent `raw_handle()` method on Windows.
-            AssignProcessToJobObject(job_handle, child.raw_handle() as _);
+            // inherent `raw_handle()` method on Windows (`None` once reaped).
+            if let Some(raw) = child.raw_handle() {
+                AssignProcessToJobObject(job_handle, raw);
+            }
         }
     }
 
