@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { handleSegmentedTabKeydown } from '../utils/segmentedTabs';
+
   interface TabItem {
     id: string;
     label: string;
@@ -27,28 +29,6 @@
   const instanceId = $props.id();
   let tablist: HTMLDivElement;
 
-  function handleKeydown(event: KeyboardEvent, currentIndex: number) {
-    let nextIndex = currentIndex;
-    if (event.key === "ArrowRight") {
-      nextIndex = (currentIndex + 1) % tabs.length;
-    } else if (event.key === "ArrowLeft") {
-      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = tabs.length - 1;
-    } else {
-      return;
-    }
-
-    event.preventDefault();
-    const nextTab = tabs[nextIndex];
-    if (nextTab) {
-      onSelect(nextTab.id);
-      const button = tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex];
-      button?.focus();
-    }
-  }
 </script>
 
 <div
@@ -67,7 +47,7 @@
       aria-controls={panelId}
       tabindex={isSelected ? 0 : -1}
       onclick={() => onSelect(tab.id)}
-      onkeydown={(e) => handleKeydown(e, index)}
+      onkeydown={(event) => handleSegmentedTabKeydown(event, index, tabs, tablist, onSelect)}
       class="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isSelected
         ? "bg-card text-foreground shadow-xs font-semibold"
         : "text-muted-foreground hover:text-foreground hover:bg-secondary/70"}"

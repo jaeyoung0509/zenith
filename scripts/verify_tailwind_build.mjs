@@ -13,7 +13,7 @@ const required = [
   '.shadow-xs',
   '.focus-visible\\:ring-2',
   '.bg-background',
-  '.dark',
+  '.dark\\:',
   '--background:',
   '--ring:',
 ];

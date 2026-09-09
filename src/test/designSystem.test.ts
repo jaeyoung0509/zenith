@@ -41,6 +41,19 @@ function contrastRatio(first: [number, number, number], second: [number, number,
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function readHslTokens(css: string, selector: ':root' | '.dark'): Map<string, [number, number, number]> {
+  const escapedSelector = selector.replace('.', '\\.');
+  const block = css.match(new RegExp(`${escapedSelector}\\s*\\{([\\s\\S]*?)\\}`))?.[1];
+  if (!block) throw new Error(`Missing ${selector} theme block`);
+
+  return new Map(
+    Array.from(block.matchAll(/--([a-z-]+):\s*([\d.]+)\s+([\d.]+)%\s+([\d.]+)%/g), (match) => [
+      match[1],
+      [Number(match[2]), Number(match[3]), Number(match[4])] as [number, number, number],
+    ])
+  );
+}
+
 describe('design-system source contracts', () => {
   it('uses semantic colors instead of raw status palette utilities', () => {
     const violations = svelteFiles.filter((path) =>
@@ -75,21 +88,22 @@ describe('design-system source contracts', () => {
 
   it('defines a shared focus token for both light and dark themes', () => {
     const css = readFileSync(`${srcRoot}/app.css`, 'utf8');
-    expect(css).toMatch(/--ring:\s*190\s+90%\s+35%/g);
-    expect(css.match(/--ring:\s*190\s+90%\s+35%/g)).toHaveLength(2);
     expect(css).toContain('@custom-variant dark');
 
-    const ring = hslToRgb(190, 90, 35);
-    const surfaces = [
-      hslToRgb(240, 10, 98), // light page background
-      hslToRgb(0, 0, 100), // light card
-      hslToRgb(240, 6, 10), // light primary control
-      hslToRgb(240, 10, 7), // dark page background
-      hslToRgb(240, 10, 10), // dark card
-      hslToRgb(0, 0, 98), // dark primary control
-    ];
-    for (const surface of surfaces) {
-      expect(contrastRatio(ring, surface)).toBeGreaterThanOrEqual(3);
+    for (const selector of [':root', '.dark'] as const) {
+      const tokens = readHslTokens(css, selector);
+      const ringToken = tokens.get('ring');
+      if (!ringToken) throw new Error(`Missing ${selector} --ring token`);
+      const ring = hslToRgb(...ringToken);
+
+      for (const surfaceName of ['background', 'card', 'primary']) {
+        const surfaceToken = tokens.get(surfaceName);
+        if (!surfaceToken) throw new Error(`Missing ${selector} --${surfaceName} token`);
+        expect(
+          contrastRatio(ring, hslToRgb(...surfaceToken)),
+          `${selector} --ring must contrast with --${surfaceName}`
+        ).toBeGreaterThanOrEqual(3);
+      }
     }
   });
 });

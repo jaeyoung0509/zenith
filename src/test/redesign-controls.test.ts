@@ -39,9 +39,9 @@ describe('redesign interaction semantics', () => {
 
   it('shows manual bytes and blocks generic cleanup for manual selections', () => {
     const { body } = render(SelectionToolbar, { props: {
-      selectedCount: 1, selectedBytes: 2048, manualBytes: 2048, onAction: () => {},
+      selectedCount: 1, selectedBytes: 0, manualBytes: 0, manualCount: 1, onAction: () => {},
     } });
-    expect(body).toContain('manual');
+    expect(body).toContain('1 Manual item');
     expect(body).toContain('Manual items require their dedicated management action');
     expect(body).toContain('disabled');
   });

@@ -1,7 +1,7 @@
 {
   "name": "zenith",
   "private": true,
-  "version": "0.3.7",
+  "version": "0.3.8",
   "license": "MIT",
   "repository": "https://github.com/jaeyoung0509/zenith",
   "type": "module",
@@ -24,6 +24,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.2.0",
     "@types/node": "^22.13.4",
+    "jsdom": "^26.1.0",
     "svelte": "^5.20.2",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.3.3",
