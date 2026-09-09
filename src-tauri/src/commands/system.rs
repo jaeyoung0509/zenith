@@ -186,16 +186,21 @@ pub async fn save_settings(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let settings = settings.sanitize();
-    let provider_selection_changed = state
-        .settings
-        .lock()
-        .expect("settings poisoned")
-        .ai_accounts_quota_providers
-        != settings.ai_accounts_quota_providers;
+    let (provider_selection_changed, inactivity_threshold_changed) = {
+        let previous = state.settings.lock().expect("settings poisoned");
+        (
+            previous.ai_accounts_quota_providers != settings.ai_accounts_quota_providers,
+            previous.agent_notifications.inactivity_threshold_minutes
+                != settings.agent_notifications.inactivity_threshold_minutes,
+        )
+    };
     let awake_manager = state.awake_manager.clone();
     let settings_store_state = state.settings.clone();
     let ai_usage_cache = state.ai_usage_cache.clone();
+    let agent_activity_cache = state.agent_activity_cache.clone();
     let ai_control_state = state.ai_control_state.clone();
+    let usage_generation = state.usage_generation.clone();
+    let activity_generation = state.activity_generation.clone();
 
     run_blocking(
         move || {
@@ -215,6 +220,15 @@ pub async fn save_settings(
                     .lock()
                     .expect("ai control poisoned")
                     .last_snapshot = None;
+                // New generation so in-flight pre-change collections cannot
+                // repopulate the cache after invalidation.
+                usage_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            if inactivity_threshold_changed {
+                *agent_activity_cache
+                    .lock()
+                    .expect("agent_activity_cache poisoned") = None;
+                activity_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
             Ok(())
         },

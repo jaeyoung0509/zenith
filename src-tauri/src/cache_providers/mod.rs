@@ -74,10 +74,22 @@ pub struct CacheProviderRegistry;
 
 impl CacheProviderRegistry {
     pub fn scan_items(registry: &SignatureRegistry) -> Vec<ScanItem> {
-        [ProviderKind::Uv, ProviderKind::Pnpm]
-            .into_par_iter()
-            .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
-            .collect()
+        // Two tiny provider lookups; route through the shared bounded scan
+        // pool intentionally instead of the unbounded global Rayon pool.
+        crate::execution_budget::install_shared(
+            || {
+                [ProviderKind::Uv, ProviderKind::Pnpm]
+                    .into_par_iter()
+                    .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
+                    .collect()
+            },
+            || {
+                [ProviderKind::Uv, ProviderKind::Pnpm]
+                    .into_iter()
+                    .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
+                    .collect()
+            },
+        )
     }
 
     fn scan_provider(

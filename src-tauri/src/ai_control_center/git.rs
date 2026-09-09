@@ -8,10 +8,11 @@ use std::time::Duration;
 #[derive(Debug, Clone, Default)]
 pub struct GitBaselineStore {
     baselines: HashMap<String, GitBaseline>,
+    generation: u64,
 }
 
 #[derive(Debug, Clone)]
-struct GitBaseline {
+pub(crate) struct GitBaseline {
     head: Option<String>,
     statuses: HashMap<String, String>,
     fingerprints: HashMap<String, String>,
@@ -24,18 +25,75 @@ impl GitBaselineStore {
         roots: &HashMap<String, PathBuf>,
         now: u64,
     ) -> Vec<GitChangeSummary> {
-        self.baselines.retain(|id, _| roots.contains_key(id));
+        let generation = self.generation;
+        let snapshot = self.snapshot_baselines();
+        let (summaries, collected) = Self::collect_summaries(&snapshot, roots, now);
+        // Generation cannot have changed under `&mut self`; the commit always
+        // applies here. The split admission path below uses the checked form.
+        let _ = self.commit_collected(generation, roots, collected);
+        summaries
+    }
+
+    /// Snapshot the smallest immutable inputs needed for collection. Callers
+    /// hold the shared Control Center lock only for this clone, then run
+    /// Git/filesystem work outside the lock.
+    pub(crate) fn snapshot_baselines(&self) -> HashMap<String, GitBaseline> {
+        self.baselines.clone()
+    }
+
+    pub(crate) fn baseline_generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Run Git commands and filesystem fingerprint work. Pure: touches no
+    /// shared state. Returns summaries plus the updated baseline map.
+    pub(crate) fn collect_summaries(
+        baselines: &HashMap<String, GitBaseline>,
+        roots: &HashMap<String, PathBuf>,
+        now: u64,
+    ) -> (Vec<GitChangeSummary>, HashMap<String, GitBaseline>) {
+        let mut next = baselines.clone();
+        // Prune baselines for projects that no longer exist in this observation
+        // without touching live shared state.
+        next.retain(|id, _| roots.contains_key(id));
         let mut summaries = Vec::new();
         for (project_id, root) in roots {
             let current = capture(root, now);
-            let baseline = self
-                .baselines
+            let baseline = next
                 .entry(project_id.clone())
                 .or_insert_with(|| current.clone());
             summaries.push(compare(project_id, root, baseline, &current));
         }
         summaries.sort_by(|a, b| a.project_id.cmp(&b.project_id));
-        summaries
+        // `next` already holds first-observation baselines: existing entries
+        // keep their original capture, new ids store their own first capture.
+        (summaries, next)
+    }
+
+    /// Reacquire the lock and merge. Validates the generation and project
+    /// identity: superseded observations are discarded without restoring
+    /// removed projects or overwriting newer baselines.
+    pub(crate) fn commit_collected(
+        &mut self,
+        snapshot_generation: u64,
+        observed_roots: &HashMap<String, PathBuf>,
+        collected: HashMap<String, GitBaseline>,
+    ) -> bool {
+        if self.generation != snapshot_generation {
+            return false;
+        }
+        // Never restore projects removed from live state by a newer commit
+        // (generation check above covers the concurrent case); only merge ids
+        // present in this observation and prune to it.
+        self.baselines
+            .retain(|id, _| observed_roots.contains_key(id));
+        for (id, baseline) in collected {
+            if observed_roots.contains_key(&id) {
+                self.baselines.insert(id, baseline);
+            }
+        }
+        self.generation = self.generation.wrapping_add(1);
+        true
     }
 
     pub fn diff_context(
@@ -56,6 +114,30 @@ impl GitBaselineStore {
                 .map(|(path, _)| path)
                 .collect(),
         ))
+    }
+
+    /// Clone one baseline under a short lock. The caller runs the filesystem
+    /// capture and diff computation outside the shared lock, then uses the
+    /// pure [`Self::diff_context_with_baseline`] helper.
+    pub(crate) fn baseline_snapshot(&self, project_id: &str) -> Option<GitBaseline> {
+        self.baselines.get(project_id).cloned()
+    }
+
+    /// Pure diff-context computation from an already-snapshotted baseline.
+    /// Runs outside any shared-state lock.
+    pub(crate) fn diff_context_with_baseline(
+        baseline: &GitBaseline,
+        root: &Path,
+        now: u64,
+    ) -> (Option<String>, Vec<String>) {
+        let current = capture(root, now);
+        (
+            baseline.head.clone(),
+            all_changed_entries(root, baseline, &current)
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect(),
+        )
     }
 }
 
@@ -490,5 +572,78 @@ mod tests {
         let diff = explicit_diff(temp.path(), baseline.as_deref(), &paths).unwrap();
         assert!(diff.contains("-before"));
         assert!(diff.contains("+after"));
+    }
+
+    #[test]
+    fn split_collection_does_not_hold_the_shared_lock() {
+        use std::sync::{mpsc, Arc, Barrier, Mutex};
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "-q"]);
+        let roots: HashMap<String, PathBuf> =
+            HashMap::from([("p".into(), temp.path().to_path_buf())]);
+        let store = Arc::new(Mutex::new(GitBaselineStore::default()));
+
+        // Snapshot under a short critical section, then collect outside.
+        let (snapshot, generation) = {
+            let guard = store.lock().unwrap();
+            (guard.snapshot_baselines(), guard.baseline_generation())
+        };
+        let barrier = Arc::new(Barrier::new(2));
+        let (done_tx, done_rx) = mpsc::channel();
+        let barrier_collector = barrier.clone();
+        let roots_collector = roots.clone();
+        let collector = std::thread::spawn(move || {
+            barrier_collector.wait();
+            // Deliberately blocked Git/filesystem work runs with no lock held.
+            std::thread::sleep(Duration::from_millis(150));
+            let (summaries, collected) =
+                GitBaselineStore::collect_summaries(&snapshot, &roots_collector, 99);
+            done_tx.send((summaries, collected)).unwrap();
+        });
+
+        barrier.wait();
+        // The shared lock must be acquirable while collection is blocked.
+        let lock_acquired = store.lock().map(|_| ()).map_err(|_| ()).is_ok();
+        assert!(lock_acquired, "collector must not hold the shared lock");
+        // Baseline semantics are preserved through the split path.
+        assert!(store.lock().unwrap().snapshot_baselines().is_empty());
+
+        let (summaries, collected) = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        collector.join().unwrap();
+        assert!(summaries[0].changed_paths.is_empty());
+        assert!(store
+            .lock()
+            .unwrap()
+            .commit_collected(generation, &roots, collected));
+        assert_eq!(store.lock().unwrap().baseline_generation(), generation + 1);
+    }
+
+    #[test]
+    fn split_commit_rejects_outdated_results() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "-q"]);
+        let roots: HashMap<String, PathBuf> =
+            HashMap::from([("p".into(), temp.path().to_path_buf())]);
+        let mut store = GitBaselineStore::default();
+        let generation = store.baseline_generation();
+        let snapshot = store.snapshot_baselines();
+        let (_, stale_collected) = GitBaselineStore::collect_summaries(&snapshot, &roots, 10);
+        // A newer commit supersedes the stale observation.
+        let (_, fresh_collected) = GitBaselineStore::collect_summaries(&snapshot, &roots, 11);
+        assert!(store.commit_collected(generation, &roots, fresh_collected));
+        assert!(
+            !store.commit_collected(generation, &roots, stale_collected),
+            "outdated results must not overwrite newer baselines"
+        );
+        // Committing an empty observation prunes without restoring removed
+        // projects.
+        let gen = store.baseline_generation();
+        let empty_snapshot = store.snapshot_baselines();
+        let empty: HashMap<String, PathBuf> = HashMap::new();
+        let (_, empty_collected) = GitBaselineStore::collect_summaries(&empty_snapshot, &empty, 12);
+        assert!(store.commit_collected(gen, &empty, empty_collected));
+        assert!(store.snapshot_baselines().is_empty());
     }
 }

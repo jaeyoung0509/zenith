@@ -237,43 +237,29 @@ impl DeveloperArtifactScanner {
             }
         }
 
-        let worker_count = std::thread::available_parallelism()
-            .map(|count| count.get().min(4))
-            .unwrap_or(2)
-            .max(1);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(worker_count)
-            .build()
-            .map_err(|error| format!("Could not create artifact scan workers: {error}"))?;
-
+        // Reuse the explicitly bounded shared scan pool instead of expanding a
+        // separate pool per request (see `execution_budget`). Cooperative
+        // cancellation stays checked per candidate and per tree entry because
+        // aborting an already-started blocking task cannot stop its closure.
         let (sender, receiver) = mpsc::channel();
         let worker_cancel = cancel.clone();
         let worker_candidates = candidates;
         let worker = std::thread::spawn(move || {
-            pool.install(|| {
-                worker_candidates
-                    .into_par_iter()
-                    .for_each_with(sender, |tx, candidate| {
-                        let _ = tx.send(MeasurementMessage::Started {
-                            artifact_id: candidate.id.clone(),
-                            project_name: candidate.project_name.clone(),
-                            kind: candidate.kind,
+            if let Some(pool) = crate::execution_budget::shared_scan_pool() {
+                pool.install(|| {
+                    worker_candidates
+                        .into_par_iter()
+                        .for_each_with(sender, |tx, candidate| {
+                            measure_candidate(candidate, tx, &worker_cancel);
                         });
-                        if worker_cancel.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        let stats = measure_tree(
-                            &candidate.path,
-                            candidate.workspace.identity.device,
-                            &worker_cancel,
-                            0,
-                        );
-                        let _ = tx.send(MeasurementMessage::Finished {
-                            candidate: Box::new(candidate),
-                            stats,
-                        });
-                    });
-            });
+                });
+            } else {
+                // Single-worker fallback: measure sequentially without
+                // touching the global Rayon pool.
+                for candidate in worker_candidates {
+                    measure_candidate(candidate, &sender, &worker_cancel);
+                }
+            }
         });
 
         let mut records = HashMap::new();
@@ -1281,6 +1267,31 @@ fn should_skip_protected_discovery_path(
             | ".vscode"
             | ".vscode-insiders"
     )
+}
+
+fn measure_candidate(
+    candidate: Candidate,
+    tx: &mpsc::Sender<MeasurementMessage>,
+    cancel: &AtomicBool,
+) {
+    let _ = tx.send(MeasurementMessage::Started {
+        artifact_id: candidate.id.clone(),
+        project_name: candidate.project_name.clone(),
+        kind: candidate.kind,
+    });
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
+    let stats = measure_tree(
+        &candidate.path,
+        candidate.workspace.identity.device,
+        cancel,
+        0,
+    );
+    let _ = tx.send(MeasurementMessage::Finished {
+        candidate: Box::new(candidate),
+        stats,
+    });
 }
 
 fn measure_tree(path: &Path, _root_device: u64, cancel: &AtomicBool, depth: usize) -> TreeStats {
