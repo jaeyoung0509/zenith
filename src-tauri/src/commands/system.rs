@@ -215,20 +215,17 @@ pub async fn save_settings(
             awake_manager.set_rules(settings.awake_rules.clone());
             *settings_store_state.lock().expect("settings poisoned") = settings;
             if provider_selection_changed {
-                *ai_usage_cache.lock().expect("ai_usage_cache poisoned") = None;
+                crate::ai_snapshots::invalidate_snapshot(&ai_usage_cache, &usage_generation);
                 ai_control_state
                     .lock()
                     .expect("ai control poisoned")
                     .last_snapshot = None;
-                // New generation so in-flight pre-change collections cannot
-                // repopulate the cache after invalidation.
-                usage_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
             if inactivity_threshold_changed {
-                *agent_activity_cache
-                    .lock()
-                    .expect("agent_activity_cache poisoned") = None;
-                activity_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                crate::ai_snapshots::invalidate_snapshot(
+                    &agent_activity_cache,
+                    &activity_generation,
+                );
             }
             Ok(())
         },

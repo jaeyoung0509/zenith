@@ -78,14 +78,6 @@ impl<T, P> Inflight<T, P> {
             .result
             .is_some()
     }
-
-    fn progress_len(&self) -> usize {
-        self.progress
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .items
-            .len()
-    }
 }
 
 /// Admission decision: either own a new collection or wait for a compatible one.
@@ -199,6 +191,11 @@ where
     /// returned future cancels only this waiter.
     pub async fn wait(&self, inflight: &Arc<Inflight<T, P>>) -> Result<T, String> {
         loop {
+            // Register before inspecting state: notify_waiters does not retain
+            // a permit for a future created after completion.
+            let notified = inflight.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             {
                 let guard = inflight
                     .state
@@ -208,7 +205,7 @@ where
                     return result;
                 }
             }
-            inflight.notify.notified().await;
+            notified.await;
         }
     }
 
@@ -220,35 +217,27 @@ where
         mut on_batch: impl FnMut(Vec<P>),
     ) -> Result<T, String> {
         let mut seen = 0usize;
-        // Replay anything completed before we subscribed.
-        let initial = self.progress_snapshot(inflight);
-        if !initial.is_empty() {
-            seen = initial.len();
-            on_batch(initial);
-        }
         loop {
-            {
-                let guard = inflight
-                    .state
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some(result) = guard.result.clone() {
-                    // Drain any progress that arrived with completion.
-                    let all = self.progress_snapshot(inflight);
-                    if all.len() > seen {
-                        on_batch(all[seen..].to_vec());
-                    }
-                    return result;
-                }
-            }
-            inflight.notify.notified().await;
+            let notified = inflight.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let result = inflight
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .result
+                .clone();
             let all = self.progress_snapshot(inflight);
             if all.len() > seen {
                 let batch = all[seen..].to_vec();
                 seen = all.len();
+                // User callbacks must never run while a state lock is held.
                 on_batch(batch);
             }
-            let _ = inflight.progress_len();
+            if let Some(result) = result {
+                return result;
+            }
+            notified.await;
         }
     }
 
@@ -317,6 +306,37 @@ mod tests {
 
     fn test_flight() -> SingleFlight<String, String> {
         SingleFlight::new()
+    }
+
+    #[tokio::test]
+    async fn progress_callback_can_complete_collection_without_lost_wakeup() {
+        let flight = test_flight();
+        let entry = match flight.admit("progress".into(), 1).await {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => unreachable!(),
+        };
+        flight.push_progress(&entry, "ready".into());
+        let mut batches = Vec::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            flight.wait_with_progress(&entry, |batch| {
+                // Complete precisely between the state check and notification
+                // await, without sleeping or relying on thread scheduling.
+                assert!(entry.state.try_lock().is_ok());
+                let first_batch = batch == vec!["ready"];
+                batches.extend(batch);
+                if first_batch {
+                    flight.push_progress(&entry, "final".into());
+                    entry.state.lock().unwrap().result = Some(Ok("done".into()));
+                    entry.notify.notify_waiters();
+                }
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, "done");
+        assert_eq!(batches, vec!["ready", "final"]);
     }
 
     #[tokio::test]

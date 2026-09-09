@@ -490,6 +490,37 @@ fn manual_strategy_never_enters_generic_cleaner() {
 }
 
 #[test]
+fn npm_cache_selection_plans_provider_cleanup_without_deleting_fixture() {
+    let dir = tempdir().unwrap();
+    let cache = dir.path().join("npm-cache");
+    fs::create_dir(&cache).unwrap();
+    let payload = cache.join("keep.bin");
+    fs::write(&payload, b"fixture").unwrap();
+    let registry = SignatureRegistry::load_embedded().unwrap();
+    let item = ScanItem {
+        id: "dev.npm.cache".into(),
+        signature_id: "dev.npm.cache".into(),
+        name: "npm Cache".into(),
+        category: Category::Developer,
+        risk: RiskTier::Rebuild,
+        path: cache.to_string_lossy().into_owned(),
+        size: FileSize::new(7, Some(7)),
+        file_count: 1,
+        description: "fixture".into(),
+        cache_metadata: Default::default(),
+        is_selected: true,
+        last_modified: None,
+        exists: true,
+    };
+    let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
+    assert_eq!(plan.targets.len(), 1);
+    assert_eq!(plan.targets[0].strategy, CleanStrategy::ExternalCommand);
+    assert!(plan.targets[0].identity.is_some());
+    // Planning must not invoke npm or mutate a real/user cache.
+    assert_eq!(fs::read(payload).unwrap(), b"fixture");
+}
+
+#[test]
 fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
     let dir = tempdir().unwrap();
     let cache_root = dir.path().join("provider-cache");

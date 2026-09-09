@@ -11,7 +11,6 @@ use crate::models::{
     RecommendationPreview,
 };
 use crate::settings_store;
-use std::sync::atomic::Ordering;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
@@ -275,12 +274,10 @@ pub fn post_agent_event(
     let store = crate::agent_activity::global_store();
     let mut guard = store.lock().unwrap();
     guard.record_event(event);
-    if let Ok(mut cache_guard) = state.agent_activity_cache.lock() {
-        *cache_guard = None;
-    }
-    // New generation so an in-flight stale collection cannot repopulate the
-    // cache after this invalidation.
-    state.activity_generation.fetch_add(1, Ordering::SeqCst);
+    crate::ai_snapshots::invalidate_snapshot(
+        &state.agent_activity_cache,
+        &state.activity_generation,
+    );
     Ok(())
 }
 
@@ -352,9 +349,9 @@ pub async fn get_ai_control_center(
 
     // Acquire the subprocess budget before dispatching blocking Git/listener
     // work. Cheap metrics/cache reads never take a budget and stay responsive.
-    // The permit is held across the blocking assembly below and releases on
-    // success, error, and cancellation paths via the owned guard.
-    let _subprocess_permit = state
+    // The worker owns its permit until the blocking assembly actually exits,
+    // including when the request awaiting it is cancelled.
+    let subprocess_permit = state
         .execution_budgets
         .acquire_subprocess()
         .await
@@ -366,6 +363,9 @@ pub async fn get_ai_control_center(
     let awake = state.awake_manager.clone();
     let dev_store = state.dev_port_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // Running blocking work survives request cancellation, so its permit
+        // must live in the worker rather than in the awaiting request.
+        let _subprocess_permit = subprocess_permit;
         let _refresh_guard = refresh_lock.lock().expect("ai control refresh poisoned");
         // Recheck after acquiring the refresh lock: a concurrent refresh may
         // have published while we collected shared snapshots.
@@ -885,12 +885,6 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
         .await
         .map_err(|error| error.to_string())??;
     *openrouter_key.lock().expect("openrouter_key poisoned") = Some(key);
-    *state
-        .ai_usage_cache
-        .lock()
-        .expect("ai_usage_cache poisoned") = None;
-    // New generation so an in-flight stale collection cannot repopulate the
-    // cache with pre-OAuth results.
-    state.usage_generation.fetch_add(1, Ordering::SeqCst);
+    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())
 }

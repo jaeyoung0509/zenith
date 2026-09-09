@@ -25,6 +25,40 @@ use crate::runtime_metrics::RuntimeMetrics;
 
 const USAGE_CACHE_TTL_SECS: u64 = 60;
 
+/// Invalidate under the same lock used by generation-checked publication.
+pub fn invalidate_snapshot<T>(cache: &Mutex<Option<T>>, generation: &AtomicU64) {
+    let mut guard = cache.lock().unwrap_or_else(|p| p.into_inner());
+    generation.fetch_add(1, Ordering::SeqCst);
+    *guard = None;
+}
+
+/// A detached supervisor always publishes success or worker failure, even when
+/// the request that admitted this collection is dropped.
+fn supervise_collection<T, P>(
+    cache: Arc<Mutex<Option<T>>>,
+    generation: Arc<AtomicU64>,
+    expected_generation: u64,
+    flight: Arc<SingleFlight<T, P>>,
+    entry: Arc<crate::collection::Inflight<T, P>>,
+    collect: impl FnOnce() -> T + Send + 'static,
+) where
+    T: Clone + Send + 'static,
+    P: Clone + Send + 'static,
+{
+    tauri::async_runtime::spawn(async move {
+        let result = tauri::async_runtime::spawn_blocking(collect)
+            .await
+            .map_err(|error| format!("Snapshot collection failed: {error}"));
+        if let Ok(snapshot) = &result {
+            let mut guard = cache.lock().unwrap_or_else(|p| p.into_inner());
+            if generation.load(Ordering::SeqCst) == expected_generation {
+                *guard = Some(snapshot.clone());
+            }
+        }
+        flight.complete(&entry, result).await;
+    });
+}
+
 fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -113,43 +147,29 @@ pub async fn fetch_usage_snapshot(
                     return Ok(snapshot);
                 }
             }
-            let providers_for_collect = providers.clone();
-            let key_for_collect = openrouter_key.clone();
-            let sf = singleflight.clone();
-            let inflight_clone = inflight.clone();
-            let on_provider_owned = on_provider.clone();
-            let collected = tauri::async_runtime::spawn_blocking(move || {
-                crate::ai_usage::AiUsageCollector::collect_parallel(
-                    key_for_collect,
-                    &providers_for_collect,
-                    |provider| {
-                        sf.push_progress(&inflight_clone, provider.clone());
-                        on_provider_owned(provider);
-                    },
-                )
-            })
-            .await
-            .map_err(|error| error.to_string())?;
-
-            // Generation gate: a configuration change during collection starts
-            // a new generation; the stale result is returned to current waiters
-            // but never overwrites the newer cache.
-            if generation.load(Ordering::SeqCst) != gen {
-                singleflight
-                    .complete(&inflight, Ok(collected.clone()))
-                    .await;
-                return Ok(collected);
-            }
-            {
-                let mut guard = cache
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                *guard = Some(collected.clone());
-            }
+            let progress_sf = singleflight.clone();
+            let progress_entry = inflight.clone();
+            supervise_collection(
+                cache.clone(),
+                generation.clone(),
+                gen,
+                singleflight.clone(),
+                inflight.clone(),
+                move || {
+                    crate::ai_usage::AiUsageCollector::collect_parallel(
+                        openrouter_key,
+                        &providers,
+                        |provider| progress_sf.push_progress(&progress_entry, provider),
+                    )
+                },
+            );
             singleflight
-                .complete(&inflight, Ok(collected.clone()))
-                .await;
-            Ok(collected)
+                .wait_with_progress(&inflight, |batch| {
+                    for provider in batch {
+                        on_provider(provider);
+                    }
+                })
+                .await
         }
     }
 }
@@ -202,30 +222,19 @@ pub async fn fetch_activity_registry(
                     return Ok(registry);
                 }
             }
-            let collected = tauri::async_runtime::spawn_blocking(move || {
-                crate::agent_activity::collect_registry_with_inactivity_threshold(
-                    inactivity_threshold_secs,
-                )
-            })
-            .await
-            .map_err(|error| format!("Agent activity refresh failed: {error}"))?;
-
-            if generation.load(Ordering::SeqCst) != gen {
-                singleflight
-                    .complete(&inflight, Ok(collected.clone()))
-                    .await;
-                return Ok(collected);
-            }
-            {
-                let mut guard = cache
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                *guard = Some(collected.clone());
-            }
-            singleflight
-                .complete(&inflight, Ok(collected.clone()))
-                .await;
-            Ok(collected)
+            supervise_collection(
+                cache.clone(),
+                generation.clone(),
+                gen,
+                singleflight.clone(),
+                inflight.clone(),
+                move || {
+                    crate::agent_activity::collect_registry_with_inactivity_threshold(
+                        inactivity_threshold_secs,
+                    )
+                },
+            );
+            singleflight.wait(&inflight).await
         }
     }
 }
@@ -264,6 +273,101 @@ pub fn enrich_activity_for_project_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn invalidated_collection_cannot_repopulate_cache() {
+        let cache = Arc::new(Mutex::new(None));
+        let generation = Arc::new(AtomicU64::new(1));
+        let flight = Arc::new(SingleFlight::<String, ()>::new());
+        let entry = match flight.admit("test".into(), 1).await {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => unreachable!(),
+        };
+        let (release, released) = std::sync::mpsc::channel();
+        supervise_collection(
+            cache.clone(),
+            generation.clone(),
+            1,
+            flight.clone(),
+            entry.clone(),
+            move || {
+                released.recv().unwrap();
+                "stale".to_string()
+            },
+        );
+        invalidate_snapshot(&cache, &generation);
+        release.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), flight.wait(&entry))
+                .await
+                .unwrap()
+                .unwrap(),
+            "stale"
+        );
+        assert!(cache.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn cancelled_admitting_request_does_not_abandon_collection() {
+        let cache = Arc::new(Mutex::new(None));
+        let flight = Arc::new(SingleFlight::<String, ()>::new());
+        let generation = Arc::new(AtomicU64::new(1));
+        let entry = match flight.admit("test".into(), 1).await {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => unreachable!(),
+        };
+        let (release, released) = std::sync::mpsc::channel();
+        supervise_collection(
+            cache.clone(),
+            generation,
+            1,
+            flight.clone(),
+            entry.clone(),
+            move || {
+                released.recv().unwrap();
+                "finished".to_string()
+            },
+        );
+        let first = {
+            let flight = flight.clone();
+            let entry = entry.clone();
+            tokio::spawn(async move { flight.wait(&entry).await })
+        };
+        first.abort();
+        let _ = first.await;
+        release.send(()).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), flight.wait(&entry))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, "finished");
+        assert_eq!(cache.lock().unwrap().as_deref(), Some("finished"));
+    }
+
+    #[tokio::test]
+    async fn panicking_collector_completes_waiters_and_allows_retry() {
+        let flight = Arc::new(SingleFlight::<String, ()>::new());
+        let entry = match flight.admit("test".into(), 1).await {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => unreachable!(),
+        };
+        supervise_collection(
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicU64::new(1)),
+            1,
+            flight.clone(),
+            entry.clone(),
+            || panic!("fixture failure"),
+        );
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), flight.wait(&entry))
+            .await
+            .unwrap();
+        assert!(result.is_err());
+        assert!(matches!(
+            flight.admit("test".into(), 1).await,
+            Admission::Own(_)
+        ));
+    }
 
     #[allow(clippy::type_complexity)]
     fn test_state() -> (
