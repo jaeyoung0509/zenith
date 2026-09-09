@@ -320,10 +320,11 @@ pub async fn run_with_timeout_async(
 
     #[cfg(target_os = "windows")]
     unsafe {
-        use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
         if !job_handle.is_null() {
-            AssignProcessToJobObject(job_handle, child.as_raw_handle() as _);
+            // `tokio::process::Child` exposes the owned process handle via the
+            // inherent `raw_handle()` method on Windows.
+            AssignProcessToJobObject(job_handle, child.raw_handle() as _);
         }
     }
 
