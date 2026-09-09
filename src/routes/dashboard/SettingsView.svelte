@@ -15,6 +15,8 @@
   import Switch from '../../lib/components/Switch.svelte';
   import Checkbox from '../../lib/components/Checkbox.svelte';
   import ReorderControls from '../../lib/components/ReorderControls.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import {
     Settings,
@@ -189,25 +191,19 @@
 </script>
 
 <div class="space-y-6 max-w-2xl">
-  <!-- Header -->
-  <div class="pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-secondary text-foreground flex items-center justify-center">
-        <Settings size={20} />
-      </div>
-      <div>
-        <h2 class="text-base font-semibold text-foreground tracking-tight">Settings</h2>
-        <p class="text-xs text-muted-foreground mt-0.5">
-          Configure cleaning defaults, appearance, and system integration.
-        </p>
-      </div>
-    </div>
-  </div>
+  <!-- Page Header -->
+  <PageHeader
+    title="Settings"
+    subtitle="Configure cleaning defaults, appearance, and system integration."
+    icon={Settings}
+  />
 
   {#if settingsStore.error}
-    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">
-      {settingsStore.error}
-    </div>
+    <InlineNotice
+      variant="destructive"
+      title="Settings Error"
+      message={settingsStore.error}
+    />
   {/if}
 
   <!-- General Preferences -->

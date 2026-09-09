@@ -22,10 +22,18 @@
     --destructive-foreground: 0 0% 98%;
     --success: 161 94% 30%;
     --warning: 32 95% 44%;
+    --ai: 265 75% 55%;
     --border: 240 6% 88%;
     --input: 240 6% 88%;
     --ring: 240 6% 10%;
     --radius: 0.65rem;
+
+    /* Purposeful Motion Tokens (Performance-conscious & WCAG AA reduced motion compliant) */
+    --duration-instant: 100ms;
+    --duration-fast: 140ms;
+    --duration-normal: 180ms;
+    --duration-overlay: 200ms;
+    --ease-out-cubic: cubic-bezier(0.215, 0.61, 0.355, 1);
   }
 
   .dark {
@@ -47,10 +55,34 @@
     --destructive-foreground: 0 0% 98%;
     --success: 158 64% 52%;
     --warning: 43 96% 56%;
+    --ai: 265 85% 68%;
     --border: 240 4% 18%;
     --input: 240 4% 18%;
-    --ring: 240 5% 84%;
   }
+}
+
+/* Motion & Interaction Utilities */
+.transition-ui {
+  transition-property: color, background-color, border-color, opacity, box-shadow, transform;
+  transition-timing-function: var(--ease-out-cubic);
+  transition-duration: var(--duration-instant);
+}
+
+.transition-motion-fast {
+  transition-property: color, background-color, border-color, opacity, transform;
+  transition-timing-function: var(--ease-out-cubic);
+  transition-duration: var(--duration-fast);
+}
+
+.transition-motion-normal {
+  transition-property: color, background-color, border-color, opacity, transform;
+  transition-timing-function: var(--ease-out-cubic);
+  transition-duration: var(--duration-normal);
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
 }
 
 /* Custom Scrollbar for macOS look */

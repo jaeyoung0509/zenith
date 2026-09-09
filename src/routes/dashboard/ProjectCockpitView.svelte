@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FolderGit2, RefreshCw } from 'lucide-svelte';
+  import { FolderGit2, RefreshCw, Sparkles } from 'lucide-svelte';
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import Badge from '../../lib/components/Badge.svelte';
@@ -139,17 +139,30 @@
         </p>
       </div>
     </div>
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={activeTabLoading}
-      ariaLabel={`Refresh ${activeTabLabel.toLowerCase()}`}
-      title={`Refresh ${activeTabLabel.toLowerCase()}`}
-      onclick={handleRefreshActive}
-    >
-      <RefreshCw size={13} class={activeTabLoading ? 'animate-spin' : ''} />
-      {activeTabLoading ? `Refreshing ${activeTabLabel.toLowerCase()}` : `Refresh ${activeTabLabel.toLowerCase()}`}
-    </Button>
+    <div class="flex items-center gap-2 shrink-0">
+      {#if onNavigateTab}
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigateTab('ai_control')}
+          class="gap-1.5 text-xs"
+        >
+          <Sparkles size={13} class="text-violet-400" />
+          <span>Control Center</span>
+        </Button>
+      {/if}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={activeTabLoading}
+        ariaLabel={`Refresh ${activeTabLabel.toLowerCase()}`}
+        title={`Refresh ${activeTabLabel.toLowerCase()}`}
+        onclick={handleRefreshActive}
+      >
+        <RefreshCw size={13} class={activeTabLoading ? 'animate-spin' : ''} />
+        {activeTabLoading ? `Refreshing ${activeTabLabel.toLowerCase()}` : `Refresh ${activeTabLabel.toLowerCase()}`}
+      </Button>
+    </div>
   </header>
 
   <div

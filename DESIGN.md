@@ -1,215 +1,175 @@
 # Zenith Design System
 
-Zenith is a compact, native-feeling macOS utility for developers. The current
-dark dashboard is the visual baseline: quiet surfaces, dense information, clear
+Zenith is a compact, native-feeling macOS and desktop utility for developers.
+The visual baseline features quiet surfaces, dense technical information, clear
 safety signals, and one obvious action per section.
 
 ## Product character
 
-- Native macOS utility, not a marketing dashboard.
+- Native desktop developer utility, not a marketing dashboard.
 - Calm, technical, and trustworthy. Avoid decorative gradients, glass effects,
-  oversized headings, excessive pills, and motion without feedback value.
+  oversized hero metrics, excessive pills, and motion without feedback value.
 - The white circular `Z` mark is the product identity. Use the template-style
   monochrome variant for the menu bar and the full app icon for Finder, Dock,
   title areas, and application menus.
 
-## Foundation
+## Foundation and semantic tokens
 
-The canonical color tokens live in `src/app.css`. In dark mode:
+The canonical color and motion tokens live in `src/app.css` and `tailwind.config.js`.
 
-- Background: near-black neutral `240 10% 7%`.
-- Cards: `240 10% 10%`; elevated or interactive surfaces use the secondary and
-  accent tokens rather than arbitrary gray values.
-- Borders: subtle `240 4% 18%`, normally one pixel.
-- Primary text: near white; secondary text uses `muted-foreground`.
-- Corners use `--radius: 0.65rem`. Small controls may use a slightly smaller
-  radius; reserve fully rounded shapes for status badges and progress details.
-- Emerald means safe, protected, or connected. Amber means rebuild or warning.
-  Red means destructive or failed. Violet identifies AI usage without replacing
-  the semantic status colors.
+### Color and surface hierarchy
+
+- **Dark mode (neutral charcoal)**:
+  - Window background: `hsl(240 10% 7%)`
+  - Cards & Content surfaces: `hsl(240 10% 10%)`
+  - Elevated surfaces & Secondary controls: `hsl(240 4% 16%)`
+  - Borders: subtle `hsl(240 4% 18%)`, normally 1 px
+  - Primary text: `hsl(0 0% 98%)`; secondary/supporting text: `hsl(240 5% 65%)` (`muted-foreground`)
+- **Light mode (clean warm neutral)**:
+  - Window background: `hsl(240 10% 98%)`
+  - Cards & Content surfaces: `hsl(0 0% 100%)`
+  - Elevated surfaces & Secondary controls: `hsl(240 5% 94%)`
+  - Borders: `hsl(240 6% 88%)`
+  - Primary text: `hsl(240 10% 10%)`; secondary text: `hsl(240 4% 46%)` (`muted-foreground`)
+
+### Semantic safety and status palette
+
+- **Emerald (`--success`)**: `hsl(158 64% 52%)` dark / `hsl(161 94% 30%)` light.
+  Represents Safe cleanup candidates, protected items, active network connections, and healthy metrics.
+- **Amber (`--warning`)**: `hsl(43 96% 56%)` dark / `hsl(32 95% 44%)` light.
+  Represents Rebuild caches, cautionary states, elevated memory pressure, and stale scans.
+- **Red (`--destructive`)**: `hsl(0 72% 51%)` dark / `hsl(0 84% 60%)` light.
+  Represents destructive actions, force termination, process kills, and hard errors.
+- **Violet (`--ai`)**: `hsl(265 85% 68%)` dark / `hsl(265 75% 55%)` light.
+  Identifies AI Activity, models, and provider metadata without replacing semantic safety signals.
 - Enabled switches use emerald track fill with a white thumb. Never use a plain
   white track for the enabled state because it is indistinguishable from an
   inactive control on light surfaces.
 
-Use the system sans-serif stack for labels and prose. Use monospace numerals for
-bytes, percentages, token counts, prices, process IDs, and reset times. Body text
-is generally 12–14 px; section titles 14–16 px; headline metrics 28–32 px.
-Compact supporting copy uses the named Tailwind steps `text-micro` (9 px),
-`text-caption` (10 px), and `text-meta` (11 px); do not reintroduce arbitrary
-pixel utilities for those sizes.
+### Typography scale
 
-## Layout
+- Use the system sans-serif stack for labels, navigation, and prose.
+- Use tabular monospace numerals (`font-mono tabular-nums`) for bytes, percentages,
+  token counts, prices, ports, process IDs, and countdown timers.
+- Key headline metrics: 28–32 px (`text-2xl` / `text-3xl font-bold font-mono`)
+- Page headings: 18–20 px (`text-lg font-semibold tracking-tight`)
+- Section headings: 14–15 px (`text-sm font-semibold tracking-tight`)
+- Body & interactive controls: 13–14 px (`text-xs` / `text-sm font-medium`)
+- Supporting metadata: 11 px (`text-meta`)
+- Captions & timestamps: 10 px (`text-caption`)
+- Micro badges & status dots: 9 px (`text-micro`)
 
-- Main window baseline: 960 × 660 px with a 224 px expanded sidebar. The sidebar
-  can collapse to an icon rail; the toggle remains visible, labelled, and
-  keyboard accessible in both states. Persist that preference with validated
-  settings so a relaunch does not unexpectedly change the user's layout.
-- Quick panel baseline: 360 × 520 px. It must stay useful above other windows,
-  with a close button at the upper right and no hidden essential controls.
-- Main content uses a 24–32 px outer inset, 16–24 px section gaps, and 12–16 px
-  internal card padding. Preserve the compact density visible in the current
-  Storage and AI Usage screens.
-- Keep the main content fluid when the sidebar changes width. Navigation labels
-  may hide in the collapsed rail, but icons need a tooltip and an accessible
-  name; do not remove the active, focus, or safety states.
-- The macOS traffic-light area and titlebar drag region must remain unobstructed.
-  Interactive elements inside a drag region require the `no-drag` class.
+### Spacing and sizing scale
 
-## Components and interaction
+- 4 px spacing scale: 4 / 8 / 12 / 16 / 24 / 32 px.
+- Standard interactive row height: 40–44 px for main window; 32–36 px for compact quick panel.
+- Control click targets: 32–36 px height; icon-only button hit area minimum 28 × 28 px.
+- Radii: 8 px (`rounded-lg`) for controls/buttons, 12 px (`rounded-xl`) for cards and grouped surfaces, 14–16 px (`rounded-2xl`) for modal overlays.
 
-- Reuse `Card`, `Button`, `Badge`, and `ProgressBar`. A page should have one
-  visually dominant primary action; supporting actions stay secondary or ghost.
-- Rows use icon, title, secondary metadata, metric, and disclosure/action in that
-  order. Align metrics vertically and keep labels short enough to scan.
-- Comparable values (bytes, percentages, counts, and prices) use a stable
-  right-aligned column with monospace numerals and `white-space: nowrap`.
-  Action buttons also stay on one line; descriptive copy may wrap or truncate
-  inside a `min-width: 0` content column instead of pushing metrics around.
-- Status indicators must be data-backed and self-explanatory. A Storage indicator
-  means reclaimable data is available; expose the amount in the expanded rail
-  as a quiet inline dot-plus-monospace value and an accessible label/tooltip in
-  the collapsed rail. Do not use a high-contrast pill or add decorative dots to
-  tabs that have no pending state.
-- Sidebar collapse is a low-emphasis chevron control: it gains a soft surface
-  and border only on hover/focus, while the icon remains directional and the
-  accessible label describes the resulting action (Expand or Collapse).
-- Every action needs hover, keyboard focus, disabled, loading, success, and error
-  behavior where applicable. Icon-only actions require labels and tooltips.
-- Loading should preserve the surrounding layout. Empty states explain what is
-  missing and give the next useful action. Errors appear near the failed action
-  and must not erase the last successful data.
-- Prefer brief 120–180 ms color/opacity transitions. Avoid layout-shifting or
-  looping animation except for active progress indicators.
+## Motion specification
+
+Polish with a strict purpose: animations must communicate state change and provide feedback without causing layout shifts, CPU wakeups, or input latency.
+
+| Interaction | Duration & Easing | Behavior |
+| --- | --- | --- |
+| Hover / focus / pressed | 90–120 ms (`--duration-instant`, `cubicOut`) | Subtle color/opacity feedback; avoid moving dense rows or shifting text |
+| Selection / tab indicator | 120–160 ms (`--duration-fast`, `cubicOut`) | Smooth indicator transition, content becomes interactive immediately |
+| Page content change | 140–180 ms (`--duration-normal`, `cubicOut`) | Subtle opacity transition with at most 2–4 px translation; no exit-before-enter delay |
+| Dialog / detail panel | 160–220 ms (`--duration-overlay`, `cubicOut`) | Soft opacity + slight scale transform; focus trapped and restored |
+| Refresh | Immediate pending state | Keep existing data stable, update changed values without animated counters or list replay |
+| Sidebar collapse | At most 180 ms | Width and padding transition with label fade; main content remains fluid |
+
+- Centralize easing and durations using CSS custom properties (`--duration-instant`, `--duration-fast`, `--duration-normal`, `--duration-overlay`, `--ease-out-cubic`).
+- Honor `prefers-reduced-motion`: all spatial movement and transitions are instantly zeroed, while preserving visual feedback and text updates.
+
+## Layout and information architecture
+
+### Main window baseline
+
+- Default size: 960 × 660 px; minimum size: 800 × 560 px.
+- Expanded sidebar width: 224 px (`w-56`); collapsed sidebar width: 64 px (`w-16`).
+- Main content outer inset: 24–32 px (`p-6` to `p-8`), 16–24 px section gaps.
+- Native drag region: Top 28 px (`h-7`) unobstructed for macOS titlebar drag. Interactive items inside require the `no-drag` class.
+
+### Navigation and page hierarchy
+
+Organize the default sidebar into subtle visual groups when space permits (sidebar expanded):
+
+1. **Storage**:
+   - Primary destinations: Storage (`storage`), Containers (`docker`), Local Models (`models`).
+   - Storage exposes discoverable secondary navigation: `Cleanup` | `Developer Artifacts` | `Large Files` | `Applications` | `Disks`.
+2. **Runtime**:
+   - Memory (`memory`), Dev Servers (`development_servers`), Keep Awake (`awake`).
+3. **AI**:
+   - AI Activity (`projects`): Consolidated hub with subtabs for `Usage`, `Projects`, `Tool Adapters`, and direct access to `AI Control Center`.
+4. **Preferences**:
+   - Settings (`settings`): Fixed at the bottom of the sidebar.
+
+*Preservation rule*: User-customized sidebar tab visibility and ordering (`settings.dashboard_tabs`) is strictly respected; custom configurations are never reset or reordered.
+
+### Standard page layout pattern
+
+Each view follows:
+**Page header (title, icon, contextual action) → compact summary (if useful) → filters / search / selection → primary content rows → detail drawer/panel on demand**.
+
+## Components and interaction contract
+
+- **Button**: Semantic variants (`primary`, `secondary`, `outline`, `ghost`, `destructive`), standardized sizes (`xs`, `sm`, `md`, `icon`), visible `focus-visible:ring-2 focus-visible:ring-ring`, disabled explanation.
+- **Card**: Clean surface separation with `border border-border/70 bg-card/60`, rounded-xl, no decorative glow or artificial blur.
+- **Badge**: Status indicators with text meaning beyond color (`variant="success"`, `variant="warning"`, `variant="outline"`).
+- **ProgressBar**: Restrained height (4–8 px), smooth progress without continuous looping shimmer.
+- **ByteValue**: Monospace tabular-numeral formatting for all byte metrics.
+- **SelectionToolbar**: Reserved space inside the content area for bulk actions; count, estimated bytes, and risk summary.
+- **EmptyState**: Distinct states for empty search results, no inventory, missing platform capability, and failed loading.
 
 ## Feature-specific patterns
 
 ### Storage
-
-- Put disk usage, selected reclaimable space, and the cleanup action in the top
-  summary card. Category rows retain safety tier, selected amount, and total.
-- Safe items may begin selected; Rebuild and Manual items never do.
-
-### AI Usage
-
-- Each provider card clearly labels its data source as Live, Local, or Manual.
-- Codex may show OAuth account windows and local token summaries. OpenCode shows
-  local activity only. OpenRouter shows live key usage after an explicit OAuth
-  connection. Claude Code and Antigravity remain honest manual handoffs until
-  their vendors expose suitable account-usage APIs.
-- Never show account email addresses or secret-bearing identifiers. Connection
-  buttons describe the provider and open only user-initiated OAuth flows.
-
-### AI Control Center
-
-- Use four compact sections: Overview, Usage & Budgets, Resource Autopilot, and
-  Safety Posture.
-- Provider rows always show provenance scope and freshness badges (`Fresh`, `Stale`,
-  `Partial`, `Unavailable`); local estimates and manual values must never look like
-  provider-enforced quotas.
-- Local alert thresholds must be labelled as "Zenith local budget alert" and must
-  not imply provider billing or quota enforcement. When aggregating across different
-  provenance kinds (e.g. authoritative + local estimate + manual), copy must
-  explicitly indicate "mixed sources".
-- Recommendations are presented as advisory cards with clear action labels.
-  Preview modals clearly inform the user that one-shot previews expire and that
-  no mutation has occurred.
-- Safety findings are displayed with distinct severity badges (`Critical`, `Warning`,
-  `Info`), concise remediation steps, relative file locations, and dismiss controls.
-- Automation switches state that they are off by default and emphasize that policies
-  never terminate processes, release ports, or delete files automatically.
-- The Quick Panel shows only the cached compact summary and offers no refresh or
-  mutation control for this feature.
+- Top summary card separates disk capacity from cleanup eligibility and selected bytes.
+- Secondary navigation tabs allow switching between:
+  - `Cleanup`: Category list, risk tiers, selection summary, review and clean.
+  - `Developer Artifacts`: Reviewable project build directories (node_modules, target, venv).
+  - `Large Files`: Size-sorted files with trash workflow.
+  - `Applications`: Installed app bundles and associated caches.
+  - `Disks`: Mounted volume capacity and macOS Disk Utility handoff.
+- Mixed-risk selections replace ambiguous "Clean Safely" with "Review & Clean".
 
 ### Quick panel
+- Default size: 360 × 520 px. Works smoothly at short heights and down to 320 px stress width.
+- Glancable top summary: System Status / Ready to Clean with one-click Safe Clean action.
+- Configurable user sections rendered in saved order (`settings.quick_panel_sections`).
+- Immediate cached data rendering with zero hidden-window recurring timers or polling.
+- Fixed header with Close and Open Zenith buttons; fixed footer with Rescan and version tag.
 
-- Show only user-selected high-frequency sections: storage, safe reclaim amount,
-  compact AI usage, category totals, and memory. Preserve the saved section and
-  AI-provider priority order; Scan Again and Open Zenith remain fixed actions.
-- The close button, Escape, Cmd+W, and focus loss hide the panel while the
-  menu-bar process continues. Quit is intentionally available from the tray
-  menu, not conflated with close.
-- Open directly below the clicked menu-bar icon, right-aligned to it and clamped
-  inside the active display. Do not reuse a stale centered window position.
-- Hidden panels perform no recurring metrics polling or provider collection.
-  Refresh disk metrics once when opening, poll memory only while visible, and
-  keep AI usage bounded by a short cache with an explicit refresh action.
+### Containers (Docker)
+- Distinguish daemon running vs stopped vs not installed.
+- Safe pruning of dangling images and build cache; protected volumes require explicit confirmation.
 
-### Disk management
-
-- Separate cleanup candidates from physical/logical volume health. The Disks
-  view shows mounted volumes, used/free capacity, mount points, and a handoff to
-  macOS Disk Utility; destructive volume operations remain outside Zenith.
-- Default cleanup ordering is largest reclaimable size first. Hide nonexistent
-  and zero-byte signature locations. Explain that Rebuild items are deletable
-  but intentionally opt-in because the next tool run may need network downloads
-  or recompilation.
+### Local models
+- Provider context (Ollama, HuggingFace, LM Studio, Apple MLX), model sizes, locations, and manual deletion handoff.
 
 ### Memory inspector
+- System memory pressure as the primary health signal; top memory-ranked user applications; graceful Quit before Force Quit.
 
-- Termination is available only for recognized user applications, including
-  executables inside installed `.app` bundles. Keep the
-  action visually secondary until row hover and always show a confirmation with
-  process count, estimated memory, and unsaved-work warning.
-- Offer normal Quit before the red Force Quit action. Explain that displayed
-  memory is an estimate and macOS may retain released pages as reusable cache.
-- Keep this view focused on memory-ranked application groups.
+### Development servers
+- Port and protocol first, then project/tool and network exposure (loopback vs all-interfaces); graceful Release before Force Release.
 
-### Development Servers
+### AI Activity & Projects
+- Subtabs: `Usage`, `Projects`, `Tool Adapters`, and `AI Control`.
+- Non-color evidence labels on all observed sessions; worktree badges; return from project details without losing state.
 
-- Use a dedicated sidebar tab rather than mixing listeners into the Memory
-  inspector. Rows lead with port/protocol, then sanitized server and project
-  context, bind exposure, process age, and the secondary Release action.
-- Recognized disposable testing infrastructure such as agent-browser and Chrome
-  for Testing follows the same row and confirmation treatment as development
-  servers; do not imply that ordinary browser sessions are releasable.
-- Use neutral styling for loopback, an informational treatment for a specific
-  network interface, and the semantic warning token for all-interface binds.
-  Protected or unrecognized listeners remain visible with the backend-provided
-  reason but have no destructive action.
-- Graceful release is the only action in the first dialog. Show the destructive
-  Force Release dialog only after the backend confirms the same listener
-  ignored SIGTERM. Dialog focus enters on open and returns to the originating
-  row action on cancel or completion.
-
-### Projects
-
-- Keep AI Activity Level 1 focused with three compact sub-tabs directly below
-  the header: `Usage` (default), `Projects`, and `Tool Adapters`. Each tab
-  should show only its own domain and use an obvious active indicator plus a
-  visible keyboard focus ring; the tab state must not rely on color alone.
-- Scope loading and refresh feedback to the selected sub-tab. Usage displays
-  provider cards, Projects displays project/session summaries, and Tool
-  Adapters displays the supported adapter matrix. Preserve successful stale
-  data beside an inline error and load agent integrations only when the
-  adapter tab is first opened.
-- Group rows by canonical repository/worktree identity and use the compact
-  parent/name hint plus branch to distinguish same-name projects without showing
-  an absolute path. Worktrees receive a text badge.
-- Every session shows a non-color evidence label. Process-only observations say
-  `Process observed · detailed status unavailable`; they never claim Finished,
-  Waiting, or Stalled.
-- Keep Unassigned sessions visible in their own section with an explanation that
-  project correlation could not be proven. Never guess from basename, branch,
-  port, or PID.
-- Preserve the last successful snapshot during refresh failures. First load uses
-  stable skeleton cards; empty state explains supported local observation and
-  the privacy boundary. Adapter health stays available in a secondary disclosure.
+### AI Control Center
+- Provenance-aware metrics; local budget alert thresholds clearly distinguished from provider-enforced quotas; advisory safety posture.
 
 ### Keep Awake
+- Prominent active state and remaining time; separation of manual timer from application rules; native application picker.
 
-- “Add Rule” leads with a native Applications picker and automatically fills the
-  app name and executable. Manual fields remain below a divider for CLI tools.
-- Show the selected bundle path so the user can verify the application before
-  saving the rule.
+### Settings
+- Grouped sections: Appearance (System/Light/Dark), Navigation & Quick Panel, Cleanup, Providers, Notifications & Automation, Diagnostics.
 
-## Visual QA checklist
+## Accessibility and visual QA
 
-- Compare both the main window and quick panel at their baseline sizes.
-- Check expanded and collapsed sidebars, long labels, zero values, offline
-  providers, loading, failure, and large numbers. Verify that byte metrics and
-  action labels do not wrap inconsistently, that long descriptive copy truncates
-  gracefully, and that nothing clips behind the titlebar.
-- Confirm the app, Dock, title, and tray icons use the intended variants and do
-  not appear twice.
-- Test keyboard focus, tooltips, and screen-reader names for every clickable
-  control, including the sidebar toggle and Storage status affordance.
+- WCAG AA contrast: Normal text ≥ 4.5:1, large text and boundaries ≥ 3:1 in both light and dark themes.
+- Full keyboard traversal with visible focus indicators (`focus-visible:ring-2 focus-visible:ring-ring`).
+- Accessible names, tooltips, and labels on all icon-only buttons.
+- No information conveyed by color alone.

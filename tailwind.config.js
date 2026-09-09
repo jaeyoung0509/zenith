@@ -33,6 +33,10 @@ export default {
         },
         success: 'hsl(var(--success))',
         warning: 'hsl(var(--warning))',
+        ai: {
+          DEFAULT: 'hsl(var(--ai, 265 85% 68%))',
+          foreground: 'hsl(var(--primary-foreground))',
+        },
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',

@@ -88,7 +88,19 @@
       <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/10 text-violet-400"><Sparkles size={19} /></div>
       <div><h2 class="text-base font-semibold tracking-tight">AI Control Center</h2><p class="mt-0.5 text-xs text-muted-foreground">Provenance-aware usage, verified sessions, and advisory safety controls</p></div>
     </div>
-    <Button variant="outline" size="sm" class="gap-1.5" disabled={aiControlStore.isLoading} onclick={() => aiControlStore.refresh(true)}><RefreshCw size={13} class={aiControlStore.isLoading ? 'animate-gentle-spin' : ''} />Refresh</Button>
+    <div class="flex items-center gap-2 shrink-0">
+      {#if onNavigateTab}
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigateTab('projects')}
+          class="gap-1.5 text-xs"
+        >
+          <span>AI Activity</span>
+        </Button>
+      {/if}
+      <Button variant="outline" size="sm" class="gap-1.5" disabled={aiControlStore.isLoading} onclick={() => aiControlStore.refresh(true)}><RefreshCw size={13} class={aiControlStore.isLoading ? 'animate-gentle-spin' : ''} />Refresh</Button>
+    </div>
   </div>
 
   <div class="flex gap-1 rounded-lg bg-secondary/50 p-1" aria-label="Control Center sections">

@@ -10,6 +10,8 @@
   import Badge from '../../lib/components/Badge.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import ByteValue from '../../lib/components/ByteValue.svelte';
+  import PageHeader from '../../lib/components/PageHeader.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import {
     Activity,
     RotateCw,
@@ -108,44 +110,49 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-success/10 text-success flex items-center justify-center">
-        <Activity size={20} />
-      </div>
-      <div>
-        <div class="flex items-center gap-2">
-          <h2 class="text-base font-semibold text-foreground tracking-tight">{memoryHealthTitle}</h2>
-          {#if memory}
-            <div class="px-2.5 py-0.5 rounded-full text-caption font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
-              <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-destructive animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}"></span>
-              <span>Pressure: {memory.pressure.toUpperCase()}</span>
-            </div>
-          {/if}
+  <!-- Page Header -->
+  <PageHeader
+    title={memoryHealthTitle}
+    subtitle={memoryHealthSubtitle}
+    icon={Activity}
+  >
+    {#snippet badge()}
+      {#if memory}
+        <div class="px-2.5 py-0.5 rounded-full text-caption font-mono font-medium border flex items-center gap-1.5 {pressureColors[memory.pressure]}">
+          <span class="h-1.5 w-1.5 rounded-full {memory.pressure === 'critical' ? 'bg-destructive animate-pulse-soft' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}"></span>
+          <span>Pressure: {memory.pressure.toUpperCase()}</span>
         </div>
-        <p class="text-xs text-muted-foreground mt-0.5">
-          {memoryHealthSubtitle}
-        </p>
-      </div>
-    </div>
+      {/if}
+    {/snippet}
 
-    <Button
-      variant="outline"
-      size="sm"
-      disabled={isRefreshing || memoryStore.isLoading}
-      onclick={handleRefresh}
-      class="gap-1.5 text-xs"
-    >
-      <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-gentle-spin' : ''} />
-      <span>Refresh</span>
-    </Button>
-  </div>
+    {#snippet actions()}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={isRefreshing || memoryStore.isLoading}
+        onclick={handleRefresh}
+        class="gap-1.5 text-xs"
+      >
+        <RotateCw size={13} class={isRefreshing || memoryStore.isLoading ? 'animate-gentle-spin' : ''} />
+        <span>Refresh</span>
+      </Button>
+    {/snippet}
+  </PageHeader>
 
   {#if memoryStore.error}
-    <div class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">{memoryStore.error}</div>
+    <InlineNotice
+      variant="destructive"
+      title="Memory Error"
+      message={memoryStore.error}
+      onDismiss={() => (memoryStore.error = null)}
+    />
   {:else if memoryStore.lastAction}
-    <div class="rounded-xl border border-success/20 bg-success/5 px-4 py-3 text-xs text-success">{memoryStore.lastAction} The operating system may retain some memory as reusable cache.</div>
+    <InlineNotice
+      variant="success"
+      title="Memory Action Complete"
+      message={`${memoryStore.lastAction} The operating system may retain some memory as reusable cache.`}
+      onDismiss={() => (memoryStore.lastAction = null)}
+    />
   {/if}
 
   {#if memory}
