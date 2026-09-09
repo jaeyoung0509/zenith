@@ -19,6 +19,7 @@ const MAX_DISCOVERY_OUTPUT: usize = 16 * 1024;
 enum ProviderKind {
     Uv,
     Pnpm,
+    Npm,
 }
 
 impl ProviderKind {
@@ -26,6 +27,7 @@ impl ProviderKind {
         match id {
             "dev.uv.cache" => Some(Self::Uv),
             "dev.pnpm.store" => Some(Self::Pnpm),
+            "dev.npm.cache" => Some(Self::Npm),
             _ => None,
         }
     }
@@ -34,6 +36,7 @@ impl ProviderKind {
         match self {
             Self::Uv => "uv",
             Self::Pnpm => "pnpm",
+            Self::Npm => "npm",
         }
     }
 
@@ -41,6 +44,8 @@ impl ProviderKind {
         match self {
             Self::Uv => &["cache", "dir"],
             Self::Pnpm => &["store", "path"],
+            // Prints the single configured cache directory.
+            Self::Npm => &["config", "get", "cache"],
         }
     }
 
@@ -48,6 +53,7 @@ impl ProviderKind {
         match self {
             Self::Uv => &["cache", "prune"],
             Self::Pnpm => &["store", "prune"],
+            Self::Npm => &["cache", "clean", "--force"],
         }
     }
 
@@ -55,6 +61,7 @@ impl ProviderKind {
         match self {
             Self::Uv => "uv Package Cache",
             Self::Pnpm => "pnpm Content-Addressable Store",
+            Self::Npm => "npm Cache",
         }
     }
 
@@ -64,6 +71,7 @@ impl ProviderKind {
             Self::Pnpm => {
                 "Unreferenced packages are pruned; future installs may download them again."
             }
+            Self::Npm => "A full cleanup can force package downloads on later installs.",
         }
     }
 }
@@ -74,17 +82,17 @@ pub struct CacheProviderRegistry;
 
 impl CacheProviderRegistry {
     pub fn scan_items(registry: &SignatureRegistry) -> Vec<ScanItem> {
-        // Two tiny provider lookups; route through the shared bounded scan
+        // Three tiny provider lookups; route through the shared bounded scan
         // pool intentionally instead of the unbounded global Rayon pool.
         crate::execution_budget::install_shared(
             || {
-                [ProviderKind::Uv, ProviderKind::Pnpm]
+                [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
                     .into_par_iter()
                     .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
                     .collect()
             },
             || {
-                [ProviderKind::Uv, ProviderKind::Pnpm]
+                [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
                     .into_iter()
                     .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
                     .collect()
@@ -99,6 +107,7 @@ impl CacheProviderRegistry {
         let signature_id = match provider {
             ProviderKind::Uv => "dev.uv.cache",
             ProviderKind::Pnpm => "dev.pnpm.store",
+            ProviderKind::Npm => "dev.npm.cache",
         };
         let Some(signature) = registry.get(signature_id) else {
             return Ok(None);
@@ -261,21 +270,7 @@ fn validate_cache_path(path: PathBuf) -> Result<PathBuf, String> {
     if canonical == canonical_home || !canonical.starts_with(&canonical_home) {
         return Err("The discovered cache is outside the current user profile".to_string());
     }
-    let broad_cache_roots = [
-        canonical_home.join(".cache"),
-        canonical_home.join("Library/Caches"),
-    ];
-    let specific_store_roots = [
-        canonical_home.join(".local/share/pnpm"),
-        canonical_home.join("Library/pnpm"),
-        canonical_home.join(".pnpm-store"),
-    ];
-    let mut approved = broad_cache_roots
-        .iter()
-        .any(|root| canonical != *root && canonical.starts_with(root))
-        || specific_store_roots
-            .iter()
-            .any(|root| canonical == *root || canonical.starts_with(root));
+    let mut approved = cache_location_approved(&canonical, &canonical_home);
     for variable in ["LOCALAPPDATA", "APPDATA"] {
         if let Some(root) = std::env::var_os(variable)
             .map(PathBuf::from)
@@ -295,6 +290,40 @@ fn validate_cache_path(path: PathBuf) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+/// Pure approval check over already-canonicalized paths (no filesystem access),
+/// so the trust boundary is directly unit-testable. Broad cache roots match
+/// strict subdirectories; specific store roots (including the npm home
+/// directory) match themselves and their contents.
+fn cache_location_approved(canonical: &Path, canonical_home: &Path) -> bool {
+    let broad_cache_roots = [
+        canonical_home.join(".cache"),
+        canonical_home.join("Library/Caches"),
+    ];
+    let specific_store_roots = [
+        canonical_home.join(".local/share/pnpm"),
+        canonical_home.join("Library/pnpm"),
+        canonical_home.join(".pnpm-store"),
+        canonical_home.join(".npm"),
+    ];
+    broad_cache_roots
+        .iter()
+        .any(|root| canonical != *root && canonical.starts_with(root))
+        || specific_store_roots
+            .iter()
+            .any(|root| canonical == *root || canonical.starts_with(root))
+}
+
+/// Home-relative install locations of version-manager-owned toolchains
+/// (nvm, Volta, asdf, fnm). Narrow to each manager's own directory; the
+/// caller still requires the canonical executable to live under one of these
+/// roots, and execution stays limited to fixed provider arguments.
+fn node_manager_roots(home: &Path) -> Vec<PathBuf> {
+    [".nvm", ".volta", ".asdf", ".fnm"]
+        .iter()
+        .map(|dir| home.join(dir))
+        .collect()
+}
+
 fn validate_executable(path: &Path) -> Result<(), String> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|_| "Could not validate the provider executable".to_string())?;
@@ -312,10 +341,17 @@ fn validate_executable(path: &Path) -> Result<(), String> {
             home.join(".npm-global/bin"),
             home.join("Library/pnpm"),
         ]);
+        roots.extend(node_manager_roots(&home));
     }
     for variable in ["LOCALAPPDATA", "APPDATA"] {
         if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
-            roots.extend([root.join("Programs"), root.join("npm"), root.join("pnpm")]);
+            roots.extend([
+                root.join("Programs"),
+                root.join("npm"),
+                root.join("pnpm"),
+                root.join("nvm"),
+                root.join("Volta"),
+            ]);
         }
     }
     if let Some(program_files) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
@@ -363,7 +399,61 @@ fn bounded_message(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_discovered_path;
+    use super::ProviderKind;
+    use super::{cache_location_approved, node_manager_roots, parse_discovered_path};
+    use std::path::PathBuf;
+
+    #[test]
+    fn npm_provider_is_wired_to_its_signature_and_commands() {
+        assert_eq!(
+            ProviderKind::for_signature("dev.npm.cache"),
+            Some(ProviderKind::Npm)
+        );
+        assert_eq!(ProviderKind::Npm.executable(), "npm");
+        assert_eq!(
+            ProviderKind::Npm.discovery_args(),
+            &["config", "get", "cache"]
+        );
+        assert_eq!(
+            ProviderKind::Npm.prune_args(),
+            &["cache", "clean", "--force"]
+        );
+        assert_eq!(ProviderKind::for_signature("dev.yarn.cache"), None);
+    }
+
+    #[test]
+    fn npm_home_cache_is_an_approved_location() {
+        let home = if cfg!(target_os = "windows") {
+            PathBuf::from("C:\\Users\\tester")
+        } else {
+            PathBuf::from("/Users/tester")
+        };
+        // The default npm cache directory and the npm home itself.
+        assert!(cache_location_approved(&home.join(".npm/_cacache"), &home));
+        assert!(cache_location_approved(&home.join(".npm"), &home));
+        // Broad roots still match strict subdirectories only.
+        assert!(cache_location_approved(
+            &home.join(".cache/npm/_cacache"),
+            &home
+        ));
+        // Unrelated home children and the home root itself stay rejected.
+        assert!(!cache_location_approved(
+            &home.join("random-override"),
+            &home
+        ));
+        assert!(!cache_location_approved(&home, &home));
+    }
+
+    #[test]
+    fn node_manager_roots_stay_inside_their_own_directories() {
+        let home = PathBuf::from("/Users/tester");
+        let roots = node_manager_roots(&home);
+        assert!(roots.contains(&home.join(".nvm")));
+        assert!(roots.contains(&home.join(".volta")));
+        for root in &roots {
+            assert!(root.starts_with(&home));
+        }
+    }
 
     #[test]
     fn discovery_requires_one_absolute_utf8_path() {

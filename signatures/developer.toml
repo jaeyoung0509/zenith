@@ -94,14 +94,11 @@ id = "dev.npm.cache"
 name = "npm Cache"
 category = "developer"
 risk = "rebuild"
-strategy = "manual"
-paths = [
-    "~/.npm/_cacache",
-    "~/.npm/_locks"
-]
-description = "Content-addressable package cache. Use npm cache verify/clean; Zenith does not delete the backing tree."
+strategy = "external_command"
+paths = []
+description = "Content-addressable package cache inspected and pruned by npm."
 provider = "npm"
-management_mode = "advisory"
+management_mode = "tool_managed"
 artifact_kind = "package_store"
 consequence = "A full cleanup can force package downloads on later installs."
 reclaimable_is_lower_bound = true

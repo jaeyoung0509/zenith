@@ -548,6 +548,54 @@ pub async fn run_with_timeout_async(
     })
 }
 
+/// Cap for version-manager directory scans so resolution work stays bounded.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const MAX_NODE_VERSION_DIRS: usize = 32;
+
+/// Bounded scan of version-manager Node installs: every direct child of
+/// `versions_dir` contributing `<child>/bin` (nvm on Unix). Non-directories
+/// are skipped without following symlinks.
+#[cfg(target_os = "macos")]
+fn nvm_node_bin_dirs(versions_dir: &Path) -> Vec<PathBuf> {
+    versioned_install_dirs(versions_dir, "bin")
+}
+
+/// nvm-windows layout: executables sit directly in each version directory
+/// (`%APPDATA%/nvm/v*/npm.cmd`). Same bound as the Unix helper.
+#[cfg(target_os = "windows")]
+fn nvm_windows_bin_dirs(nvm_dir: &Path) -> Vec<PathBuf> {
+    versioned_install_dirs(nvm_dir, "")
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn versioned_install_dirs(versions_dir: &Path, leaf: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(versions_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .take(MAX_NODE_VERSION_DIRS)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            std::fs::symlink_metadata(path)
+                .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                .unwrap_or(false)
+        })
+        .map(|path| {
+            if leaf.is_empty() {
+                path
+            } else {
+                path.join(leaf)
+            }
+        })
+        .filter(|path| {
+            std::fs::symlink_metadata(path)
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 pub fn resolve(name: &str) -> Option<PathBuf> {
     let mut candidates = env::var_os("PATH")
         .map(|value| env::split_paths(&value).collect::<Vec<_>>())
@@ -566,7 +614,13 @@ pub fn resolve(name: &str) -> Option<PathBuf> {
                 home.join(".local/bin"),
                 home.join(".cargo/bin"),
                 home.join(".npm-global/bin"),
+                home.join(".volta/bin"),
+                home.join(".asdf/shims"),
             ]);
+            // Version-manager installs (nvm) keep one `bin` dir per Node
+            // version; scan them bounded so resolution work cannot grow
+            // without limit.
+            candidates.extend(nvm_node_bin_dirs(&home.join(".nvm/versions/node")));
         }
 
         match name {
@@ -595,7 +649,14 @@ pub fn resolve(name: &str) -> Option<PathBuf> {
             candidates.extend([
                 local_appdata.join("Programs\\Ollama"),
                 local_appdata.join("Programs\\Python\\Launcher"),
+                local_appdata.join("Volta\\bin"),
             ]);
+            if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
+                // nvm-windows keeps one directory per Node version plus a
+                // `nodejs` junction to the active one; scan bounded.
+                candidates.push(appdata.join("nodejs"));
+                candidates.extend(nvm_windows_bin_dirs(&appdata.join("nvm")));
+            }
         }
 
         if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
@@ -926,5 +987,33 @@ mod tests {
         // best-effort tree termination while the timeout path reaps explicitly.
         let completed = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
         assert!(completed.is_err() || completed.unwrap().is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn nvm_scan_finds_version_bins_and_skips_non_directories() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let versions = directory.path().join("versions/node");
+        for version in ["v20.0.0", "v22.0.0"] {
+            fs::create_dir_all(versions.join(version).join("bin")).unwrap();
+        }
+        fs::write(versions.join("stray-file"), "x").unwrap();
+        symlink(versions.join("v20.0.0"), versions.join("v-link")).unwrap();
+
+        let mut found = super::nvm_node_bin_dirs(&versions);
+        found.sort();
+        assert_eq!(
+            found,
+            vec![versions.join("v20.0.0/bin"), versions.join("v22.0.0/bin"),]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn nvm_scan_returns_empty_for_missing_versions_dir() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(super::nvm_node_bin_dirs(&directory.path().join("versions/node")).is_empty());
     }
 }
