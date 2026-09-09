@@ -296,7 +296,7 @@
               {:else if cleanupState === 'scanning'}
                 <span class="text-muted-foreground">Checking development caches</span>
               {:else if cleanupState === 'refreshing'}
-                <span class="text-warning">Refreshing scan…</span>
+                <span class="text-warning">{scanStore.lastScanTrigger === 'auto' ? 'Auto-refreshing…' : 'Refreshing scan…'}</span>
               {:else if cleanupState === 'stale'}
                 <span class="text-warning">Out of date · Scan Again before cleaning</span>
               {:else if cleanupState === 'ready'}
