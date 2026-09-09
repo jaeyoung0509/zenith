@@ -989,15 +989,34 @@ mod tests {
         system: &FakeMemorySystem,
         group: &str,
     ) -> String {
+        lease_for_with_force_authorization(store, system, group, cfg!(target_os = "windows"))
+    }
+
+    fn lease_for_with_force_authorization(
+        store: &Mutex<MemoryTerminationStore>,
+        system: &FakeMemorySystem,
+        group: &str,
+        force_authorized: bool,
+    ) -> String {
         let members = system.group_members(group);
         assert!(!members.is_empty());
         store.lock().unwrap().create_lease(CreateMemoryLeaseParams {
             group: group.to_string(),
             members,
             can_terminate: true,
-            force_authorized: false,
+            force_authorized,
             now: Instant::now(),
         })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn initial_termination_mode() -> MemoryTerminationMode {
+        MemoryTerminationMode::Force
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn initial_termination_mode() -> MemoryTerminationMode {
+        MemoryTerminationMode::Graceful
     }
 
     #[test]
@@ -1119,7 +1138,7 @@ mod tests {
         let store = Mutex::new(MemoryTerminationStore::default());
         let result = MemoryInspector::execute_termination(
             "missing-lease",
-            MemoryTerminationMode::Graceful,
+            initial_termination_mode(),
             &store,
             &system,
         );
@@ -1141,7 +1160,7 @@ mod tests {
         let lease = lease_for(&store, &system, "Cursor");
         let first = MemoryInspector::execute_termination(
             &lease,
-            MemoryTerminationMode::Graceful,
+            initial_termination_mode(),
             &store,
             &system,
         )
@@ -1149,7 +1168,7 @@ mod tests {
         assert_eq!(first.outcome, MemoryTerminationOutcome::Released);
         let second = MemoryInspector::execute_termination(
             &lease,
-            MemoryTerminationMode::Graceful,
+            initial_termination_mode(),
             &store,
             &system,
         );
@@ -1182,7 +1201,7 @@ mod tests {
         );
         let result = MemoryInspector::execute_termination(
             &lease,
-            MemoryTerminationMode::Graceful,
+            initial_termination_mode(),
             &store,
             &system,
         )
@@ -1216,7 +1235,7 @@ mod tests {
         );
         let result = MemoryInspector::execute_termination(
             &lease,
-            MemoryTerminationMode::Graceful,
+            initial_termination_mode(),
             &store,
             &system,
         )
@@ -1248,7 +1267,7 @@ mod tests {
         );
         let result = MemoryInspector::execute_termination(
             &lease,
-            MemoryTerminationMode::Graceful,
+            initial_termination_mode(),
             &store,
             &system,
         )
@@ -1280,12 +1299,12 @@ mod tests {
                     group: "Cursor".to_string(),
                 }],
                 can_terminate: true,
-                force_authorized: false,
+                force_authorized: cfg!(target_os = "windows"),
                 now: Instant::now(),
             });
             let result = MemoryInspector::execute_termination(
                 &lease,
-                MemoryTerminationMode::Graceful,
+                initial_termination_mode(),
                 &store,
                 &system,
             );
@@ -1294,6 +1313,7 @@ mod tests {
         assert!(system.signaled.lock().unwrap().is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn graceful_failure_mints_force_authorized_lease() {
         let system = FakeMemorySystem::new();
@@ -1307,7 +1327,7 @@ mod tests {
             "/Applications/Cursor.app/Contents/MacOS/Cursor",
         );
         let store = Mutex::new(MemoryTerminationStore::default());
-        let lease = lease_for(&store, &system, "Cursor");
+        let lease = lease_for_with_force_authorization(&store, &system, "Cursor", false);
         let graceful = MemoryInspector::execute_termination(
             &lease,
             MemoryTerminationMode::Graceful,
@@ -1413,7 +1433,7 @@ mod tests {
             "/Applications/Cursor.app/Contents/MacOS/Cursor",
         );
         let store = Mutex::new(MemoryTerminationStore::default());
-        let lease = lease_for(&store, &system, "Cursor");
+        let lease = lease_for_with_force_authorization(&store, &system, "Cursor", false);
         let result = MemoryInspector::execute_termination(
             &lease,
             MemoryTerminationMode::Force,
