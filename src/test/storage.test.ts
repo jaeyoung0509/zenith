@@ -1,9 +1,17 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'svelte/server';
 import StorageView from '../routes/dashboard/StorageView.svelte';
 import CategoryDetailView from '../routes/dashboard/CategoryDetailView.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
 import type { CategoryResult } from '../lib/models/types';
+
+afterEach(() => {
+  scanStore.lastScan = null;
+  scanStore.selectedMap = {};
+  scanStore.isScanning = false;
+  scanStore.isCleaning = false;
+  scanStore.lastScanTrigger = null;
+});
 
 describe('StorageView CTA and responsive toolbar layout', () => {
   beforeEach(() => {
@@ -39,11 +47,12 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       manual_bytes: 0,
     };
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
     scanStore.lastScan = {
       scan_id: 'scan-1',
       valid_for_seconds: 300,
-      started_at: Date.now() - 1000,
-      finished_at: Date.now(),
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
       categories: [mockCategory],
       total_bytes: 1024 * 1024 * 100,
       safe_bytes: 1024 * 1024 * 100,
@@ -66,9 +75,10 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).not.toContain('Review cleanup 100 MB');
     expect(rendered.body).not.toMatch(/Review cleanup\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
     // Ensure summary pill renders byte count separately
-    expect(rendered.body).toContain('✓ 100 MB Safe');
+    expect(rendered.body).toMatch(/text-success[^>]*>✓ [\s\S]*?100 MB[\s\S]*? Safe<\/span>/);
     // Ensure responsive toolbar classes for 960x660 baseline
-    expect(rendered.body).toContain('flex flex-col md:flex-row md:items-center justify-between gap-3');
+    expect(rendered.body).toContain('flex flex-col sm:flex-row sm:items-center justify-between gap-3');
+    expect(rendered.body).toContain('aria-label="Cleanup selection and actions"');
     expect(rendered.body).toContain('aria-label="Open storage settings"');
   });
 
@@ -98,11 +108,12 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       manual_bytes: 0,
     };
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
     scanStore.lastScan = {
       scan_id: 'scan-2',
       valid_for_seconds: 300,
-      started_at: Date.now() - 1000,
-      finished_at: Date.now(),
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
       categories: [mockCategory],
       total_bytes: 1024 * 1024 * 500,
       safe_bytes: 0,
@@ -125,7 +136,72 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).not.toContain('Review cleanup 500 MB');
     expect(rendered.body).not.toMatch(/Review cleanup\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
     // Ensure summary pill renders rebuildable count separately
-    expect(rendered.body).toContain('↻ 500 MB Rebuildable');
+    expect(rendered.body).toMatch(/text-warning[^>]*>↻ [\s\S]*?500 MB[\s\S]*? Rebuildable<\/span>/);
+  });
+
+  it('wires zero-byte manual selections to the shared toolbar contract', () => {
+    const safeItem = {
+      id: 'safe-item',
+      signature_id: 'sig.safe',
+      name: 'Safe Cache',
+      category: 'developer' as const,
+      risk: 'safe' as const,
+      path: '/tmp/safe-cache',
+      size: { logical: 1024, allocated: 1024 },
+      file_count: 1,
+      description: 'Safe cache',
+      is_selected: true,
+      last_modified: null,
+      exists: true,
+    };
+    const manualItem = {
+      ...safeItem,
+      id: 'manual-item',
+      signature_id: 'sig.manual',
+      name: 'Manual Resource',
+      path: '/tmp/manual-resource',
+      risk: 'manual' as const,
+      size: { logical: 0, allocated: 0 },
+    };
+    const category: CategoryResult = {
+      category: 'developer',
+      display_name: 'Developer Caches',
+      items: [safeItem, manualItem],
+      total_bytes: 1024,
+      safe_bytes: 1024,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+    };
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    scanStore.lastScan = {
+      scan_id: 'scan-manual-zero',
+      valid_for_seconds: 300,
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
+      categories: [category],
+      total_bytes: 1024,
+      safe_bytes: 1024,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+    };
+    scanStore.selectedMap = { 'safe-item': true, 'manual-item': true };
+
+    const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+
+    expect(rendered.body).toContain('1 Manual item');
+    expect(rendered.body).toContain('Manual items require their dedicated management action');
+  });
+
+  it('uses the header scan control as the only freshness status UI', () => {
+    scanStore.isScanning = true;
+    scanStore.lastScanTrigger = 'auto';
+
+    const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+
+    expect(rendered.body).toContain('animate-gentle-spin');
+    expect(rendered.body).toContain('Scanning…');
+    expect(rendered.body).not.toContain('Scan storage to find current cleanup candidates');
+    expect(rendered.body).not.toContain('Scan Again');
   });
 });
 
@@ -157,11 +233,12 @@ describe('detected versus reclaimable storage copy', () => {
       manual_bytes: bytes,
     };
 
+    const nowSeconds = Math.floor(Date.now() / 1000);
     scanStore.lastScan = {
       scan_id: 'scan-orbstack',
       valid_for_seconds: 300,
-      started_at: Date.now() - 1000,
-      finished_at: Date.now(),
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
       categories: [category],
       total_bytes: bytes,
       safe_bytes: 0,

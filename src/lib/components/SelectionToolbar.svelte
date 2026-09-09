@@ -11,6 +11,7 @@
     safeBytes?: number;
     rebuildBytes?: number;
     manualBytes?: number;
+    manualCount?: number;
     onSelectAll?: () => void;
     onSelectSafe?: () => void;
     onDeselectAll?: () => void;
@@ -18,6 +19,7 @@
     onAction?: () => void;
     isActionDisabled?: boolean;
     isActionLoading?: boolean;
+    isSelectionDisabled?: boolean;
     class?: string;
     extraActions?: Snippet;
   }
@@ -29,6 +31,7 @@
     safeBytes = 0,
     rebuildBytes = 0,
     manualBytes = 0,
+    manualCount = 0,
     onSelectAll,
     onSelectSafe,
     onDeselectAll,
@@ -36,12 +39,15 @@
     onAction,
     isActionDisabled = false,
     isActionLoading = false,
+    isSelectionDisabled = false,
     class: className = "",
     extraActions,
   }: Props = $props();
 </script>
 
 <div
+  role="group"
+  aria-label="Cleanup selection and actions"
   class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border border-border/80 bg-card/80 shadow-xs {className}"
 >
   <div class="flex flex-wrap items-center gap-2">
@@ -49,6 +55,7 @@
       <Button
         variant="ghost"
         size="xs"
+        disabled={isSelectionDisabled}
         onclick={onSelectSafe}
         class="text-xs text-muted-foreground hover:text-foreground"
       >
@@ -61,6 +68,7 @@
       <Button
         variant="ghost"
         size="xs"
+        disabled={isSelectionDisabled}
         onclick={onSelectAll}
         class="text-xs text-muted-foreground hover:text-foreground"
       >
@@ -72,7 +80,7 @@
       <Button
         variant="ghost"
         size="xs"
-        disabled={selectedCount === 0}
+        disabled={isSelectionDisabled || selectedCount === 0}
         onclick={onDeselectAll}
         class="text-xs text-muted-foreground hover:text-foreground"
       >
@@ -94,13 +102,18 @@
       {/if}
     </span>
 
-    {#if safeBytes > 0 || rebuildBytes > 0}
+    {#if safeBytes > 0 || rebuildBytes > 0 || manualCount > 0}
       <span class="inline-flex items-center gap-1.5 text-caption font-mono">
         {#if safeBytes > 0}
-          <span class="text-success">✓ <ByteValue bytes={safeBytes} /> safe</span>
+          <span class="text-success">✓ <ByteValue bytes={safeBytes} /> Safe</span>
         {/if}
         {#if rebuildBytes > 0}
-          <span class="text-warning">↻ <ByteValue bytes={rebuildBytes} /> rebuild</span>
+          <span class="text-warning">↻ <ByteValue bytes={rebuildBytes} /> Rebuildable</span>
+        {/if}
+        {#if manualCount > 0}
+          <span class="text-destructive">
+            ! {manualCount} Manual {manualCount === 1 ? 'item' : 'items'}{#if manualBytes > 0} · <ByteValue bytes={manualBytes} />{/if}
+          </span>
         {/if}
       </span>
     {/if}
@@ -115,7 +128,8 @@
       <Button
         variant={rebuildBytes > 0 ? "secondary" : "primary"}
         size="sm"
-        disabled={isActionDisabled || isActionLoading || selectedCount === 0}
+        disabled={isActionDisabled || isActionLoading || selectedCount === 0 || manualCount > 0}
+        title={manualCount > 0 ? "Manual items require their dedicated management action" : undefined}
         onclick={onAction}
         class="gap-1.5"
       >

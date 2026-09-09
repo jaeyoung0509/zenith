@@ -216,6 +216,17 @@ export class ScanStore {
     return total;
   }
 
+  get manualSelectedCount(): number {
+    if (!this.lastScan) return 0;
+    let total = 0;
+    for (const cat of this.lastScan.categories) {
+      for (const item of cat.items) {
+        if (item.risk === 'manual' && this.selectedMap[item.id]) total++;
+      }
+    }
+    return total;
+  }
+
   get selectedCount(): number {
     return Object.values(this.selectedMap).filter(Boolean).length;
   }

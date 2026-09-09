@@ -5,7 +5,7 @@
   import type { CategoryResult } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
-  import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import { formatTimeAgo } from '../../lib/utils/format';
   import {
     tauriOpenStorageSettings,
     tauriShowInFileManager,
@@ -16,8 +16,8 @@
   import CategoryCard from '../../lib/components/CategoryCard.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
-  import ScanFreshnessNotice from '../../lib/components/ScanFreshnessNotice.svelte';
   import ByteValue from '../../lib/components/ByteValue.svelte';
+  import SelectionToolbar from '../../lib/components/SelectionToolbar.svelte';
   import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
   import ApplicationsView from './ApplicationsView.svelte';
@@ -25,8 +25,6 @@
   import {
     RotateCw,
     Trash2,
-    CheckSquare,
-    Square,
     ShieldCheck,
     AlertCircle,
     HardDrive,
@@ -174,8 +172,6 @@
       onBack={() => (activeSecondaryTab = 'cleanup')}
     />
   {:else}
-    <ScanFreshnessNotice />
-
     <!-- Storage & Cleanable Overview Card -->
     <Card class="p-6 bg-card/70 border-border/80 relative overflow-hidden space-y-6">
       <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -272,73 +268,37 @@
         </div>
       {/if}
 
-      <!-- Action Toolbar -->
-      <div class="pt-4 border-t border-border/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-1.5">
+      <!-- Shared Action Toolbar -->
+      <SelectionToolbar
+        selectedCount={scanStore.selectedCount}
+        selectedBytes={safeSelectedBytes + rebuildSelectedBytes + manualSelectedBytes}
+        safeBytes={safeSelectedBytes}
+        rebuildBytes={rebuildSelectedBytes}
+        manualBytes={manualSelectedBytes}
+        manualCount={scanStore.manualSelectedCount}
+        onSelectSafe={() => scanStore.selectAllSafe()}
+        onDeselectAll={() => scanStore.deselectAll()}
+        actionLabel="Review cleanup"
+        onAction={handleCleanSelected}
+        isActionDisabled={!scanStore.canClean || scanStore.reclaimableBytes === 0}
+        isActionLoading={scanStore.isCleaning}
+        isSelectionDisabled={!scanStore.canClean}
+        class="mt-4"
+      >
+        {#snippet extraActions()}
           <Button
             variant="ghost"
-            size="sm"
-            disabled={!scanStore.canClean}
-            onclick={() => scanStore.selectAllSafe()}
-            class="text-xs px-2.5"
-          >
-            <CheckSquare size={13} class="mr-1 text-success" />
-            <span>Select Safe Only</span>
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!scanStore.canClean}
-            onclick={() => scanStore.deselectAll()}
-            class="text-xs text-muted-foreground px-2.5"
-          >
-            <Square size={13} class="mr-1" />
-            <span>Deselect All</span>
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
+            size="xs"
             onclick={() => tauriOpenStorageSettings()}
-            class="text-xs text-muted-foreground gap-1 px-2.5"
+            class="text-muted-foreground"
             title="Open storage settings"
             ariaLabel="Open storage settings"
           >
             <ExternalLink size={12} />
             <span>Storage Settings</span>
           </Button>
-        </div>
-
-        <div class="flex flex-col sm:flex-row sm:items-center md:flex-col md:items-end gap-2 shrink-0">
-          {#if scanStore.selectedCount > 0}
-            <div class="flex flex-wrap items-center gap-2 text-meta font-mono">
-              <span class="whitespace-nowrap text-success font-medium">✓ {formatBytes(safeSelectedBytes)} Safe</span>
-              {#if rebuildSelectedBytes > 0}
-                <span class="whitespace-nowrap text-warning font-medium">↻ {formatBytes(rebuildSelectedBytes)} Rebuildable</span>
-              {/if}
-              {#if manualSelectedBytes > 0}
-                <span class="whitespace-nowrap text-destructive font-medium">! {formatBytes(manualSelectedBytes)} Manual</span>
-              {/if}
-            </div>
-          {/if}
-          <Button
-            variant="primary"
-            size="md"
-            disabled={!scanStore.canClean || scanStore.reclaimableBytes === 0}
-            onclick={handleCleanSelected}
-            class="gap-2 px-5 min-w-[130px]"
-          >
-            {#if scanStore.isCleaning}
-              <DeletingDots size="sm" />
-              <span>Cleaning…</span>
-            {:else}
-              <Trash2 size={14} />
-              <span>Review cleanup</span>
-            {/if}
-          </Button>
-        </div>
-      </div>
+        {/snippet}
+      </SelectionToolbar>
     </Card>
 
     <!-- Cleaning In Progress Bar -->
