@@ -13,7 +13,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     scanStore.isCleaning = false;
   });
 
-  it('renders "Clean Safely" for safe-only selections without duplicating byte count in CTA text', () => {
+  it('renders "Review cleanup" for safe-only selections without duplicating byte count in CTA text', () => {
     const mockCategory: CategoryResult = {
       category: 'ai',
       display_name: 'AI Tools',
@@ -58,13 +58,13 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       },
     });
 
-    expect(rendered.body).toContain('Clean Safely');
-    expect(rendered.body).not.toContain('Review &amp; Clean');
+    expect(rendered.body).toContain('Review cleanup');
+    expect(rendered.body).not.toContain('Clean Safely');
     // Ensure the CTA button strictly renders clean text without appended byte label
-    expect(rendered.body).toContain('<span>Clean Safely</span>');
-    expect(rendered.body).not.toContain('Clean Safely ·');
-    expect(rendered.body).not.toContain('Clean Safely 100 MB');
-    expect(rendered.body).not.toMatch(/Clean Safely\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
+    expect(rendered.body).toContain('<span>Review cleanup</span>');
+    expect(rendered.body).not.toContain('Review cleanup ·');
+    expect(rendered.body).not.toContain('Review cleanup 100 MB');
+    expect(rendered.body).not.toMatch(/Review cleanup\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
     // Ensure summary pill renders byte count separately
     expect(rendered.body).toContain('✓ 100 MB Safe');
     // Ensure responsive toolbar classes for 960x660 baseline
@@ -72,7 +72,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).toContain('aria-label="Open storage settings"');
   });
 
-  it('renders "Review & Clean" when rebuildable items are selected', () => {
+  it('renders "Review cleanup" when rebuildable items are selected', () => {
     const mockCategory: CategoryResult = {
       category: 'developer',
       display_name: 'Developer Caches',
@@ -118,12 +118,12 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       },
     });
 
-    expect(rendered.body).toContain('Review &amp; Clean');
+    expect(rendered.body).toContain('Review cleanup');
     // Ensure the CTA button strictly renders clean text without appended byte label
-    expect(rendered.body).toContain('<span>Review &amp; Clean</span>');
-    expect(rendered.body).not.toContain('Review &amp; Clean ·');
-    expect(rendered.body).not.toContain('Review &amp; Clean 500 MB');
-    expect(rendered.body).not.toMatch(/Review &amp; Clean\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
+    expect(rendered.body).toContain('<span>Review cleanup</span>');
+    expect(rendered.body).not.toContain('Review cleanup ·');
+    expect(rendered.body).not.toContain('Review cleanup 500 MB');
+    expect(rendered.body).not.toMatch(/Review cleanup\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
     // Ensure summary pill renders rebuildable count separately
     expect(rendered.body).toContain('↻ 500 MB Rebuildable');
   });

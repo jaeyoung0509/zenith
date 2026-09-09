@@ -40,7 +40,7 @@
 </script>
 
 <div
-  role="alert"
+  role={variant === "error" || variant === "destructive" ? "alert" : "status"}
   class="flex items-start justify-between gap-3 p-3 rounded-xl border text-xs leading-relaxed {variantStyles[variant]} {className}"
 >
   <div class="flex items-start gap-2.5 min-w-0">
@@ -49,7 +49,7 @@
       {#if title}
         <div class="font-semibold">{title}</div>
       {/if}
-      <div class="text-caption leading-normal">{message}</div>
+      <div class="text-xs leading-normal break-words">{message}</div>
     </div>
   </div>
 
@@ -68,6 +68,7 @@
         type="button"
         onclick={onDismiss}
         aria-label="Dismiss notice"
+        title="Dismiss notice"
         class="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
       >
         <X size={13} />

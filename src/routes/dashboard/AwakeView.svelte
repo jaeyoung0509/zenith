@@ -190,7 +190,7 @@
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div class="space-y-1.5">
         <div class="flex items-center gap-2">
-          <Power size={16} class={awakeState.is_active ? 'text-warning animate-pulse-soft' : 'text-muted-foreground'} />
+          <Power size={16} class={awakeState.is_active ? 'text-warning' : 'text-muted-foreground'} />
           <h3 class="text-sm font-semibold text-foreground">
             {#if awakeState.is_active}
               {#if awakeState.manual_expires_at != null || awakeState.trigger_source?.includes('Manual')}

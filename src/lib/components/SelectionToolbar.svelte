@@ -115,12 +115,12 @@
       <Button
         variant={rebuildBytes > 0 ? "secondary" : "primary"}
         size="sm"
-        disabled={isActionDisabled || selectedCount === 0}
+        disabled={isActionDisabled || isActionLoading || selectedCount === 0}
         onclick={onAction}
         class="gap-1.5"
       >
         <Trash2 size={13} />
-        <span>{actionLabel}</span>
+        <span>{isActionLoading ? "Working…" : actionLabel}</span>
       </Button>
     {/if}
   </div>

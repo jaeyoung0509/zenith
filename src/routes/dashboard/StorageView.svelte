@@ -1,4 +1,6 @@
 <script lang="ts">
+  import SegmentedTabs from '../../lib/components/SegmentedTabs.svelte';
+  import CleanupReviewDialog from '../../lib/components/CleanupReviewDialog.svelte';
   import { untrack } from 'svelte';
   import type { CategoryResult } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
@@ -61,12 +63,20 @@
   let disk = $derived(memoryStore.disk);
   let scan = $derived(scanStore.lastScan);
   let showResultModal = $state(false);
+  let review = $state<{ scanId: string; items: import('../../lib/models/types').ScanItem[] } | null>(null);
+  const storagePanelId = $props.id();
+  const storageTabs = [
+    { id: 'cleanup', label: 'Cleanup', icon: Trash2 },
+    { id: 'developer-artifacts', label: 'Developer Artifacts', icon: FolderSearch },
+    { id: 'large-files', label: 'Large Files', icon: FileSearch },
+    { id: 'applications', label: 'Applications', icon: AppWindow },
+    { id: 'disks', label: 'Disks', icon: HardDrive },
+  ];
   let volumes = $derived(memoryStore.volumes);
 
   let safeSelectedBytes = $derived(scanStore.safeSelectedBytes);
   let rebuildSelectedBytes = $derived(scanStore.rebuildSelectedBytes);
   let manualSelectedBytes = $derived(scanStore.manualSelectedBytes);
-  let hasRebuildSelected = $derived(scanStore.rebuildSelectedBytes > 0);
 
   $effect(() => {
     // One snapshot on activation and after a scan replaces the inventory.
@@ -75,7 +85,21 @@
   });
 
   function handleCleanSelected() {
-    scanStore.cleanSelected().then((res) => {
+    if (!scan || !scanStore.canClean) return;
+    review = {
+      scanId: scan.scan_id,
+      items: scan.categories.flatMap(category => category.items)
+        .filter(item => scanStore.selectedMap[item.id] && item.risk !== 'manual'),
+    };
+  }
+
+  function confirmCleanup() {
+    if (!review || review.scanId !== scan?.scan_id || !scanStore.canClean) return;
+    const items = review.items;
+    review = null;
+    // Execute only the reviewed selection, even if another consumer selected
+    // additional items while the review was open. Backend plans revalidate it.
+    scanStore.cleanItems(items).then((res) => {
       if (res) showResultModal = true;
     });
   }
@@ -103,7 +127,7 @@
 
 <div class="space-y-6">
   <!-- Top Storage Header -->
-  <div class="flex items-center justify-between pb-3 border-b border-border/60">
+  <div class="flex flex-wrap gap-3 items-center justify-between pb-3 border-b border-border/60">
     <div class="flex items-center gap-3">
       <div class="h-9 w-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0">
         <HardDrive size={20} />
@@ -126,63 +150,15 @@
   </div>
 
   <!-- Secondary Navigation Tabs -->
-  <div
-    role="tablist"
-    aria-label="Storage workflows"
-    class="inline-flex items-center gap-1 p-1 rounded-lg bg-secondary/50 border border-border/50 text-muted-foreground overflow-x-auto max-w-full"
-  >
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeSecondaryTab === 'cleanup'}
-      onclick={() => handleTabClick('cleanup')}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {activeSecondaryTab === 'cleanup' ? 'bg-card text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/70'}"
-    >
-      <Trash2 size={13} />
-      <span>Cleanup</span>
-    </button>
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeSecondaryTab === 'developer-artifacts'}
-      onclick={() => handleTabClick('developer-artifacts')}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {activeSecondaryTab === 'developer-artifacts' ? 'bg-card text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/70'}"
-    >
-      <FolderSearch size={13} />
-      <span>Developer Artifacts</span>
-    </button>
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeSecondaryTab === 'large-files'}
-      onclick={() => handleTabClick('large-files')}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {activeSecondaryTab === 'large-files' ? 'bg-card text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/70'}"
-    >
-      <FileSearch size={13} />
-      <span>Large Files</span>
-    </button>
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeSecondaryTab === 'applications'}
-      onclick={() => handleTabClick('applications')}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {activeSecondaryTab === 'applications' ? 'bg-card text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/70'}"
-    >
-      <AppWindow size={13} />
-      <span>Applications</span>
-    </button>
-    <button
-      type="button"
-      role="tab"
-      aria-selected={activeSecondaryTab === 'disks'}
-      onclick={() => handleTabClick('disks')}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {activeSecondaryTab === 'disks' ? 'bg-card text-foreground shadow-xs font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/70'}"
-    >
-      <HardDrive size={13} />
-      <span>Disks</span>
-    </button>
-  </div>
+  <SegmentedTabs
+    tabs={storageTabs}
+    panelId={storagePanelId}
+    activeTab={activeSecondaryTab}
+    ariaLabel="Storage workflows"
+    onSelect={(tab) => handleTabClick(tab as typeof activeSecondaryTab)}
+  />
 
+  <div class="space-y-6" id={storagePanelId} role="tabpanel" aria-label={storageTabs.find(tab => tab.id === activeSecondaryTab)?.label} tabindex="0">
   {#if activeSecondaryTab === 'developer-artifacts'}
     <DeveloperArtifactsView onBack={() => (activeSecondaryTab = 'cleanup')} />
   {:else if activeSecondaryTab === 'large-files'}
@@ -358,7 +334,7 @@
               <span>Cleaning…</span>
             {:else}
               <Trash2 size={14} />
-              <span>{hasRebuildSelected ? 'Review & Clean' : 'Clean Safely'}</span>
+              <span>Review cleanup</span>
             {/if}
           </Button>
         </div>
@@ -419,6 +395,17 @@
         </div>
       {/if}
     </div>
+  {/if}
+
+  </div>
+
+  {#if review}
+    <CleanupReviewDialog
+      items={review.items}
+      disabled={review.scanId !== scan?.scan_id || !scanStore.canClean}
+      onCancel={() => (review = null)}
+      onConfirm={confirmCleanup}
+    />
   {/if}
 
   {#if showResultModal && scanStore.lastCleanResult}

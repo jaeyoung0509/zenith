@@ -10,7 +10,6 @@
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import StorageView from './StorageView.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
-  import DiskView from './DiskView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
   import MemoryView from './MemoryView.svelte';
@@ -19,9 +18,6 @@
   import AiControlCenterView from './AiControlCenterView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
-  import LargeFilesView from './LargeFilesView.svelte';
-  import ApplicationsView from './ApplicationsView.svelte';
-  import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { formatBytes } from '../../lib/utils/format';
   import { tauriStartWindowDrag } from '../../lib/utils/tauri';
@@ -117,7 +113,7 @@
         const definition = tabDefs[tab as DashboardTab];
         return !!definition && (!definition.capability || platformCapabilitiesStore.isAvailable(definition.capability));
       });
-      currentTab = (firstAvailable as Tab | undefined) ?? 'settings';
+      currentTab = firstAvailable === 'disk' ? 'disks' : (firstAvailable as Tab | undefined) ?? 'settings';
     });
 
     return () => {
@@ -137,7 +133,7 @@
       currentTab = 'large-files';
     } else if (tab === 'applications') {
       currentTab = 'applications';
-    } else if (tab === 'disks') {
+    } else if (tab === 'disks' || tab === 'disk') {
       currentTab = 'disks';
     } else if (tab === 'settings') {
       currentTab = 'settings';
@@ -170,7 +166,7 @@
   <aside
     class="{sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between pt-9 relative transition-[width,padding] duration-150"
   >
-    <div class="space-y-4">
+    <div class="space-y-4 min-h-0 overflow-y-auto">
       <!-- Title & Branding -->
       <div class="flex items-center {sidebarCollapsed ? 'flex-col' : 'justify-between'} gap-2">
         <div
@@ -221,7 +217,7 @@
             {@const prevTabId = (settings.dashboard_tabs ?? [])[i - 1]}
             {@const prevGroup = prevTabId ? tabGroups[prevTabId as DashboardTab] : null}
             {@const showGroupHeader = !sidebarCollapsed && currentGroup && currentGroup !== prevGroup}
-            {@const isTabActive = currentTab === tabId || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
+            {@const isTabActive = currentTab === tabId || (tabId === 'disk' && currentTab === 'disks') || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
 
             {#if showGroupHeader}
               <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
@@ -337,22 +333,11 @@
               onBack={() => (selectedCategory = null)}
               onNavigateTab={(tab) => selectTab(tab)}
             />
-          {:else if currentTab === 'storage'}
+          {:else if currentTab === 'storage' || currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'}
             <StorageView
+              initialTab={currentTab === 'storage' ? 'cleanup' : currentTab}
               onSelectCategory={(cat) => (selectedCategory = cat)}
-              onOpenLargeFiles={() => selectTab('large-files')}
-              onOpenApplications={() => selectTab('applications')}
-              onOpenDeveloperArtifacts={() => selectTab('developer-artifacts')}
-              onOpenDisks={() => selectTab('disks')}
             />
-          {:else if currentTab === 'large-files'}
-            <LargeFilesView onBack={() => selectTab('storage')} />
-          {:else if currentTab === 'applications'}
-            <ApplicationsView onBack={() => selectTab('storage')} />
-          {:else if currentTab === 'developer-artifacts'}
-            <DeveloperArtifactsView onBack={() => selectTab('storage')} />
-          {:else if currentTab === 'disks'}
-            <DiskView onReviewCategory={(cat) => (selectedCategory = cat)} />
           {:else if currentTab === 'docker'}
             <DockerView />
           {:else if currentTab === 'models'}
