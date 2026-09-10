@@ -36,7 +36,7 @@ safety conventions below when changing Zenith.
   hard entry cap, recover poisoned locks where their state is disposable, and
   remove entries on success, cancellation, and error paths.
 - Keep all `invoke` calls in `src/lib/utils/tauri.ts`. Dedicated storage-management workflows (Large Files Inspector and App Uninstaller) are the sanctioned exception: their native/browser-preview split lives in `src/lib/api/storage.ts` with selection via the shared `isTauri()` from `src/lib/api/index.ts`. Every other browser-previewed feature must have a deterministic mock guarded by `isTauri()`. See `docs/ARCHITECTURE.md` for the exact extension path.
-- Register every application command in `src-tauri/build.rs` and grant it only to the windows that need it through `src-tauri/capabilities`. Destructive adapters belong to the main-window capability, not the quick panel.
+- Register every application command in `src-tauri/build.rs` and grant it only to the windows that need it through `src-tauri/capabilities`. General destructive adapters belong to the main-window capability. The Quick Panel may expose backend-owned one-click cleanup only through a narrow Safe-only command that derives targets from the current trusted scan.
 - Never read or expose OAuth credential files directly. Prefer an official CLI
   or API flow. Keep provider secrets in Rust, return only derived usage data,
   and use the OS keychain if persistence is introduced. Never log tokens.

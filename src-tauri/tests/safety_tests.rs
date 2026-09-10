@@ -856,6 +856,187 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
     assert!(!transient_cache.exists(), "transient_cache must be deleted");
 }
 
+#[test]
+fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
+    use zenith_lib::commands::select_quick_clean_safe_candidates;
+    use zenith_lib::models::ZenithSettings;
+
+    let scan = ScanResult {
+        scan_id: "test-scan-123".to_string(),
+        valid_for_seconds: 60,
+        started_at: 1000,
+        finished_at: 1005,
+        total_bytes: 1500,
+        safe_bytes: 600,
+        rebuild_bytes: 400,
+        manual_bytes: 500,
+        categories: vec![
+            CategoryResult {
+                category: Category::Developer,
+                display_name: "Developer".to_string(),
+                total_bytes: 600,
+                safe_bytes: 200,
+                rebuild_bytes: 400,
+                manual_bytes: 0,
+                items: vec![
+                    ScanItem {
+                        id: "dev.safe.nonzero".to_string(),
+                        signature_id: "dev.signature".to_string(),
+                        name: "Safe Dev Cache".to_string(),
+                        category: Category::Developer,
+                        risk: RiskTier::Safe,
+                        path: "/tmp/dev-cache".to_string(),
+                        size: FileSize::new(200, Some(200)),
+                        file_count: 5,
+                        description: "test".to_string(),
+                        cache_metadata: Default::default(),
+                        is_selected: true,
+                        last_modified: None,
+                        exists: true,
+                    },
+                    ScanItem {
+                        id: "dev.safe.zero".to_string(),
+                        signature_id: "dev.signature".to_string(),
+                        name: "Zero Byte Cache".to_string(),
+                        category: Category::Developer,
+                        risk: RiskTier::Safe,
+                        path: "/tmp/dev-zero".to_string(),
+                        size: FileSize::new(0, Some(0)),
+                        file_count: 0,
+                        description: "test".to_string(),
+                        cache_metadata: Default::default(),
+                        is_selected: true,
+                        last_modified: None,
+                        exists: true,
+                    },
+                    ScanItem {
+                        id: "dev.rebuild".to_string(),
+                        signature_id: "dev.signature".to_string(),
+                        name: "Rebuild Dev Cache".to_string(),
+                        category: Category::Developer,
+                        risk: RiskTier::Rebuild,
+                        path: "/tmp/dev-rebuild".to_string(),
+                        size: FileSize::new(400, Some(400)),
+                        file_count: 10,
+                        description: "test".to_string(),
+                        cache_metadata: Default::default(),
+                        is_selected: true,
+                        last_modified: None,
+                        exists: true,
+                    },
+                ],
+            },
+            CategoryResult {
+                category: Category::System,
+                display_name: "System".to_string(),
+                total_bytes: 400,
+                safe_bytes: 400,
+                rebuild_bytes: 0,
+                manual_bytes: 0,
+                items: vec![ScanItem {
+                    id: "sys.safe.nonzero".to_string(),
+                    signature_id: "sys.signature".to_string(),
+                    name: "System Logs".to_string(),
+                    category: Category::System,
+                    risk: RiskTier::Safe,
+                    path: "/tmp/sys-logs".to_string(),
+                    size: FileSize::new(400, Some(400)),
+                    file_count: 8,
+                    description: "test".to_string(),
+                    cache_metadata: Default::default(),
+                    is_selected: true,
+                    last_modified: None,
+                    exists: true,
+                }],
+            },
+            CategoryResult {
+                category: Category::Model,
+                display_name: "Model".to_string(),
+                total_bytes: 500,
+                safe_bytes: 0,
+                rebuild_bytes: 0,
+                manual_bytes: 500,
+                items: vec![ScanItem {
+                    id: "model.manual".to_string(),
+                    signature_id: "model.signature".to_string(),
+                    name: "Manual Model".to_string(),
+                    category: Category::Model,
+                    risk: RiskTier::Manual,
+                    path: "/tmp/model".to_string(),
+                    size: FileSize::new(500, Some(500)),
+                    file_count: 1,
+                    description: "test".to_string(),
+                    cache_metadata: Default::default(),
+                    is_selected: true,
+                    last_modified: None,
+                    exists: true,
+                }],
+            },
+        ],
+    };
+
+    // Default settings has clean_developer_tools=true
+    let default_settings = ZenithSettings::default();
+    let candidates = select_quick_clean_safe_candidates(&scan, &default_settings);
+    assert_eq!(candidates, vec!["dev.safe.nonzero", "sys.safe.nonzero"]);
+
+    // If clean_developer_tools is disabled, dev.safe.nonzero must NOT be included
+    let disabled_dev_settings = ZenithSettings {
+        clean_developer_tools: false,
+        ..Default::default()
+    };
+    let candidates2 = select_quick_clean_safe_candidates(&scan, &disabled_dev_settings);
+    assert_eq!(candidates2, vec!["sys.safe.nonzero"]);
+}
+
+#[test]
+fn test_quick_panel_capability_boundary_safe_only() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let quick_path = manifest_dir.join("capabilities/quick.json");
+    let quick_raw = fs::read_to_string(&quick_path).expect("read quick.json");
+    let quick_json: serde_json::Value = serde_json::from_str(&quick_raw).expect("parse quick.json");
+
+    let quick_permissions = quick_json
+        .get("permissions")
+        .and_then(|p| p.as_array())
+        .expect("permissions array in quick.json");
+
+    let quick_permission_strings: Vec<&str> = quick_permissions
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+
+    // Must allow quick_clean_safe
+    assert!(
+        quick_permission_strings.contains(&"allow-quick-clean-safe"),
+        "quick.json must contain allow-quick-clean-safe"
+    );
+
+    // Must NOT allow arbitrary plan creation or execution
+    assert!(
+        !quick_permission_strings.contains(&"allow-create-delete-plan"),
+        "quick.json must NOT contain allow-create-delete-plan"
+    );
+    assert!(
+        !quick_permission_strings.contains(&"allow-execute-clean"),
+        "quick.json must NOT contain allow-execute-clean"
+    );
+
+    // Verify main capability still has general delete plan & execution authority
+    let main_path = manifest_dir.join("capabilities/main.json");
+    let main_raw = fs::read_to_string(&main_path).expect("read main.json");
+    let main_json: serde_json::Value = serde_json::from_str(&main_raw).expect("parse main.json");
+    let main_permissions = main_json
+        .get("permissions")
+        .and_then(|p| p.as_array())
+        .expect("permissions array in main.json");
+    let main_permission_strings: Vec<&str> =
+        main_permissions.iter().filter_map(|p| p.as_str()).collect();
+
+    assert!(main_permission_strings.contains(&"allow-create-delete-plan"));
+    assert!(main_permission_strings.contains(&"allow-execute-clean"));
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_parent_replacement_between_validation_and_unlink_leaves_outside_untouched() {

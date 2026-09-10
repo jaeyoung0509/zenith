@@ -3,7 +3,9 @@
 use super::state::AppState;
 use super::support::{run_blocking, unix_timestamp};
 use crate::cleaner::CleanExecutor;
-use crate::models::{Category, CleanEvent, CleanResult, PlanPreview, ScanEvent, ScanResult};
+use crate::models::{
+    Category, CleanEvent, CleanResult, PlanPreview, RiskTier, ScanEvent, ScanResult,
+};
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
 use tauri::ipc::Channel;
@@ -152,6 +154,102 @@ pub async fn execute_clean(
     })
     .await
     .map_err(|_| "Clean execution thread panicked".to_string())??;
+
+    Ok(result)
+}
+
+/// Derives backend-owned Safe-only candidates for Quick Clean.
+/// Enforces: risk == Safe, bytes > 0, category enabled in settings.
+/// Never includes Rebuild or Manual items.
+pub fn select_quick_clean_safe_candidates(
+    scan: &ScanResult,
+    settings: &crate::models::ZenithSettings,
+) -> Vec<String> {
+    let mut eligible_ids = Vec::new();
+    for category in &scan.categories {
+        if !settings.is_category_clean_enabled(category.category) {
+            continue;
+        }
+        for item in &category.items {
+            let bytes = item.size.allocated.unwrap_or(item.size.logical);
+            if item.risk == RiskTier::Safe && bytes > 0 {
+                eligible_ids.push(item.id.clone());
+            }
+        }
+    }
+    eligible_ids
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn quick_clean_safe(
+    on_event: Channel<CleanEvent>,
+    state: State<'_, AppState>,
+) -> Result<CleanResult, String> {
+    let operation_gate = state.storage_operation_gate.clone();
+    let registry = state.registry.clone();
+    let last_scan_store = state.last_scan.clone();
+
+    // 1. Load current fresh backend scan and sanitized settings
+    let (scan, selected_item_ids) = {
+        let scan_guard = last_scan_store.lock().expect("last_scan poisoned");
+        let scan = scan_guard
+            .as_ref()
+            .ok_or_else(|| {
+                "The scan is no longer current. Scan again before cleaning.".to_string()
+            })?
+            .clone();
+
+        let now = unix_timestamp();
+        scan.validate_for_cleanup(&scan.scan_id, now)
+            .map_err(|error| error.to_string())?;
+
+        let settings = state.settings.lock().expect("settings poisoned").clone();
+        let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
+
+        (scan, eligible_ids)
+    };
+
+    if selected_item_ids.is_empty() {
+        let now = unix_timestamp();
+        return Ok(CleanResult {
+            plan_id: uuid::Uuid::new_v4(),
+            started_at: now,
+            finished_at: now,
+            total_reclaimed_bytes: 0,
+            total_failed_bytes: 0,
+            items: vec![],
+            actual_disk_free_delta: Some(0),
+        });
+    }
+
+    // 2. Build the SafetyPlanner plan from trusted Safe-only IDs
+    let plan =
+        SafetyPlanner::create_plan_from_scan(&scan, &scan.scan_id, &selected_item_ids, &registry)
+            .map_err(|error| error.to_string())?;
+
+    // 3. Execute through the operation gate, invalidating last_scan
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
+        operation_gate.run(|| {
+            {
+                let mut current_scan = last_scan_store.lock().expect("last_scan poisoned");
+                let scan_ref = current_scan.as_ref().ok_or_else(|| {
+                    "The scan is no longer current. Scan again before cleaning.".to_string()
+                })?;
+                scan_ref
+                    .validate_for_cleanup(&plan.scan_id, unix_timestamp())
+                    .map_err(|error| error.to_string())?;
+                // Invalidate scan so other windows cannot create plans from stale scan
+                *current_scan = None;
+            }
+
+            Ok(CleanExecutor::execute(plan, |event| {
+                let _ = on_event.send(event);
+            }))
+        })
+    })
+    .await
+    .map_err(|_| "Quick clean worker thread panicked".to_string())??;
 
     Ok(result)
 }

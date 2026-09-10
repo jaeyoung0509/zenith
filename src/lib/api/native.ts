@@ -165,6 +165,16 @@ export const nativeApi = {
     return await unwrap(commands.executeClean(plan.id, channel));
   },
 
+  async quickCleanSafe(
+    onEvent: (event: CleanEvent) => void
+  ): Promise<CleanResult> {
+    const channel = new Channel<CleanEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+    return await unwrap(commands.quickCleanSafe(channel));
+  },
+
   async getMemoryMetrics(): Promise<MemoryMetrics> {
     return await unwrap(commands.getMemoryMetrics());
   },

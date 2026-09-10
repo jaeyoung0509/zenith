@@ -181,8 +181,7 @@
   });
 
   async function handleCleanSafe() {
-    scanStore.selectQuickCleanDefaults(settings);
-    const result = await scanStore.cleanSelected();
+    const result = await scanStore.quickCleanSafe();
     if (result) {
       showResultModal = true;
     }

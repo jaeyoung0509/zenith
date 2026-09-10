@@ -11,6 +11,7 @@ import {
   tauriCreatePlan,
   tauriExecuteClean,
   tauriGetLastScan,
+  tauriQuickCleanSafe,
   tauriScan,
 } from '../utils/tauri';
 
@@ -418,6 +419,64 @@ export class ScanStore {
       this.isScanning = false;
       this.currentCategory = null;
       this.currentScanningItem = null;
+    }
+  }
+
+  async quickCleanSafe(): Promise<CleanResult | null> {
+    if (this.isCleaning || this.isScanning) return null;
+    this.updateFreshness();
+    if (!this.canClean) {
+      this.error = 'Scan results are out of date. Scan again and review the new results before cleaning.';
+      return null;
+    }
+
+    this.isCleaning = true;
+    this.error = null;
+    this.lastCleanResult = null;
+
+    try {
+      const result = await tauriQuickCleanSafe((event: CleanEvent) => {
+        switch (event.type) {
+          case 'Started':
+            this.cleanProgress = {
+              currentItem: 'Starting cleanup...',
+              index: 0,
+              total: event.total_targets,
+              percent: 0,
+            };
+            break;
+          case 'ItemStarted':
+            this.cleanProgress = {
+              currentItem: event.name,
+              index: event.index,
+              total: event.total,
+              percent: Math.round((event.index / event.total) * 100),
+            };
+            break;
+          case 'ItemFinished':
+            break;
+          case 'Finished':
+            this.lastCleanResult = event.result;
+            break;
+          case 'Error':
+            this.error = event.message;
+            break;
+        }
+      });
+
+      this.lastCleanResult = result;
+      this.invalidate();
+
+      // Re-scan after clean to refresh metrics
+      await this.runScan();
+
+      return result;
+    } catch (e: any) {
+      this.invalidate();
+      this.error = `${e?.toString() || 'Clean failed'} Scan again and review the results before retrying.`;
+      return null;
+    } finally {
+      this.isCleaning = false;
     }
   }
 

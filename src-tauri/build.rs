@@ -22,6 +22,7 @@ fn main() {
         "get_last_scan",
         "create_delete_plan",
         "execute_clean",
+        "quick_clean_safe",
         "get_memory_metrics",
         "terminate_memory_group",
         "pick_keep_awake_application",

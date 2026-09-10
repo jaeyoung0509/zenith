@@ -350,6 +350,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::get_last_scan,
             commands::create_delete_plan,
             commands::execute_clean,
+            commands::quick_clean_safe,
             commands::get_memory_metrics,
             commands::terminate_memory_group,
             commands::pick_keep_awake_application,

@@ -149,6 +149,12 @@ export function tauriExecuteClean(
   return api.executeClean(plan, onEvent);
 }
 
+export function tauriQuickCleanSafe(
+  onEvent: (event: CleanEvent) => void
+): Promise<CleanResult> {
+  return api.quickCleanSafe(onEvent);
+}
+
 export function tauriGetMemoryMetrics(): Promise<MemoryMetrics> {
   return api.getMemoryMetrics();
 }
