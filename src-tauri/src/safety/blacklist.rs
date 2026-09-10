@@ -28,7 +28,7 @@ impl Blacklist {
         let home = home.map(|value| Self::normalize_path(&value));
 
         // 1. Exact forbidden root & home
-        if path == Path::new("/") {
+        if Self::paths_equal(path, Path::new("/")) {
             return true;
         }
 
@@ -41,15 +41,15 @@ impl Blacklist {
         }
 
         if let Some(ref h) = home {
-            if path == h {
+            if Self::paths_equal(path, h) {
                 return true;
             }
             // Whole AppData itself or Local/Roaming themselves
-            if path == h.join("AppData")
-                || path == h.join("AppData/Local")
-                || path == h.join("AppData\\Local")
-                || path == h.join("AppData/Roaming")
-                || path == h.join("AppData\\Roaming")
+            if Self::paths_equal(path, &h.join("AppData"))
+                || Self::paths_equal(path, &h.join("AppData/Local"))
+                || Self::paths_equal(path, &h.join("AppData\\Local"))
+                || Self::paths_equal(path, &h.join("AppData/Roaming"))
+                || Self::paths_equal(path, &h.join("AppData\\Roaming"))
             {
                 return true;
             }
@@ -59,14 +59,14 @@ impl Blacklist {
         let temp = std::env::temp_dir();
         #[cfg(target_os = "windows")]
         let temp = Self::normalize_path(&temp);
-        if path == temp {
+        if Self::paths_equal(path, &temp) {
             return true;
         }
 
         // 2. Universal Git protection, ADS, and Windows alias defense
         let path_str = path.to_string_lossy();
         for part in path_str.split(['/', '\\']) {
-            if part == ".git" {
+            if part == ".git" || cfg!(windows) && part.eq_ignore_ascii_case(".git") {
                 return true;
             }
             if part.ends_with('.') || part.ends_with(' ') {
@@ -83,7 +83,7 @@ impl Blacklist {
 
         // 3. User sensitive directories (credentials, keychains, user content)
         if let Some(ref h) = home {
-            if path.starts_with(h) {
+            if Self::path_starts_with(path, h) {
                 let sensitive_relative = [
                     ".ssh",
                     ".gnupg",
@@ -111,7 +111,9 @@ impl Blacklist {
 
                 for rel in &sensitive_relative {
                     let sensitive_path = h.join(rel);
-                    if path == sensitive_path || path.starts_with(&sensitive_path) {
+                    if Self::paths_equal(path, &sensitive_path)
+                        || Self::path_starts_with(path, &sensitive_path)
+                    {
                         return true;
                     }
                 }
@@ -128,10 +130,10 @@ impl Blacklist {
             || path_str.starts_with("/private/tmp")
         {
             // Protect root temp folders themselves from direct deletion
-            if path == Path::new("/tmp")
-                || path == Path::new("/private/tmp")
-                || path == Path::new("/var/folders")
-                || path == Path::new("/private/var/folders")
+            if Self::paths_equal(path, Path::new("/tmp"))
+                || Self::paths_equal(path, Path::new("/private/tmp"))
+                || Self::paths_equal(path, Path::new("/var/folders"))
+                || Self::paths_equal(path, Path::new("/private/var/folders"))
             {
                 return true;
             }
@@ -140,7 +142,9 @@ impl Blacklist {
 
         // 5. Exact users root directory
         let normalized_path_str = path.to_string_lossy().replace('\\', "/");
-        if normalized_path_str == "C:/Users" || path == Path::new("/Users") {
+        if normalized_path_str.eq_ignore_ascii_case("C:/Users")
+            || Self::paths_equal(path, Path::new("/Users"))
+        {
             return true;
         }
 
@@ -167,16 +171,53 @@ impl Blacklist {
 
         for sys in &system_prefixes {
             let sys_path = Path::new(sys);
-            if path == sys_path
-                || path.starts_with(sys_path)
-                || normalized_path_str == *sys
-                || normalized_path_str.starts_with(&format!("{sys}/"))
+            let normalized_system = sys.to_ascii_lowercase();
+            let normalized_candidate = normalized_path_str.to_ascii_lowercase();
+            if Self::paths_equal(path, sys_path)
+                || Self::path_starts_with(path, sys_path)
+                || normalized_candidate == normalized_system
+                || normalized_candidate.starts_with(&format!("{normalized_system}/"))
             {
                 return true;
             }
         }
 
         false
+    }
+
+    fn paths_equal(left: &Path, right: &Path) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            return Self::windows_path_key(left) == Self::windows_path_key(right);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            left == right
+        }
+    }
+
+    fn path_starts_with(path: &Path, base: &Path) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            let path_key = Self::windows_path_key(path);
+            let base_key = Self::windows_path_key(base);
+            return path_key
+                .strip_prefix(&base_key)
+                .is_some_and(|suffix| suffix.starts_with('/'));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            path.starts_with(base)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_path_key(path: &Path) -> String {
+        Self::normalize_path(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
     }
 
     /// Verifies that a target path is completely safe from the blacklist.

@@ -629,6 +629,9 @@ impl SafeTreeDeleter {
 
     #[cfg(windows)]
     fn delete_windows_entry(path: &Path, expected: &fs::Metadata) -> io::Result<()> {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
         let expected_identity = ToctouGuard::capture(path).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -636,9 +639,11 @@ impl SafeTreeDeleter {
             )
         })?;
         let handle = WindowsDeleteHandle::open(path)?;
+        let expected_is_reparse = expected.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
         if handle.device != expected_identity.device
             || handle.inode != expected_identity.inode
-            || handle.is_dir != expected.is_dir()
+            || handle.is_reparse_point != expected_is_reparse
+            || (!expected_is_reparse && handle.is_dir != expected.is_dir())
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1002,9 +1007,11 @@ impl SafeTreeDeleter {
 
     fn is_excluded(path: &Path, exclusions: &[String]) -> bool {
         exclusions.iter().any(|exclusion| {
-            if (exclusion.starts_with('~') || exclusion.starts_with('/'))
-                && SignatureLoader::expand_path(exclusion)
-                    .is_some_and(|expanded| path == expanded || path.starts_with(expanded))
+            let exclusion_path = Path::new(exclusion);
+            if (exclusion.starts_with('~') || exclusion_path.is_absolute())
+                && SignatureLoader::expand_path(exclusion).is_some_and(|expanded| {
+                    Self::paths_equal(path, &expanded) || Self::path_starts_with(path, &expanded)
+                })
             {
                 return true;
             }
@@ -1012,6 +1019,41 @@ impl SafeTreeDeleter {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name == exclusion)
         })
+    }
+
+    fn paths_equal(left: &Path, right: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            return Self::windows_path_key(left) == Self::windows_path_key(right);
+        }
+        #[cfg(not(windows))]
+        {
+            left == right
+        }
+    }
+
+    fn path_starts_with(path: &Path, base: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            let path_key = Self::windows_path_key(path);
+            let base_key = Self::windows_path_key(base);
+            return path_key
+                .strip_prefix(&base_key)
+                .is_some_and(|suffix| suffix.starts_with('/'));
+        }
+        #[cfg(not(windows))]
+        {
+            path.starts_with(base)
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows_path_key(path: &Path) -> String {
+        Blacklist::normalize_path(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
     }
 }
 
