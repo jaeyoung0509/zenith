@@ -1024,7 +1024,7 @@ impl SafeTreeDeleter {
     fn paths_equal(left: &Path, right: &Path) -> bool {
         #[cfg(windows)]
         {
-            return Self::windows_path_key(left) == Self::windows_path_key(right);
+            Self::windows_path_key(left) == Self::windows_path_key(right)
         }
         #[cfg(not(windows))]
         {
@@ -1037,9 +1037,9 @@ impl SafeTreeDeleter {
         {
             let path_key = Self::windows_path_key(path);
             let base_key = Self::windows_path_key(base);
-            return path_key
+            path_key
                 .strip_prefix(&base_key)
-                .is_some_and(|suffix| suffix.starts_with('/'));
+                .is_some_and(|suffix| suffix.starts_with('/'))
         }
         #[cfg(not(windows))]
         {
