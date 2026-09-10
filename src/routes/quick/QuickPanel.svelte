@@ -370,7 +370,9 @@
               }}
               aria-label="Refresh AI usage"
             >
-              <RotateCw size={12} class={usageStore.isLoading ? 'animate-gentle-spin' : ''} />
+              <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {usageStore.isLoading ? 'animate-gentle-spin' : ''}">
+                <RotateCw size={12} />
+              </span>
             </button>
           </div>
           {#if settings.quick_panel_ai_providers.length === 0}
@@ -512,6 +514,7 @@
     <div class="flex items-center gap-1.5 text-meta text-muted-foreground">
       <span>Last scan {formatTimeAgo(scan?.finished_at)}</span>
       <button
+        id="quick-storage-scan-button"
         type="button"
         disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning}
         onclick={() => {
@@ -520,7 +523,9 @@
         class="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
         title={cleanupAvailable ? 'Rescan storage' : (cleanupCapability?.reason ?? 'Storage cleanup is unavailable on this platform.')}
       >
-        <RotateCw size={11} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
+        <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
+          <RotateCw size={11} />
+        </span>
       </button>
     </div>
     <div class="flex items-center gap-2">
@@ -538,6 +543,10 @@
   </div>
 
   {#if showResultModal && scanStore.lastCleanResult}
-    <CleanResultModal result={scanStore.lastCleanResult} onClose={() => (showResultModal = false)} />
+    <CleanResultModal
+      result={scanStore.lastCleanResult}
+      onClose={() => (showResultModal = false)}
+      returnFocusTargetId="quick-storage-scan-button"
+    />
   {/if}
 </div>

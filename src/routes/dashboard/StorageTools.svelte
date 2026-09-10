@@ -37,7 +37,9 @@
         onclick={onScanStorage}
         class="shrink-0 gap-1.5"
       >
-        <RotateCw size={13} class={isScanning ? 'animate-gentle-spin' : ''} />
+        <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 {isScanning ? 'animate-gentle-spin' : ''}">
+          <RotateCw size={13} />
+        </span>
         <span>{isScanning ? 'Scanning...' : 'Scan Storage'}</span>
       </Button>
     {/if}
