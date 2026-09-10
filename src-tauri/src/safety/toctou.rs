@@ -183,7 +183,7 @@ fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
             std::ptr::null(),
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            0,
+            std::ptr::null_mut(),
         );
         if handle == INVALID_HANDLE_VALUE || handle.is_null() {
             return None;

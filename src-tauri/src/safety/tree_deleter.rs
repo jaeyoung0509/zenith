@@ -2,6 +2,7 @@
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
 use crate::signatures::SignatureLoader;
+#[cfg(unix)]
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -106,7 +107,7 @@ impl WindowsDeleteHandle {
                 std::ptr::null(),
                 OPEN_EXISTING,
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                0,
+                std::ptr::null_mut(),
             )
         };
         if handle == INVALID_HANDLE_VALUE || handle.is_null() {
