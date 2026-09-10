@@ -365,10 +365,8 @@ impl KeepAwakeManager {
                     )
                 };
 
-            if status == AwakeRuleStatus::Active {
-                if first_eligible_rule.is_none() {
-                    first_eligible_rule = Some(rule.clone());
-                }
+            if status == AwakeRuleStatus::Active && first_eligible_rule.is_none() {
+                first_eligible_rule = Some(rule.clone());
             }
 
             evaluations.push(AwakeRuleEvaluation {
@@ -1160,10 +1158,7 @@ mod tests {
             KeepAwakeManager::typed_rule_status(true, true, true, true, true),
             (true, AwakeRuleStatus::Active)
         );
-        assert_eq!(
-            KeepAwakeManager::typed_rule_status(true, true, false, false, true).0,
-            true
-        );
+        assert!(KeepAwakeManager::typed_rule_status(true, true, false, false, true).0);
 
         let mut stale = typed_rule.clone();
         stale.application.as_mut().unwrap().path = "/moved/Warp.app".into();
