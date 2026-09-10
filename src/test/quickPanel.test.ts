@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
 import QuickUsageGauges from '../lib/components/QuickUsageGauges.svelte';
-import { isQuickPanelDismissShortcut, moveOrdered, projectAiProviders, reorderOrdered, toggleOrdered } from '../lib/utils/quickPanel';
+import {
+  isQuickPanelDismissShortcut,
+  moveOrdered,
+  projectAiProviders,
+  reorderOrdered,
+  selectQuickUsageWindows,
+  toggleOrdered,
+} from '../lib/utils/quickPanel';
 
 describe('quick panel customization', () => {
   it('never removes the final visible section', () => {
@@ -163,14 +170,75 @@ describe('quick panel AI provider projection', () => {
     expect(result[1].name).toBe('Antigravity');
   });
 
-  it('renders spinning loader and the shared quota gauge in QuickPanel.svelte', () => {
+  it('selects a complete 5-hour and weekly quota pair regardless of source order', () => {
+    const weekly = { label: 'Weekly limit', used_percent: 21, resets_at: null };
+    const fiveHour = { label: '5 hour limit', used_percent: 45, resets_at: null };
+
+    expect(selectQuickUsageWindows([weekly, fiveHour])).toEqual({ fiveHour, weekly });
+    expect(selectQuickUsageWindows([fiveHour])).toBeNull();
+  });
+
+  it('renders loading, compact fallback, and dual-quota paths in both provider sections', () => {
     const source = readFileSync(
       new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
       'utf8'
     );
     expect(source).toContain('usageStore.isProviderLoading(provider.id)');
     expect(source).toContain('RotateCw size={11}');
-    expect(source.match(/<QuickUsageGauges/g)).toHaveLength(2);
+    expect(source.match(/<QuickUsageGauges/g)).toHaveLength(4);
+  });
+
+  it('uses stacked provider rows so quota gauges get the full compact-panel width', () => {
+    const quickPanelSource = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    const gaugeSource = readFileSync(
+      new URL('../lib/components/QuickUsageGauges.svelte', import.meta.url),
+      'utf8'
+    );
+
+    expect(quickPanelSource.match(/class:space-y-2=\{hasUsagePair\}/g)).toHaveLength(2);
+    expect(quickPanelSource.match(/:else if !hasUsagePair/g)).toHaveLength(2);
+    expect(quickPanelSource.match(/&& hasUsagePair/g)).toHaveLength(2);
+    expect(quickPanelSource).toContain('<span class="truncate font-medium">{provider.name}</span>');
+    expect(quickPanelSource).toContain('<span class="truncate text-muted-foreground">{provider.name}</span>');
+    expect(gaugeSource).toContain(
+      'grid-cols-[repeat(auto-fit,minmax(min(8rem,100%),1fr))]'
+    );
+    expect(gaugeSource).not.toContain('grid-cols-2');
+    expect(gaugeSource).not.toContain('w-48');
+    expect(gaugeSource).toContain('whitespace-nowrap');
+    expect(gaugeSource).toContain('tabular-nums');
+  });
+
+  it('keeps three-digit quota metadata on one line with tabular numeric styling', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T00:00:00Z'));
+
+    try {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const rendered = render(QuickUsageGauges, {
+        props: {
+          windows: [
+            { label: '5h limit', used_percent: 100, resets_at: nowSeconds + 23 * 3600 },
+            { label: 'Weekly limit', used_percent: 100, resets_at: nowSeconds + 6 * 86400 },
+          ],
+          fallback: 'unused fallback',
+        },
+      });
+
+      expect(rendered.body).toContain('whitespace-nowrap');
+      expect(rendered.body).toContain('tabular-nums');
+      expect(rendered.body).toContain('100%');
+      expect(rendered.body).toContain('· 23h');
+      expect(rendered.body).toContain('· 6d');
+      expect(rendered.body).toContain('aria-label="5 hours: 100% used, resets in 23h"');
+      expect(rendered.body).toContain('aria-label="1 week: 100% used, resets in 6d"');
+      expect(rendered.body).not.toContain('unused fallback');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders separate 5-hour and weekly gauge bars with accessible values', () => {
@@ -203,5 +271,7 @@ describe('quick panel AI provider projection', () => {
 
     expect(rendered.body).toContain('45% used');
     expect(rendered.body).not.toContain('Usage limit windows');
+    expect(rendered.body).toContain('shrink-0 whitespace-nowrap');
+    expect(rendered.body).toContain('tabular-nums');
   });
 });
