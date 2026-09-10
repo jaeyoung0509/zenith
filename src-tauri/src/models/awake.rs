@@ -192,6 +192,7 @@ mod tests {
 
     #[test]
     fn typed_rule_round_trips_application_identity_and_known_agents() {
+        let app_path = std::env::current_dir().unwrap().join("Warp.app");
         let rule = AwakeRule {
             id: "rule.warp-agents".into(),
             app_name: "Warp".into(),
@@ -200,7 +201,7 @@ mod tests {
             application: Some(ApplicationIdentity {
                 display_name: "Warp".into(),
                 executable_name: "stable".into(),
-                path: "/Applications/Warp.app".into(),
+                path: app_path.to_string_lossy().into_owned(),
             }),
             agent_ids: vec![AwakeAgentId::Codex, AwakeAgentId::OpenCode],
             behavior: AwakeBehavior::PreventSystemSleep,
