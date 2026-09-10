@@ -152,9 +152,11 @@
       class="gap-1.5"
       id="storage-scan-button"
     >
-      <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
-        <RotateCw size={13} />
-      </span>
+      {#key scanStore.isScanning}
+        <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
+          <RotateCw size={13} />
+        </span>
+      {/key}
       <span>{scanStore.isScanning ? 'Scanning…' : 'Scan Storage'}</span>
     </Button>
   </div>

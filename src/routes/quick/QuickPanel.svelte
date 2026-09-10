@@ -370,9 +370,11 @@
               }}
               aria-label="Refresh AI usage"
             >
-              <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {usageStore.isLoading ? 'animate-gentle-spin' : ''}">
-                <RotateCw size={12} />
-              </span>
+              {#key usageStore.isLoading}
+                <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {usageStore.isLoading ? 'animate-gentle-spin' : ''}">
+                  <RotateCw size={12} />
+                </span>
+              {/key}
             </button>
           </div>
           {#if settings.quick_panel_ai_providers.length === 0}
@@ -523,9 +525,11 @@
         class="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
         title={cleanupAvailable ? 'Rescan storage' : (cleanupCapability?.reason ?? 'Storage cleanup is unavailable on this platform.')}
       >
-        <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
-          <RotateCw size={11} />
-        </span>
+        {#key scanStore.isScanning}
+          <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
+            <RotateCw size={11} />
+          </span>
+        {/key}
       </button>
     </div>
     <div class="flex items-center gap-2">

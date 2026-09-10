@@ -271,6 +271,15 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(gentleSpinRule).toContain('transform-origin: center');
     expect(gentleSpinRule).not.toContain('will-change');
 
+    // Spin must use the independent `rotate` property so the icon never takes
+    // the transform compositing path that leaves stale WKWebView layers behind
+    // after `isScanning` flips false (issue #148).
+    const keyframesIndex = css.indexOf('@keyframes gentle-spin');
+    expect(keyframesIndex).toBeGreaterThan(0);
+    const keyframesBlock = css.slice(keyframesIndex, css.indexOf('.animate-gentle-spin'));
+    expect(keyframesBlock).toContain('rotate:');
+    expect(keyframesBlock).not.toContain('transform:');
+
     expect(css).toContain('@media (prefers-reduced-motion: reduce)');
     const reducedMotionIndex = css.indexOf('@media (prefers-reduced-motion: reduce)');
     const reducedMotionBlock = css.slice(reducedMotionIndex);
