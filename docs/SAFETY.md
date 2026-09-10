@@ -37,6 +37,46 @@ symlink itself, preserves blacklisted or excluded descendants, and removes a
 directory only after it is empty. Generic cleanup does not call
 `remove_dir_all`.
 
+On Unix, traversal holds verified directory descriptors opened with
+`O_DIRECTORY | O_NOFOLLOW` and the final unlink for every file and directory
+goes through `unlinkat` on the verified parent descriptor. A verified
+descriptor is never converted back into an untrusted full-path lookup for the
+final mutation, so replacing or redirecting any parent component after
+validation cannot cause deletion outside the planned signature scope.
+
+On Windows, directory and file identity is captured through handles opened
+with `CreateFileW` using `FILE_FLAG_BACKUP_SEMANTICS |
+FILE_FLAG_OPEN_REPARSE_POINT` and compared as stable volume/file IDs before
+mutation. The verified handle does not share delete access, remains open
+through validation, and applies final deletion with
+`SetFileInformationByHandle(FileDispositionInfo)` to the same filesystem
+object. A missing or zero `(device, inode)` identity is a verification failure,
+never a skipped comparison. Reparse points and symlinks are never traversed;
+symlink, reparse-point, and canonicalization failures fail closed on mutation
+paths.
+
+Execution-time freshness is fail closed by default: a planned file or
+directory target whose modification timestamp changed after scanning aborts
+with `ChangedSinceScan`. The narrowly documented exception is stale-temp
+signatures with `min_age_days`, where the executor re-measures the full tree
+newest-mtime immediately before deletion instead of relying on the single
+directory mtime captured at plan time.
+
+## Platform coverage
+
+Safety guarantees are equivalent in policy and testable on both platforms,
+within the limits CI actually executes:
+
+- Unix (`macos-latest`, `ubuntu-latest`): descriptor-relative `unlinkat`
+  deletion, parent-replacement race tests, symlink escape tests, and
+  permission/ownership checks run in CI.
+- Windows (`windows-latest`): no-follow handle identity capture, `(0, 0)`
+  rejection, reparse-point (junction) non-traversal, case-insensitive
+  protected-path checks, and long (`\\?\`-prefixed) path handling run in CI
+  using temporary fixtures only. Windows graceful process termination is
+  reported as unavailable rather than mapping `TerminateProcess` to graceful.
+- No destructive test points at real user processes or directories.
+
 Blocked locations include filesystem roots, the user home root, credentials,
 keychains, source-control metadata such as nested `.git`, and standard user
 content directories. Temporary cleanup never targets all of `/tmp`; candidates

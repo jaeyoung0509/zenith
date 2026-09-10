@@ -140,7 +140,7 @@ impl CleanExecutor {
             };
         }
 
-        // 1. Blacklist check (lexical & canonical)
+        // 1. Blacklist check (lexical & canonical, fail closed on mutation)
         if let Err(e) = Blacklist::validate(path) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
@@ -153,7 +153,7 @@ impl CleanExecutor {
                 error_message: Some(e.to_string()),
             };
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist(path) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -162,6 +162,20 @@ impl CleanExecutor {
                 success: false,
                 bytes_reclaimed: 0,
                 failure_reason: Some(CleanFailureReason::Blacklisted),
+                error_message: Some(e.to_string()),
+            };
+        }
+
+        // 1b. Symlink metadata must be readable; failure fails closed.
+        if let Err(e) = SymlinkGuard::is_symlink_strict(path) {
+            return CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Failed,
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(CleanFailureReason::ChangedSinceScan),
                 error_message: Some(e.to_string()),
             };
         }

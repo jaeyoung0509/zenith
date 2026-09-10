@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,6 +27,7 @@ fn test_blacklist_root_and_home_rejection() {
 
 #[test]
 fn test_blacklist_system_directories_rejection() {
+    #[cfg(unix)]
     let sys_paths = [
         "/System",
         "/System/Library",
@@ -41,6 +40,13 @@ fn test_blacklist_system_directories_rejection() {
         "/private",
         "/Applications",
         "/Library",
+    ];
+    #[cfg(windows)]
+    let sys_paths = [
+        "C:\\Windows",
+        "C:\\Windows\\System32",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
     ];
 
     for path_str in &sys_paths {
@@ -104,12 +110,22 @@ fn test_blacklist_parent_traversal_attacks() {
 
 #[test]
 fn test_blacklist_git_directory_rejection() {
-    let git_dir = Path::new("/tmp/some-project/.git");
-    assert!(Blacklist::is_blacklisted(git_dir));
-    assert!(Blacklist::validate(git_dir).is_err());
+    #[cfg(unix)]
+    {
+        let git_dir = Path::new("/tmp/some-project/.git");
+        assert!(Blacklist::is_blacklisted(git_dir));
+        assert!(Blacklist::validate(git_dir).is_err());
 
-    let git_file = Path::new("/tmp/some-project/.git/config");
-    assert!(Blacklist::is_blacklisted(git_file));
+        let git_file = Path::new("/tmp/some-project/.git/config");
+        assert!(Blacklist::is_blacklisted(git_file));
+    }
+    #[cfg(windows)]
+    {
+        let dir = tempdir().expect("tempdir");
+        let git_dir = dir.path().join("some-project").join(".git");
+        assert!(Blacklist::is_blacklisted(&git_dir));
+        assert!(Blacklist::validate(&git_dir).is_err());
+    }
 }
 
 #[test]
@@ -140,6 +156,7 @@ fn test_toctou_identity_verification_and_abort() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn test_symlink_safety_and_no_escape() {
     let dir = tempdir().expect("failed to create temp dir");
@@ -153,9 +170,9 @@ fn test_symlink_safety_and_no_escape() {
     }
 
     // Create a symlink inside the fixture pointing outside
-    let symlink_path = dir.path().join("cache_link");
     #[cfg(unix)]
     {
+        let symlink_path = dir.path().join("cache_link");
         std::os::unix::fs::symlink(&outside_file, &symlink_path).expect("create symlink");
         assert!(SymlinkGuard::is_symlink(&symlink_path));
 
@@ -596,6 +613,7 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     assert!(!removable.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn test_ancestor_symlink_escape_rejection() {
     let dir = tempdir().expect("create temp dir");
@@ -607,9 +625,9 @@ fn test_ancestor_symlink_escape_rejection() {
     fs::write(&precious_file, b"cannot be deleted").unwrap();
 
     // Create an intermediate symlink: cargo/registry -> outside_dir
-    let symlink_dir = trusted_root.join("registry");
     #[cfg(unix)]
     {
+        let symlink_dir = trusted_root.join("registry");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_dir).expect("create symlink");
 
         let target_path = symlink_dir.join("cache");
@@ -636,6 +654,7 @@ fn test_sparse_file_zero_allocated_bytes() {
     assert_eq!(size_unknown.reclaimable(), 100 * 1024 * 1024);
 }
 
+#[cfg(unix)]
 #[test]
 fn test_symlink_ancestor_above_signature_root_rejection() {
     let base_dir = tempdir().expect("create base temp dir");
@@ -644,9 +663,9 @@ fn test_symlink_ancestor_above_signature_root_rejection() {
     fs::write(&precious, b"fn important() {}").unwrap();
 
     // Create intermediate symlink: base_dir/.cargo -> outside_dir
-    let symlink_dot_cargo = base_dir.path().join(".cargo");
     #[cfg(unix)]
     {
+        let symlink_dot_cargo = base_dir.path().join(".cargo");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_dot_cargo).expect("create symlink");
 
         let signature_target = symlink_dot_cargo.join("registry").join("cache");
@@ -664,6 +683,7 @@ fn test_symlink_ancestor_above_signature_root_rejection() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn test_signature_root_itself_symlink_rejection() {
     let base_dir = tempdir().expect("create base temp dir");
@@ -672,9 +692,9 @@ fn test_signature_root_itself_symlink_rejection() {
     fs::write(&precious, b"cannot delete").unwrap();
 
     // signature root itself is a symlink: base_dir/cache -> outside_dir
-    let symlink_cache = base_dir.path().join("cache");
     #[cfg(unix)]
     {
+        let symlink_cache = base_dir.path().join("cache");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_cache).expect("create symlink");
 
         let validation_res =
@@ -834,4 +854,145 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
         "default_project_id.txt must be preserved"
     );
     assert!(!transient_cache.exists(), "transient_cache must be deleted");
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_parent_replacement_between_validation_and_unlink_leaves_outside_untouched() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("root");
+    let parent = root.join("parent");
+    fs::create_dir_all(&parent).unwrap();
+    let child = parent.join("child.bin");
+    fs::write(&child, b"inside").unwrap();
+
+    let outside = dir.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let outside_target = outside.join("child.bin");
+    fs::write(&outside_target, b"outside").unwrap();
+
+    // Delete through the verified tree deleter, then prove a swapped parent
+    // symlink cannot redirect an already-verified descriptor unlink.
+    let parent_file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&parent)
+        .unwrap();
+    fs::remove_file(&child).unwrap();
+    fs::remove_dir(&parent).unwrap();
+    std::os::unix::fs::symlink(&outside, &parent).unwrap();
+
+    let res = unsafe {
+        let name = std::ffi::CString::new("child.bin").unwrap();
+        libc::unlinkat(
+            std::os::unix::io::AsRawFd::as_raw_fd(&parent_file),
+            name.as_ptr(),
+            0,
+        )
+    };
+    assert_ne!(res, 0, "stale descriptor unlink must fail");
+    assert_eq!(fs::read(&outside_target).unwrap(), b"outside");
+}
+
+#[cfg(windows)]
+mod windows_safety {
+    use super::*;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[test]
+    fn directory_handle_captures_real_volume_file_identity() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("cache");
+        fs::create_dir(&target).unwrap();
+        let identity = ToctouGuard::capture(&target).expect("capture identity");
+        assert_ne!((identity.device, identity.inode), (0, 0));
+        assert!(ToctouGuard::verify(&target, &identity).is_ok());
+    }
+
+    #[test]
+    fn zero_identity_is_never_accepted_as_verified() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("cache");
+        fs::create_dir(&target).unwrap();
+        let mut identity = ToctouGuard::capture(&target).expect("capture");
+        identity.device = 0;
+        identity.inode = 0;
+        assert!(ToctouGuard::verify(&target, &identity).is_err());
+    }
+
+    #[test]
+    fn file_id_change_is_rejected_as_ownership_changed() {
+        let dir = tempdir().expect("tempdir");
+        let target = dir.path().join("payload.bin");
+        fs::write(&target, b"v1").unwrap();
+        let identity = ToctouGuard::capture(&target).expect("capture");
+        fs::remove_file(&target).unwrap();
+        fs::write(&target, b"v1-recreated").unwrap();
+        // Recreated file has a new file ID; verification must fail.
+        assert!(ToctouGuard::verify(&target, &identity).is_err());
+    }
+
+    #[test]
+    fn reparse_point_is_never_traversed_during_cleanup() {
+        let dir = tempdir().expect("tempdir");
+        let cache = dir.path().join("cache");
+        fs::create_dir(&cache).unwrap();
+        let outside = tempdir().expect("outside");
+        let precious = outside.path().join("precious.bin");
+        fs::write(&precious, b"precious").unwrap();
+
+        let link = cache.join("junction");
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .output();
+        let Ok(output) = output else {
+            return;
+        };
+        if !output.status.success() {
+            return;
+        }
+        assert!(SymlinkGuard::is_symlink(&link));
+        let report = SafeTreeDeleter::delete_contents(&cache, &[]);
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert!(!link.exists() || SymlinkGuard::is_symlink(&link));
+        assert!(precious.exists(), "reparse target must remain untouched");
+    }
+
+    #[test]
+    fn case_insensitive_protected_paths_are_rejected() {
+        assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
+        assert!(Blacklist::is_blacklisted(Path::new("c:\\windows")));
+        assert!(Blacklist::is_blacklisted(Path::new(
+            "C:\\WINDOWS\\System32"
+        )));
+        assert!(Blacklist::validate(Path::new("c:\\windows\\system32")).is_err());
+    }
+
+    #[test]
+    fn long_paths_with_verbatim_prefix_are_handled() {
+        let dir = tempdir().expect("tempdir");
+        let mut deep = dir.path().to_path_buf();
+        for i in 0..8 {
+            deep = deep.join(format!("very-long-directory-name-{i:02}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        let payload = deep.join("payload.bin");
+        fs::write(&payload, b"long-path-payload").unwrap();
+        let verbatim = format!(r"\\?\{}", payload.display());
+        let verbatim_path = PathBuf::from(&verbatim);
+        // Blacklist normalization must not mistake the verbatim prefix for ADS.
+        assert!(!Blacklist::is_blacklisted(&verbatim_path));
+        let report = SafeTreeDeleter::delete_contents(&deep, &[]);
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert!(!payload.exists());
+    }
+
+    #[allow(dead_code)]
+    fn wide_len(path: &Path) -> usize {
+        path.as_os_str().encode_wide().count()
+    }
 }

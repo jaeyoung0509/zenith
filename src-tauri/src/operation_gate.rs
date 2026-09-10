@@ -8,7 +8,12 @@ pub struct StorageOperationGate {
 
 impl StorageOperationGate {
     pub fn run<T>(&self, operation: impl FnOnce() -> T) -> T {
-        let _guard = self.inner.lock().expect("storage operation gate poisoned");
+        // Lifecycle-owned serialization gate: recover from poisoning so one
+        // panicking operation cannot permanently wedge all storage workflows.
+        let _guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         operation()
     }
 }
@@ -62,5 +67,21 @@ mod tests {
 
         generic_work.join().unwrap();
         storage_work.join().unwrap();
+    }
+
+    #[test]
+    fn gate_remains_usable_after_operation_panics() {
+        let gate = StorageOperationGate::default();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            gate.run(|| panic!("intentional operation panic"))
+        }));
+        assert!(result.is_err());
+        // Poison recovery: the next operation must still serialize and run.
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_clone = ran.clone();
+        gate.run(|| {
+            ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 }
