@@ -47,14 +47,42 @@ fn backup_and_recover_corrupted_settings(
     let original = settings_path(config_dir);
     let backup = config_dir.join(format!("settings.corrupt.{timestamp}.json"));
 
-    // 1. Move corrupted settings.json to backup
-    if let Err(e) = fs::rename(&original, &backup) {
-        let _ = fs::copy(&original, &backup);
-        crate::diagnostics::log_error(
-            "settings",
-            &format!("Failed to rename corrupted settings: {e}"),
-        );
-    }
+    // 1. Move corrupted settings.json to backup. Only prune older backups
+    // after the current corrupt payload was actually preserved.
+    let backup_preserved = match fs::rename(&original, &backup) {
+        Ok(()) => true,
+        Err(rename_error) => match fs::copy(&original, &backup) {
+            Ok(_) => {
+                crate::diagnostics::log_error(
+                    "settings",
+                    &format!(
+                        "Failed to rename corrupted settings; preserved a copy instead: {rename_error}"
+                    ),
+                );
+                // Windows rename does not replace an existing destination. Once
+                // the corrupt payload is safely copied, remove the original so
+                // the atomic temporary-file rename in `save` can restore it.
+                if let Err(remove_error) = fs::remove_file(&original) {
+                    crate::diagnostics::log_error(
+                        "settings",
+                        &format!(
+                            "Failed to remove copied corrupt settings before recovery: {remove_error}"
+                        ),
+                    );
+                }
+                true
+            }
+            Err(copy_error) => {
+                crate::diagnostics::log_error(
+                    "settings",
+                    &format!(
+                        "Failed to preserve corrupted settings (rename: {rename_error}; copy: {copy_error})"
+                    ),
+                );
+                false
+            }
+        },
+    };
 
     // 2. Atomically write default settings back into settings.json to recover
     if let Err(e) = save(config_dir, defaults) {
@@ -64,13 +92,19 @@ fn backup_and_recover_corrupted_settings(
         );
     }
 
-    // 3. Prune old corrupted backups beyond the retention limit
-    prune_corrupt_backups(config_dir, MAX_CORRUPT_BACKUPS);
+    // 3. Prune old corrupted backups beyond the retention limit only after
+    // preserving this recovery event.
+    if backup_preserved {
+        prune_corrupt_backups(config_dir, MAX_CORRUPT_BACKUPS);
+    }
 
+    let preservation = if backup_preserved {
+        format!("preserved at {}", backup.display())
+    } else {
+        "could not be preserved".to_string()
+    };
     let msg = format!(
-        "Corrupted settings file moved to {} and recovered with defaults (Error: {})",
-        backup.display(),
-        err_msg
+        "Corrupted settings file {preservation}; recovery with defaults was attempted (Error: {err_msg})"
     );
     crate::diagnostics::log_error("settings", &msg);
 }
@@ -86,6 +120,9 @@ pub fn list_corrupted_backups(config_dir: &Path) -> Vec<PathBuf> {
     let mut backups = Vec::new();
     if let Ok(entries) = fs::read_dir(config_dir) {
         for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
+                continue;
+            }
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if name.starts_with("settings.corrupt.") && name.ends_with(".json") {
@@ -253,5 +290,13 @@ mod tests {
                 name
             );
         }
+
+        let lookalike_directory = dir_path.join("settings.corrupt.50.json");
+        std::fs::create_dir(&lookalike_directory).unwrap();
+        prune_corrupt_backups(dir_path, 2);
+        assert!(
+            lookalike_directory.is_dir(),
+            "Backup pruning must never treat lookalike directories as files"
+        );
     }
 }

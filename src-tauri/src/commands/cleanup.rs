@@ -4,7 +4,7 @@ use super::state::AppState;
 use super::support::{lock_or_state_error, lock_recover, run_blocking, unix_timestamp};
 use crate::cleaner::CleanExecutor;
 use crate::models::{
-    Category, CleanEvent, CleanResult, PlanPreview, RiskTier, ScanEvent, ScanResult,
+    Category, CleanEvent, CleanResult, CleanStrategy, PlanPreview, RiskTier, ScanEvent, ScanResult,
 };
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
@@ -22,14 +22,14 @@ pub async fn start_scan(
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
     let operation_gate = state.storage_operation_gate.clone();
-    let _permit = execution_budgets.acquire_storage_read().await?;
     let (excluded_signatures, intensive_cleanup) = {
-        let settings = lock_recover(&state.settings);
+        let settings = lock_or_state_error(&state.settings, "Settings")?;
         (
             settings.excluded_signatures.clone(),
             settings.intensive_cleanup,
         )
     };
+    let _permit = execution_budgets.acquire_storage_read().await?;
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_read(|| {
@@ -122,6 +122,7 @@ pub async fn execute_clean(
     let operation_gate = state.storage_operation_gate.clone();
     let plans = state.delete_plans.clone();
     let last_scan = state.last_scan.clone();
+    let docker_status_cache = state.docker_status_cache.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
         operation_gate.run_write(|| {
             let plan = lock_or_state_error(&plans, "Delete plans")?
@@ -144,6 +145,13 @@ pub async fn execute_clean(
                 // Even a partial cleanup changes the observation. Other windows
                 // must not create another plan from the pre-cleanup inventory.
                 *scan = None;
+            }
+            if plan
+                .targets
+                .iter()
+                .any(|target| target.strategy == CleanStrategy::DockerPrune)
+            {
+                *lock_recover(&docker_status_cache) = None;
             }
             Ok(CleanExecutor::execute(plan, |event| {
                 let _ = on_event.send(event);
@@ -187,6 +195,7 @@ pub async fn quick_clean_safe(
     let operation_gate = state.storage_operation_gate.clone();
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
+    let docker_status_cache = state.docker_status_cache.clone();
 
     // 1. Load current fresh backend scan and sanitized settings
     let (scan, selected_item_ids) = {
@@ -202,7 +211,7 @@ pub async fn quick_clean_safe(
         scan.validate_for_cleanup(&scan.scan_id, now)
             .map_err(|error| error.to_string())?;
 
-        let settings = lock_recover(&state.settings).clone();
+        let settings = lock_or_state_error(&state.settings, "Settings")?.clone();
         let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
 
         (scan, eligible_ids)
@@ -239,6 +248,14 @@ pub async fn quick_clean_safe(
                     .map_err(|error| error.to_string())?;
                 // Invalidate scan so other windows cannot create plans from stale scan
                 *current_scan = None;
+            }
+
+            if plan
+                .targets
+                .iter()
+                .any(|target| target.strategy == CleanStrategy::DockerPrune)
+            {
+                *lock_recover(&docker_status_cache) = None;
             }
 
             Ok(CleanExecutor::execute(plan, |event| {

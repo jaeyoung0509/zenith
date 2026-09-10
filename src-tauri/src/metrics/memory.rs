@@ -1,4 +1,4 @@
-use crate::collection::{Admission, SingleFlight};
+use crate::collection::{Admission, Inflight, SingleFlight};
 use crate::metrics::memory_termination::{
     CreateMemoryLeaseParams, MemoryLeaseMember, MemoryTerminationStore,
 };
@@ -43,6 +43,30 @@ pub struct MemorySampler {
     process_refresh_counter: AtomicU64,
     cached_observation: Mutex<Option<Arc<MemoryObservation>>>,
     singleflight: SingleFlight<Arc<MemoryObservation>, ()>,
+}
+
+/// Owns observation collection independently from the IPC request that admitted it.
+/// A window closing or cancelling its request must not strand compatible waiters or
+/// leave the single-flight entry occupied until its TTL expires.
+fn supervise_memory_observation(
+    sampler: Arc<MemorySampler>,
+    entry: Arc<Inflight<Arc<MemoryObservation>, ()>>,
+    collect: impl FnOnce() -> MemoryObservation + Send + 'static,
+) {
+    tauri::async_runtime::spawn(async move {
+        let result = tauri::async_runtime::spawn_blocking(move || Arc::new(collect()))
+            .await
+            .map_err(|error| format!("Memory observation worker panicked: {error}"));
+
+        if let Ok(observation) = &result {
+            *sampler
+                .cached_observation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observation.clone());
+        }
+
+        sampler.singleflight.complete(&entry, result).await;
+    });
 }
 
 impl Default for MemorySampler {
@@ -264,16 +288,8 @@ impl MemorySampler {
         self: &Arc<Self>,
         max_age: Duration,
     ) -> Result<Arc<MemoryObservation>, String> {
-        {
-            let guard = self
-                .cached_observation
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(obs) = guard.as_ref() {
-                if obs.captured_at.elapsed() < max_age {
-                    return Ok(obs.clone());
-                }
-            }
+        if let Some(observation) = self.cached_observation(max_age) {
+            return Ok(observation);
         }
 
         match self
@@ -282,23 +298,31 @@ impl MemorySampler {
             .await
         {
             Admission::Own(entry) => {
-                let sampler = self.clone();
-                let obs = tauri::async_runtime::spawn_blocking(move || Arc::new(sampler.observe()))
-                    .await
-                    .map_err(|e| format!("Memory observation worker panicked: {e}"))?;
-
-                {
-                    let mut guard = self
-                        .cached_observation
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *guard = Some(obs.clone());
+                // Another collection may have populated the cache after this
+                // request checked it but before it acquired admission.
+                if let Some(observation) = self.cached_observation(max_age) {
+                    self.singleflight
+                        .complete(&entry, Ok(observation.clone()))
+                        .await;
+                    return Ok(observation);
                 }
-                self.singleflight.complete(&entry, Ok(obs.clone())).await;
-                Ok(obs)
+                let worker_sampler = self.clone();
+                supervise_memory_observation(self.clone(), entry.clone(), move || {
+                    worker_sampler.observe()
+                });
+                self.singleflight.wait(&entry).await
             }
             Admission::Wait(entry) => self.singleflight.wait(&entry).await,
         }
+    }
+
+    fn cached_observation(&self, max_age: Duration) -> Option<Arc<MemoryObservation>> {
+        self.cached_observation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|observation| observation.captured_at.elapsed() < max_age)
+            .cloned()
     }
 
     fn compressed_memory(&self) -> u64 {
@@ -1058,16 +1082,41 @@ impl MemoryInspector {
 
 #[cfg(test)]
 mod tests {
-    use super::{MemoryInspector, MemorySampler, MemoryTerminationSystem, RealMemorySystem};
+    use super::{
+        supervise_memory_observation, MemoryInspector, MemoryObservation, MemorySampler,
+        MemoryTerminationSystem, RealMemorySystem,
+    };
+    use crate::collection::Admission;
     use crate::metrics::memory_termination::{
         CreateMemoryLeaseParams, MemoryLeaseMember, MemoryTerminationStore,
     };
-    use crate::models::{MemoryTerminationMode, MemoryTerminationOutcome};
+    use crate::models::{
+        MemoryMetrics, MemoryPressure, MemoryTerminationMode, MemoryTerminationOutcome,
+    };
     use crate::process_owner::ProcessOwner;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    fn observation_fixture() -> MemoryObservation {
+        MemoryObservation {
+            metrics: MemoryMetrics {
+                total_bytes: 1,
+                used_bytes: 0,
+                available_bytes: 1,
+                free_bytes: 1,
+                compressed_bytes: 0,
+                swap_used_bytes: 0,
+                swap_total_bytes: 0,
+                pressure: MemoryPressure::Normal,
+                top_processes: Vec::new(),
+                timestamp: 1,
+            },
+            termination_candidates: HashMap::new(),
+            captured_at: Instant::now(),
+        }
+    }
 
     struct FakeMemorySystem {
         owner: ProcessOwner,
@@ -1735,5 +1784,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn cancelled_observation_request_does_not_abandon_shared_collection() {
+        let sampler = Arc::new(MemorySampler::new());
+        let entry = match sampler
+            .singleflight
+            .admit("memory_observation".to_string(), 0)
+            .await
+        {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => unreachable!(),
+        };
+        let (release, released) = std::sync::mpsc::channel();
+        supervise_memory_observation(sampler.clone(), entry.clone(), move || {
+            released.recv().unwrap();
+            observation_fixture()
+        });
+
+        let admitting_request = {
+            let sampler = sampler.clone();
+            let entry = entry.clone();
+            tokio::spawn(async move { sampler.singleflight.wait(&entry).await })
+        };
+        admitting_request.abort();
+        let _ = admitting_request.await;
+
+        release.send(()).unwrap();
+        let observation =
+            tokio::time::timeout(Duration::from_secs(1), sampler.singleflight.wait(&entry))
+                .await
+                .expect("detached observation supervisor did not complete")
+                .expect("observation collection failed");
+        assert_eq!(observation.metrics.total_bytes, 1);
+
+        let retry = sampler
+            .singleflight
+            .admit("memory_observation".to_string(), 0)
+            .await;
+        let retry_entry = match retry {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => panic!("completed observation remained in flight"),
+        };
+        sampler
+            .singleflight
+            .complete(&retry_entry, Ok(Arc::new(observation_fixture())))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn panicking_observation_completes_waiters_and_allows_retry() {
+        let sampler = Arc::new(MemorySampler::new());
+        let entry = match sampler
+            .singleflight
+            .admit("memory_observation".to_string(), 0)
+            .await
+        {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => unreachable!(),
+        };
+        supervise_memory_observation(sampler.clone(), entry.clone(), || panic!("fixture failure"));
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), sampler.singleflight.wait(&entry))
+                .await
+                .expect("panicking observation stranded its waiters");
+        assert!(result.is_err());
+
+        let retry = sampler
+            .singleflight
+            .admit("memory_observation".to_string(), 0)
+            .await;
+        let retry_entry = match retry {
+            Admission::Own(entry) => entry,
+            Admission::Wait(_) => panic!("failed observation remained in flight"),
+        };
+        sampler
+            .singleflight
+            .complete(&retry_entry, Ok(Arc::new(observation_fixture())))
+            .await;
     }
 }

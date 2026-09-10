@@ -27,9 +27,10 @@ pub(super) fn user_home() -> Result<PathBuf, String> {
 
 /// Acquires a mutex lock, recovering from poisoning if another thread panicked.
 ///
-/// Use for disposable, observational, or cache state (e.g., last scan observations,
-/// metric caches, read-only settings queries) where recovering the partially written
-/// value or overwriting it is safe and prevents an isolated panic from wedging the app.
+/// Use for disposable, observational, or cache state (e.g., last scan observations
+/// and metric caches) where recovering the partially written value or overwriting it
+/// is safe and prevents an isolated panic from wedging the app. Persistent settings
+/// and destructive authority must use [`lock_or_state_error`] instead.
 pub(crate) fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
