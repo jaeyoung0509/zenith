@@ -156,6 +156,7 @@ fn test_toctou_identity_verification_and_abort() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn test_symlink_safety_and_no_escape() {
     let dir = tempdir().expect("failed to create temp dir");
@@ -612,6 +613,7 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     assert!(!removable.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn test_ancestor_symlink_escape_rejection() {
     let dir = tempdir().expect("create temp dir");
@@ -652,6 +654,7 @@ fn test_sparse_file_zero_allocated_bytes() {
     assert_eq!(size_unknown.reclaimable(), 100 * 1024 * 1024);
 }
 
+#[cfg(unix)]
 #[test]
 fn test_symlink_ancestor_above_signature_root_rejection() {
     let base_dir = tempdir().expect("create base temp dir");
@@ -680,6 +683,7 @@ fn test_symlink_ancestor_above_signature_root_rejection() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn test_signature_root_itself_symlink_rejection() {
     let base_dir = tempdir().expect("create base temp dir");
