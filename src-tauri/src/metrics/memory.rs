@@ -1,3 +1,4 @@
+use crate::collection::{Admission, SingleFlight};
 use crate::metrics::memory_termination::{
     CreateMemoryLeaseParams, MemoryLeaseMember, MemoryTerminationStore,
 };
@@ -8,13 +9,40 @@ use crate::models::{
 use crate::process_owner::ProcessOwner;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use sysinfo::{ProcessesToUpdate, Signal, System};
+
+/// Internal snapshot of memory metrics and verified termination candidates.
+/// Captured in a single OS observation pass and not exposed directly over IPC.
+#[derive(Clone, Debug)]
+pub struct MemoryObservation {
+    pub metrics: MemoryMetrics,
+    pub termination_candidates: HashMap<String, Vec<MemoryLeaseMember>>,
+    pub captured_at: Instant,
+}
+
+impl MemoryObservation {
+    /// Mints fresh, verified one-shot termination leases into the given store
+    /// and returns an enriched copy of the metrics.
+    pub fn mint_metrics_with_leases(&self, store: &Mutex<MemoryTerminationStore>) -> MemoryMetrics {
+        let mut metrics = self.metrics.clone();
+        MemoryInspector::attach_termination_leases(
+            &mut metrics,
+            store,
+            &self.termination_candidates,
+        );
+        metrics
+    }
+}
 
 pub struct MemorySampler {
     system: Mutex<Option<System>>,
     compressed_cache: Mutex<Option<(Instant, u64)>>,
+    process_refresh_counter: AtomicU64,
+    cached_observation: Mutex<Option<Arc<MemoryObservation>>>,
+    singleflight: SingleFlight<Arc<MemoryObservation>, ()>,
 }
 
 impl Default for MemorySampler {
@@ -28,7 +56,15 @@ impl MemorySampler {
         Self {
             system: Mutex::new(None),
             compressed_cache: Mutex::new(None),
+            process_refresh_counter: AtomicU64::new(0),
+            cached_observation: Mutex::new(None),
+            singleflight: SingleFlight::default(),
         }
+    }
+
+    /// Number of full OS process table refreshes performed by this sampler.
+    pub fn process_refresh_count(&self) -> u64 {
+        self.process_refresh_counter.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -41,6 +77,12 @@ impl MemorySampler {
 
     /// Captures current system memory metrics and top resource-consuming developer processes.
     pub fn sample(&self) -> MemoryMetrics {
+        self.observe().metrics
+    }
+
+    /// Single-pass observation: performs exactly one full process table refresh to collect
+    /// both aggregate memory groups and verified termination candidate identities.
+    pub fn observe(&self) -> MemoryObservation {
         let (
             total_bytes,
             used_bytes,
@@ -49,6 +91,7 @@ impl MemorySampler {
             swap_total_bytes,
             swap_used_bytes,
             top_processes,
+            termination_candidates,
         ) = {
             let mut guard = self
                 .system
@@ -64,14 +107,23 @@ impl MemorySampler {
             let swap_total_bytes = sys.total_swap();
             let swap_used_bytes = sys.used_swap();
 
-            // Refresh processes
+            // Refresh processes exactly once for this observation pass
             sys.refresh_processes(ProcessesToUpdate::All, true);
+            self.process_refresh_counter.fetch_add(1, Ordering::SeqCst);
 
-            // Aggregate top processes
+            let own_pid = std::process::id();
+            let own_uid = sys
+                .process(sysinfo::Pid::from_u32(own_pid))
+                .and_then(|process| process.effective_user_id().or_else(|| process.user_id()));
+            let current_owner = ProcessOwner::current();
+
             let mut process_groups: HashMap<String, (u64, usize, u32, Vec<u32>, bool)> =
+                HashMap::new();
+            let mut termination_candidates: HashMap<String, Vec<MemoryLeaseMember>> =
                 HashMap::new();
 
             for (pid, process) in sys.processes() {
+                let pid_u32 = pid.as_u32();
                 let raw_name = process.name().to_string_lossy();
                 let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
                 let mem = process.memory();
@@ -79,12 +131,54 @@ impl MemorySampler {
                     MemoryInspector::can_terminate_process(&norm_name, process.exe());
 
                 let entry = process_groups
-                    .entry(norm_name)
-                    .or_insert_with(|| (0, 0, pid.as_u32(), Vec::new(), false));
+                    .entry(norm_name.clone())
+                    .or_insert_with(|| (0, 0, pid_u32, Vec::new(), false));
                 entry.0 += mem;
                 entry.1 += 1;
-                entry.3.push(pid.as_u32());
+                entry.3.push(pid_u32);
                 entry.4 |= can_terminate;
+
+                // Collect candidate members in this same pass
+                if pid_u32 <= 1 || pid_u32 == own_pid {
+                    continue;
+                }
+                if !can_terminate {
+                    continue;
+                }
+                if crate::process_protection::is_protected_process(
+                    &norm_name,
+                    Some(&raw_name),
+                    process.exe(),
+                ) {
+                    continue;
+                }
+                let Some(owner) = ProcessOwner::verified(
+                    process.effective_user_id().or_else(|| process.user_id()),
+                    own_uid,
+                ) else {
+                    continue;
+                };
+                if owner != current_owner {
+                    continue;
+                }
+                if process.start_time() == 0 {
+                    continue;
+                }
+
+                termination_candidates
+                    .entry(norm_name.clone())
+                    .or_default()
+                    .push(MemoryLeaseMember {
+                        pid: pid_u32,
+                        owner,
+                        start_time: process.start_time(),
+                        exe: process.exe().map(PathBuf::from),
+                        group: norm_name,
+                    });
+            }
+
+            for members in termination_candidates.values_mut() {
+                members.sort_by_key(|member| member.pid);
             }
 
             let mut top_processes: Vec<ProcessMemory> = process_groups
@@ -117,6 +211,7 @@ impl MemorySampler {
                 swap_total_bytes,
                 swap_used_bytes,
                 top_processes,
+                termination_candidates,
             )
         };
 
@@ -145,17 +240,64 @@ impl MemorySampler {
             .unwrap_or_default()
             .as_secs();
 
-        MemoryMetrics {
-            total_bytes,
-            used_bytes,
-            available_bytes,
-            free_bytes,
-            compressed_bytes,
-            swap_used_bytes,
-            swap_total_bytes,
-            pressure,
-            top_processes,
-            timestamp,
+        MemoryObservation {
+            metrics: MemoryMetrics {
+                total_bytes,
+                used_bytes,
+                available_bytes,
+                free_bytes,
+                compressed_bytes,
+                swap_used_bytes,
+                swap_total_bytes,
+                pressure,
+                top_processes,
+                timestamp,
+            },
+            termination_candidates,
+            captured_at: Instant::now(),
+        }
+    }
+
+    /// Retrieves an observation, reusing a cached observation if within `max_age`
+    /// or coalescing concurrent requests across windows with SingleFlight.
+    pub async fn get_observation(
+        self: &Arc<Self>,
+        max_age: Duration,
+    ) -> Result<Arc<MemoryObservation>, String> {
+        {
+            let guard = self
+                .cached_observation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(obs) = guard.as_ref() {
+                if obs.captured_at.elapsed() < max_age {
+                    return Ok(obs.clone());
+                }
+            }
+        }
+
+        match self
+            .singleflight
+            .admit("memory_observation".to_string(), 0)
+            .await
+        {
+            Admission::Own(entry) => {
+                let sampler = self.clone();
+                let obs = tauri::async_runtime::spawn_blocking(move || Arc::new(sampler.observe()))
+                    .await
+                    .map_err(|e| format!("Memory observation worker panicked: {e}"))?;
+
+                {
+                    let mut guard = self
+                        .cached_observation
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *guard = Some(obs.clone());
+                }
+                self.singleflight.complete(&entry, Ok(obs.clone())).await;
+                Ok(obs)
+            }
+            Admission::Wait(entry) => self.singleflight.wait(&entry).await,
         }
     }
 
@@ -388,11 +530,12 @@ impl MemoryInspector {
         MemorySampler::new().sample()
     }
 
-    /// Attaches short-lived backend-owned termination leases to terminable groups.
+    /// Attaches short-lived backend-owned termination leases to terminable groups
+    /// from pre-collected candidate identities (single-pass observation).
     pub fn attach_termination_leases(
         metrics: &mut MemoryMetrics,
         store: &Mutex<MemoryTerminationStore>,
-        system: &dyn MemoryTerminationSystem,
+        candidates: &HashMap<String, Vec<MemoryLeaseMember>>,
     ) {
         let now = Instant::now();
         let mut guard = store
@@ -403,14 +546,17 @@ impl MemoryInspector {
                 process.termination_lease_id = None;
                 continue;
             }
-            let members = system.group_members(&process.name);
+            let Some(members) = candidates.get(&process.name) else {
+                process.termination_lease_id = None;
+                continue;
+            };
             if members.is_empty() {
                 process.termination_lease_id = None;
                 continue;
             }
             let lease_id = guard.create_lease(CreateMemoryLeaseParams {
                 group: process.name.clone(),
-                members,
+                members: members.clone(),
                 can_terminate: true,
                 // Windows has no safe generic graceful adapter. Its UI presents
                 // the only supported action explicitly as Force Quit, while the
@@ -420,6 +566,24 @@ impl MemoryInspector {
             });
             process.termination_lease_id = Some(lease_id);
         }
+    }
+
+    /// Attaches short-lived backend-owned termination leases by querying a termination system (e.g. for testing).
+    pub fn attach_termination_leases_with_system(
+        metrics: &mut MemoryMetrics,
+        store: &Mutex<MemoryTerminationStore>,
+        system: &dyn MemoryTerminationSystem,
+    ) {
+        let mut candidates = HashMap::new();
+        for process in &metrics.top_processes {
+            if process.can_terminate {
+                let members = system.group_members(&process.name);
+                if !members.is_empty() {
+                    candidates.insert(process.name.clone(), members);
+                }
+            }
+        }
+        Self::attach_termination_leases(metrics, store, &candidates);
     }
 
     /// Consumes a backend-owned lease and terminates its members after a fresh
@@ -902,8 +1066,8 @@ mod tests {
     use crate::process_owner::ProcessOwner;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
-    use std::sync::Mutex;
-    use std::time::Instant;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     struct FakeMemorySystem {
         owner: ProcessOwner,
@@ -1500,5 +1664,76 @@ mod tests {
         assert!(matches!(owner, ProcessOwner::Unix(_)));
         #[cfg(not(unix))]
         assert!(matches!(owner, ProcessOwner::Windows(_)));
+    }
+
+    #[tokio::test]
+    async fn single_observation_pass_refreshes_processes_once() {
+        let sampler = MemorySampler::new();
+        assert_eq!(sampler.process_refresh_count(), 0);
+
+        let observation = sampler.observe();
+        assert_eq!(sampler.process_refresh_count(), 1);
+        assert!(observation.metrics.total_bytes > 0);
+
+        for process in &observation.metrics.top_processes {
+            if process.can_terminate {
+                let candidates = observation.termination_candidates.get(&process.name);
+                assert!(
+                    candidates.is_some(),
+                    "Terminable process {} must have pre-collected candidates",
+                    process.name
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_requests_share_observation_and_mint_separate_leases() {
+        let sampler = Arc::new(MemorySampler::new());
+        let store = Mutex::new(MemoryTerminationStore::new(64));
+
+        let sampler1 = sampler.clone();
+        let sampler2 = sampler.clone();
+
+        let (obs1, obs2) = tokio::join!(
+            sampler1.get_observation(Duration::from_millis(800)),
+            sampler2.get_observation(Duration::from_millis(800)),
+        );
+
+        let obs1 = obs1.expect("obs1 failed");
+        let obs2 = obs2.expect("obs2 failed");
+
+        assert_eq!(sampler.process_refresh_count(), 1);
+
+        let metrics1 = obs1.mint_metrics_with_leases(&store);
+        let metrics2 = obs2.mint_metrics_with_leases(&store);
+
+        for (p1, p2) in metrics1
+            .top_processes
+            .iter()
+            .zip(metrics2.top_processes.iter())
+        {
+            if let (true, Some(id1), Some(id2)) = (
+                p1.can_terminate,
+                &p1.termination_lease_id,
+                &p2.termination_lease_id,
+            ) {
+                assert_ne!(
+                    id1, id2,
+                    "Each response must receive a distinct one-shot lease ID"
+                );
+
+                let now = Instant::now();
+                let lease1 = store.lock().unwrap().take_lease(id1, now);
+                assert!(lease1.is_some(), "Lease 1 must be consumable");
+
+                let guard = store.lock().unwrap();
+                let lease2_peek = guard.peek_lease(id2, now);
+                assert!(
+                    lease2_peek.is_some(),
+                    "Lease 2 must remain valid after consuming lease 1"
+                );
+            }
+        }
     }
 }

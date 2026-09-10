@@ -21,14 +21,10 @@ use tauri::{AppHandle, Manager, State};
 pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetrics, String> {
     let sampler = state.memory_sampler.clone();
     let lease_store = state.memory_termination_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut metrics = sampler.sample();
-        let system = crate::metrics::memory::RealMemorySystem::default();
-        MemoryInspector::attach_termination_leases(&mut metrics, &lease_store, &system);
-        metrics
-    })
-    .await
-    .map_err(|e| e.to_string())
+    let observation = sampler
+        .get_observation(std::time::Duration::from_millis(800))
+        .await?;
+    Ok(observation.mint_metrics_with_leases(&lease_store))
 }
 
 #[tauri::command]
