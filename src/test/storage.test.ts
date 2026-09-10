@@ -200,23 +200,24 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
 
-    expect(rendered.body).toContain('animate-gentle-spin');
+    expect(rendered.body).toContain('animate-loading-dash');
     expect(rendered.body).toContain('Scanning…');
     expect(rendered.body).not.toContain('Scan storage to find current cleanup candidates');
     expect(rendered.body).not.toContain('Scan Again');
   });
 
-  it('renders the header scan control with a stable square wrapper to prevent ghosting and layout shifts', () => {
+  it('renders the header scan control with a stable square wrapper and paint-only motion', () => {
     scanStore.isScanning = false;
     const idleRender = render(StorageView, { props: { onSelectCategory: vi.fn() } });
     expect(idleRender.body).toContain('id="storage-scan-button"');
     expect(idleRender.body).toContain('inline-flex items-center justify-center shrink-0 w-3.5 h-3.5');
-    expect(idleRender.body).not.toContain('w-3.5 h-3.5 animate-gentle-spin');
+    expect(idleRender.body).toContain('transition-[background-color,color,border-color]');
 
     scanStore.isScanning = true;
     const scanningRender = render(StorageView, { props: { onSelectCategory: vi.fn() } });
     expect(scanningRender.body).toContain('id="storage-scan-button"');
-    expect(scanningRender.body).toContain('inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 animate-gentle-spin');
+    expect(scanningRender.body).toContain('inline-flex items-center justify-center shrink-0 w-3.5 h-3.5');
+    expect(scanningRender.body).toContain('animate-loading-dash');
   });
 
   it('suppresses native WebKit blue outline while preserving intentional focus-visible keyboard styling on tabpanel', () => {
@@ -263,19 +264,42 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).toContain('-done-button');
   });
 
-  it('ensures app.css centers gentle-spin rotation and avoids will-change transform promotion', () => {
+  it('keeps Storage scan feedback off transform and opacity compositor animations', () => {
     const css = readFileSync(new URL('../app.css', import.meta.url), 'utf-8');
-    const gentleSpinIndex = css.indexOf('.animate-gentle-spin');
-    expect(gentleSpinIndex).toBeGreaterThan(0);
-    const gentleSpinRule = css.slice(gentleSpinIndex, css.indexOf('}', gentleSpinIndex));
-    expect(gentleSpinRule).toContain('transform-origin: center');
-    expect(gentleSpinRule).not.toContain('will-change');
+    const keyframesIndex = css.indexOf('@keyframes loading-dash');
+    expect(keyframesIndex).toBeGreaterThan(0);
+    const keyframesBlock = css.slice(keyframesIndex, css.indexOf('.animate-loading-dash'));
+    expect(keyframesBlock).toContain('stroke-dashoffset:');
+    expect(keyframesBlock).not.toContain('transform:');
+    expect(keyframesBlock).not.toContain('rotate:');
+    expect(keyframesBlock).not.toContain('opacity:');
 
     expect(css).toContain('@media (prefers-reduced-motion: reduce)');
     const reducedMotionIndex = css.indexOf('@media (prefers-reduced-motion: reduce)');
     const reducedMotionBlock = css.slice(reducedMotionIndex);
-    expect(reducedMotionBlock).toContain('.animate-gentle-spin');
+    expect(reducedMotionBlock).toContain('.animate-loading-dash');
     expect(reducedMotionBlock).toContain('animation: none !important');
+
+    const storageView = readFileSync(
+      new URL('../routes/dashboard/StorageView.svelte', import.meta.url),
+      'utf-8'
+    );
+    const storageTools = readFileSync(
+      new URL('../routes/dashboard/StorageTools.svelte', import.meta.url),
+      'utf-8'
+    );
+    const quickPanel = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf-8'
+    );
+
+    expect(storageView).toContain('motion="paint"');
+    expect(storageTools).toContain('motion="paint"');
+    expect(storageView).toContain('<LoadingSpinner');
+    expect(storageTools).toContain('<LoadingSpinner');
+    expect(quickPanel).toContain('<LoadingSpinner');
+    expect(storageView).not.toContain('animate-gentle-spin');
+    expect(storageTools).not.toContain('animate-gentle-spin');
   });
 });
 

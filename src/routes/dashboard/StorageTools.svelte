@@ -1,5 +1,6 @@
 <script lang="ts">
   import Button from '../../lib/components/Button.svelte';
+  import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
   import { AppWindow, ChevronRight, FileSearch, FolderSearch, RotateCw } from 'lucide-svelte';
 
   interface Props {
@@ -36,9 +37,14 @@
         disabled={isScanning || isCleaning}
         onclick={onScanStorage}
         class="shrink-0 gap-1.5"
+        motion="paint"
       >
-        <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 {isScanning ? 'animate-gentle-spin' : ''}">
-          <RotateCw size={13} />
+        <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5">
+          {#if isScanning}
+            <LoadingSpinner size={13} />
+          {:else}
+            <RotateCw size={13} />
+          {/if}
         </span>
         <span>{isScanning ? 'Scanning...' : 'Scan Storage'}</span>
       </Button>

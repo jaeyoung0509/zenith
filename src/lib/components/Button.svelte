@@ -4,6 +4,7 @@
   interface Props {
     variant?: 'primary' | 'secondary' | 'outline' | 'destructive' | 'ghost';
     size?: 'xs' | 'sm' | 'md' | 'lg' | 'icon';
+    motion?: 'scale' | 'paint';
     disabled?: boolean;
     id?: string;
     class?: string;
@@ -16,6 +17,7 @@
   let {
     variant = 'primary',
     size = 'md',
+    motion = 'scale',
     disabled = false,
     id,
     class: className = '',
@@ -27,15 +29,20 @@
 
   const variantStyles = {
     primary:
-      'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] shadow-sm',
+      'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm',
     secondary:
-      'bg-secondary text-secondary-foreground hover:bg-secondary/80 active:scale-[0.98]',
+      'bg-secondary text-secondary-foreground hover:bg-secondary/80',
     outline:
-      'border border-border bg-transparent hover:bg-accent hover:text-accent-foreground active:scale-[0.98]',
+      'border border-border bg-transparent hover:bg-accent hover:text-accent-foreground',
     destructive:
-      'bg-destructive text-destructive-foreground hover:bg-destructive/90 active:scale-[0.98] shadow-sm',
+      'bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-sm',
     ghost:
-      'hover:bg-accent hover:text-accent-foreground active:scale-[0.98]',
+      'hover:bg-accent hover:text-accent-foreground',
+  };
+
+  const motionStyles = {
+    scale: 'transition-[background-color,color,border-color,transform,opacity] duration-150 active:scale-[0.98]',
+    paint: 'transition-[background-color,color,border-color] duration-150',
   };
 
   const sizeStyles = {
@@ -54,7 +61,9 @@
   {onclick}
   aria-label={ariaLabel}
   {title}
-  class="inline-flex items-center justify-center whitespace-nowrap font-medium transition-[background-color,color,border-color,transform,opacity] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-45 select-none {variantStyles[
+  class="inline-flex items-center justify-center whitespace-nowrap font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-45 select-none {motionStyles[
+    motion
+  ]} {variantStyles[
     variant
   ]} {sizeStyles[size]} {className}"
 >
