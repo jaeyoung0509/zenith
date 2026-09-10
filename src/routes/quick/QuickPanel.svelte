@@ -8,7 +8,11 @@
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
-  import { isQuickPanelDismissShortcut, projectAiProviders } from '../../lib/utils/quickPanel';
+  import {
+    isQuickPanelDismissShortcut,
+    projectAiProviders,
+    selectQuickUsageWindows,
+  } from '../../lib/utils/quickPanel';
   import {
     isTauri,
     tauriHideCurrentWindow,
@@ -386,8 +390,10 @@
             <div class="py-2 text-center text-caption text-muted-foreground">Reading accounts…</div>
           {:else if selectedProviders.length}
             {#each selectedProviders as provider}
+              {@const hasUsagePair = selectQuickUsageWindows(provider.windows) !== null}
               <div
-                class="min-w-0 space-y-2 rounded-lg px-1.5 py-1.5 text-xs hover:bg-secondary/40 transition-colors"
+                class="min-w-0 rounded-lg px-1.5 py-1.5 text-xs hover:bg-secondary/40 transition-colors"
+                class:space-y-2={hasUsagePair}
                 title={providerTitle(provider)}
               >
                 <div class="flex min-w-0 items-center justify-between gap-2">
@@ -399,9 +405,11 @@
                     <span class="shrink-0 inline-flex items-center text-muted-foreground/70" title="Loading live quota...">
                       <RotateCw size={11} class="animate-spin" />
                     </span>
+                  {:else if !hasUsagePair}
+                    <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
                   {/if}
                 </div>
-                {#if !usageStore.isProviderLoading(provider.id)}
+                {#if !usageStore.isProviderLoading(provider.id) && hasUsagePair}
                   <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
                 {/if}
               </div>
@@ -463,8 +471,10 @@
           {#if selectedProviders.length > 0}
             <div class="space-y-0.5 rounded-lg border border-border/40 bg-background/30 p-1">
               {#each selectedProviders as provider (provider.id)}
+                {@const hasUsagePair = selectQuickUsageWindows(provider.windows) !== null}
                 <div
-                  class="min-w-0 space-y-2 rounded-md px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                  class="min-w-0 rounded-md px-1.5 py-1 text-xs hover:bg-secondary/40 transition-colors"
+                  class:space-y-2={hasUsagePair}
                   title={providerTitle(provider)}
                 >
                   <div class="flex min-w-0 items-center justify-between gap-2">
@@ -476,9 +486,11 @@
                       <span class="shrink-0 inline-flex items-center text-muted-foreground/70" title="Loading live quota...">
                         <RotateCw size={11} class="animate-spin" />
                       </span>
+                    {:else if !hasUsagePair}
+                      <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
                     {/if}
                   </div>
-                  {#if !usageStore.isProviderLoading(provider.id)}
+                  {#if !usageStore.isProviderLoading(provider.id) && hasUsagePair}
                     <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
                   {/if}
                 </div>

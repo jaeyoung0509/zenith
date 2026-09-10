@@ -1,4 +1,23 @@
-import type { AiProviderUsage } from '../models/types';
+import type { AiProviderUsage, UsageWindow } from '../models/types';
+
+export interface QuickUsageWindowPair {
+  fiveHour: UsageWindow;
+  weekly: UsageWindow;
+}
+
+export function selectQuickUsageWindows(
+  windows: readonly UsageWindow[]
+): QuickUsageWindowPair | null {
+  const fiveHour = windows.find((usageWindow) => {
+    const label = usageWindow.label.toLowerCase();
+    return label.includes('5h') || label.includes('5 hour');
+  });
+  const weekly = windows.find((usageWindow) =>
+    usageWindow.label.toLowerCase().includes('week')
+  );
+
+  return fiveHour && weekly ? { fiveHour, weekly } : null;
+}
 
 export function toggleOrdered<T>(items: T[], item: T, keepOne = false): T[] {
   if (!items.includes(item)) return [...items, item];
