@@ -275,14 +275,22 @@ describe('SettingsStore persistence and lifecycle', () => {
 
     mockSaveSettings.mockRejectedValueOnce(new Error('Disk write failed'));
 
-    // Should resolve gracefully without throwing unhandled event promise rejection
-    await expect(store.save({ theme: 'light', clean_docker: false })).resolves.toBeUndefined();
+    // Failure is reported without an unhandled event promise rejection so
+    // interactive callers can keep their editor open.
+    await expect(store.save({ theme: 'light', clean_docker: false })).resolves.toBe(false);
 
     expect(store.error).toContain('Disk write failed');
     expect(store.settings.theme).toBe('system');
     expect(store.settings.clean_docker).toBe(true);
     // Theme should be restored to system
     expect(mockDocument.documentElement.classList.contains('dark')).toBe(true);
+  });
+
+  it('reports a successful save to interactive callers', async () => {
+    await store.load();
+
+    await expect(store.save({ clean_docker: false })).resolves.toBe(true);
+    expect(store.error).toBeNull();
   });
 
   it('allows a newer queued save to succeed without rollback when an older save fails', async () => {

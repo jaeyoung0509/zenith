@@ -290,8 +290,7 @@ impl KeepAwakeManager {
             // raw matcher and are intentionally evaluated only in this branch.
             let (is_process_running, status) =
                 if let Some(application) = rule.application.as_ref() {
-                    let application_valid = application.is_structurally_valid()
-                        && Path::new(&application.path).exists();
+                    let application_valid = Self::application_identity_is_available(application);
                     let app_running = application_valid
                         && sys.as_ref().is_some_and(|system| {
                             system.processes().values().any(|process| {
@@ -618,6 +617,28 @@ impl KeepAwakeManager {
         })
     }
 
+    fn application_identity_is_available(application: &ApplicationIdentity) -> bool {
+        if !application.is_structurally_valid() {
+            return false;
+        }
+
+        let selected = Path::new(&application.path);
+        if selected.is_file()
+            || selected
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            return selected.is_file();
+        }
+
+        selected.is_dir()
+            && selected
+                .join("Contents")
+                .join("MacOS")
+                .join(&application.executable_name)
+                .is_file()
+    }
+
     fn process_matches_agent(proc: &sysinfo::Process, agent: AwakeAgentId) -> bool {
         let aliases = crate::agent_activity::adapters::executable_aliases(agent.adapter_id());
         if aliases.is_empty() {
@@ -671,22 +692,6 @@ impl KeepAwakeManager {
             .join("MacOS")
             .join(&application.executable_name);
         Self::paths_equal(&expected, executable)
-            || executable
-                .strip_prefix(selected)
-                .ok()
-                .is_some_and(|relative| {
-                    let mut components = relative.components();
-                    matches!(
-                        (components.next(), components.next()),
-                        (Some(std::path::Component::Normal(contents)), Some(std::path::Component::Normal(macos)))
-                            if contents == "Contents" && macos == "MacOS"
-                    ) && relative
-                        .file_name()
-                        .is_some_and(|name| Self::matches_executable_alias(
-                            &name.to_string_lossy(),
-                            &application.executable_name,
-                        ))
-                })
     }
 
     fn paths_equal(left: &Path, right: &Path) -> bool {
@@ -1094,6 +1099,9 @@ mod tests {
         std::fs::write(&executable, b"test").unwrap();
         let helper = macos.join("helper");
         std::fs::write(&helper, b"test").unwrap();
+        let nested_executable = macos.join("nested/stable");
+        std::fs::create_dir_all(nested_executable.parent().unwrap()).unwrap();
+        std::fs::write(&nested_executable, b"test").unwrap();
         let identity = ApplicationIdentity {
             display_name: "Warp".into(),
             executable_name: "stable".into(),
@@ -1106,6 +1114,10 @@ mod tests {
         ));
         assert!(!KeepAwakeManager::application_executable_path_matches(
             &identity, &helper
+        ));
+        assert!(!KeepAwakeManager::application_executable_path_matches(
+            &identity,
+            &nested_executable
         ));
         assert!(!KeepAwakeManager::application_executable_path_matches(
             &identity,

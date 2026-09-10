@@ -389,11 +389,17 @@ impl ZenithSettings {
         }
 
         // Typed Keep Awake rules use a bounded allowlist and explicit any-of
-        // semantics. Preserve legacy pattern strings exactly for the Advanced
-        // editor, while removing duplicate typed agent chips.
+        // semantics. Preserve pattern strings exactly for genuine legacy
+        // rules, and make compatibility fields canonical for typed rules so
+        // the two persisted representations cannot drift.
         for rule in &mut self.awake_rules {
             let mut agents = HashSet::new();
             rule.agent_ids.retain(|agent| agents.insert(*agent));
+            if let Some(application) = &rule.application {
+                rule.app_name = application.display_name.clone();
+                rule.executable_pattern = application.executable_name.clone();
+                rule.requires_process_pattern = None;
+            }
         }
 
         const SUPPORTED_PROVIDERS: [&str; 5] =
@@ -553,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_deduplicates_typed_awake_agents_without_touching_identity() {
+    fn sanitize_canonicalizes_typed_awake_rules_without_touching_identity() {
         let mut settings = ZenithSettings::default();
         let rule = settings.awake_rules.first_mut().unwrap();
         rule.application = Some(ApplicationIdentity {
@@ -566,6 +572,9 @@ mod tests {
             AwakeAgentId::OpenCode,
             AwakeAgentId::Codex,
         ];
+        rule.app_name = "stale display name".into();
+        rule.executable_pattern = "stale|raw|pattern".into();
+        rule.requires_process_pattern = Some("must-not-survive".into());
 
         let sanitized = settings.sanitize();
         let rule = &sanitized.awake_rules[0];
@@ -577,6 +586,9 @@ mod tests {
             rule.application.as_ref().unwrap().path,
             "/Applications/Warp.app"
         );
+        assert_eq!(rule.app_name, "Warp");
+        assert_eq!(rule.executable_pattern, "stable");
+        assert_eq!(rule.requires_process_pattern, None);
     }
 
     #[test]

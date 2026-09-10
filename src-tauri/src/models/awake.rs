@@ -111,8 +111,14 @@ pub struct ApplicationIdentity {
 
 impl ApplicationIdentity {
     pub fn is_structurally_valid(&self) -> bool {
+        let executable_name = self.executable_name.trim();
+        let is_basename = !executable_name.is_empty()
+            && executable_name != "."
+            && executable_name != ".."
+            && !executable_name.contains(['/', '\\']);
+
         !self.display_name.trim().is_empty()
-            && !self.executable_name.trim().is_empty()
+            && is_basename
             && std::path::Path::new(&self.path).is_absolute()
     }
 }
@@ -125,8 +131,8 @@ pub struct AwakeRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_process_pattern: Option<String>,
     /// Native picker identity for the primary application. When present, this
-    /// is a typed rule and raw pattern fields are retained only for legacy
-    /// compatibility/debugging; they are not used for matching.
+    /// is a typed rule. Sanitization derives the legacy name/pattern mirrors
+    /// from this identity so they cannot drift, and matching ignores them.
     #[serde(default)]
     pub application: Option<ApplicationIdentity>,
     /// Allowlisted agent adapters. Semantics are explicit any-of (OR).
@@ -213,5 +219,21 @@ mod tests {
         let decoded: AwakeRule = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, rule);
         assert!(decoded.application.unwrap().is_structurally_valid());
+    }
+
+    #[test]
+    fn application_identity_rejects_non_basename_executables() {
+        for executable_name in ["", "..", "Contents/MacOS/stable", r"bin\\stable.exe"] {
+            let identity = ApplicationIdentity {
+                display_name: "Warp".into(),
+                executable_name: executable_name.into(),
+                path: std::env::current_dir()
+                    .unwrap()
+                    .join("Warp.app")
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            assert!(!identity.is_structurally_valid(), "{executable_name}");
+        }
     }
 }

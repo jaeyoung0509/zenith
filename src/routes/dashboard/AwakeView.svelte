@@ -57,6 +57,7 @@
   let newBehavior = $state<AwakeBehavior>('prevent_system_sleep');
   let newPowerCondition = $state<PowerCondition>('ac_power_only');
   let isPickingApp = $state(false);
+  let isSavingRule = $state(false);
   let pickerError = $state<string | null>(null);
 
   onMount(() => {
@@ -174,6 +175,9 @@
   }
 
   async function saveRule() {
+    if (isSavingRule || !isEditorValid()) return;
+    isSavingRule = true;
+    pickerError = null;
     const existing = editingRule;
     const id = editingRuleId ?? `rule.${Date.now()}`;
     const enabled = existing?.enabled ?? false;
@@ -201,12 +205,20 @@
           enabled,
         };
 
-    if (editingRuleId) {
-      await awakeStore.updateRule(rule);
-    } else {
-      await awakeStore.addRule(rule);
+    try {
+      const saved = editingRuleId
+        ? await awakeStore.updateRule(rule)
+        : await awakeStore.addRule(rule);
+      if (!saved) {
+        pickerError = settingsStore.error ?? 'Could not save the rule. Please try again.';
+        return;
+      }
+      closeRuleEditor();
+    } catch (error: unknown) {
+      pickerError = error instanceof Error ? error.message : String(error);
+    } finally {
+      isSavingRule = false;
     }
-    closeRuleEditor();
   }
 
   function getRuleEvaluation(ruleId: string) {
@@ -292,6 +304,14 @@
       variant="destructive"
       title="Native Power Assertion Error"
       message={awakeState.last_error}
+    />
+  {/if}
+
+  {#if settingsStore.error}
+    <InlineNotice
+      variant="destructive"
+      title="Settings Save Error"
+      message={settingsStore.error}
     />
   {/if}
 
@@ -554,7 +574,7 @@
             <h2 id="rule-editor-title" class="text-sm font-semibold">{editorMode === 'basic' ? 'Build an app rule' : 'Edit legacy process rule'}</h2>
             <p class="mt-1 text-meta text-muted-foreground">{editorMode === 'basic' ? 'Choose what must be present before Zenith holds a power assertion.' : 'Use raw process fragments only for custom or older rules.'}</p>
           </div>
-          <button type="button" onclick={closeRuleEditor} class="h-8 w-8 rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Close rule editor" aria-label="Close rule editor">
+          <button type="button" onclick={closeRuleEditor} disabled={isSavingRule} class="h-8 w-8 rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Close rule editor" aria-label="Close rule editor">
             <X size={16} class="mx-auto" aria-hidden="true" />
           </button>
         </div>
@@ -663,8 +683,8 @@
         {/if}
 
         <div class="flex justify-end gap-2 border-t border-border/60 pt-4 mt-5">
-          <Button variant="ghost" size="sm" onclick={closeRuleEditor}>Cancel</Button>
-          <Button variant="primary" size="sm" onclick={() => void saveRule()} disabled={!isEditorValid()}>{editingRuleId ? 'Save changes' : 'Save rule'}</Button>
+          <Button variant="ghost" size="sm" onclick={closeRuleEditor} disabled={isSavingRule}>Cancel</Button>
+          <Button variant="primary" size="sm" onclick={() => void saveRule()} disabled={!isEditorValid() || isSavingRule}>{isSavingRule ? 'Saving…' : editingRuleId ? 'Save changes' : 'Save rule'}</Button>
         </div>
       </div>
     </div>

@@ -143,7 +143,7 @@ export class SettingsStore {
     }
   }
 
-  async save(partial: Partial<ZenithSettings>) {
+  async save(partial: Partial<ZenithSettings>): Promise<boolean> {
     const revision = ++this.saveRevision;
     const previousSettings = this.settings;
     this.settings = { ...this.settings, ...partial };
@@ -161,7 +161,7 @@ export class SettingsStore {
         this.applyTheme(this.settings.theme);
         this.error = err?.toString() || 'Failed to serialize settings';
       }
-      return;
+      return false;
     }
 
     const currentSave = this.saveQueue
@@ -177,6 +177,7 @@ export class SettingsStore {
 
     try {
       await currentSave;
+      return true;
     } catch (error: any) {
       // Only the latest queued save may roll back the optimistic UI.
       // If a newer snapshot was queued, allow that newer save to complete without clobbering UI state.
@@ -185,6 +186,7 @@ export class SettingsStore {
         this.settings = this.persistedSettings ?? serializeSettingsSnapshot(previousSettings);
         this.applyTheme(this.settings.theme);
       }
+      return false;
     }
   }
 
