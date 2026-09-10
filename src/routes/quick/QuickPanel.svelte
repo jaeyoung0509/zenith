@@ -514,6 +514,7 @@
     <div class="flex items-center gap-1.5 text-meta text-muted-foreground">
       <span>Last scan {formatTimeAgo(scan?.finished_at)}</span>
       <button
+        id="quick-storage-scan-button"
         type="button"
         disabled={!cleanupAvailable || scanStore.isScanning || scanStore.isCleaning}
         onclick={() => {
@@ -542,6 +543,10 @@
   </div>
 
   {#if showResultModal && scanStore.lastCleanResult}
-    <CleanResultModal result={scanStore.lastCleanResult} onClose={() => (showResultModal = false)} />
+    <CleanResultModal
+      result={scanStore.lastCleanResult}
+      onClose={() => (showResultModal = false)}
+      returnFocusTargetId="quick-storage-scan-button"
+    />
   {/if}
 </div>

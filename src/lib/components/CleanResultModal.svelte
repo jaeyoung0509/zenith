@@ -11,9 +11,10 @@
     result: CleanResult;
     onClose: () => void;
     returnFocusTarget?: HTMLElement | null;
+    returnFocusTargetId?: string;
   }
 
-  let { result, onClose, returnFocusTarget }: Props = $props();
+  let { result, onClose, returnFocusTarget, returnFocusTargetId }: Props = $props();
   const id = $props.id();
   let dialog: HTMLDialogElement;
 
@@ -42,7 +43,10 @@
       if (dialog?.open) {
         dialog.close();
       }
-      restoreFocus(returnFocusTarget ?? previousFocus);
+      const explicitTarget = returnFocusTargetId
+        ? document.getElementById(returnFocusTargetId)
+        : returnFocusTarget;
+      restoreFocus(explicitTarget ?? previousFocus);
     };
   });
 

@@ -3,14 +3,25 @@
  */
 
 export function isFocusable(element: unknown): element is HTMLElement {
+  if (typeof HTMLElement === 'undefined') return false;
   if (!(element instanceof HTMLElement)) return false;
   if (!element.isConnected) return false;
   if ('disabled' in element && Boolean((element as HTMLButtonElement | HTMLInputElement).disabled)) {
     return false;
   }
-  if (element.getAttribute('aria-hidden') === 'true') return false;
-  if (element.hasAttribute('hidden')) return false;
-  return true;
+  if (element.getAttribute('aria-disabled') === 'true') return false;
+  if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+  if (typeof getComputedStyle === 'function') {
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+  }
+
+  const naturallyFocusable = element.matches(
+    'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, iframe, [contenteditable="true"]'
+  );
+  return naturallyFocusable || (element.hasAttribute('tabindex') && element.tabIndex >= 0);
 }
 
 export function findStableFocusTarget(

@@ -96,6 +96,10 @@
     if (!review || review.scanId !== scan?.scan_id || !scanStore.canClean) return;
     const items = review.items;
     review = null;
+    // The review trigger becomes disabled while cleanup runs. After the
+    // native dialog unmounts, move focus to the still-enabled active tab
+    // instead of allowing WebKit to fall back to the tabpanel itself.
+    queueMicrotask(() => restoreFocus());
     // Execute only the reviewed selection, even if another consumer selected
     // additional items while the review was open. Backend plans revalidate it.
     scanStore.cleanItems(items).then((res) => {
@@ -388,6 +392,7 @@
     <CleanResultModal
       result={scanStore.lastCleanResult}
       onClose={() => (showResultModal = false)}
+      returnFocusTargetId="storage-scan-button"
     />
   {/if}
 </div>

@@ -15,6 +15,7 @@ describe('Storage visual focus and modal interaction semantics', () => {
   it('correctly filters focusable elements based on connection, disabled, hidden, and aria-hidden', () => {
     const button = document.createElement('button');
     expect(isFocusable(button)).toBe(false);
+    expect(isFocusable(document.body)).toBe(false);
 
     document.body.append(button);
     expect(isFocusable(button)).toBe(true);
@@ -23,6 +24,10 @@ describe('Storage visual focus and modal interaction semantics', () => {
     expect(isFocusable(button)).toBe(false);
 
     button.disabled = false;
+    button.setAttribute('aria-disabled', 'true');
+    expect(isFocusable(button)).toBe(false);
+
+    button.removeAttribute('aria-disabled');
     button.setAttribute('aria-hidden', 'true');
     expect(isFocusable(button)).toBe(false);
 
@@ -32,6 +37,21 @@ describe('Storage visual focus and modal interaction semantics', () => {
 
     button.removeAttribute('hidden');
     expect(isFocusable(button)).toBe(true);
+
+    const plainDiv = document.createElement('div');
+    document.body.append(plainDiv);
+    expect(isFocusable(plainDiv)).toBe(false);
+    plainDiv.tabIndex = 0;
+    expect(isFocusable(plainDiv)).toBe(true);
+    plainDiv.tabIndex = -2;
+    expect(isFocusable(plainDiv)).toBe(false);
+
+    const hiddenParent = document.createElement('div');
+    hiddenParent.hidden = true;
+    const nestedButton = document.createElement('button');
+    hiddenParent.append(nestedButton);
+    document.body.append(hiddenParent);
+    expect(isFocusable(nestedButton)).toBe(false);
   });
 
   it('restores focus to preferredTarget when connected and enabled', () => {
@@ -162,4 +182,5 @@ describe('Storage visual focus and modal interaction semantics', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(document.activeElement).toBe(scanButton);
   });
+
 });
