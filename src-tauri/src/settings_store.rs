@@ -33,6 +33,8 @@ pub fn load(config_dir: &Path) -> ZenithSettings {
     }
 }
 
+pub const MAX_CORRUPT_BACKUPS: usize = 5;
+
 fn backup_and_recover_corrupted_settings(
     config_dir: &Path,
     err_msg: &str,
@@ -40,7 +42,7 @@ fn backup_and_recover_corrupted_settings(
 ) {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis())
         .unwrap_or(0);
     let original = settings_path(config_dir);
     let backup = config_dir.join(format!("settings.corrupt.{timestamp}.json"));
@@ -62,6 +64,9 @@ fn backup_and_recover_corrupted_settings(
         );
     }
 
+    // 3. Prune old corrupted backups beyond the retention limit
+    prune_corrupt_backups(config_dir, MAX_CORRUPT_BACKUPS);
+
     let msg = format!(
         "Corrupted settings file moved to {} and recovered with defaults (Error: {})",
         backup.display(),
@@ -70,20 +75,53 @@ fn backup_and_recover_corrupted_settings(
     crate::diagnostics::log_error("settings", &msg);
 }
 
-pub fn count_corrupted_backups(config_dir: &Path) -> usize {
+fn parse_backup_timestamp(path: &Path) -> Option<u128> {
+    let name = path.file_name()?.to_str()?;
+    let without_prefix = name.strip_prefix("settings.corrupt.")?;
+    let ts_str = without_prefix.strip_suffix(".json")?;
+    ts_str.parse::<u128>().ok()
+}
+
+pub fn list_corrupted_backups(config_dir: &Path) -> Vec<PathBuf> {
+    let mut backups = Vec::new();
     if let Ok(entries) = fs::read_dir(config_dir) {
-        entries
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_str()
-                    .map(|n| n.starts_with("settings.corrupt.") && n.ends_with(".json"))
-                    .unwrap_or(false)
-            })
-            .count()
-    } else {
-        0
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("settings.corrupt.") && name.ends_with(".json") {
+                    backups.push(path);
+                }
+            }
+        }
     }
+    backups.sort_by(
+        |a, b| match (parse_backup_timestamp(a), parse_backup_timestamp(b)) {
+            (Some(ts_a), Some(ts_b)) => ts_a.cmp(&ts_b),
+            _ => {
+                let a_time = a.metadata().and_then(|m| m.modified()).ok();
+                let b_time = b.metadata().and_then(|m| m.modified()).ok();
+                match (a_time, b_time) {
+                    (Some(at), Some(bt)) => at.cmp(&bt),
+                    _ => a.cmp(b),
+                }
+            }
+        },
+    );
+    backups
+}
+
+pub fn prune_corrupt_backups(config_dir: &Path, max_backups: usize) {
+    let backups = list_corrupted_backups(config_dir);
+    if backups.len() > max_backups {
+        let remove_count = backups.len() - max_backups;
+        for backup in backups.into_iter().take(remove_count) {
+            let _ = fs::remove_file(backup);
+        }
+    }
+}
+
+pub fn count_corrupted_backups(config_dir: &Path) -> usize {
+    list_corrupted_backups(config_dir).len()
 }
 
 pub fn has_corrupted_backup(config_dir: &Path) -> bool {
@@ -101,7 +139,10 @@ pub fn save(config_dir: &Path, settings: &ZenithSettings) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{count_corrupted_backups, has_corrupted_backup, load, save, settings_path};
+    use super::{
+        count_corrupted_backups, has_corrupted_backup, load, prune_corrupt_backups, save,
+        settings_path, MAX_CORRUPT_BACKUPS,
+    };
     use crate::models::{QuickPanelSection, ZenithSettings};
 
     #[test]
@@ -143,5 +184,74 @@ mod tests {
         let second_load = load(directory.path());
         assert_eq!(second_load, ZenithSettings::default());
         assert_eq!(count_corrupted_backups(directory.path()), backups_before);
+    }
+
+    #[test]
+    fn corrupt_backups_cap_at_max_and_prune_oldest() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir_path = directory.path();
+
+        // Create 8 backups with known timestamps (1000..1007)
+        for i in 1000..1008 {
+            let file = dir_path.join(format!("settings.corrupt.{i}.json"));
+            std::fs::write(&file, b"corrupt").unwrap();
+        }
+
+        assert_eq!(count_corrupted_backups(dir_path), 8);
+
+        // Prune to MAX_CORRUPT_BACKUPS (5)
+        prune_corrupt_backups(dir_path, MAX_CORRUPT_BACKUPS);
+
+        assert_eq!(count_corrupted_backups(dir_path), 5);
+
+        // The oldest 3 (1000, 1001, 1002) should have been pruned
+        assert!(!dir_path.join("settings.corrupt.1000.json").exists());
+        assert!(!dir_path.join("settings.corrupt.1001.json").exists());
+        assert!(!dir_path.join("settings.corrupt.1002.json").exists());
+
+        // The newest 5 (1003..1007) must remain
+        for i in 1003..1008 {
+            assert!(
+                dir_path.join(format!("settings.corrupt.{i}.json")).exists(),
+                "Expected backup {i} to remain"
+            );
+        }
+    }
+
+    #[test]
+    fn prune_preserves_unrelated_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir_path = directory.path();
+
+        let unrelated_files = [
+            "settings.json",
+            "settings.json.tmp",
+            "settings.corrupt.notjson.txt",
+            "unrelated.log",
+            "notes.md",
+        ];
+
+        for name in &unrelated_files {
+            std::fs::write(dir_path.join(name), b"data").unwrap();
+        }
+
+        // Create 7 backups
+        for i in 100..107 {
+            let file = dir_path.join(format!("settings.corrupt.{i}.json"));
+            std::fs::write(&file, b"corrupt").unwrap();
+        }
+
+        prune_corrupt_backups(dir_path, 3);
+
+        assert_eq!(count_corrupted_backups(dir_path), 3);
+
+        // All unrelated files must remain intact
+        for name in &unrelated_files {
+            assert!(
+                dir_path.join(name).exists(),
+                "Unrelated file {} must be preserved",
+                name
+            );
+        }
     }
 }
