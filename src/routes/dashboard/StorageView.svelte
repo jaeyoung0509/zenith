@@ -22,6 +22,7 @@
   import LargeFilesView from './LargeFilesView.svelte';
   import ApplicationsView from './ApplicationsView.svelte';
   import DiskView from './DiskView.svelte';
+  import { restoreFocus } from '../../lib/utils/focus';
   import {
     RotateCw,
     Trash2,
@@ -98,7 +99,11 @@
     // Execute only the reviewed selection, even if another consumer selected
     // additional items while the review was open. Backend plans revalidate it.
     scanStore.cleanItems(items).then((res) => {
-      if (res) showResultModal = true;
+      if (res) {
+        showResultModal = true;
+      } else {
+        restoreFocus();
+      }
     });
   }
 
@@ -141,8 +146,11 @@
       disabled={scanStore.isScanning || scanStore.isCleaning}
       onclick={() => scanStore.runScan()}
       class="gap-1.5"
+      id="storage-scan-button"
     >
-      <RotateCw size={13} class={scanStore.isScanning ? 'animate-gentle-spin' : ''} />
+      <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
+        <RotateCw size={13} />
+      </span>
       <span>{scanStore.isScanning ? 'Scanning…' : 'Scan Storage'}</span>
     </Button>
   </div>
@@ -156,7 +164,13 @@
     onSelect={(tab) => handleTabClick(tab as typeof activeSecondaryTab)}
   />
 
-  <div class="space-y-6" id={storagePanelId} role="tabpanel" aria-label={storageTabs.find(tab => tab.id === activeSecondaryTab)?.label} tabindex="0">
+  <div
+    class="space-y-6 outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
+    id={storagePanelId}
+    role="tabpanel"
+    aria-label={storageTabs.find(tab => tab.id === activeSecondaryTab)?.label}
+    tabindex="0"
+  >
   {#if activeSecondaryTab === 'developer-artifacts'}
     <DeveloperArtifactsView onBack={() => (activeSecondaryTab = 'cleanup')} />
   {:else if activeSecondaryTab === 'large-files'}
@@ -304,7 +318,7 @@
     <!-- Cleaning In Progress Bar -->
     {#if scanStore.isCleaning}
       <Card class="p-4 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
-        <div class="space-y-2">
+        <div class="space-y-2" role="status" aria-live="polite">
           <div class="flex items-center justify-between text-xs">
             <span class="font-medium text-foreground flex items-center gap-2">
               <DeletingDots size="xs" />
@@ -350,7 +364,9 @@
         </div>
       {:else}
         <div class="py-12 text-center text-muted-foreground text-sm space-y-3">
-          <RotateCw size={24} class="animate-gentle-spin mx-auto opacity-50" />
+          <span class="inline-flex items-center justify-center shrink-0 size-6 animate-gentle-spin mx-auto opacity-50">
+            <RotateCw size={24} />
+          </span>
           <p>Scanning known development caches...</p>
         </div>
       {/if}

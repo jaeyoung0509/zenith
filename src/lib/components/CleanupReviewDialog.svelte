@@ -4,33 +4,54 @@
   import { formatBytes } from '../utils/format';
   import Button from './Button.svelte';
   import RiskBadge from './RiskBadge.svelte';
+  import { isFocusable, restoreFocus } from '../utils/focus';
 
-  let { items, disabled = false, onCancel, onConfirm }: {
+  let { items, disabled = false, onCancel, onConfirm, returnFocusTarget }: {
     items: ScanItem[];
     disabled?: boolean;
     onCancel: () => void;
     onConfirm: () => void;
+    returnFocusTarget?: HTMLElement | null;
   } = $props();
   const id = $props.id();
   let dialog: HTMLDialogElement;
   let hasRebuild = $derived(items.some(item => item.risk === 'rebuild'));
+  let isConfirmed = false;
 
   onMount(() => {
-    const previousFocus = document.activeElement;
-    dialog.showModal();
+    const previousFocus = document.activeElement as HTMLElement | null;
+    if (typeof dialog?.showModal === 'function') {
+      dialog.showModal();
+    }
     return () => {
-      dialog.close();
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+      if (dialog?.open) {
+        dialog.close();
+      }
+      if (!isConfirmed) {
+        const preferred = isFocusable(returnFocusTarget) ? returnFocusTarget : previousFocus;
+        restoreFocus(preferred);
+      }
     };
   });
+
+  function handleConfirm() {
+    isConfirmed = true;
+    onConfirm();
+  }
+
+  function handleCancel() {
+    onCancel();
+  }
 </script>
 
 <dialog
   bind:this={dialog}
+  id={id + '-dialog'}
+  aria-modal="true"
   aria-labelledby={id + '-title'}
   aria-describedby={id + '-description'}
-  oncancel={(event) => { event.preventDefault(); onCancel(); }}
-  class="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50"
+  oncancel={(event) => { event.preventDefault(); handleCancel(); }}
+  class="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50 focus:outline-none"
 >
   <h2 id={id + '-title'} class="text-base font-semibold">Review cleanup</h2>
   <p id={id + '-description'} class="mt-2 text-sm text-muted-foreground">
@@ -51,7 +72,7 @@
     <p role="status" class="mb-3 text-sm text-warning">The scan changed or expired. Cancel and review a fresh selection.</p>
   {/if}
   <div class="flex flex-wrap justify-end gap-2">
-    <Button variant="secondary" onclick={onCancel}>Cancel</Button>
-    <Button variant="destructive" disabled={disabled || items.length === 0} onclick={onConfirm}>Clean reviewed items</Button>
+    <Button variant="secondary" onclick={handleCancel}>Cancel</Button>
+    <Button variant="destructive" disabled={disabled || items.length === 0} onclick={handleConfirm}>Clean reviewed items</Button>
   </div>
 </dialog>

@@ -207,7 +207,7 @@
 
 .animate-gentle-spin {
   animation: gentle-spin 0.75s linear infinite;
-  will-change: transform;
+  transform-origin: center;
 }
 
 @keyframes shimmer-active {
@@ -239,6 +239,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-gentle-spin {
+    animation: none !important;
+  }
   *,
   *::before,
   *::after {

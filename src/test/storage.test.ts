@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'svelte/server';
+import { readFileSync } from 'node:fs';
 import StorageView from '../routes/dashboard/StorageView.svelte';
 import CategoryDetailView from '../routes/dashboard/CategoryDetailView.svelte';
+import CleanResultModal from '../lib/components/CleanResultModal.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
-import type { CategoryResult } from '../lib/models/types';
+import type { CategoryResult, CleanResult } from '../lib/models/types';
 
 afterEach(() => {
   scanStore.lastScan = null;
@@ -202,6 +204,78 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).toContain('Scanning…');
     expect(rendered.body).not.toContain('Scan storage to find current cleanup candidates');
     expect(rendered.body).not.toContain('Scan Again');
+  });
+
+  it('renders the header scan control with a stable square wrapper to prevent ghosting and layout shifts', () => {
+    scanStore.isScanning = false;
+    const idleRender = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+    expect(idleRender.body).toContain('id="storage-scan-button"');
+    expect(idleRender.body).toContain('inline-flex items-center justify-center shrink-0 w-3.5 h-3.5');
+    expect(idleRender.body).not.toContain('w-3.5 h-3.5 animate-gentle-spin');
+
+    scanStore.isScanning = true;
+    const scanningRender = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+    expect(scanningRender.body).toContain('id="storage-scan-button"');
+    expect(scanningRender.body).toContain('inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 animate-gentle-spin');
+  });
+
+  it('suppresses native WebKit blue outline while preserving intentional focus-visible keyboard styling on tabpanel', () => {
+    const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+    expect(rendered.body).toContain('role="tabpanel"');
+    expect(rendered.body).toContain('tabindex="0"');
+    expect(rendered.body).toContain('outline-none');
+    expect(rendered.body).toContain('focus:outline-none');
+    expect(rendered.body).toContain('focus-visible:ring-1');
+  });
+
+  it('renders CleanResultModal with accessible dialog semantics and deterministic done button', () => {
+    const mockResult: CleanResult = {
+      plan_id: 'plan-done',
+      started_at: 1000,
+      finished_at: 1005,
+      total_reclaimed_bytes: 1024 * 1024 * 50,
+      total_failed_bytes: 0,
+      actual_disk_free_delta: 1024 * 1024 * 50,
+      items: [
+        {
+          item_id: 'item-1',
+          name: 'Xcode DerivedData',
+          path: '/Users/test/Library/Developer/Xcode/DerivedData',
+          bytes_reclaimed: 1024 * 1024 * 50,
+          success: true,
+          status: 'success',
+          failure_reason: null,
+          error_message: null,
+        },
+      ],
+    };
+
+    const rendered = render(CleanResultModal, {
+      props: { result: mockResult, onClose: vi.fn() },
+    });
+
+    expect(rendered.body).toContain('<dialog');
+    expect(rendered.body).toContain('aria-modal="true"');
+    expect(rendered.body).toContain('aria-labelledby=');
+    expect(rendered.body).toContain('aria-describedby=');
+    expect(rendered.body).toContain('Clean Complete');
+    expect(rendered.body).toContain('50 MB');
+    expect(rendered.body).toContain('-done-button');
+  });
+
+  it('ensures app.css centers gentle-spin rotation and avoids will-change transform promotion', () => {
+    const css = readFileSync(new URL('../app.css', import.meta.url), 'utf-8');
+    const gentleSpinIndex = css.indexOf('.animate-gentle-spin');
+    expect(gentleSpinIndex).toBeGreaterThan(0);
+    const gentleSpinRule = css.slice(gentleSpinIndex, css.indexOf('}', gentleSpinIndex));
+    expect(gentleSpinRule).toContain('transform-origin: center');
+    expect(gentleSpinRule).not.toContain('will-change');
+
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)');
+    const reducedMotionIndex = css.indexOf('@media (prefers-reduced-motion: reduce)');
+    const reducedMotionBlock = css.slice(reducedMotionIndex);
+    expect(reducedMotionBlock).toContain('.animate-gentle-spin');
+    expect(reducedMotionBlock).toContain('animation: none !important');
   });
 });
 
