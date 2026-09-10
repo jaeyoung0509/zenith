@@ -26,6 +26,8 @@ describe('serializeSettingsSnapshot', () => {
         id: 'rule.codex',
         app_name: 'Codex',
         executable_pattern: 'codex',
+        application: null,
+        agent_ids: [],
         behavior: 'prevent_system_sleep',
         power_condition: 'ac_power_only',
         enabled: true,

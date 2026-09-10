@@ -60,9 +60,61 @@ impl PowerSourceType {
 #[serde(rename_all = "snake_case")]
 pub enum AwakeRuleStatus {
     Active,
+    WaitingApplication,
+    WaitingAgent,
     WaitingProcess,
     WaitingPower,
+    InvalidApplication,
     Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AwakeAgentId {
+    Codex,
+    Claude,
+    Antigravity,
+    #[serde(rename = "opencode")]
+    OpenCode,
+}
+
+impl AwakeAgentId {
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Antigravity, Self::OpenCode];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+            Self::Antigravity => "Antigravity",
+            Self::OpenCode => "OpenCode / OMP",
+        }
+    }
+
+    /// The adapter id is shared with Agent Activity so a typed Keep Awake rule
+    /// cannot invent its own process-signature table.
+    pub const fn adapter_id(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Antigravity => "antigravity",
+            Self::OpenCode => "opencode",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ApplicationIdentity {
+    pub display_name: String,
+    pub executable_name: String,
+    pub path: String,
+}
+
+impl ApplicationIdentity {
+    pub fn is_structurally_valid(&self) -> bool {
+        !self.display_name.trim().is_empty()
+            && !self.executable_name.trim().is_empty()
+            && std::path::Path::new(&self.path).is_absolute()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -72,6 +124,14 @@ pub struct AwakeRule {
     pub executable_pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_process_pattern: Option<String>,
+    /// Native picker identity for the primary application. When present, this
+    /// is a typed rule and raw pattern fields are retained only for legacy
+    /// compatibility/debugging; they are not used for matching.
+    #[serde(default)]
+    pub application: Option<ApplicationIdentity>,
+    /// Allowlisted agent adapters. Semantics are explicit any-of (OR).
+    #[serde(default)]
+    pub agent_ids: Vec<AwakeAgentId>,
     pub behavior: AwakeBehavior,
     #[serde(default)]
     pub power_condition: PowerCondition,
@@ -126,5 +186,31 @@ mod tests {
         let rule: AwakeRule = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(rule.power_condition, PowerCondition::Always);
         assert_eq!(rule.requires_process_pattern, None);
+        assert_eq!(rule.application, None);
+        assert!(rule.agent_ids.is_empty());
+    }
+
+    #[test]
+    fn typed_rule_round_trips_application_identity_and_known_agents() {
+        let rule = AwakeRule {
+            id: "rule.warp-agents".into(),
+            app_name: "Warp".into(),
+            executable_pattern: "Warp".into(),
+            requires_process_pattern: None,
+            application: Some(ApplicationIdentity {
+                display_name: "Warp".into(),
+                executable_name: "stable".into(),
+                path: "/Applications/Warp.app".into(),
+            }),
+            agent_ids: vec![AwakeAgentId::Codex, AwakeAgentId::OpenCode],
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::AcPowerOnly,
+            enabled: false,
+        };
+
+        let encoded = serde_json::to_string(&rule).unwrap();
+        let decoded: AwakeRule = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, rule);
+        assert!(decoded.application.unwrap().is_structurally_valid());
     }
 }
