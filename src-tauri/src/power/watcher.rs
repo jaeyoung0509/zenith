@@ -1,11 +1,12 @@
 use crate::models::{
-    AwakeBehavior, AwakeRule, AwakeRuleEvaluation, AwakeRuleStatus, AwakeState, PowerCondition,
-    PowerSourceType, ZenithError,
+    ApplicationIdentity, AwakeAgentId, AwakeBehavior, AwakeRule, AwakeRuleEvaluation,
+    AwakeRuleStatus, AwakeState, PowerCondition, PowerSourceType, ZenithError,
 };
 use crate::power::{
     NativeAssertionProvider, PowerAssertion, PowerAssertionProvider, PowerSourceProvider,
     SystemPowerSource,
 };
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
@@ -284,57 +285,93 @@ impl KeepAwakeManager {
                 continue;
             }
 
-            let patterns_lower: Vec<String> = rule
-                .executable_pattern
-                .split('|')
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            let requires_lower: Option<Vec<String>> = rule
-                .requires_process_pattern
-                .as_deref()
-                .map(|pat| {
-                    pat.split('|')
+            // Typed rules use the native application identity and the
+            // allowlisted agent adapter identities. Legacy rules retain their
+            // raw matcher and are intentionally evaluated only in this branch.
+            let (is_process_running, status) =
+                if let Some(application) = rule.application.as_ref() {
+                    let application_valid = Self::application_identity_is_available(application);
+                    let app_running = application_valid
+                        && sys.as_ref().is_some_and(|system| {
+                            system.processes().values().any(|process| {
+                                Self::process_matches_application(process, application)
+                            })
+                        });
+                    let agent_required = !rule.agent_ids.is_empty();
+                    let agent_running = !agent_required
+                        || (app_running
+                            && sys.as_ref().is_some_and(|system| {
+                                rule.agent_ids.iter().any(|agent| {
+                                    system
+                                        .processes()
+                                        .values()
+                                        .any(|process| Self::process_matches_agent(process, *agent))
+                                })
+                            }));
+                    Self::typed_rule_status(
+                        application_valid,
+                        app_running,
+                        agent_required,
+                        agent_running,
+                        is_power_eligible,
+                    )
+                } else {
+                    let patterns_lower: Vec<String> = rule
+                        .executable_pattern
+                        .split('|')
                         .map(|s| s.trim().to_lowercase())
                         .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>()
-                })
-                .filter(|v| !v.is_empty());
+                        .collect();
 
-            let is_running = sys.as_ref().is_some_and(|s| {
-                let has_primary = s
-                    .processes()
-                    .values()
-                    .any(|proc| Self::process_matches_patterns(proc, &patterns_lower));
-                if !has_primary {
-                    return false;
-                }
-                if let Some(req) = &requires_lower {
-                    // Require at least one (different or same) process matching the secondary pattern
-                    s.processes()
-                        .values()
-                        .any(|proc| Self::process_matches_patterns(proc, req))
-                } else {
-                    true
-                }
-            });
+                    let requires_lower: Option<Vec<String>> = rule
+                        .requires_process_pattern
+                        .as_deref()
+                        .map(|pat| {
+                            pat.split('|')
+                                .map(|s| s.trim().to_lowercase())
+                                .filter(|s| !s.is_empty())
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|v| !v.is_empty());
 
-            let status = if !is_running {
-                AwakeRuleStatus::WaitingProcess
-            } else if !is_power_eligible {
-                AwakeRuleStatus::WaitingPower
-            } else {
-                if first_eligible_rule.is_none() {
-                    first_eligible_rule = Some(rule.clone());
-                }
-                AwakeRuleStatus::Active
-            };
+                    let is_running = sys.as_ref().is_some_and(|s| {
+                        let has_primary = s
+                            .processes()
+                            .values()
+                            .any(|proc| Self::process_matches_patterns(proc, &patterns_lower));
+                        if !has_primary {
+                            return false;
+                        }
+                        if let Some(req) = &requires_lower {
+                            // Require at least one (different or same) process matching the secondary pattern
+                            s.processes()
+                                .values()
+                                .any(|proc| Self::process_matches_patterns(proc, req))
+                        } else {
+                            true
+                        }
+                    });
+
+                    (
+                        is_running,
+                        if !is_running {
+                            AwakeRuleStatus::WaitingProcess
+                        } else if !is_power_eligible {
+                            AwakeRuleStatus::WaitingPower
+                        } else {
+                            AwakeRuleStatus::Active
+                        },
+                    )
+                };
+
+            if status == AwakeRuleStatus::Active && first_eligible_rule.is_none() {
+                first_eligible_rule = Some(rule.clone());
+            }
 
             evaluations.push(AwakeRuleEvaluation {
                 rule_id: rule.id.clone(),
                 status,
-                is_process_running: is_running,
+                is_process_running,
                 is_power_eligible,
             });
         }
@@ -549,6 +586,139 @@ impl KeepAwakeManager {
         Self::matches_strings(&name, exe.as_deref(), &cmd, lower_patterns)
     }
 
+    pub(crate) fn typed_rule_status(
+        application_valid: bool,
+        application_running: bool,
+        agent_required: bool,
+        agent_running: bool,
+        power_eligible: bool,
+    ) -> (bool, AwakeRuleStatus) {
+        if !application_valid {
+            return (false, AwakeRuleStatus::InvalidApplication);
+        }
+        if !application_running {
+            return (false, AwakeRuleStatus::WaitingApplication);
+        }
+        if agent_required && !agent_running {
+            return (false, AwakeRuleStatus::WaitingAgent);
+        }
+        if !power_eligible {
+            return (true, AwakeRuleStatus::WaitingPower);
+        }
+        (true, AwakeRuleStatus::Active)
+    }
+
+    fn process_matches_application(
+        proc: &sysinfo::Process,
+        application: &ApplicationIdentity,
+    ) -> bool {
+        proc.exe().is_some_and(|executable| {
+            Self::application_executable_path_matches(application, executable)
+        })
+    }
+
+    fn application_identity_is_available(application: &ApplicationIdentity) -> bool {
+        if !application.is_structurally_valid() {
+            return false;
+        }
+
+        let selected = Path::new(&application.path);
+        if selected.is_file()
+            || selected
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            return selected.is_file();
+        }
+
+        selected.is_dir()
+            && selected
+                .join("Contents")
+                .join("MacOS")
+                .join(&application.executable_name)
+                .is_file()
+    }
+
+    fn process_matches_agent(proc: &sysinfo::Process, agent: AwakeAgentId) -> bool {
+        let aliases = crate::agent_activity::adapters::executable_aliases(agent.adapter_id());
+        if aliases.is_empty() {
+            return false;
+        }
+
+        // Process names and executable paths are checked by exact basename.
+        // Command-line arguments are treated as path/name tokens as well, so
+        // `node /.../opencode` is supported without substring matching an
+        // unrelated argument or directory name.
+        if aliases
+            .iter()
+            .any(|alias| Self::matches_executable_alias(&proc.name().to_string_lossy(), alias))
+        {
+            return true;
+        }
+        if proc.exe().is_some_and(|executable| {
+            let value = executable.to_string_lossy();
+            aliases
+                .iter()
+                .any(|alias| Self::matches_executable_alias(&value, alias))
+        }) {
+            return true;
+        }
+        proc.cmd().iter().any(|argument| {
+            let value = argument.to_string_lossy();
+            aliases
+                .iter()
+                .any(|alias| Self::matches_executable_alias(&value, alias))
+        })
+    }
+
+    pub(crate) fn application_executable_path_matches(
+        application: &ApplicationIdentity,
+        executable: &Path,
+    ) -> bool {
+        let selected = Path::new(&application.path);
+        if selected.is_file()
+            || selected
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            return Self::paths_equal(selected, executable);
+        }
+
+        // macOS application bundles expose the CFBundleExecutable under this
+        // exact directory. The basename check prevents a different helper in
+        // the same bundle from satisfying the rule.
+        let expected = selected
+            .join("Contents")
+            .join("MacOS")
+            .join(&application.executable_name);
+        Self::paths_equal(&expected, executable)
+    }
+
+    fn paths_equal(left: &Path, right: &Path) -> bool {
+        let left = left.to_string_lossy().replace('\\', "/");
+        let right = right.to_string_lossy().replace('\\', "/");
+        if cfg!(windows) {
+            left.eq_ignore_ascii_case(&right)
+        } else {
+            left == right
+        }
+    }
+
+    fn matches_executable_alias(value: &str, alias: &str) -> bool {
+        let basename = value
+            .trim_matches(|character| character == '"' || character == '\'')
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default();
+        let basename =
+            if basename.len() >= 4 && basename[basename.len() - 4..].eq_ignore_ascii_case(".exe") {
+                &basename[..basename.len() - 4]
+            } else {
+                basename
+            };
+        basename.eq_ignore_ascii_case(alias)
+    }
+
     fn matches_strings(
         name_lower: &str,
         exe_lower: Option<&str>,
@@ -621,6 +791,8 @@ mod tests {
             app_name: "NonExistentApp123".to_string(),
             executable_pattern: "non_existent_process_xyz".to_string(),
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::AcPowerOnly,
             enabled: true,
@@ -701,6 +873,8 @@ mod tests {
             app_name: "App 1".to_string(),
             executable_pattern: "non_existent_111".to_string(),
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::AcPowerOnly,
             enabled: true,
@@ -711,6 +885,8 @@ mod tests {
             app_name: "App 2".to_string(),
             executable_pattern: "non_existent_222".to_string(),
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::KeepDisplayAwake,
             power_condition: PowerCondition::Always,
             enabled: false,
@@ -895,6 +1071,170 @@ mod tests {
     }
 
     #[test]
+    fn typed_agent_aliases_are_exact_and_include_omp() {
+        let aliases = crate::agent_activity::adapters::executable_aliases("opencode");
+        assert_eq!(aliases, &["opencode", "omp"]);
+        assert!(KeepAwakeManager::matches_executable_alias("omp", "omp"));
+        assert!(KeepAwakeManager::matches_executable_alias(
+            r"C:\Users\me\bin\ANTIGRAVITY.EXE",
+            "antigravity"
+        ));
+        assert!(!KeepAwakeManager::matches_executable_alias(
+            "my-opencode-wrapper",
+            "opencode"
+        ));
+        assert!(!KeepAwakeManager::matches_executable_alias(
+            "/Users/me/.opencode/bin/runner",
+            "opencode"
+        ));
+    }
+
+    #[test]
+    fn typed_application_matching_requires_the_selected_executable_boundary() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("Warp.app");
+        let macos = bundle.join("Contents/MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
+        let executable = macos.join("stable");
+        std::fs::write(&executable, b"test").unwrap();
+        let helper = macos.join("helper");
+        std::fs::write(&helper, b"test").unwrap();
+        let nested_executable = macos.join("nested/stable");
+        std::fs::create_dir_all(nested_executable.parent().unwrap()).unwrap();
+        std::fs::write(&nested_executable, b"test").unwrap();
+        let identity = ApplicationIdentity {
+            display_name: "Warp".into(),
+            executable_name: "stable".into(),
+            path: bundle.to_string_lossy().into_owned(),
+        };
+
+        assert!(KeepAwakeManager::application_executable_path_matches(
+            &identity,
+            &executable
+        ));
+        assert!(!KeepAwakeManager::application_executable_path_matches(
+            &identity, &helper
+        ));
+        assert!(!KeepAwakeManager::application_executable_path_matches(
+            &identity,
+            &nested_executable
+        ));
+        assert!(!KeepAwakeManager::application_executable_path_matches(
+            &identity,
+            &directory.path().join("Other.app/Contents/MacOS/stable")
+        ));
+    }
+
+    #[test]
+    fn typed_rules_distinguish_app_agent_and_power_waiting_states() {
+        let executable = std::env::current_exe().unwrap();
+        let executable_name = executable
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let application = ApplicationIdentity {
+            display_name: "Test application".into(),
+            executable_name,
+            path: executable.to_string_lossy().into_owned(),
+        };
+        let typed_rule = AwakeRule {
+            id: "rule.typed".into(),
+            app_name: "Test application".into(),
+            executable_pattern: "legacy-value-must-not-match".into(),
+            requires_process_pattern: Some("legacy-agent-value-must-not-match".into()),
+            application: Some(application.clone()),
+            agent_ids: Vec::new(),
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::AcPowerOnly,
+            enabled: true,
+        };
+
+        let assertion = Arc::new(TestAssertionProvider::new(false));
+        let ac_manager = KeepAwakeManager::with_providers(
+            Arc::new(MockPowerSource::new(PowerSourceType::Ac)),
+            assertion.clone(),
+        );
+        ac_manager.set_rules(vec![typed_rule.clone()]);
+        assert_eq!(
+            ac_manager.get_state().rule_evaluations[0].status,
+            AwakeRuleStatus::Active
+        );
+        assert!(ac_manager.get_state().is_active);
+
+        assert_eq!(
+            KeepAwakeManager::typed_rule_status(true, true, true, false, true).1,
+            AwakeRuleStatus::WaitingAgent
+        );
+        assert_eq!(
+            KeepAwakeManager::typed_rule_status(true, true, true, true, true),
+            (true, AwakeRuleStatus::Active)
+        );
+        assert!(KeepAwakeManager::typed_rule_status(true, true, false, false, true).0);
+
+        let mut stale = typed_rule.clone();
+        stale.application.as_mut().unwrap().path = "/moved/Warp.app".into();
+        ac_manager.set_rules(vec![stale]);
+        assert_eq!(
+            ac_manager.get_state().rule_evaluations[0].status,
+            AwakeRuleStatus::InvalidApplication
+        );
+
+        let battery_manager = KeepAwakeManager::with_providers(
+            Arc::new(MockPowerSource::new(PowerSourceType::Battery)),
+            assertion.clone(),
+        );
+        battery_manager.set_rules(vec![typed_rule.clone()]);
+        assert_eq!(
+            battery_manager.get_state().rule_evaluations[0].status,
+            AwakeRuleStatus::WaitingPower
+        );
+
+        let unknown_manager = KeepAwakeManager::with_providers(
+            Arc::new(MockPowerSource::new(PowerSourceType::Unknown)),
+            assertion,
+        );
+        unknown_manager.set_rules(vec![typed_rule]);
+        assert_eq!(
+            unknown_manager.get_state().rule_evaluations[0].status,
+            AwakeRuleStatus::WaitingPower
+        );
+    }
+
+    #[test]
+    fn typed_assertion_releases_when_the_rule_is_removed() {
+        let executable = std::env::current_exe().unwrap();
+        let application = ApplicationIdentity {
+            display_name: "Test application".into(),
+            executable_name: executable
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            path: executable.to_string_lossy().into_owned(),
+        };
+        let rule = AwakeRule {
+            id: "rule.release".into(),
+            app_name: "Test application".into(),
+            executable_pattern: "unused".into(),
+            requires_process_pattern: None,
+            application: Some(application),
+            agent_ids: Vec::new(),
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::Always,
+            enabled: true,
+        };
+        let manager = KeepAwakeManager::with_providers(
+            Arc::new(MockPowerSource::new(PowerSourceType::Ac)),
+            Arc::new(TestAssertionProvider::new(false)),
+        );
+        manager.set_rules(vec![rule]);
+        assert!(manager.get_state().is_active);
+        manager.set_rules(Vec::new());
+        assert!(!manager.get_state().is_active);
+    }
+
+    #[test]
     fn manual_override_takes_precedence_over_process_rules() {
         let power_mock = Arc::new(MockPowerSource::new(PowerSourceType::Ac));
         let assertion_mock = Arc::new(TestAssertionProvider::new(false));
@@ -913,6 +1253,8 @@ mod tests {
             app_name: "ActiveApp".to_string(),
             executable_pattern: current_exe,
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::Always,
             enabled: true,
@@ -959,6 +1301,8 @@ mod tests {
             app_name: "Test".to_string(),
             executable_pattern: current_exe.clone(),
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::AcPowerOnly,
             enabled: true,
@@ -987,6 +1331,8 @@ mod tests {
             app_name: "TestAlways".to_string(),
             executable_pattern: current_exe,
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::Always,
             enabled: true,
@@ -1055,6 +1401,8 @@ mod tests {
             app_name: "Warp+Codex".to_string(),
             executable_pattern: current_exe.clone(),
             requires_process_pattern: Some(current_exe),
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::Always,
             enabled: true,
@@ -1084,6 +1432,8 @@ mod tests {
             app_name: "First".to_string(),
             executable_pattern: current_exe.clone(),
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::PreventSystemSleep,
             power_condition: PowerCondition::Always,
             enabled: true,
@@ -1093,6 +1443,8 @@ mod tests {
             app_name: "Second".to_string(),
             executable_pattern: current_exe,
             requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
             behavior: AwakeBehavior::KeepDisplayAwake,
             power_condition: PowerCondition::Always,
             enabled: true,

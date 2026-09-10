@@ -35,28 +35,32 @@ class AwakeStore {
     const updated = current.map((r) =>
       r.id === ruleId ? { ...r, enabled: !r.enabled } : r
     ) as typeof current;
-    await settingsStore.save({ awake_rules: updated });
-    await this.refresh();
+    const saved = await settingsStore.save({ awake_rules: updated });
+    if (saved) await this.refresh();
+    return saved;
   }
 
   async addRule(rule: AwakeRule) {
     const updated = [...settingsStore.settings.awake_rules, rule] as typeof settingsStore.settings.awake_rules;
-    await settingsStore.save({ awake_rules: updated });
-    await this.refresh();
+    const saved = await settingsStore.save({ awake_rules: updated });
+    if (saved) await this.refresh();
+    return saved;
   }
 
   async deleteRule(ruleId: string) {
     const current = settingsStore.settings.awake_rules;
     const updated = current.filter((r) => r.id !== ruleId) as typeof current;
-    await settingsStore.save({ awake_rules: updated });
-    await this.refresh();
+    const saved = await settingsStore.save({ awake_rules: updated });
+    if (saved) await this.refresh();
+    return saved;
   }
 
   async updateRule(rule: AwakeRule) {
     const current = settingsStore.settings.awake_rules;
     const updated = current.map((r) => (r.id === rule.id ? rule : r)) as typeof current;
-    await settingsStore.save({ awake_rules: updated });
-    await this.refresh();
+    const saved = await settingsStore.save({ awake_rules: updated });
+    if (saved) await this.refresh();
+    return saved;
   }
 
   async setManual(durationSecs: number | null, behavior: AwakeBehavior = 'prevent_system_sleep') {

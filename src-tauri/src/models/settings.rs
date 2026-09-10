@@ -139,6 +139,8 @@ impl Default for ZenithSettings {
                     app_name: "Codex".to_string(),
                     executable_pattern: "codex".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -148,6 +150,8 @@ impl Default for ZenithSettings {
                     app_name: "Claude Code / Claude Desktop".to_string(),
                     executable_pattern: "claude".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -157,6 +161,8 @@ impl Default for ZenithSettings {
                     app_name: "Warp".to_string(),
                     executable_pattern: "warp".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -166,6 +172,8 @@ impl Default for ZenithSettings {
                     app_name: "Opencode".to_string(),
                     executable_pattern: "opencode".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -175,6 +183,8 @@ impl Default for ZenithSettings {
                     app_name: "OMP (Opencode)".to_string(),
                     executable_pattern: "omp".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -184,6 +194,8 @@ impl Default for ZenithSettings {
                     app_name: "Warp + Codex/OMP (compound)".to_string(),
                     executable_pattern: "warp".to_string(),
                     requires_process_pattern: Some("codex|opencode|omp|claude".to_string()),
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -193,6 +205,8 @@ impl Default for ZenithSettings {
                     app_name: "Docker Desktop".to_string(),
                     executable_pattern: "com.docker.backend".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -202,6 +216,8 @@ impl Default for ZenithSettings {
                     app_name: "Terminal / iTerm2 / Ghostty".to_string(),
                     executable_pattern: "Terminal|iTerm2|ghostty".to_string(),
                     requires_process_pattern: None,
+                    application: None,
+                    agent_ids: Vec::new(),
                     behavior: crate::models::AwakeBehavior::PreventSystemSleep,
                     power_condition: crate::models::PowerCondition::AcPowerOnly,
                     enabled: false,
@@ -372,6 +388,20 @@ impl ZenithSettings {
             self.quick_panel_sections.push(QuickPanelSection::Storage);
         }
 
+        // Typed Keep Awake rules use a bounded allowlist and explicit any-of
+        // semantics. Preserve pattern strings exactly for genuine legacy
+        // rules, and make compatibility fields canonical for typed rules so
+        // the two persisted representations cannot drift.
+        for rule in &mut self.awake_rules {
+            let mut agents = HashSet::new();
+            rule.agent_ids.retain(|agent| agents.insert(*agent));
+            if let Some(application) = &rule.application {
+                rule.app_name = application.display_name.clone();
+                rule.executable_pattern = application.executable_name.clone();
+                rule.requires_process_pattern = None;
+            }
+        }
+
         const SUPPORTED_PROVIDERS: [&str; 5] =
             ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
@@ -410,6 +440,8 @@ fn legacy_dashboard_tabs_revision() -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{ApplicationIdentity, AwakeAgentId};
+
     use super::{DashboardTab, QuickPanelSection, ZenithSettings};
 
     #[test]
@@ -524,6 +556,39 @@ mod tests {
             .awake_rules
             .iter()
             .any(|r| r.id == "rule.warp-codex" && r.requires_process_pattern.is_some()));
+    }
+
+    #[test]
+    fn sanitize_canonicalizes_typed_awake_rules_without_touching_identity() {
+        let mut settings = ZenithSettings::default();
+        let rule = settings.awake_rules.first_mut().unwrap();
+        rule.application = Some(ApplicationIdentity {
+            display_name: "Warp".into(),
+            executable_name: "stable".into(),
+            path: "/Applications/Warp.app".into(),
+        });
+        rule.agent_ids = vec![
+            AwakeAgentId::Codex,
+            AwakeAgentId::OpenCode,
+            AwakeAgentId::Codex,
+        ];
+        rule.app_name = "stale display name".into();
+        rule.executable_pattern = "stale|raw|pattern".into();
+        rule.requires_process_pattern = Some("must-not-survive".into());
+
+        let sanitized = settings.sanitize();
+        let rule = &sanitized.awake_rules[0];
+        assert_eq!(
+            rule.agent_ids,
+            vec![AwakeAgentId::Codex, AwakeAgentId::OpenCode]
+        );
+        assert_eq!(
+            rule.application.as_ref().unwrap().path,
+            "/Applications/Warp.app"
+        );
+        assert_eq!(rule.app_name, "Warp");
+        assert_eq!(rule.executable_pattern, "stable");
+        assert_eq!(rule.requires_process_pattern, None);
     }
 
     #[test]

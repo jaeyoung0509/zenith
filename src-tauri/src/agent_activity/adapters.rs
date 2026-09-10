@@ -55,10 +55,20 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
     AgentToolAdapter {
         id: "opencode",
         display_name: "OpenCode",
-        executables: &["opencode"],
+        executables: &["opencode", "omp"],
         integration_available: false,
     },
 ];
+
+/// Returns the canonical executable aliases for a known adapter. Keep Awake
+/// typed rules consume this same allowlist instead of maintaining a second
+/// process-signature table.
+pub fn executable_aliases(adapter_id: &str) -> &'static [&'static str] {
+    ADAPTERS
+        .iter()
+        .find(|adapter| adapter.id == adapter_id)
+        .map_or(&[], |adapter| adapter.executables)
+}
 
 pub fn adapter_for_executable(path: &Path) -> Option<&'static AgentToolAdapter> {
     let home = crate::platform::NativePlatformPaths::new().home();

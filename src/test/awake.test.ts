@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AwakeRule, AwakeState } from '../lib/models/types';
+import { awakeRuleSummary, toggleAwakeAgent } from '../lib/utils/awake';
 
 describe('awake models and state handling', () => {
   it('correctly models power conditions and evaluations', () => {
@@ -40,6 +41,8 @@ describe('awake models and state handling', () => {
       id: 'rule.codex',
       app_name: 'Codex',
       executable_pattern: 'codex',
+      application: null,
+      agent_ids: [],
       behavior: 'prevent_system_sleep',
       power_condition: 'ac_power_only',
       enabled: true,
@@ -49,6 +52,8 @@ describe('awake models and state handling', () => {
       id: 'rule.render',
       app_name: 'Render Farm',
       executable_pattern: 'blender',
+      application: null,
+      agent_ids: [],
       behavior: 'keep_display_awake',
       power_condition: 'always',
       enabled: true,
@@ -107,5 +112,37 @@ describe('awake models and state handling', () => {
     expect(failedState.is_active).toBe(false);
     expect(failedState.manual_expires_at).toBeNull();
     expect(failedState.last_error).toContain('IOKit power assertion failed');
+  });
+
+  it('supports keyboard-friendly chip selection and removal semantics', () => {
+    const selected = toggleAwakeAgent([], 'codex');
+    expect(selected).toEqual(['codex']);
+    expect(toggleAwakeAgent(selected, 'opencode')).toEqual(['codex', 'opencode']);
+    expect(toggleAwakeAgent(['codex', 'opencode'], 'codex')).toEqual(['opencode']);
+  });
+
+  it('summarizes typed rules without exposing legacy pattern syntax', () => {
+    const rule: AwakeRule = {
+      id: 'rule.warp-agents',
+      app_name: 'Warp',
+      executable_pattern: 'warp|stable',
+      requires_process_pattern: 'codex|omp',
+      application: {
+        display_name: 'Warp',
+        executable_name: 'stable',
+        path: '/Applications/Warp.app',
+      },
+      agent_ids: ['codex', 'antigravity', 'opencode'],
+      behavior: 'prevent_system_sleep',
+      power_condition: 'ac_power_only',
+      enabled: false,
+    };
+
+    const summary = awakeRuleSummary(rule);
+    expect(summary).toContain('Warp is open');
+    expect(summary).toContain('Codex, Antigravity, or OpenCode / OMP');
+    expect(summary).toContain('only while plugged in');
+    expect(summary).toContain('display may sleep');
+    expect(summary).not.toContain('|');
   });
 });

@@ -60,9 +60,67 @@ impl PowerSourceType {
 #[serde(rename_all = "snake_case")]
 pub enum AwakeRuleStatus {
     Active,
+    WaitingApplication,
+    WaitingAgent,
     WaitingProcess,
     WaitingPower,
+    InvalidApplication,
     Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AwakeAgentId {
+    Codex,
+    Claude,
+    Antigravity,
+    #[serde(rename = "opencode")]
+    OpenCode,
+}
+
+impl AwakeAgentId {
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Antigravity, Self::OpenCode];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+            Self::Antigravity => "Antigravity",
+            Self::OpenCode => "OpenCode / OMP",
+        }
+    }
+
+    /// The adapter id is shared with Agent Activity so a typed Keep Awake rule
+    /// cannot invent its own process-signature table.
+    pub const fn adapter_id(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Antigravity => "antigravity",
+            Self::OpenCode => "opencode",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ApplicationIdentity {
+    pub display_name: String,
+    pub executable_name: String,
+    pub path: String,
+}
+
+impl ApplicationIdentity {
+    pub fn is_structurally_valid(&self) -> bool {
+        let executable_name = self.executable_name.trim();
+        let is_basename = !executable_name.is_empty()
+            && executable_name != "."
+            && executable_name != ".."
+            && !executable_name.contains(['/', '\\']);
+
+        !self.display_name.trim().is_empty()
+            && is_basename
+            && std::path::Path::new(&self.path).is_absolute()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -72,6 +130,14 @@ pub struct AwakeRule {
     pub executable_pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_process_pattern: Option<String>,
+    /// Native picker identity for the primary application. When present, this
+    /// is a typed rule. Sanitization derives the legacy name/pattern mirrors
+    /// from this identity so they cannot drift, and matching ignores them.
+    #[serde(default)]
+    pub application: Option<ApplicationIdentity>,
+    /// Allowlisted agent adapters. Semantics are explicit any-of (OR).
+    #[serde(default)]
+    pub agent_ids: Vec<AwakeAgentId>,
     pub behavior: AwakeBehavior,
     #[serde(default)]
     pub power_condition: PowerCondition,
@@ -126,5 +192,48 @@ mod tests {
         let rule: AwakeRule = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(rule.power_condition, PowerCondition::Always);
         assert_eq!(rule.requires_process_pattern, None);
+        assert_eq!(rule.application, None);
+        assert!(rule.agent_ids.is_empty());
+    }
+
+    #[test]
+    fn typed_rule_round_trips_application_identity_and_known_agents() {
+        let app_path = std::env::current_dir().unwrap().join("Warp.app");
+        let rule = AwakeRule {
+            id: "rule.warp-agents".into(),
+            app_name: "Warp".into(),
+            executable_pattern: "Warp".into(),
+            requires_process_pattern: None,
+            application: Some(ApplicationIdentity {
+                display_name: "Warp".into(),
+                executable_name: "stable".into(),
+                path: app_path.to_string_lossy().into_owned(),
+            }),
+            agent_ids: vec![AwakeAgentId::Codex, AwakeAgentId::OpenCode],
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::AcPowerOnly,
+            enabled: false,
+        };
+
+        let encoded = serde_json::to_string(&rule).unwrap();
+        let decoded: AwakeRule = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, rule);
+        assert!(decoded.application.unwrap().is_structurally_valid());
+    }
+
+    #[test]
+    fn application_identity_rejects_non_basename_executables() {
+        for executable_name in ["", "..", "Contents/MacOS/stable", r"bin\\stable.exe"] {
+            let identity = ApplicationIdentity {
+                display_name: "Warp".into(),
+                executable_name: executable_name.into(),
+                path: std::env::current_dir()
+                    .unwrap()
+                    .join("Warp.app")
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            assert!(!identity.is_structurally_valid(), "{executable_name}");
+        }
     }
 }

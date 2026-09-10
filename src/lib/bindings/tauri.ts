@@ -390,6 +390,12 @@ export type AppUninstallInspection_Serialize = {
 	warnings: string[],
 };
 
+export type ApplicationIdentity = {
+	display_name: string,
+	executable_name: string,
+	path: string,
+};
+
 export type AttentionReason = "approval" | "input" | "turn_complete" | "inactivity";
 
 export type AuditEntry = AuditEntry_Serialize | AuditEntry_Deserialize;
@@ -432,6 +438,8 @@ export type AutopilotPreferences_Serialize = {
 	recommendation_cooldown_seconds: number,
 };
 
+export type AwakeAgentId = "codex" | "claude" | "antigravity" | "opencode";
+
 export type AwakeBehavior = "prevent_system_sleep" | "keep_display_awake";
 
 export type AwakeRule = AwakeRule_Serialize | AwakeRule_Deserialize;
@@ -443,13 +451,21 @@ export type AwakeRuleEvaluation = {
 	is_power_eligible: boolean,
 };
 
-export type AwakeRuleStatus = "active" | "waiting_process" | "waiting_power" | "disabled";
+export type AwakeRuleStatus = "active" | "waiting_application" | "waiting_agent" | "waiting_process" | "waiting_power" | "invalid_application" | "disabled";
 
 export type AwakeRule_Deserialize = {
 	id: string,
 	app_name: string,
 	executable_pattern: string,
 	requires_process_pattern?: string | null,
+	/**
+	 *  Native picker identity for the primary application. When present, this
+	 *  is a typed rule. Sanitization derives the legacy name/pattern mirrors
+	 *  from this identity so they cannot drift, and matching ignores them.
+	 */
+	application?: ApplicationIdentity | null,
+	/**  Allowlisted agent adapters. Semantics are explicit any-of (OR). */
+	agent_ids?: AwakeAgentId[],
 	behavior: AwakeBehavior,
 	power_condition?: PowerCondition,
 	enabled: boolean,
@@ -460,6 +476,14 @@ export type AwakeRule_Serialize = {
 	app_name: string,
 	executable_pattern: string,
 	requires_process_pattern?: string | null,
+	/**
+	 *  Native picker identity for the primary application. When present, this
+	 *  is a typed rule. Sanitization derives the legacy name/pattern mirrors
+	 *  from this identity so they cannot drift, and matching ignores them.
+	 */
+	application: ApplicationIdentity | null,
+	/**  Allowlisted agent adapters. Semantics are explicit any-of (OR). */
+	agent_ids: AwakeAgentId[],
 	behavior: AwakeBehavior,
 	power_condition: PowerCondition,
 	enabled: boolean,
