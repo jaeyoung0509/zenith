@@ -1,7 +1,7 @@
 //! System metrics, preferences, Keep Awake, diagnostics, and development commands.
 
 use super::state::AppState;
-use super::support::run_blocking;
+use super::support::{lock_or_state_error, lock_recover, run_blocking};
 use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
@@ -216,7 +216,7 @@ pub async fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), Stri
 #[tauri::command]
 #[specta::specta]
 pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String> {
-    let s = state.settings.lock().expect("settings poisoned");
+    let s = lock_recover(&state.settings);
     Ok(s.clone())
 }
 
@@ -229,7 +229,7 @@ pub async fn save_settings(
 ) -> Result<(), String> {
     let settings = settings.sanitize();
     let (provider_selection_changed, inactivity_threshold_changed) = {
-        let previous = state.settings.lock().expect("settings poisoned");
+        let previous = lock_recover(&state.settings);
         (
             previous.ai_accounts_quota_providers != settings.ai_accounts_quota_providers,
             previous.agent_notifications.inactivity_threshold_minutes
@@ -255,7 +255,7 @@ pub async fn save_settings(
                 .map_err(|error| error.to_string())?;
             settings_store::save(&config_dir, &settings)?;
             awake_manager.set_rules(settings.awake_rules.clone());
-            *settings_store_state.lock().expect("settings poisoned") = settings;
+            *lock_or_state_error(&settings_store_state, "Settings")? = settings;
             if provider_selection_changed {
                 crate::ai_snapshots::invalidate_snapshot(&ai_usage_cache, &usage_generation);
                 ai_control_state
@@ -363,7 +363,7 @@ pub async fn get_diagnostics(
     let settings = state.settings.clone();
     run_blocking(
         move || {
-            let settings = settings.lock().expect("settings poisoned").clone();
+            let settings = lock_recover(&settings).clone();
             let config_dir = app_handle
                 .path()
                 .app_config_dir()

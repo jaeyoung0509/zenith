@@ -1,7 +1,7 @@
 //! Cleanup scan, private plan, and execution command handlers.
 
 use super::state::AppState;
-use super::support::{run_blocking, unix_timestamp};
+use super::support::{lock_or_state_error, lock_recover, run_blocking, unix_timestamp};
 use crate::cleaner::CleanExecutor;
 use crate::models::{
     Category, CleanEvent, CleanResult, PlanPreview, RiskTier, ScanEvent, ScanResult,
@@ -24,7 +24,7 @@ pub async fn start_scan(
     let operation_gate = state.storage_operation_gate.clone();
     let _permit = execution_budgets.acquire_storage_read().await?;
     let (excluded_signatures, intensive_cleanup) = {
-        let settings = state.settings.lock().expect("settings poisoned");
+        let settings = lock_recover(&state.settings);
         (
             settings.excluded_signatures.clone(),
             settings.intensive_cleanup,
@@ -43,7 +43,7 @@ pub async fn start_scan(
                     let _ = on_event.send(event);
                 },
             );
-            *last_scan_store.lock().expect("last_scan poisoned") = Some(result.clone());
+            *lock_recover(&last_scan_store) = Some(result.clone());
             result
         })
     })
@@ -56,7 +56,7 @@ pub async fn start_scan(
 #[tauri::command]
 #[specta::specta]
 pub fn get_last_scan(state: State<'_, AppState>) -> Option<ScanResult> {
-    state.last_scan.lock().expect("mutex poisoned").clone()
+    lock_recover(&state.last_scan).clone()
 }
 
 #[tauri::command]
@@ -72,9 +72,7 @@ pub async fn create_delete_plan(
     let delete_plans = state.delete_plans.clone();
     run_blocking(
         move || {
-            let scan = last_scan
-                .lock()
-                .expect("last_scan poisoned")
+            let scan = lock_recover(&last_scan)
                 .clone()
                 .filter(|scan| scan.scan_id == scan_id)
                 .ok_or_else(|| {
@@ -94,7 +92,7 @@ pub async fn create_delete_plan(
                     .saturating_add(u64::from(ScanResult::VALID_FOR_SECONDS)),
             );
             let now = unix_timestamp();
-            let mut plans = delete_plans.lock().expect("delete_plans poisoned");
+            let mut plans = lock_or_state_error(&delete_plans, "Delete plans")?;
             plans.retain(|_, stored| now.saturating_sub(stored.created_at) < PLAN_TTL_SECS);
             if plans.len() >= 64 {
                 if let Some(oldest_id) = plans
@@ -126,9 +124,7 @@ pub async fn execute_clean(
     let last_scan = state.last_scan.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
         operation_gate.run_write(|| {
-            let plan = plans
-                .lock()
-                .expect("delete_plans poisoned")
+            let plan = lock_or_state_error(&plans, "Delete plans")?
                 .remove(&plan_id)
                 .ok_or_else(|| "Delete plan not found or already used".to_string())?;
             if unix_timestamp()
@@ -138,7 +134,7 @@ pub async fn execute_clean(
                 return Err("Delete plan expired. Scan again before cleaning.".to_string());
             }
             {
-                let mut scan = last_scan.lock().expect("last_scan poisoned");
+                let mut scan = lock_recover(&last_scan);
                 scan.as_ref()
                     .ok_or_else(|| {
                         "The scan is no longer current. Scan again before cleaning.".to_string()
@@ -155,7 +151,7 @@ pub async fn execute_clean(
         })
     })
     .await
-    .map_err(|_| "Clean execution thread panicked".to_string())??;
+    .map_err(|_| "Clean worker thread panicked".to_string())??;
 
     Ok(result)
 }
@@ -194,7 +190,7 @@ pub async fn quick_clean_safe(
 
     // 1. Load current fresh backend scan and sanitized settings
     let (scan, selected_item_ids) = {
-        let scan_guard = last_scan_store.lock().expect("last_scan poisoned");
+        let scan_guard = lock_recover(&last_scan_store);
         let scan = scan_guard
             .as_ref()
             .ok_or_else(|| {
@@ -206,7 +202,7 @@ pub async fn quick_clean_safe(
         scan.validate_for_cleanup(&scan.scan_id, now)
             .map_err(|error| error.to_string())?;
 
-        let settings = state.settings.lock().expect("settings poisoned").clone();
+        let settings = lock_recover(&state.settings).clone();
         let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
 
         (scan, eligible_ids)
@@ -234,7 +230,7 @@ pub async fn quick_clean_safe(
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
         operation_gate.run_write(|| {
             {
-                let mut current_scan = last_scan_store.lock().expect("last_scan poisoned");
+                let mut current_scan = lock_recover(&last_scan_store);
                 let scan_ref = current_scan.as_ref().ok_or_else(|| {
                     "The scan is no longer current. Scan again before cleaning.".to_string()
                 })?;
