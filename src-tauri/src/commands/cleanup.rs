@@ -18,9 +18,11 @@ pub async fn start_scan(
     categories: Option<Vec<Category>>,
     state: State<'_, AppState>,
 ) -> Result<ScanResult, String> {
+    let execution_budgets = state.execution_budgets.clone();
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
     let operation_gate = state.storage_operation_gate.clone();
+    let _permit = execution_budgets.acquire_storage_read().await?;
     let (excluded_signatures, intensive_cleanup) = {
         let settings = state.settings.lock().expect("settings poisoned");
         (
@@ -30,7 +32,7 @@ pub async fn start_scan(
     };
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run(|| {
+        operation_gate.run_read(|| {
             let cat_ref = categories.as_deref();
             let result = ScanEngine::scan(
                 &registry,
@@ -123,7 +125,7 @@ pub async fn execute_clean(
     let plans = state.delete_plans.clone();
     let last_scan = state.last_scan.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
-        operation_gate.run(|| {
+        operation_gate.run_write(|| {
             let plan = plans
                 .lock()
                 .expect("delete_plans poisoned")
@@ -230,7 +232,7 @@ pub async fn quick_clean_safe(
 
     // 3. Execute through the operation gate, invalidating last_scan
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
-        operation_gate.run(|| {
+        operation_gate.run_write(|| {
             {
                 let mut current_scan = last_scan_store.lock().expect("last_scan poisoned");
                 let scan_ref = current_scan.as_ref().ok_or_else(|| {
