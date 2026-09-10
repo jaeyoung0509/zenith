@@ -173,6 +173,42 @@ describe('quick panel AI provider projection', () => {
     expect(source.match(/<QuickUsageGauges/g)).toHaveLength(2);
   });
 
+  it('uses stacked provider rows so quota gauges get the full compact-panel width', () => {
+    const quickPanelSource = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    const gaugeSource = readFileSync(
+      new URL('../lib/components/QuickUsageGauges.svelte', import.meta.url),
+      'utf8'
+    );
+
+    expect(quickPanelSource).toContain('class="min-w-0 space-y-2 rounded-lg');
+    expect(quickPanelSource).toContain('class="min-w-0 space-y-2 rounded-md');
+    expect(gaugeSource).toContain('grid w-full min-w-0 grid-cols-2 gap-2');
+    expect(gaugeSource).not.toContain('w-48');
+    expect(gaugeSource).toContain('whitespace-nowrap');
+    expect(gaugeSource).toContain('tabular-nums');
+  });
+
+  it('keeps three-digit quota metadata on one line with tabular numeric styling', () => {
+    const rendered = render(QuickUsageGauges, {
+      props: {
+        windows: [
+          { label: '5h limit', used_percent: 100, resets_at: Date.now() / 1000 + 23 * 3600 + 60 },
+          { label: 'Weekly limit', used_percent: 100, resets_at: Date.now() / 1000 + 5 * 86400 + 60 },
+        ],
+        fallback: 'unused fallback',
+      },
+    });
+
+    expect(rendered.body).toContain('whitespace-nowrap');
+    expect(rendered.body).toContain('tabular-nums');
+    expect(rendered.body).toContain('100%');
+    expect(rendered.body).toMatch(/· \d+[dhm]/);
+    expect(rendered.body).not.toContain('unused fallback');
+  });
+
   it('renders separate 5-hour and weekly gauge bars with accessible values', () => {
     const rendered = render(QuickUsageGauges, {
       props: {

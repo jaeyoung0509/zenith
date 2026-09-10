@@ -33,7 +33,7 @@
 </script>
 
 {#if fiveHourWindow && weeklyWindow}
-  <div class="grid w-48 shrink-0 grid-cols-2 gap-2" aria-label="Usage limit windows">
+  <div class="grid w-full min-w-0 grid-cols-2 gap-2" aria-label="Usage limit windows">
     {#each [
       { label: '5 hours', usageWindow: fiveHourWindow },
       { label: '1 week', usageWindow: weeklyWindow },
@@ -46,12 +46,12 @@
         aria-valuemax="100"
         aria-valuenow={percent(item.usageWindow)}
       >
-        <div class="flex items-baseline justify-between gap-1 font-mono text-micro">
-          <span class="text-muted-foreground">{item.label}</span>
-          <span class="shrink-0 text-foreground">
+        <div class="flex min-w-0 items-baseline justify-between gap-2 whitespace-nowrap font-mono text-micro">
+          <span class="shrink-0 text-muted-foreground">{item.label}</span>
+          <span class="shrink-0 text-right tabular-nums text-foreground">
             {percent(item.usageWindow)}%
             {#if compactReset(item.usageWindow.resets_at)}
-              <span class="text-muted-foreground"> · {compactReset(item.usageWindow.resets_at)}</span>
+              <span class="whitespace-nowrap text-muted-foreground"> · {compactReset(item.usageWindow.resets_at)}</span>
             {/if}
           </span>
         </div>
@@ -60,5 +60,5 @@
     {/each}
   </div>
 {:else}
-  <span class="shrink-0 font-mono text-caption text-muted-foreground">{fallback}</span>
+  <span class="block w-full min-w-0 truncate font-mono text-caption text-muted-foreground">{fallback}</span>
 {/if}
