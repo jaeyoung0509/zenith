@@ -88,9 +88,29 @@ pub async fn open_storage_settings() -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_docker_status() -> Result<DockerStatus, String> {
+pub async fn get_docker_status(state: State<'_, AppState>) -> Result<DockerStatus, String> {
+    const DOCKER_STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+    {
+        let cache = state
+            .docker_status_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some((status, fetched_at)) = &*cache {
+            if fetched_at.elapsed() < DOCKER_STATUS_TTL {
+                return Ok(status.clone());
+            }
+        }
+    }
+
+    let _permit = state.execution_budgets.acquire_subprocess().await?;
+    let cache_store = state.docker_status_cache.clone();
     run_blocking(
-        || Ok(DockerAdapter::get_status()),
+        move || {
+            let fresh = DockerAdapter::get_status();
+            let mut cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
+            *cache = Some((fresh.clone(), std::time::Instant::now()));
+            Ok(fresh)
+        },
         "Docker status worker panicked",
     )
     .await
@@ -98,9 +118,20 @@ pub async fn get_docker_status() -> Result<DockerStatus, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn prune_docker_target(signature_id: String) -> Result<u64, String> {
+pub async fn prune_docker_target(
+    signature_id: String,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let _permit = state.execution_budgets.acquire_subprocess().await?;
+    let cache_store = state.docker_status_cache.clone();
     run_blocking(
-        move || DockerAdapter::prune_category(&signature_id).map_err(|error| error.to_string()),
+        move || {
+            let result =
+                DockerAdapter::prune_category(&signature_id).map_err(|error| error.to_string())?;
+            let mut cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
+            *cache = None;
+            Ok(result)
+        },
         "Docker cleanup worker panicked",
     )
     .await

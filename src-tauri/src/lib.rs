@@ -193,6 +193,7 @@ pub fn run() {
         platform_capabilities,
         runtime_metrics,
         execution_budgets,
+        docker_status_cache: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
