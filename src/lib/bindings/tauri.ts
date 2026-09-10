@@ -460,8 +460,8 @@ export type AwakeRule_Deserialize = {
 	requires_process_pattern?: string | null,
 	/**
 	 *  Native picker identity for the primary application. When present, this
-	 *  is a typed rule and raw pattern fields are retained only for legacy
-	 *  compatibility/debugging; they are not used for matching.
+	 *  is a typed rule. Sanitization derives the legacy name/pattern mirrors
+	 *  from this identity so they cannot drift, and matching ignores them.
 	 */
 	application?: ApplicationIdentity | null,
 	/**  Allowlisted agent adapters. Semantics are explicit any-of (OR). */
@@ -478,8 +478,8 @@ export type AwakeRule_Serialize = {
 	requires_process_pattern?: string | null,
 	/**
 	 *  Native picker identity for the primary application. When present, this
-	 *  is a typed rule and raw pattern fields are retained only for legacy
-	 *  compatibility/debugging; they are not used for matching.
+	 *  is a typed rule. Sanitization derives the legacy name/pattern mirrors
+	 *  from this identity so they cannot drift, and matching ignores them.
 	 */
 	application: ApplicationIdentity | null,
 	/**  Allowlisted agent adapters. Semantics are explicit any-of (OR). */
