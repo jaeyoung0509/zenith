@@ -164,72 +164,69 @@ export class ScanStore {
   // Selected item IDs mapped to item objects
   selectedMap = $state<Record<string, boolean>>({});
 
-  // Computed / Derived values
-  get reclaimableBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk !== 'manual' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
+  // Consolidated single-pass selection summary
+  selectionSummary = $derived.by(() => {
+    let reclaimableBytes = 0;
+    let safeSelectedBytes = 0;
+    let rebuildSelectedBytes = 0;
+    let manualSelectedBytes = 0;
+    let manualSelectedCount = 0;
+    let selectedCount = 0;
+
+    if (this.lastScan) {
+      for (const cat of this.lastScan.categories) {
+        for (const item of cat.items) {
+          if (this.selectedMap[item.id]) {
+            selectedCount++;
+            const bytes = item.size.allocated ?? item.size.logical;
+            if (item.risk === 'safe') {
+              safeSelectedBytes += bytes;
+              reclaimableBytes += bytes;
+            } else if (item.risk === 'rebuild') {
+              rebuildSelectedBytes += bytes;
+              reclaimableBytes += bytes;
+            } else if (item.risk === 'manual') {
+              manualSelectedBytes += bytes;
+              manualSelectedCount++;
+            }
+          }
         }
       }
     }
-    return total;
+
+    return {
+      reclaimableBytes,
+      safeSelectedBytes,
+      rebuildSelectedBytes,
+      manualSelectedBytes,
+      manualSelectedCount,
+      selectedCount,
+    };
+  });
+
+  // Computed / Derived getters delegating to single-pass summary
+  get reclaimableBytes(): number {
+    return this.selectionSummary.reclaimableBytes;
   }
 
   get safeSelectedBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'safe' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
-        }
-      }
-    }
-    return total;
+    return this.selectionSummary.safeSelectedBytes;
   }
 
   get rebuildSelectedBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'rebuild' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
-        }
-      }
-    }
-    return total;
+    return this.selectionSummary.rebuildSelectedBytes;
   }
 
   get manualSelectedBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'manual' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
-        }
-      }
-    }
-    return total;
+    return this.selectionSummary.manualSelectedBytes;
   }
 
   get manualSelectedCount(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'manual' && this.selectedMap[item.id]) total++;
-      }
-    }
-    return total;
+    return this.selectionSummary.manualSelectedCount;
   }
 
   get selectedCount(): number {
-    return Object.values(this.selectedMap).filter(Boolean).length;
+    return this.selectionSummary.selectedCount;
   }
 
   private initPromise: Promise<void> | null = null;

@@ -203,3 +203,81 @@ describe('quick clean eligibility and predicate consistency', () => {
     expect(scanStore.selectedMap['dev-safe']).toBe(true);
   });
 });
+
+describe('scanStore selectionSummary', () => {
+  it('computes selection metrics in a single pass across safe, rebuild, and manual items', async () => {
+    const { scanStore } = await import('../lib/stores/scan.svelte');
+
+    const mockScan = {
+      scan_id: 'summary-test-1',
+      valid_for_seconds: 300,
+      started_at: 1000,
+      created_at: 1000,
+      finished_at: 1005,
+      total_bytes: 7500,
+      safe_bytes: 1500,
+      rebuild_bytes: 2000,
+      manual_bytes: 4000,
+      categories: [
+        {
+          category: 'ai' as const,
+          display_name: 'AI Tools',
+          total_bytes: 3500,
+          safe_bytes: 1500,
+          rebuild_bytes: 2000,
+          manual_bytes: 0,
+          items: [
+            item({ id: 'item-safe', category: 'ai', risk: 'safe', size: { logical: 1500, allocated: 1500 } }),
+            item({ id: 'item-rebuild', category: 'ai', risk: 'rebuild', size: { logical: 2000, allocated: 2000 } }),
+          ],
+        },
+        {
+          category: 'developer' as const,
+          display_name: 'Developer Tools',
+          total_bytes: 4000,
+          safe_bytes: 0,
+          rebuild_bytes: 0,
+          manual_bytes: 4000,
+          items: [
+            item({ id: 'item-manual-1', category: 'developer', risk: 'manual', size: { logical: 1000, allocated: 1000 } }),
+            item({ id: 'item-manual-2', category: 'developer', risk: 'manual', size: { logical: 3000, allocated: 3000 } }),
+          ],
+        },
+      ],
+    };
+
+    scanStore.lastScan = mockScan;
+    scanStore.selectedMap = {
+      'item-safe': true,
+      'item-rebuild': true,
+      'item-manual-1': true,
+      'item-manual-2': false,
+    };
+
+    const summary = scanStore.selectionSummary;
+    expect(summary.selectedCount).toBe(3);
+    expect(summary.safeSelectedBytes).toBe(1500);
+    expect(summary.rebuildSelectedBytes).toBe(2000);
+    expect(summary.reclaimableBytes).toBe(3500); // safe + rebuild
+    expect(summary.manualSelectedBytes).toBe(1000);
+    expect(summary.manualSelectedCount).toBe(1);
+
+    // Verify getter parity
+    expect(scanStore.selectedCount).toBe(summary.selectedCount);
+    expect(scanStore.safeSelectedBytes).toBe(summary.safeSelectedBytes);
+    expect(scanStore.rebuildSelectedBytes).toBe(summary.rebuildSelectedBytes);
+    expect(scanStore.reclaimableBytes).toBe(summary.reclaimableBytes);
+    expect(scanStore.manualSelectedBytes).toBe(summary.manualSelectedBytes);
+    expect(scanStore.manualSelectedCount).toBe(summary.manualSelectedCount);
+
+    // Verify reactivity on deselecting safe item
+    scanStore.selectedMap = {
+      ...scanStore.selectedMap,
+      'item-safe': false,
+    };
+
+    expect(scanStore.selectionSummary.safeSelectedBytes).toBe(0);
+    expect(scanStore.selectionSummary.reclaimableBytes).toBe(2000);
+    expect(scanStore.selectionSummary.selectedCount).toBe(2);
+  });
+});
