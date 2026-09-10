@@ -169,9 +169,9 @@ fn test_symlink_safety_and_no_escape() {
     }
 
     // Create a symlink inside the fixture pointing outside
-    let symlink_path = dir.path().join("cache_link");
     #[cfg(unix)]
     {
+        let symlink_path = dir.path().join("cache_link");
         std::os::unix::fs::symlink(&outside_file, &symlink_path).expect("create symlink");
         assert!(SymlinkGuard::is_symlink(&symlink_path));
 
@@ -623,9 +623,9 @@ fn test_ancestor_symlink_escape_rejection() {
     fs::write(&precious_file, b"cannot be deleted").unwrap();
 
     // Create an intermediate symlink: cargo/registry -> outside_dir
-    let symlink_dir = trusted_root.join("registry");
     #[cfg(unix)]
     {
+        let symlink_dir = trusted_root.join("registry");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_dir).expect("create symlink");
 
         let target_path = symlink_dir.join("cache");
@@ -660,9 +660,9 @@ fn test_symlink_ancestor_above_signature_root_rejection() {
     fs::write(&precious, b"fn important() {}").unwrap();
 
     // Create intermediate symlink: base_dir/.cargo -> outside_dir
-    let symlink_dot_cargo = base_dir.path().join(".cargo");
     #[cfg(unix)]
     {
+        let symlink_dot_cargo = base_dir.path().join(".cargo");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_dot_cargo).expect("create symlink");
 
         let signature_target = symlink_dot_cargo.join("registry").join("cache");
@@ -688,9 +688,9 @@ fn test_signature_root_itself_symlink_rejection() {
     fs::write(&precious, b"cannot delete").unwrap();
 
     // signature root itself is a symlink: base_dir/cache -> outside_dir
-    let symlink_cache = base_dir.path().join("cache");
     #[cfg(unix)]
     {
+        let symlink_cache = base_dir.path().join("cache");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_cache).expect("create symlink");
 
         let validation_res =
@@ -985,14 +985,6 @@ mod windows_safety {
         let report = SafeTreeDeleter::delete_contents(&deep, &[]);
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
-    }
-
-    #[test]
-    fn windows_graceful_termination_is_unavailable_for_memory_groups() {
-        // Documents the platform contract: TerminateProcess is never labeled
-        // graceful. Covered by unit tests on Windows; this integration marker
-        // ensures the suite compiles and runs on windows-latest.
-        assert!(cfg!(windows));
     }
 
     #[allow(dead_code)]
