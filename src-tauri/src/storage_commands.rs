@@ -167,8 +167,9 @@ pub async fn start_large_file_scan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
+    let _permit = state.execution_budgets.acquire_storage_read().await?;
     let result = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run(|| {
+        operation_gate.run_read(|| {
             let mut emitted_result: Option<LargeFileScanResult> = None;
             let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
@@ -259,8 +260,9 @@ pub async fn start_developer_artifact_scan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
+    let _permit = state.execution_budgets.acquire_storage_read().await?;
     let result = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run(|| {
+        operation_gate.run_read(|| {
             let mut emitted_result: Option<DeveloperArtifactScanResult> = None;
             let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
@@ -373,10 +375,12 @@ pub fn prepare_large_file_trash(
 pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<InstalledApp>, String> {
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
-    let inventory =
-        tauri::async_runtime::spawn_blocking(move || operation_gate.run(ApplicationScanner::scan))
-            .await
-            .map_err(|_| "Application inventory worker panicked".to_string())?;
+    let _permit = state.execution_budgets.acquire_storage_read().await?;
+    let inventory = tauri::async_runtime::spawn_blocking(move || {
+        operation_gate.run_read(ApplicationScanner::scan)
+    })
+    .await
+    .map_err(|_| "Application inventory worker panicked".to_string())?;
     let mut apps = inventory
         .records
         .values()
@@ -403,8 +407,9 @@ pub async fn inspect_app_uninstall(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
+    let _permit = state.execution_budgets.acquire_storage_read().await?;
     let inspection = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run(|| {
+        operation_gate.run_read(|| {
             let inventory = worker_storage_state
                 .app_inventory
                 .lock()
@@ -470,7 +475,7 @@ pub async fn execute_trash_plan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run(|| {
+        operation_gate.run_write(|| {
             let plan = storage_state
                 .trash_plans
                 .lock()

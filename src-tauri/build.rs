@@ -1,4 +1,6 @@
 fn main() {
+    assert_release_custom_protocol();
+
     const COMMANDS: &[&str] = &[
         "get_ai_usage",
         "get_project_context",
@@ -22,6 +24,7 @@ fn main() {
         "get_last_scan",
         "create_delete_plan",
         "execute_clean",
+        "quick_clean_safe",
         "get_memory_metrics",
         "terminate_memory_group",
         "pick_keep_awake_application",
@@ -91,4 +94,17 @@ fn embed_windows_manifest_for_all_targets() {
             .expect("Windows manifest path must be valid Unicode")
     );
     println!("cargo:rustc-link-arg=/WX");
+}
+
+fn assert_release_custom_protocol() {
+    println!("cargo:rerun-if-env-changed=PROFILE");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CUSTOM_PROTOCOL");
+
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+    if profile == "release" && std::env::var("CARGO_FEATURE_CUSTOM_PROTOCOL").is_err() {
+        panic!(
+            "Release builds must enable the `custom-protocol` feature to embed frontend assets. \
+            Building release without `custom-protocol` produces a blank webview."
+        );
+    }
 }

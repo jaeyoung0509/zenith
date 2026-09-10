@@ -844,6 +844,64 @@ export const mockApi = {
     });
   },
 
+  async quickCleanSafe(
+    onEvent: (event: CleanEvent) => void
+  ): Promise<CleanResult> {
+    const planId = 'mock-quick-clean-plan';
+    return new Promise((resolve) => {
+      onEvent({
+        type: 'Started',
+        plan_id: planId,
+        total_targets: 1,
+        expected_bytes: 500 * 1024 * 1024,
+      });
+
+      setTimeout(() => {
+        onEvent({
+          type: 'ItemStarted',
+          item_id: 'mock-safe-item',
+          name: 'System Logs',
+          index: 1,
+          total: 1,
+        });
+
+        setTimeout(() => {
+          onEvent({
+            type: 'ItemFinished',
+            item_id: 'mock-safe-item',
+            name: 'System Logs',
+            success: true,
+            reclaimed_bytes: 500 * 1024 * 1024,
+            error: null,
+          });
+
+          const res: CleanResult = {
+            plan_id: planId,
+            started_at: Math.floor(Date.now() / 1000) - 1,
+            finished_at: Math.floor(Date.now() / 1000),
+            total_reclaimed_bytes: 500 * 1024 * 1024,
+            total_failed_bytes: 0,
+            items: [
+              {
+                item_id: 'mock-safe-item',
+                name: 'System Logs',
+                path: '/tmp/logs',
+                status: 'success',
+                success: true,
+                bytes_reclaimed: 500 * 1024 * 1024,
+                failure_reason: null,
+                error_message: null,
+              },
+            ],
+            actual_disk_free_delta: 500 * 1024 * 1024,
+          };
+          onEvent({ type: 'Finished', result: res });
+          resolve(res);
+        }, 50);
+      }, 50);
+    });
+  },
+
   async getMemoryMetrics(): Promise<MemoryMetrics> {
     return {
       total_bytes: 16 * 1024 * 1024 * 1024,

@@ -1,7 +1,7 @@
 //! AI usage, agent activity, and AI Control Center command handlers.
 
 use super::state::AppState;
-use super::support::{run_blocking, unix_timestamp, user_home};
+use super::support::{lock_or_state_error, run_blocking, unix_timestamp, user_home};
 use crate::ai_snapshots::{enrich_activity_for_project_view, fetch_activity_registry};
 use crate::ai_usage::connect_openrouter;
 use crate::models::{
@@ -306,7 +306,7 @@ pub async fn get_ai_control_center(
     }
     // Clone settings-derived inputs under short locks; no I/O held.
     let (preferences, provider_ids, inactivity_threshold_secs) = {
-        let settings = state.settings.lock().expect("settings poisoned");
+        let settings = lock_or_state_error(&state.settings, "Settings")?;
         (
             settings.ai_control.clone(),
             settings.ai_accounts_quota_providers.clone(),
@@ -542,17 +542,14 @@ pub async fn save_ai_control_preferences(
             {
                 crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
             }
-            let mut next_settings = settings_store_state
-                .lock()
-                .expect("settings poisoned")
-                .clone();
+            let mut next_settings = lock_or_state_error(&settings_store_state, "Settings")?.clone();
             next_settings.ai_control = preferences.clone();
             let config = app_handle
                 .path()
                 .app_config_dir()
                 .map_err(|error| error.to_string())?;
             settings_store::save(&config, &next_settings)?;
-            *settings_store_state.lock().expect("settings poisoned") = next_settings;
+            *lock_or_state_error(&settings_store_state, "Settings")? = next_settings;
             // Apply the native policy only after persistence succeeds, keeping the runtime
             // and the settings file consistent if an atomic settings write is rejected.
             awake_manager.set_control_center_awake_policy(
@@ -590,7 +587,7 @@ pub async fn run_ai_safety_scan(
 ) -> Result<crate::models::SafetySnapshot, String> {
     let control = state.ai_control_state.clone();
     let (preferences, inactivity_threshold_secs) = {
-        let settings = state.settings.lock().expect("settings poisoned");
+        let settings = lock_or_state_error(&state.settings, "Settings")?;
         (
             settings.ai_control.clone(),
             u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60,
@@ -661,10 +658,7 @@ pub async fn dismiss_ai_safety_finding(
     let control_state = state.ai_control_state.clone();
     run_blocking(
         move || {
-            let mut settings = settings_store_state
-                .lock()
-                .expect("settings poisoned")
-                .clone();
+            let mut settings = lock_or_state_error(&settings_store_state, "Settings")?.clone();
             if !settings.ai_control.dismissed_findings.contains(&finding_id) {
                 settings
                     .ai_control
@@ -679,7 +673,7 @@ pub async fn dismiss_ai_safety_finding(
                 .map_err(|error| error.to_string())?;
             settings_store::save(&config, &settings)?;
             let retention = settings.ai_control.audit_retention_days;
-            *settings_store_state.lock().expect("settings poisoned") = settings;
+            *lock_or_state_error(&settings_store_state, "Settings")? = settings;
 
             let mut control = control_state.lock().expect("ai control poisoned");
             if let Some(item) = control

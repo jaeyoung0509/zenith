@@ -432,6 +432,17 @@ impl ZenithSettings {
         self.ai_control = crate::ai_control_center::budgets::sanitize(self.ai_control);
         self
     }
+
+    /// Returns whether the specified category is enabled for cleanup under current settings.
+    pub fn is_category_clean_enabled(&self, category: crate::models::Category) -> bool {
+        match category {
+            crate::models::Category::Ai => self.clean_ai_tools,
+            crate::models::Category::Developer => self.clean_developer_tools,
+            crate::models::Category::Container => self.clean_docker,
+            crate::models::Category::Model => self.clean_local_models,
+            crate::models::Category::System => true,
+        }
+    }
 }
 
 fn legacy_dashboard_tabs_revision() -> u8 {

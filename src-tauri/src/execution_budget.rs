@@ -6,9 +6,9 @@
 //!   workers per scan.
 //! - `cache_providers` used the global Rayon pool (`into_par_iter`) for two
 //!   tiny provider lookups.
-//! - `StorageOperationGate` serializes participating mutating storage
-//!   workflows; it is a safety serialization primitive, not a performance
-//!   semaphore, and is preserved unchanged.
+//! - `StorageOperationGate` coordinates filesystem-heavy reads and mutating
+//!   storage workflows; reads execute concurrently while mutations remain
+//!   exclusive across all windows.
 //!
 //! This module provides:
 //! - [`shared_scan_pool`]: one explicitly bounded scan pool reused by generic

@@ -33,4 +33,5 @@ pub struct AppState {
     pub platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider>,
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
+    pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
 }

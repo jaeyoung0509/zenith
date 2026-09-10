@@ -11,6 +11,7 @@ import {
   tauriCreatePlan,
   tauriExecuteClean,
   tauriGetLastScan,
+  tauriQuickCleanSafe,
   tauriScan,
 } from '../utils/tauri';
 
@@ -163,72 +164,69 @@ export class ScanStore {
   // Selected item IDs mapped to item objects
   selectedMap = $state<Record<string, boolean>>({});
 
-  // Computed / Derived values
-  get reclaimableBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk !== 'manual' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
+  // Consolidated single-pass selection summary
+  selectionSummary = $derived.by(() => {
+    let reclaimableBytes = 0;
+    let safeSelectedBytes = 0;
+    let rebuildSelectedBytes = 0;
+    let manualSelectedBytes = 0;
+    let manualSelectedCount = 0;
+    let selectedCount = 0;
+
+    if (this.lastScan) {
+      for (const cat of this.lastScan.categories) {
+        for (const item of cat.items) {
+          if (this.selectedMap[item.id]) {
+            selectedCount++;
+            const bytes = item.size.allocated ?? item.size.logical;
+            if (item.risk === 'safe') {
+              safeSelectedBytes += bytes;
+              reclaimableBytes += bytes;
+            } else if (item.risk === 'rebuild') {
+              rebuildSelectedBytes += bytes;
+              reclaimableBytes += bytes;
+            } else if (item.risk === 'manual') {
+              manualSelectedBytes += bytes;
+              manualSelectedCount++;
+            }
+          }
         }
       }
     }
-    return total;
+
+    return {
+      reclaimableBytes,
+      safeSelectedBytes,
+      rebuildSelectedBytes,
+      manualSelectedBytes,
+      manualSelectedCount,
+      selectedCount,
+    };
+  });
+
+  // Computed / Derived getters delegating to single-pass summary
+  get reclaimableBytes(): number {
+    return this.selectionSummary.reclaimableBytes;
   }
 
   get safeSelectedBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'safe' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
-        }
-      }
-    }
-    return total;
+    return this.selectionSummary.safeSelectedBytes;
   }
 
   get rebuildSelectedBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'rebuild' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
-        }
-      }
-    }
-    return total;
+    return this.selectionSummary.rebuildSelectedBytes;
   }
 
   get manualSelectedBytes(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'manual' && this.selectedMap[item.id]) {
-          total += item.size.allocated ?? item.size.logical;
-        }
-      }
-    }
-    return total;
+    return this.selectionSummary.manualSelectedBytes;
   }
 
   get manualSelectedCount(): number {
-    if (!this.lastScan) return 0;
-    let total = 0;
-    for (const cat of this.lastScan.categories) {
-      for (const item of cat.items) {
-        if (item.risk === 'manual' && this.selectedMap[item.id]) total++;
-      }
-    }
-    return total;
+    return this.selectionSummary.manualSelectedCount;
   }
 
   get selectedCount(): number {
-    return Object.values(this.selectedMap).filter(Boolean).length;
+    return this.selectionSummary.selectedCount;
   }
 
   private initPromise: Promise<void> | null = null;
@@ -418,6 +416,64 @@ export class ScanStore {
       this.isScanning = false;
       this.currentCategory = null;
       this.currentScanningItem = null;
+    }
+  }
+
+  async quickCleanSafe(): Promise<CleanResult | null> {
+    if (this.isCleaning || this.isScanning) return null;
+    this.updateFreshness();
+    if (!this.canClean) {
+      this.error = 'Scan results are out of date. Scan again and review the new results before cleaning.';
+      return null;
+    }
+
+    this.isCleaning = true;
+    this.error = null;
+    this.lastCleanResult = null;
+
+    try {
+      const result = await tauriQuickCleanSafe((event: CleanEvent) => {
+        switch (event.type) {
+          case 'Started':
+            this.cleanProgress = {
+              currentItem: 'Starting cleanup...',
+              index: 0,
+              total: event.total_targets,
+              percent: 0,
+            };
+            break;
+          case 'ItemStarted':
+            this.cleanProgress = {
+              currentItem: event.name,
+              index: event.index,
+              total: event.total,
+              percent: Math.round((event.index / event.total) * 100),
+            };
+            break;
+          case 'ItemFinished':
+            break;
+          case 'Finished':
+            this.lastCleanResult = event.result;
+            break;
+          case 'Error':
+            this.error = event.message;
+            break;
+        }
+      });
+
+      this.lastCleanResult = result;
+      this.invalidate();
+
+      // Re-scan after clean to refresh metrics
+      await this.runScan();
+
+      return result;
+    } catch (e: any) {
+      this.invalidate();
+      this.error = `${e?.toString() || 'Clean failed'} Scan again and review the results before retrying.`;
+      return null;
+    } finally {
+      this.isCleaning = false;
     }
   }
 

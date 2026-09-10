@@ -47,6 +47,7 @@ export const commands = {
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
+	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
 	terminateMemoryGroup: (leaseId: string, mode: MemoryTerminationMode) => typedError<MemoryTerminationResult, string>(__TAURI_INVOKE("terminate_memory_group", { leaseId, mode })),
 	pickKeepAwakeApplication: () => typedError<{

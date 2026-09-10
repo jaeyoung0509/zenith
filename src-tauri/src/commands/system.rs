@@ -1,7 +1,7 @@
 //! System metrics, preferences, Keep Awake, diagnostics, and development commands.
 
 use super::state::AppState;
-use super::support::run_blocking;
+use super::support::{lock_or_state_error, run_blocking};
 use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
@@ -21,14 +21,10 @@ use tauri::{AppHandle, Manager, State};
 pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetrics, String> {
     let sampler = state.memory_sampler.clone();
     let lease_store = state.memory_termination_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut metrics = sampler.sample();
-        let system = crate::metrics::memory::RealMemorySystem::default();
-        MemoryInspector::attach_termination_leases(&mut metrics, &lease_store, &system);
-        metrics
-    })
-    .await
-    .map_err(|e| e.to_string())
+    let observation = sampler
+        .get_observation(std::time::Duration::from_millis(800))
+        .await?;
+    Ok(observation.mint_metrics_with_leases(&lease_store))
 }
 
 #[tauri::command]
@@ -92,9 +88,43 @@ pub async fn open_storage_settings() -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_docker_status() -> Result<DockerStatus, String> {
+pub async fn get_docker_status(state: State<'_, AppState>) -> Result<DockerStatus, String> {
+    const DOCKER_STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+    {
+        let cache = state
+            .docker_status_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some((status, fetched_at)) = &*cache {
+            if fetched_at.elapsed() < DOCKER_STATUS_TTL {
+                return Ok(status.clone());
+            }
+        }
+    }
+
+    let _permit = state.execution_budgets.acquire_subprocess().await?;
+    let cache_store = state.docker_status_cache.clone();
+    let operation_gate = state.storage_operation_gate.clone();
     run_blocking(
-        || Ok(DockerAdapter::get_status()),
+        move || {
+            operation_gate.run_read(|| {
+                // A Docker mutation may have completed while this cache miss
+                // waited for the read side of the storage gate.
+                {
+                    let cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some((status, fetched_at)) = &*cache {
+                        if fetched_at.elapsed() < DOCKER_STATUS_TTL {
+                            return Ok(status.clone());
+                        }
+                    }
+                }
+
+                let fresh = DockerAdapter::get_status();
+                let mut cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
+                *cache = Some((fresh.clone(), std::time::Instant::now()));
+                Ok(fresh)
+            })
+        },
         "Docker status worker panicked",
     )
     .await
@@ -102,9 +132,25 @@ pub async fn get_docker_status() -> Result<DockerStatus, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn prune_docker_target(signature_id: String) -> Result<u64, String> {
+pub async fn prune_docker_target(
+    signature_id: String,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let _permit = state.execution_budgets.acquire_subprocess().await?;
+    let cache_store = state.docker_status_cache.clone();
+    let operation_gate = state.storage_operation_gate.clone();
     run_blocking(
-        move || DockerAdapter::prune_category(&signature_id).map_err(|error| error.to_string()),
+        move || {
+            operation_gate.run_write(|| {
+                *cache_store.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                let result =
+                    DockerAdapter::prune_category(&signature_id).map_err(|error| error.to_string());
+                // The command may have changed Docker state even if its final
+                // status/delta query failed, so never retain a pre-prune snapshot.
+                *cache_store.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                result
+            })
+        },
         "Docker cleanup worker panicked",
     )
     .await
@@ -112,9 +158,11 @@ pub async fn prune_docker_target(signature_id: String) -> Result<u64, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_local_models() -> Result<Vec<LocalModelItem>, String> {
+pub async fn get_local_models(state: State<'_, AppState>) -> Result<Vec<LocalModelItem>, String> {
+    let _permit = state.execution_budgets.acquire_storage_read().await?;
+    let operation_gate = state.storage_operation_gate.clone();
     run_blocking(
-        || Ok(LocalModelScanner::scan_all_models()),
+        move || operation_gate.run_read(|| Ok(LocalModelScanner::scan_all_models())),
         "Local model scan worker panicked",
     )
     .await
@@ -122,9 +170,17 @@ pub async fn get_local_models() -> Result<Vec<LocalModelItem>, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn delete_local_model(model_id: String) -> Result<u64, String> {
+pub async fn delete_local_model(
+    model_id: String,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let operation_gate = state.storage_operation_gate.clone();
     run_blocking(
-        move || LocalModelManager::delete_by_id(&model_id).map_err(|error| error.to_string()),
+        move || {
+            operation_gate.run_write(|| {
+                LocalModelManager::delete_by_id(&model_id).map_err(|error| error.to_string())
+            })
+        },
         "Local model deletion worker panicked",
     )
     .await
@@ -189,7 +245,7 @@ pub async fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), Stri
 #[tauri::command]
 #[specta::specta]
 pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String> {
-    let s = state.settings.lock().expect("settings poisoned");
+    let s = lock_or_state_error(&state.settings, "Settings")?;
     Ok(s.clone())
 }
 
@@ -202,7 +258,7 @@ pub async fn save_settings(
 ) -> Result<(), String> {
     let settings = settings.sanitize();
     let (provider_selection_changed, inactivity_threshold_changed) = {
-        let previous = state.settings.lock().expect("settings poisoned");
+        let previous = lock_or_state_error(&state.settings, "Settings")?;
         (
             previous.ai_accounts_quota_providers != settings.ai_accounts_quota_providers,
             previous.agent_notifications.inactivity_threshold_minutes
@@ -228,7 +284,7 @@ pub async fn save_settings(
                 .map_err(|error| error.to_string())?;
             settings_store::save(&config_dir, &settings)?;
             awake_manager.set_rules(settings.awake_rules.clone());
-            *settings_store_state.lock().expect("settings poisoned") = settings;
+            *lock_or_state_error(&settings_store_state, "Settings")? = settings;
             if provider_selection_changed {
                 crate::ai_snapshots::invalidate_snapshot(&ai_usage_cache, &usage_generation);
                 ai_control_state
@@ -336,7 +392,7 @@ pub async fn get_diagnostics(
     let settings = state.settings.clone();
     run_blocking(
         move || {
-            let settings = settings.lock().expect("settings poisoned").clone();
+            let settings = lock_or_state_error(&settings, "Settings")?.clone();
             let config_dir = app_handle
                 .path()
                 .app_config_dir()

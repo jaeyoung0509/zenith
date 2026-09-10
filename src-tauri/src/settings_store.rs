@@ -33,6 +33,8 @@ pub fn load(config_dir: &Path) -> ZenithSettings {
     }
 }
 
+pub const MAX_CORRUPT_BACKUPS: usize = 5;
+
 fn backup_and_recover_corrupted_settings(
     config_dir: &Path,
     err_msg: &str,
@@ -40,19 +42,47 @@ fn backup_and_recover_corrupted_settings(
 ) {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis())
         .unwrap_or(0);
     let original = settings_path(config_dir);
     let backup = config_dir.join(format!("settings.corrupt.{timestamp}.json"));
 
-    // 1. Move corrupted settings.json to backup
-    if let Err(e) = fs::rename(&original, &backup) {
-        let _ = fs::copy(&original, &backup);
-        crate::diagnostics::log_error(
-            "settings",
-            &format!("Failed to rename corrupted settings: {e}"),
-        );
-    }
+    // 1. Move corrupted settings.json to backup. Only prune older backups
+    // after the current corrupt payload was actually preserved.
+    let backup_preserved = match fs::rename(&original, &backup) {
+        Ok(()) => true,
+        Err(rename_error) => match fs::copy(&original, &backup) {
+            Ok(_) => {
+                crate::diagnostics::log_error(
+                    "settings",
+                    &format!(
+                        "Failed to rename corrupted settings; preserved a copy instead: {rename_error}"
+                    ),
+                );
+                // Windows rename does not replace an existing destination. Once
+                // the corrupt payload is safely copied, remove the original so
+                // the atomic temporary-file rename in `save` can restore it.
+                if let Err(remove_error) = fs::remove_file(&original) {
+                    crate::diagnostics::log_error(
+                        "settings",
+                        &format!(
+                            "Failed to remove copied corrupt settings before recovery: {remove_error}"
+                        ),
+                    );
+                }
+                true
+            }
+            Err(copy_error) => {
+                crate::diagnostics::log_error(
+                    "settings",
+                    &format!(
+                        "Failed to preserve corrupted settings (rename: {rename_error}; copy: {copy_error})"
+                    ),
+                );
+                false
+            }
+        },
+    };
 
     // 2. Atomically write default settings back into settings.json to recover
     if let Err(e) = save(config_dir, defaults) {
@@ -62,28 +92,73 @@ fn backup_and_recover_corrupted_settings(
         );
     }
 
+    // 3. Prune old corrupted backups beyond the retention limit only after
+    // preserving this recovery event.
+    if backup_preserved {
+        prune_corrupt_backups(config_dir, MAX_CORRUPT_BACKUPS);
+    }
+
+    let preservation = if backup_preserved {
+        format!("preserved at {}", backup.display())
+    } else {
+        "could not be preserved".to_string()
+    };
     let msg = format!(
-        "Corrupted settings file moved to {} and recovered with defaults (Error: {})",
-        backup.display(),
-        err_msg
+        "Corrupted settings file {preservation}; recovery with defaults was attempted (Error: {err_msg})"
     );
     crate::diagnostics::log_error("settings", &msg);
 }
 
-pub fn count_corrupted_backups(config_dir: &Path) -> usize {
+fn parse_backup_timestamp(path: &Path) -> Option<u128> {
+    let name = path.file_name()?.to_str()?;
+    let without_prefix = name.strip_prefix("settings.corrupt.")?;
+    let ts_str = without_prefix.strip_suffix(".json")?;
+    ts_str.parse::<u128>().ok()
+}
+
+pub fn list_corrupted_backups(config_dir: &Path) -> Vec<PathBuf> {
+    let mut backups = Vec::new();
     if let Ok(entries) = fs::read_dir(config_dir) {
-        entries
-            .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_str()
-                    .map(|n| n.starts_with("settings.corrupt.") && n.ends_with(".json"))
-                    .unwrap_or(false)
-            })
-            .count()
-    } else {
-        0
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
+                continue;
+            }
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("settings.corrupt.") && name.ends_with(".json") {
+                    backups.push(path);
+                }
+            }
+        }
     }
+    backups.sort_by(
+        |a, b| match (parse_backup_timestamp(a), parse_backup_timestamp(b)) {
+            (Some(ts_a), Some(ts_b)) => ts_a.cmp(&ts_b),
+            _ => {
+                let a_time = a.metadata().and_then(|m| m.modified()).ok();
+                let b_time = b.metadata().and_then(|m| m.modified()).ok();
+                match (a_time, b_time) {
+                    (Some(at), Some(bt)) => at.cmp(&bt),
+                    _ => a.cmp(b),
+                }
+            }
+        },
+    );
+    backups
+}
+
+pub fn prune_corrupt_backups(config_dir: &Path, max_backups: usize) {
+    let backups = list_corrupted_backups(config_dir);
+    if backups.len() > max_backups {
+        let remove_count = backups.len() - max_backups;
+        for backup in backups.into_iter().take(remove_count) {
+            let _ = fs::remove_file(backup);
+        }
+    }
+}
+
+pub fn count_corrupted_backups(config_dir: &Path) -> usize {
+    list_corrupted_backups(config_dir).len()
 }
 
 pub fn has_corrupted_backup(config_dir: &Path) -> bool {
@@ -101,7 +176,10 @@ pub fn save(config_dir: &Path, settings: &ZenithSettings) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{count_corrupted_backups, has_corrupted_backup, load, save, settings_path};
+    use super::{
+        count_corrupted_backups, has_corrupted_backup, load, prune_corrupt_backups, save,
+        settings_path, MAX_CORRUPT_BACKUPS,
+    };
     use crate::models::{QuickPanelSection, ZenithSettings};
 
     #[test]
@@ -143,5 +221,82 @@ mod tests {
         let second_load = load(directory.path());
         assert_eq!(second_load, ZenithSettings::default());
         assert_eq!(count_corrupted_backups(directory.path()), backups_before);
+    }
+
+    #[test]
+    fn corrupt_backups_cap_at_max_and_prune_oldest() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir_path = directory.path();
+
+        // Create 8 backups with known timestamps (1000..1007)
+        for i in 1000..1008 {
+            let file = dir_path.join(format!("settings.corrupt.{i}.json"));
+            std::fs::write(&file, b"corrupt").unwrap();
+        }
+
+        assert_eq!(count_corrupted_backups(dir_path), 8);
+
+        // Prune to MAX_CORRUPT_BACKUPS (5)
+        prune_corrupt_backups(dir_path, MAX_CORRUPT_BACKUPS);
+
+        assert_eq!(count_corrupted_backups(dir_path), 5);
+
+        // The oldest 3 (1000, 1001, 1002) should have been pruned
+        assert!(!dir_path.join("settings.corrupt.1000.json").exists());
+        assert!(!dir_path.join("settings.corrupt.1001.json").exists());
+        assert!(!dir_path.join("settings.corrupt.1002.json").exists());
+
+        // The newest 5 (1003..1007) must remain
+        for i in 1003..1008 {
+            assert!(
+                dir_path.join(format!("settings.corrupt.{i}.json")).exists(),
+                "Expected backup {i} to remain"
+            );
+        }
+    }
+
+    #[test]
+    fn prune_preserves_unrelated_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir_path = directory.path();
+
+        let unrelated_files = [
+            "settings.json",
+            "settings.json.tmp",
+            "settings.corrupt.notjson.txt",
+            "unrelated.log",
+            "notes.md",
+        ];
+
+        for name in &unrelated_files {
+            std::fs::write(dir_path.join(name), b"data").unwrap();
+        }
+
+        // Create 7 backups
+        for i in 100..107 {
+            let file = dir_path.join(format!("settings.corrupt.{i}.json"));
+            std::fs::write(&file, b"corrupt").unwrap();
+        }
+
+        prune_corrupt_backups(dir_path, 3);
+
+        assert_eq!(count_corrupted_backups(dir_path), 3);
+
+        // All unrelated files must remain intact
+        for name in &unrelated_files {
+            assert!(
+                dir_path.join(name).exists(),
+                "Unrelated file {} must be preserved",
+                name
+            );
+        }
+
+        let lookalike_directory = dir_path.join("settings.corrupt.50.json");
+        std::fs::create_dir(&lookalike_directory).unwrap();
+        prune_corrupt_backups(dir_path, 2);
+        assert!(
+            lookalike_directory.is_dir(),
+            "Backup pruning must never treat lookalike directories as files"
+        );
     }
 }

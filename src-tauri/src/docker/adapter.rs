@@ -55,8 +55,8 @@ impl DockerAdapter {
         }
 
         let overview = Self::get_overview();
-        let images = Self::get_images();
         let containers = Self::get_containers();
+        let images = Self::get_images_from_containers(&containers);
         let volumes = Self::get_volumes();
 
         DockerStatus {
@@ -295,55 +295,66 @@ impl DockerAdapter {
     }
 
     pub fn get_images() -> Vec<DockerImageItem> {
-        let used_images: std::collections::HashSet<String> = Self::get_containers()
-            .into_iter()
-            .map(|c| c.image)
-            .collect();
+        let containers = Self::get_containers();
+        Self::get_images_from_containers(&containers)
+    }
+
+    pub fn get_images_from_containers(containers: &[DockerContainerItem]) -> Vec<DockerImageItem> {
+        let used_images: std::collections::HashSet<String> =
+            containers.iter().map(|c| c.image.clone()).collect();
 
         let mut cmd = tooling::command("docker");
         cmd.args(["images", "--format", "{{json .}}"]);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
-        let mut images = Vec::new();
         if let Ok(out) = output {
             if out.status.success() {
-                for line in String::from_utf8_lossy(&out.stdout).lines() {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                        let id = v
-                            .get("ID")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let repo = v
-                            .get("Repository")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let tag = v
-                            .get("Tag")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let size_str = v.get("Size").and_then(|s| s.as_str()).unwrap_or("0B");
-                        let size_bytes = Self::parse_docker_size(size_str);
-                        let is_dangling = repo == "<none>" || tag == "<none>";
+                return Self::parse_images(&String::from_utf8_lossy(&out.stdout), &used_images);
+            }
+        }
+        Vec::new()
+    }
 
-                        let full_name = format!("{repo}:{tag}");
-                        let is_in_use = !is_dangling
-                            && (used_images.contains(&id)
-                                || used_images.contains(&repo)
-                                || used_images.contains(&full_name));
+    pub fn parse_images(
+        stdout: &str,
+        used_images: &std::collections::HashSet<String>,
+    ) -> Vec<DockerImageItem> {
+        let mut images = Vec::new();
+        for line in stdout.lines() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                let id = v
+                    .get("ID")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let repo = v
+                    .get("Repository")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let tag = v
+                    .get("Tag")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let size_str = v.get("Size").and_then(|s| s.as_str()).unwrap_or("0B");
+                let size_bytes = Self::parse_docker_size(size_str);
+                let is_dangling = repo == "<none>" || tag == "<none>";
 
-                        images.push(DockerImageItem {
-                            id,
-                            repository: repo,
-                            tag,
-                            size_bytes,
-                            is_dangling,
-                            is_in_use,
-                        });
-                    }
-                }
+                let full_name = format!("{repo}:{tag}");
+                let is_in_use = !is_dangling
+                    && (used_images.contains(&id)
+                        || used_images.contains(&repo)
+                        || used_images.contains(&full_name));
+
+                images.push(DockerImageItem {
+                    id,
+                    repository: repo,
+                    tag,
+                    size_bytes,
+                    is_dangling,
+                    is_in_use,
+                });
             }
         }
         images
@@ -547,5 +558,33 @@ mod tests {
         assert_eq!(overview.volumes.total_bytes, 8 * 1024 * 1024 * 1024);
         assert_eq!(overview.volumes.reclaimable_bytes, 500 * 1024 * 1024);
         assert!(overview.total_reclaimable_bytes < overview.total_bytes);
+    }
+
+    #[test]
+    fn parse_images_detects_used_and_dangling() {
+        use std::collections::HashSet;
+
+        let output = r#"
+{"ID":"img1","Repository":"redis","Tag":"alpine","Size":"30MB"}
+{"ID":"img2","Repository":"nginx","Tag":"latest","Size":"100MB"}
+{"ID":"img3","Repository":"<none>","Tag":"<none>","Size":"50MB"}
+"#;
+        let mut used = HashSet::new();
+        used.insert("redis:alpine".to_string());
+
+        let images = DockerAdapter::parse_images(output, &used);
+        assert_eq!(images.len(), 3);
+
+        // img1 is used by redis:alpine
+        assert!(images[0].is_in_use);
+        assert!(!images[0].is_dangling);
+
+        // img2 is not in use
+        assert!(!images[1].is_in_use);
+        assert!(!images[1].is_dangling);
+
+        // img3 is dangling
+        assert!(!images[2].is_in_use);
+        assert!(images[2].is_dangling);
     }
 }
