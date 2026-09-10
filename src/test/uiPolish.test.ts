@@ -79,6 +79,18 @@ describe('accessible action contracts', () => {
     );
     expect(rendered.body).not.toContain('transition-all');
   });
+
+  it('supports paint-only feedback for controls that must avoid compositor promotion', () => {
+    const rendered = render(Button, { props: { motion: 'paint' } });
+
+    expect(rendered.body).toContain(
+      'transition-[background-color,color,border-color]'
+    );
+    expect(rendered.body).not.toContain(
+      'transition-[background-color,color,border-color,transform,opacity]'
+    );
+    expect(rendered.body).not.toContain('active:scale-[0.98]');
+  });
 });
 
 describe('cleanup result feedback', () => {

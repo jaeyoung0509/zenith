@@ -210,6 +210,21 @@
   transform-origin: center;
 }
 
+/* Paint-only progress motion for WKWebView surfaces. Animating the dash phase
+   avoids transform/opacity compositor layers that can survive state teardown. */
+@keyframes loading-dash {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+.animate-loading-dash {
+  animation: loading-dash 0.75s linear infinite;
+}
+
 @keyframes shimmer-active {
   0% {
     transform: translateX(-100%) skewX(-12deg);
@@ -239,7 +254,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-gentle-spin {
+  .animate-gentle-spin,
+  .animate-loading-dash {
     animation: none !important;
   }
   *,

@@ -18,6 +18,7 @@
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import ByteValue from '../../lib/components/ByteValue.svelte';
   import SelectionToolbar from '../../lib/components/SelectionToolbar.svelte';
+  import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
   import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
   import LargeFilesView from './LargeFilesView.svelte';
   import ApplicationsView from './ApplicationsView.svelte';
@@ -151,12 +152,15 @@
       onclick={() => scanStore.runScan()}
       class="gap-1.5"
       id="storage-scan-button"
+      motion="paint"
     >
-      {#key scanStore.isScanning}
-        <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
+      <span class="inline-flex items-center justify-center shrink-0 w-3.5 h-3.5">
+        {#if scanStore.isScanning}
+          <LoadingSpinner size={13} />
+        {:else}
           <RotateCw size={13} />
-        </span>
-      {/key}
+        {/if}
+      </span>
       <span>{scanStore.isScanning ? 'Scanning…' : 'Scan Storage'}</span>
     </Button>
   </div>
@@ -370,9 +374,7 @@
         </div>
       {:else}
         <div class="py-12 text-center text-muted-foreground text-sm space-y-3">
-          <span class="inline-flex items-center justify-center shrink-0 size-6 animate-gentle-spin mx-auto opacity-50">
-            <RotateCw size={24} />
-          </span>
+          <LoadingSpinner size={24} class="mx-auto opacity-50" />
           <p>Scanning known development caches...</p>
         </div>
       {/if}

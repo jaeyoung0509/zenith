@@ -23,6 +23,7 @@
   import QuickUsageGauges from '../../lib/components/QuickUsageGauges.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
+  import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
   import {
     Sparkles,
     Trash2,
@@ -370,11 +371,13 @@
               }}
               aria-label="Refresh AI usage"
             >
-              {#key usageStore.isLoading}
-                <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {usageStore.isLoading ? 'animate-gentle-spin' : ''}">
+              <span class="inline-flex items-center justify-center shrink-0 w-3 h-3">
+                {#if usageStore.isLoading}
+                  <LoadingSpinner size={12} />
+                {:else}
                   <RotateCw size={12} />
-                </span>
-              {/key}
+                {/if}
+              </span>
             </button>
           </div>
           {#if settings.quick_panel_ai_providers.length === 0}
@@ -422,7 +425,7 @@
           </div>
         {:else if scanStore.isScanning}
           <div class="py-4 text-center space-y-2">
-            <RotateCw size={16} class="animate-gentle-spin mx-auto text-muted-foreground" />
+            <LoadingSpinner size={16} class="mx-auto text-muted-foreground" />
             <p class="text-xs text-muted-foreground">Scanning caches...</p>
           </div>
         {/if}
@@ -525,11 +528,13 @@
         class="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
         title={cleanupAvailable ? 'Rescan storage' : (cleanupCapability?.reason ?? 'Storage cleanup is unavailable on this platform.')}
       >
-        {#key scanStore.isScanning}
-          <span class="inline-flex items-center justify-center shrink-0 w-3 h-3 {scanStore.isScanning ? 'animate-gentle-spin' : ''}">
+        <span class="inline-flex items-center justify-center shrink-0 w-3 h-3">
+          {#if scanStore.isScanning}
+            <LoadingSpinner size={11} />
+          {:else}
             <RotateCw size={11} />
-          </span>
-        {/key}
+          {/if}
+        </span>
       </button>
     </div>
     <div class="flex items-center gap-2">
