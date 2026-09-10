@@ -83,8 +83,8 @@ impl WindowsDeleteHandle {
         let path_text = path.to_string_lossy();
         let wide: Vec<u16> = if path_text.starts_with(r"\\?\") {
             path.as_os_str().encode_wide().chain([0]).collect()
-        } else if path_text.starts_with(r"\\") {
-            format!(r"\\?\UNC\{}", &path_text[2..])
+        } else if let Some(unc_path) = path_text.strip_prefix(r"\\") {
+            format!(r"\\?\UNC\{}", unc_path)
                 .encode_utf16()
                 .chain([0])
                 .collect()
@@ -612,7 +612,6 @@ impl SafeTreeDeleter {
                     Self::restore_directory_permissions(path, permissions, report);
                 }
             }
-            return;
         }
 
         #[cfg(not(windows))]
@@ -811,9 +810,9 @@ impl SafeTreeDeleter {
                         path.display()
                     ));
                 }
-                return Ok(PermissionSnapshot {
+                Ok(PermissionSnapshot {
                     directory: Some(directory),
-                });
+                })
             }
             #[cfg(not(windows))]
             Ok(PermissionSnapshot::default())
