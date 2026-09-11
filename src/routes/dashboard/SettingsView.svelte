@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import type {
     AgentNotificationPreferences,
@@ -12,6 +13,7 @@
     QuickPanelSection,
   } from '../../lib/models/types';
   import { tauriGetDiagnostics, tauriOpenLogsFolder } from '../../lib/utils/tauri';
+  import { LOG_DIRECTORY_FALLBACK, titleCaseLabel } from '../../lib/utils/platformCopy';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
   import Button from '../../lib/components/Button.svelte';
@@ -95,6 +97,11 @@
 
   let settings = $derived(settingsStore.settings);
 
+  let releasesUrl = $derived.by(() => {
+    const url = platformContextStore.context?.releases_url;
+    return typeof url === 'string' && url.length > 0 ? url : null;
+  });
+
   let isIntensiveAvailable = $derived(
     platformCapabilitiesStore.isAvailable('intensive_cleanup')
   );
@@ -159,6 +166,7 @@
   let copiedDiagnostics = $state(false);
 
   onMount(() => {
+    void platformContextStore.load();
     void loadDiagnostics();
     void usageStore.loadDescriptors();
   });
@@ -403,10 +411,12 @@
   <div class="space-y-3">
     <div>
       <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-        Menu Bar Quick Panel
+        {platformContextStore.quickPanelSurfaceLabel
+          ? `${titleCaseLabel(platformContextStore.quickPanelSurfaceLabel)} Quick Panel`
+          : 'Quick Panel'}
       </h3>
       <p class="text-meta text-muted-foreground mt-1">
-        Choose what appears below the menu bar icon. Drag or use the arrow buttons to set priority.
+        Choose what appears below the {platformContextStore.quickPanelSurfaceLabel ?? 'quick panel'} icon. Drag or use the arrow buttons to set priority.
       </p>
     </div>
     <Card class="p-4 bg-card/70 space-y-5">
@@ -539,29 +549,39 @@
       </p>
     </div>
     <Card class="p-4 bg-card/70">
-      <div class="flex items-start justify-between gap-5 text-xs">
-        <div class="min-w-0">
-          <div class="flex items-center gap-2 font-medium text-foreground">
-            <AlertTriangle size={14} class="text-warning" />
-            Intensive cleanup
-            <Badge variant="outline">{isIntensiveAvailable ? 'Opt-in' : 'Unavailable'}</Badge>
-          </div>
-          <div class="text-meta text-muted-foreground mt-1 leading-relaxed">
-            {#if !isIntensiveAvailable && intensiveReason}
-              {intensiveReason}
-            {:else}
-              Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
-              Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
-            {/if}
-          </div>
-        </div>
-        <Switch
-          checked={isIntensiveAvailable && settings.intensive_cleanup}
-          disabled={!isIntensiveAvailable}
-          onchange={() => handleToggle('intensive_cleanup')}
-          ariaLabel="Intensive cleanup"
+      {#if platformCapabilitiesStore.error && !platformCapabilitiesStore.capabilities}
+        <InlineNotice
+          variant="error"
+          title="Platform capabilities unavailable"
+          message={platformCapabilitiesStore.error}
+          actionLabel="Retry"
+          onAction={() => void platformCapabilitiesStore.load(true)}
         />
-      </div>
+      {:else}
+        <div class="flex items-start justify-between gap-5 text-xs">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 font-medium text-foreground">
+              <AlertTriangle size={14} class="text-warning" />
+              Intensive cleanup
+              <Badge variant="outline">{isIntensiveAvailable ? 'Opt-in' : 'Unavailable'}</Badge>
+            </div>
+            <div class="text-meta text-muted-foreground mt-1 leading-relaxed">
+              {#if !isIntensiveAvailable && intensiveReason}
+                {intensiveReason}
+              {:else}
+                Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
+                Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
+              {/if}
+            </div>
+          </div>
+          <Switch
+            checked={isIntensiveAvailable && settings.intensive_cleanup}
+            disabled={!isIntensiveAvailable}
+            onchange={() => handleToggle('intensive_cleanup')}
+            ariaLabel="Intensive cleanup"
+          />
+        </div>
+      {/if}
     </Card>
   </div>
 
@@ -775,7 +795,7 @@
       <div class="space-y-1">
         <div class="text-xs font-medium text-foreground">Local System & Error Logs</div>
         <p class="text-meta text-muted-foreground leading-relaxed">
-          Zenith keeps zero telemetry and never transmits analytics or secrets. Error and subprocess failure logs are stored locally on your machine at <code class="font-mono text-caption bg-secondary/80 px-1 py-0.5 rounded">~/Library/Logs/Zenith</code>.
+          Zenith keeps zero telemetry and never transmits analytics or secrets. Error and subprocess failure logs are stored locally on your machine at <code class="font-mono text-caption bg-secondary/80 px-1 py-0.5 rounded">{platformContextStore.logDirectory ?? LOG_DIRECTORY_FALLBACK}</code>.
         </p>
       </div>
 
@@ -798,7 +818,7 @@
       </div>
 
       {#if diagnosticsData}
-        <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto">
+        <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto scroll-stable">
           <div><span class="text-foreground font-semibold">Zenith:</span> {diagnosticsData.app_version} ({diagnosticsData.arch})</div>
           <div><span class="text-foreground font-semibold">OS:</span> {diagnosticsData.os_version}</div>
           <div><span class="text-foreground font-semibold">Log:</span> {diagnosticsData.log_path}</div>
@@ -821,10 +841,19 @@
       About Zenith
     </h3>
     <Card class="p-4 bg-card/70 text-xs space-y-2">
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between gap-3">
         <span class="font-medium text-foreground">Zenith Developer System Manager</span>
         <Badge variant="outline" class="font-mono">{formatVersion(APP_VERSION)}</Badge>
       </div>
+      {#if releasesUrl}
+        <a
+          class="inline-block text-primary underline underline-offset-2 text-xs"
+          href={releasesUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          title="Opens the release page in your browser"
+        >Check for a newer release</a>
+      {/if}
       <p class="text-muted-foreground leading-relaxed">
         Zenith is an ultra-lightweight open-source utility designed to safely manage AI caches, developer build artifacts, Docker storage, local LLMs, memory pressure, and keep-awake power assertions.
       </p>

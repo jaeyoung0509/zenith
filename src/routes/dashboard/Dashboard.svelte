@@ -8,6 +8,8 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
+  import PreviewModeIndicator from '../../lib/components/PreviewModeIndicator.svelte';
   import StorageView from './StorageView.svelte';
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
@@ -23,8 +25,10 @@
   import { normalizeDashboardTab } from '../../lib/utils/dashboardNavigation';
   import { tauriStartWindowDrag } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
+  import Card from '../../lib/components/Card.svelte';
   import {
     Activity,
+    AlertCircle,
     Boxes,
     ChartNoAxesCombined,
     Container,
@@ -32,6 +36,7 @@
     ChevronsRight,
     HardDrive,
     Moon,
+    RotateCw,
     Server,
     Settings,
     Shield,
@@ -46,8 +51,20 @@
   // snapshot tests. Browser mounts wait for the backend capability response
   // before mounting any platform-sensitive child route.
   let capabilitiesReady = $state(typeof window === 'undefined');
+  // Derived from the store rather than a local flag so a failed query and an
+  // unsupported platform can never be confused with each other.
+  let capabilitiesFailed = $derived(
+    platformCapabilitiesStore.error !== null && platformCapabilitiesStore.capabilities === null
+  );
+  let disposed = false;
+  let workflowsMounted = false;
+  let stopFreshness: (() => void) | undefined;
   let settings = $derived(settingsStore.settings);
   let sidebarCollapsed = $derived(settings.sidebar_collapsed ?? false);
+  // Only the platform that actually draws an overlay title bar reserves the top
+  // band or gets a drag strip; a native caption bar would otherwise show dead
+  // pixels below it.
+  let overlayTitleBar = $derived(platformContextStore.overlayTitleBar);
   let fadeDuration = $derived(prefersReducedMotion.current ? 0 : 140);
 
   type DashboardCapability =
@@ -85,37 +102,50 @@
     usage: 'AI',
   };
 
+  function isTabAvailable(tabId: DashboardTab): boolean {
+    if (!capabilitiesReady || capabilitiesFailed) return false;
+    const capability = tabDefs[tabId]?.capability;
+    return !capability || platformCapabilitiesStore.isAvailable(capability);
+  }
+
+  /**
+   * Loads the backend capability matrix and, once it is known, mounts the
+   * platform-sensitive workflows. Retrying after a failure repeats the same
+   * path, so a transient IPC error cannot leave the dashboard permanently
+   * gated and identical to an unsupported platform.
+   */
+  async function refreshCapabilities(force: boolean) {
+    await platformCapabilitiesStore.load(force);
+    if (disposed) return;
+
+    capabilitiesReady = true;
+    if (capabilitiesFailed || workflowsMounted) return;
+    workflowsMounted = true;
+
+    const cleanupAvailable = platformCapabilitiesStore.isAvailable('cleanup');
+    const awakeAvailable = platformCapabilitiesStore.isAvailable('keep_awake');
+
+    // Do not mount or invoke platform-sensitive workflows until the backend
+    // has told us that the corresponding adapter is available.
+    if (cleanupAvailable) {
+      stopFreshness = scanStore.observeFreshness();
+      // Show the cached scan immediately; the freshness timer (#128)
+      // auto-rescans within ~1s if it is stale, so no deferred scan here.
+      void scanStore.init();
+    }
+    if (awakeAvailable) void awakeStore.refresh();
+
+    // A persisted tab may have become unavailable after an upgrade or on a
+    // different platform. Start on the first available tab instead of
+    // mounting an unsupported route.
+    const preferredTabs = settingsStore.settings.dashboard_tabs ?? [];
+    const firstAvailable = preferredTabs.find((tab) => isTabAvailable(tab as DashboardTab));
+    currentTab = normalizeDashboardTab(firstAvailable ?? 'settings') as Tab;
+  }
+
   onMount(() => {
-    let disposed = false;
-    let stopFreshness: (() => void) | undefined;
-
-    void platformCapabilitiesStore.load().then(() => {
-      if (disposed) return;
-
-      capabilitiesReady = true;
-      const cleanupAvailable = platformCapabilitiesStore.isAvailable('cleanup');
-      const awakeAvailable = platformCapabilitiesStore.isAvailable('keep_awake');
-
-      // Do not mount or invoke platform-sensitive workflows until the backend
-      // has told us that the corresponding adapter is available.
-      if (cleanupAvailable) {
-        stopFreshness = scanStore.observeFreshness();
-        // Show the cached scan immediately; the freshness timer (#128)
-        // auto-rescans within ~1s if it is stale, so no deferred scan here.
-        void scanStore.init();
-      }
-      if (awakeAvailable) void awakeStore.refresh();
-
-      // A persisted tab may have become unavailable after an upgrade or on a
-      // different platform. Start on the first available tab instead of
-      // mounting an unsupported route.
-      const preferredTabs = settingsStore.settings.dashboard_tabs ?? [];
-      const firstAvailable = preferredTabs.find((tab) => {
-        const definition = tabDefs[tab as DashboardTab];
-        return !!definition && (!definition.capability || platformCapabilitiesStore.isAvailable(definition.capability));
-      });
-      currentTab = normalizeDashboardTab(firstAvailable ?? 'settings') as Tab;
-    });
+    void platformContextStore.load();
+    void refreshCapabilities(false);
 
     return () => {
       disposed = true;
@@ -124,9 +154,7 @@
   });
 
   function selectTab(tab: Tab | string) {
-    if (!capabilitiesReady) return;
-    const capability = tabDefs[tab as DashboardTab]?.capability;
-    if (capability && !platformCapabilitiesStore.isAvailable(capability)) return;
+    if (!isTabAvailable(tab as DashboardTab)) return;
 
     tab = normalizeDashboardTab(tab);
     if (tab === 'developer_artifacts' || tab === 'developer-artifacts') {
@@ -158,23 +186,29 @@
 </script>
 
 <div class="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans select-none relative">
-  <!-- Window drag region for macOS Overlay title bar -->
-  <div
-    class="titlebar-drag-region absolute top-0 left-0 right-0 h-7 z-30"
-    aria-hidden="true"
-    onmousedown={handleWindowDrag}
-  ></div>
+  {#if overlayTitleBar}
+    <!-- Window drag region for the macOS overlay title bar -->
+    <div
+      class="titlebar-drag-region absolute top-0 left-0 right-0 h-7 z-30"
+      aria-hidden="true"
+      onmousedown={handleWindowDrag}
+    ></div>
+  {/if}
   <!-- Sidebar Navigation -->
   <aside
-    class="{sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between pt-9 relative transition-[width,padding] duration-150"
+    class="{sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between {overlayTitleBar
+      ? 'pt-9'
+      : ''} relative transition-[width,padding] duration-150"
   >
-    <div class="space-y-4 min-h-0 overflow-y-auto">
+    <div class="space-y-4 min-h-0 overflow-y-auto scroll-stable">
       <!-- Title & Branding -->
       <div class="flex items-center {sidebarCollapsed ? 'flex-col' : 'justify-between'} gap-2">
         <div
-          class="{sidebarCollapsed ? 'px-0' : 'px-2.5'} flex items-center space-x-2.5 titlebar-drag-region"
+          class="{sidebarCollapsed ? 'px-0' : 'px-2.5'} flex items-center space-x-2.5 {overlayTitleBar
+            ? 'titlebar-drag-region'
+            : ''}"
           role="presentation"
-          onmousedown={handleWindowDrag}
+          onmousedown={overlayTitleBar ? handleWindowDrag : undefined}
         >
           <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
             <defs>
@@ -214,7 +248,7 @@
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
             {@const capability = def.capability ? platformCapabilitiesStore.feature(def.capability) : null}
-            {@const tabAvailable = capabilitiesReady && (!capability || platformCapabilitiesStore.isAvailable(def.capability!))}
+            {@const tabAvailable = isTabAvailable(tabId as DashboardTab)}
             {@const currentGroup = tabGroups[tabId as DashboardTab]}
             {@const prevTabId = (settings.dashboard_tabs ?? [])[i - 1]}
             {@const prevGroup = prevTabId ? tabGroups[prevTabId as DashboardTab] : null}
@@ -313,6 +347,7 @@
           <span class="truncate">Protected cleanup</span>
         {/if}
       </div>
+      <PreviewModeIndicator compact={sidebarCollapsed} />
       {#if !sidebarCollapsed}
         <div class="px-2.5 flex items-center justify-between text-caption text-muted-foreground/60 font-mono select-none">
           <span>Zenith</span>
@@ -323,9 +358,36 @@
   </aside>
 
   <!-- Main Content Area with fluid native transition -->
-  <main class="min-w-0 flex-1 h-full overflow-y-auto p-8 pt-10">
+  <main class="min-w-0 flex-1 h-full overflow-y-auto scroll-stable p-8 {overlayTitleBar ? 'pt-10' : ''}">
     {#if !capabilitiesReady}
       <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Loading platform capabilities…</div>
+    {:else if capabilitiesFailed}
+      <div class="flex h-full items-center justify-center">
+        <Card class="max-w-md p-6 space-y-3 text-center bg-card/70">
+          <div class="mx-auto h-9 w-9 rounded-full bg-destructive/10 text-destructive flex items-center justify-center">
+            <AlertCircle size={18} />
+          </div>
+          <div class="space-y-1">
+            <h2 class="text-sm font-semibold text-foreground">Platform capabilities unavailable</h2>
+            <p class="text-xs text-muted-foreground break-words">
+              {platformCapabilitiesStore.error ?? 'Zenith could not read this platform\'s capability matrix from the backend.'}
+            </p>
+            <p class="text-caption text-muted-foreground">
+              Tabs stay closed until the backend answers so no native action runs on an unverified platform.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={platformCapabilitiesStore.isLoading}
+            onclick={() => void refreshCapabilities(true)}
+            class="mx-auto gap-1.5"
+          >
+            <RotateCw size={13} class={platformCapabilitiesStore.isLoading ? 'animate-gentle-spin' : ''} />
+            <span>{platformCapabilitiesStore.isLoading ? 'Retrying…' : 'Retry'}</span>
+          </Button>
+        </Card>
+      </div>
     {:else}
       {#key selectedCategory ? selectedCategory.category : currentTab}
         <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>

@@ -8,6 +8,8 @@ import { nextAiActivityTab } from '../lib/utils/aiActivityTabs';
 import ProjectsPanel from '../lib/components/ai-activity/ProjectsPanel.svelte';
 import ToolAdaptersPanel from '../lib/components/ai-activity/ToolAdaptersPanel.svelte';
 import ProjectCockpitView from '../routes/dashboard/ProjectCockpitView.svelte';
+import { platformContextStore } from '../lib/stores/platformContext.svelte';
+import { mockApi } from '../lib/api/mock';
 
 const snapshot: AgentActivitySnapshot = {
   observed_at: 100,
@@ -77,6 +79,7 @@ afterEach(() => {
   usageStore.loadingProviders = [];
   usageStore.isLoading = false;
   usageStore.error = null;
+  platformContextStore.reset();
 });
 
 describe('Project Cockpit', () => {
@@ -97,9 +100,11 @@ describe('Project Cockpit', () => {
     expect(source).not.toContain('kill -9');
   });
 
-  it('renders Level 2 Project Cockpit when a project is selected', () => {
+  it('renders Level 2 Project Cockpit when a project is selected', async () => {
     agentActivityStore.snapshot = snapshot;
     agentActivityStore.selectProject('project-one');
+    // The reveal control must name the platform's own file manager.
+    platformContextStore.context = await mockApi.getPlatformContext();
     const rendered = render(ProjectCockpitView);
 
     expect(rendered.body).toContain('Back to Projects');
@@ -107,7 +112,7 @@ describe('Project Cockpit', () => {
     expect(rendered.body).toContain('Development Services');
     expect(rendered.body).toContain('Developer Storage');
     expect(rendered.body).toContain('localhost:5173');
-    expect(rendered.body).toContain('Show in File Manager');
+    expect(rendered.body).toContain('Reveal in Finder');
     expect(rendered.body).toContain('Open in Terminal');
     expect(rendered.body).toContain('Stop');
   });

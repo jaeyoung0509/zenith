@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { dockerStore } from '../../lib/stores/docker.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import { withMinimumDuration } from '../../lib/utils/async';
   import Button from '../../lib/components/Button.svelte';
@@ -25,6 +26,7 @@
   let confirmVolumePrune = $state(false);
 
   onMount(() => {
+    void platformContextStore.load();
     void dockerStore.refresh();
   });
 
@@ -93,7 +95,9 @@
     <EmptyState
       icon={Container}
       title="Docker Daemon is Inactive"
-      description="Start Docker Desktop or Colima to inspect images, containers, and build cache storage."
+      description={platformContextStore.containerRuntimeHint
+        ? `Start ${platformContextStore.containerRuntimeHint} to inspect images, containers, and build cache storage.`
+        : 'Start a container runtime to inspect images, containers, and build cache storage.'}
     />
   {:else if overview}
     <!-- Storage Breakdown Grid -->
@@ -275,7 +279,7 @@
         <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Detected Containers ({status.containers.length})
         </h3>
-        <div class="space-y-2 max-h-60 overflow-y-auto pr-1">
+        <div class="space-y-2 max-h-60 overflow-y-auto scroll-stable">
           {#each status.containers as container}
             <div class="flex items-center justify-between p-3 rounded-lg bg-card/70 border border-border/60 text-xs">
               <div class="space-y-0.5">

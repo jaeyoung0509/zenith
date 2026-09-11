@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type {
     LargeFileItem,
     LargeFileFilter,
@@ -23,9 +23,11 @@
     tauriCancelLargeFileScan,
     tauriExecuteTrashPlan,
     tauriPrepareLargeFileTrash,
-    tauriShowInFileManager,
+    tauriRevealLargeFile,
     tauriStartLargeFileScan,
   } from '../../lib/utils/tauri';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import {
     AlertCircle,
     ArrowLeft,
@@ -44,6 +46,10 @@
   }
 
   let { onBack }: Props = $props();
+
+  onMount(() => {
+    void platformContextStore.load();
+  });
 
   const MIB = 1024 * 1024;
 
@@ -289,13 +295,13 @@
         <h1 class="text-xl font-semibold tracking-tight">Large Files</h1>
         <div class="flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground">
           <ShieldCheck size={14} class="text-success" />
-          <span>Identity rechecked before Trash</span>
+          <span>Identity rechecked before {platformContextStore.trashLabel}</span>
         </div>
       </div>
       <p class="mt-1 text-xs text-muted-foreground">
         {scanFilter === 'installers'
-          ? 'Review disk images and installer packages in approved personal folders. Nothing is selected automatically and items move through Trash.'
-          : 'Inspect large personal files. Nothing is selected automatically and deletion always goes through Trash.'}
+          ? `Review disk images and installer packages in approved personal folders. Nothing is selected automatically and items move through ${platformContextStore.trashLabel}.`
+          : `Inspect large personal files. Nothing is selected automatically and deletion always goes through ${platformContextStore.trashLabel}.`}
       </p>
     </div>
   </div>
@@ -397,7 +403,7 @@
     <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-warning/30 bg-warning/5' : 'border-success/30 bg-success/5'}`}>
       <div class="flex items-center justify-between gap-3 text-xs">
         <span class={`font-medium ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-warning' : 'text-success'}`}>
-          Moved {trashResult.moved_count} item{trashResult.moved_count === 1 ? '' : 's'} to Trash
+          Moved {trashResult.moved_count} item{trashResult.moved_count === 1 ? '' : 's'} to {platformContextStore.trashLabel}
           {#if trashResult.failed_count + trashResult.skipped_count > 0}
             · {trashResult.failed_count + trashResult.skipped_count} not moved
           {/if}
@@ -419,7 +425,7 @@
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <div class="text-sm font-semibold flex items-center gap-2">
-            Trash review ready
+            {platformContextStore.trashLabel} review ready
             <span class={`text-caption px-1.5 py-0.5 rounded font-mono border ${isExpired ? 'bg-destructive/15 text-destructive border-destructive/30' : isExpiringSoon ? 'bg-warning/15 text-warning border-warning/30' : 'bg-secondary text-muted-foreground border-border'}`}>
               {formatCountdown(remainingSecs)}
             </span>
@@ -432,7 +438,7 @@
           <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
           <Button variant="destructive" size="md" onclick={executeTrash} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — prepare again' : ''}>
             <Trash2 size={14} />
-            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move to Trash'}
+            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : `Move to ${platformContextStore.trashLabel}`}
           </Button>
         </div>
       </div>
@@ -492,7 +498,7 @@
   {#if items.length > 0}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll the virtualized region) -->
     <div
-      class="max-h-[min(60vh,640px)] overflow-y-auto pr-1"
+      class="max-h-[min(60vh,640px)] overflow-y-auto scroll-stable"
       bind:clientHeight={resultsViewportHeight}
       onscroll={(event) => (resultsScrollTop = event.currentTarget.scrollTop)}
       role="region"
@@ -538,9 +544,10 @@
               <Button
                 variant="ghost"
                 size="icon"
-                onclick={() => tauriShowInFileManager(`${item.display_parent}/${item.name}`)}
+                disabled={!canReveal()}
+                onclick={() => void runReveal(() => tauriRevealLargeFile(item.id), (message) => (error = message))}
                 ariaLabel={`Show ${item.name} in file manager`}
-                title="Show in File Manager"
+                title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
               >
                 <FolderOpen size={14} />
               </Button>

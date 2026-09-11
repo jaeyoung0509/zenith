@@ -1,4 +1,4 @@
-import { api, isTauri as isTauriCheck } from '../api';
+import { api, isTauri } from '../api';
 import { storageApi } from '../api/storage';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
@@ -33,6 +33,7 @@ import type {
   MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
+  PlatformContext,
   ProviderDescriptor,
   ProviderId,
   RecommendationPreview,
@@ -52,7 +53,7 @@ import type {
   IngestedAgentEvent,
 } from '../models/types';
 
-export const isTauri = isTauriCheck();
+export { isTauri };
 
 export function tauriGetProjectContext(force = false): Promise<AgentActivitySnapshot> {
   return api.getProjectContext(force);
@@ -266,6 +267,10 @@ export function tauriGetPlatformCapabilities(): Promise<PlatformCapabilities> {
   return api.getPlatformCapabilities();
 }
 
+export function tauriGetPlatformContext(): Promise<PlatformContext> {
+  return api.getPlatformContext();
+}
+
 export function tauriGetDiagnostics(): Promise<DiagnosticsSnapshot> {
   return api.getDiagnostics();
 }
@@ -279,7 +284,7 @@ export function tauriHideCurrentWindow(): Promise<void> {
 }
 
 export async function tauriStartWindowDrag(): Promise<void> {
-  if (!isTauri) return;
+  if (!isTauri()) return;
   await getCurrentWindow().startDragging();
 }
 
@@ -299,6 +304,10 @@ export function tauriPrepareLargeFileTrash(
   selectedItemIds: string[]
 ): Promise<TrashPlanPreview> {
   return storageApi.prepareLargeFileTrash(scanId, selectedItemIds);
+}
+
+export function tauriRevealLargeFile(itemId: string): Promise<void> {
+  return storageApi.revealLargeFile(itemId);
 }
 
 export function tauriPickDeveloperWorkspace(): Promise<DeveloperWorkspace | null> {

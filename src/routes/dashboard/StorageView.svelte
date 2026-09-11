@@ -1,11 +1,14 @@
 <script lang="ts">
   import SegmentedTabs from '../../lib/components/SegmentedTabs.svelte';
   import CleanupReviewDialog from '../../lib/components/CleanupReviewDialog.svelte';
-  import { untrack } from 'svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
+  import { onMount, untrack } from 'svelte';
   import type { CategoryResult } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import { formatTimeAgo } from '../../lib/utils/format';
   import {
     tauriOpenStorageSettings,
@@ -57,6 +60,12 @@
   }: Props = $props();
 
   let activeSecondaryTab = $state<'cleanup' | 'developer-artifacts' | 'large-files' | 'applications' | 'disks'>('cleanup');
+  let revealError = $state<string | null>(null);
+
+  onMount(() => {
+    void platformContextStore.load();
+    void platformCapabilitiesStore.load();
+  });
 
   let isApplicationsInspectable = $derived(
     platformCapabilitiesStore.isInspectable('installed_apps')
@@ -189,6 +198,15 @@
     onSelect={(tab) => handleTabClick(tab as typeof activeSecondaryTab)}
   />
 
+  {#if platformCapabilitiesStore.error !== null && platformCapabilitiesStore.capabilities === null}
+    <InlineNotice
+      variant="error"
+      message={`Could not verify installed-application inspection: ${platformCapabilitiesStore.error}. Retry to restore the Applications tab.`}
+      actionLabel="Retry"
+      onAction={() => void platformCapabilitiesStore.load(true)}
+    />
+  {/if}
+
   <div
     class="space-y-6 outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
     id={storagePanelId}
@@ -295,15 +313,22 @@
                   variant="ghost"
                   size="icon"
                   class="h-6 w-6 text-muted-foreground shrink-0"
-                  title="Show in File Manager"
+                  disabled={!canReveal()}
+                  title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
                   ariaLabel={`Show ${volume.name || volume.mount_point} in file manager`}
-                  onclick={() => tauriShowInFileManager(volume.mount_point)}
+                  onclick={() => void runReveal(() => tauriShowInFileManager(volume.mount_point), (message) => (revealError = message))}
                 >
                   <FolderOpen size={12} />
                 </Button>
               </div>
             {/each}
           </div>
+          {#if revealError}
+            <div role="alert" class="flex items-center gap-2.5 rounded-xl border border-destructive/30 bg-destructive/15 p-3.5 text-xs text-destructive">
+              <AlertCircle size={16} class="shrink-0" />
+              <span>{revealError}</span>
+            </div>
+          {/if}
         </div>
       {/if}
 

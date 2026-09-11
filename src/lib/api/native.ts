@@ -28,6 +28,7 @@ import type {
   MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
+  PlatformContext,
   ProviderDescriptor,
   ProviderId_Deserialize,
   RecommendationPreview,
@@ -277,6 +278,10 @@ export const nativeApi = {
 
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return await commands.getPlatformCapabilities();
+  },
+
+  async getPlatformContext(): Promise<PlatformContext> {
+    return await commands.getPlatformContext();
   },
 
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {

@@ -98,7 +98,7 @@
   oncancel={(event) => { event.preventDefault(); onClose(); }}
   onclick={handleBackdropClick}
   onkeydown={handleKeydown}
-  class="m-auto w-[calc(100%-2rem)] max-w-md max-h-[calc(100%-2rem)] overflow-y-auto rounded-xl border border-border bg-card p-5 text-foreground shadow-2xl backdrop:bg-background/80 backdrop:backdrop-blur-sm focus:outline-none"
+  class="m-auto w-[calc(100%-2rem)] max-w-md max-h-[calc(100%-2rem)] overflow-y-auto scroll-stable rounded-xl border border-border bg-card p-5 text-foreground shadow-2xl backdrop:bg-background/80 backdrop:backdrop-blur-sm focus:outline-none"
 >
   <div class="flex items-center justify-between pb-3 border-b border-border/80">
     <div class="flex items-center gap-2">
@@ -163,7 +163,7 @@
           <AlertCircle size={14} />
           <span>{failedItems.length} item(s) failed</span>
         </div>
-        <div class="max-h-28 overflow-y-auto space-y-1.5 pr-1">
+        <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
           {#each failedItems as item}
             <div class="p-2 rounded bg-destructive/10 border border-destructive/20 text-xs">
               <div class="font-medium text-foreground">{item.name}</div>
@@ -183,7 +183,7 @@
           <AlertTriangle size={14} />
           <span>{partialItems.length} item(s) partially cleaned</span>
         </div>
-        <div class="max-h-28 overflow-y-auto space-y-1.5 pr-1">
+        <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
           {#each partialItems as item}
             <div class="p-2 rounded bg-warning/10 border border-warning/20 text-xs">
               <div class="flex items-center justify-between">
@@ -201,7 +201,7 @@
 
     <!-- Fully Cleaned Items -->
     {#if fullSuccessItems.length > 0}
-      <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+      <div class="space-y-1.5 max-h-40 overflow-y-auto scroll-stable">
         <span class="text-xs font-medium text-muted-foreground">Cleaned Items ({fullSuccessItems.length})</span>
         {#each fullSuccessItems as item}
           <div class="flex items-center justify-between py-1 text-xs border-b border-border/40 last:border-0">

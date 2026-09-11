@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import Dashboard from '../routes/dashboard/Dashboard.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
+import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { platformContextStore } from '../lib/stores/platformContext.svelte';
+import { goldenCapabilitiesByPlatform } from '../lib/models/platformCapabilities';
+import { mockApi } from '../lib/api/mock';
 
 beforeEach(() => {
   scanStore.lastScan = {
@@ -47,6 +51,8 @@ beforeEach(() => {
 afterEach(() => {
   scanStore.lastScan = null;
   scanStore.selectedMap = {};
+  platformCapabilitiesStore.reset();
+  platformContextStore.reset();
 });
 
 describe('Dashboard sidebar affordances', () => {
@@ -75,5 +81,49 @@ describe('Dashboard sidebar affordances', () => {
   it('exposes the consolidated AI Activity dashboard route', () => {
     const rendered = render(Dashboard);
     expect(rendered.body).toContain('AI Activity');
+  });
+});
+
+describe('Dashboard platform chrome', () => {
+  it('reserves the overlay top band only when the backend reports one', async () => {
+    platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+
+    platformContextStore.context = await mockApi.getPlatformContext();
+    const overlay = render(Dashboard);
+    expect(overlay.body).toContain('titlebar-drag-region absolute top-0 left-0 right-0 h-7 z-30');
+    expect(overlay.body).toContain('pt-9');
+    expect(overlay.body).toContain('pt-10');
+
+    platformContextStore.context = {
+      ...(await mockApi.getPlatformContext()),
+      platform: 'windows',
+      overlay_title_bar: false,
+      native_caption_bar: true,
+    };
+    const nativeCaption = render(Dashboard);
+    // A native caption bar must neither reserve the band nor expose a drag strip.
+    expect(nativeCaption.body).not.toContain('titlebar-drag-region');
+    expect(nativeCaption.body).not.toContain('pt-9');
+    expect(nativeCaption.body).not.toContain('pt-10');
+  });
+
+  it('renders a retryable capability failure instead of an unsupported platform', () => {
+    platformCapabilitiesStore.capabilities = null;
+    platformCapabilitiesStore.error = 'IPC unavailable';
+
+    const failed = render(Dashboard);
+
+    expect(failed.body).toContain('Platform capabilities unavailable');
+    expect(failed.body).toContain('IPC unavailable');
+    expect(failed.body).toContain('Retry');
+    expect(failed.body).not.toContain('Loading platform capabilities');
+
+    platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.windows;
+    platformCapabilitiesStore.error = null;
+
+    const unsupported = render(Dashboard);
+
+    expect(unsupported.body).not.toContain('Platform capabilities unavailable');
+    expect(unsupported.body).not.toContain('Loading platform capabilities');
   });
 });

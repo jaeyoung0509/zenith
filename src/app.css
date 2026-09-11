@@ -36,8 +36,8 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, system-ui, sans-serif;
-  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Inter, system-ui, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Segoe UI Mono", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", monospace;
   --text-micro: 0.5625rem;
   --text-micro--line-height: 0.75rem;
   --text-caption: 0.625rem;
@@ -167,6 +167,14 @@
 
 .no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* WebView2 classic scrollbars consume layout width while macOS overlay
+   scrollbars do not, so a scrolling column would otherwise shift by the
+   scrollbar width between platforms. Reserve the gutter instead of padding
+   every column by hand. */
+.scroll-stable {
+  scrollbar-gutter: stable;
 }
 
 /* Minimal UX Animations */

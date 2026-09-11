@@ -93,6 +93,7 @@ export type {
   PowerSourceType,
   ProcessMemory,
   PlatformCapabilities,
+  PlatformContext,
   PlatformFeatureCapability,
   PlatformFeatureStatus,
   PlatformKind,

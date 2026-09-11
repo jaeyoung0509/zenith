@@ -4,8 +4,10 @@ import { render } from 'svelte/server';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
 import QuickUsageGauges from '../lib/components/QuickUsageGauges.svelte';
 import {
+  isAcceleratorPressed,
   isQuickPanelDismissShortcut,
   moveOrdered,
+  platformAccelerator,
   projectAiProviders,
   reorderOrdered,
   selectQuickUsageWindows,
@@ -33,10 +35,41 @@ describe('quick panel customization', () => {
     expect(reorderOrdered(['a', 'b'], 'unknown', 'a')).toEqual(['a', 'b']);
   });
 
-  it('recognizes Escape and Cmd+W as dismiss shortcuts', () => {
+  it('recognizes Escape and both platform accelerators as dismiss shortcuts', () => {
     expect(isQuickPanelDismissShortcut('Escape', false)).toBe(true);
+    expect(isQuickPanelDismissShortcut('Escape', true)).toBe(true);
     expect(isQuickPanelDismissShortcut('w', true)).toBe(true);
     expect(isQuickPanelDismissShortcut('w', false)).toBe(false);
+    expect(isQuickPanelDismissShortcut('q', true)).toBe(false);
+  });
+
+  it('derives the dismiss modifier from the platform context', () => {
+    const macChord = { metaKey: true, ctrlKey: false };
+    const windowsChord = { metaKey: false, ctrlKey: true };
+
+    expect(platformAccelerator('meta')).toBe('meta');
+    expect(platformAccelerator('ctrl')).toBe('ctrl');
+    // An unknown context keeps the macOS chord rather than guessing.
+    expect(platformAccelerator(null)).toBe('meta');
+
+    expect(isAcceleratorPressed(macChord, 'meta')).toBe(true);
+    expect(isAcceleratorPressed(macChord, 'ctrl')).toBe(false);
+    expect(isAcceleratorPressed(windowsChord, 'ctrl')).toBe(true);
+    expect(isAcceleratorPressed(windowsChord, 'meta')).toBe(false);
+
+    // Ctrl+W must dismiss on Windows and must not dismiss on macOS.
+    expect(
+      isQuickPanelDismissShortcut(
+        'w',
+        isAcceleratorPressed(windowsChord, platformAccelerator('ctrl'))
+      )
+    ).toBe(true);
+    expect(
+      isQuickPanelDismissShortcut(
+        'w',
+        isAcceleratorPressed(macChord, platformAccelerator('ctrl'))
+      )
+    ).toBe(false);
   });
 
   it('supports toggling and ordering the agent_activity section', () => {

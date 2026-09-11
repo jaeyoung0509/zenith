@@ -74,13 +74,18 @@ export const commands = {
 	openDashboardWindow: () => typedError<null, string>(__TAURI_INVOKE("open_dashboard_window")),
 	getAppVersion: () => __TAURI_INVOKE<string>("get_app_version"),
 	getPlatformCapabilities: () => __TAURI_INVOKE<PlatformCapabilities_Serialize>("get_platform_capabilities"),
+	getPlatformContext: () => __TAURI_INVOKE<PlatformContext>("get_platform_context"),
 	/**
 	 *  Platform vocabulary and locations the interface renders.
 	 * 
 	 *  Copy such as "Move to Trash", "menu bar", or a log directory literal is only
 	 *  true on one platform; the frontend asks for it instead of hardcoding it.
+	 *  Runs the `--doctor` self-check against the running environment.
+	 * 
+	 *  The command line and the interface execute the same assertions: a user who
+	 *  cannot open a terminal can still see which invariant failed.
 	 */
-	getPlatformContext: () => __TAURI_INVOKE<PlatformContext>("get_platform_context"),
+	runEnvironmentSelfCheck: () => typedError<EnvironmentReport, string>(__TAURI_INVOKE("run_environment_self_check")),
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
 	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
@@ -979,6 +984,13 @@ export type DockerVolumeItem_Serialize = {
 	is_in_use: boolean,
 };
 
+export type EnvironmentReport = {
+	platform: PlatformKind,
+	fingerprint: string[],
+	checks: SelfCheckRow[],
+	failures: number,
+};
+
 export type FileSize = FileSize_Serialize | FileSize_Deserialize;
 
 export type FileSize_Deserialize = {
@@ -1829,6 +1841,18 @@ export type SelectedApplication = {
 	name: string,
 	executable_pattern: string,
 	path: string,
+};
+
+export type SelfCheckOutcome = "pass" | "fail";
+
+/**
+ *  One self-check result. `name` is the invariant, `detail` is a shape or
+ *  boolean summary of what was checked.
+ */
+export type SelfCheckRow = {
+	name: string,
+	outcome: SelfCheckOutcome,
+	detail: string,
 };
 
 export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";

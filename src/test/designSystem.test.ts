@@ -86,6 +86,21 @@ describe('design-system source contracts', () => {
     expect(vite).toContain('tailwindcss()');
   });
 
+  it('keeps Windows and Korean font fallbacks with a stable scrollbar gutter', () => {
+    const css = readFileSync(`${srcRoot}/app.css`, 'utf8');
+    const sansStack = css.match(/--font-sans:([^;]+);/)?.[1] ?? '';
+    const monoStack = css.match(/--font-mono:([^;]+);/)?.[1] ?? '';
+
+    expect(sansStack).toContain('"Segoe UI"');
+    for (const koreanFallback of ['"Apple SD Gothic Neo"', '"Malgun Gothic"', '"Noto Sans KR"']) {
+      expect(sansStack).toContain(koreanFallback);
+      expect(monoStack).toContain(koreanFallback);
+    }
+    // WebView2 classic scrollbars consume layout width; without a reserved
+    // gutter a scrolling column shifts by the scrollbar width on Windows.
+    expect(css).toContain('scrollbar-gutter: stable');
+  });
+
   it('defines a shared focus token for both light and dark themes', () => {
     const css = readFileSync(`${srcRoot}/app.css`, 'utf8');
     expect(css).toContain('@custom-variant dark');

@@ -6,10 +6,13 @@
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
   import {
+    isAcceleratorPressed,
     isQuickPanelDismissShortcut,
+    platformAccelerator,
     projectAiProviders,
     selectQuickUsageWindows,
   } from '../../lib/utils/quickPanel';
@@ -28,6 +31,8 @@
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
+  import PreviewModeIndicator from '../../lib/components/PreviewModeIndicator.svelte';
   import {
     Sparkles,
     Trash2,
@@ -39,7 +44,6 @@
     RotateCw,
     X,
     LayoutDashboard,
-    Settings,
     Code2,
     Container,
     Boxes,
@@ -69,6 +73,11 @@
   let memoryAvailable = $derived(platformCapabilitiesStore.isInspectable('memory_metrics'));
   let awakeAvailable = $derived(awakeCapability?.status === 'available');
   let aiAvailable = $derived(aiCapability?.status === 'available');
+  // A capability query failure is not an unsupported platform: the quick panel
+  // must offer a retry instead of claiming the feature does not exist.
+  let capabilitiesFailed = $derived(
+    platformCapabilitiesStore.error !== null && platformCapabilitiesStore.capabilities === null
+  );
 
   let quickCleanableBytes = $derived.by(() =>
     scanStore.quickCleanableBytes(settings)
@@ -103,8 +112,14 @@
   async function activatePanel() {
     if (panelActive) return;
     panelActive = true;
+    await refreshPanelData();
+  }
+
+  /** Runs (or re-runs, after a capability failure) the panel's data loads. */
+  async function refreshPanelData() {
     await settingsStore.load(true);
     await platformCapabilitiesStore.load(true);
+    await platformContextStore.load(true);
     if (!panelActive) return;
     if (awakeAvailable) void awakeStore.refresh();
     if (hasSection('storage') && cleanupAvailable) void memoryStore.refreshDisk();
@@ -128,6 +143,7 @@
       });
     }
     if ((hasSection('cleanup') || hasSection('categories')) && cleanupAvailable) {
+      stopFreshness?.();
       stopFreshness = scanStore.observeFreshness();
       await scanStore.init();
       if (panelActive && scanStore.isStale()) void scanStore.runScan();
@@ -147,7 +163,10 @@
     let unlistenFocus: (() => void) | undefined;
 
     const closeOnShortcut = (event: KeyboardEvent) => {
-      if (isQuickPanelDismissShortcut(event.key, event.metaKey)) {
+      const accelerator = platformAccelerator(platformContextStore.context?.primary_accelerator);
+      if (
+        isQuickPanelDismissShortcut(event.key, isAcceleratorPressed(event, accelerator))
+      ) {
         event.preventDefault();
         event.stopImmediatePropagation();
         handleClose();
@@ -155,7 +174,7 @@
     };
     window.addEventListener('keydown', closeOnShortcut, true);
 
-    if (!isTauri) {
+    if (!isTauri()) {
       void activatePanel();
     } else {
       void import('@tauri-apps/api/webviewWindow').then(async ({ getCurrentWebviewWindow }) => {
@@ -195,6 +214,12 @@
   function handleClose() {
     deactivatePanel();
     void tauriHideCurrentWindow();
+  }
+
+  /** Retries a failed capability query without reloading the whole panel. */
+  async function retryCapabilities() {
+    await platformCapabilitiesStore.load(true);
+    if (platformCapabilitiesStore.capabilities) await refreshPanelData();
   }
 
   function providerValue(provider: AiProviderUsage) {
@@ -270,13 +295,24 @@
           <span>Awake</span>
         </div>
       {/if}
-      <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-foreground" onclick={handleOpenDashboard} ariaLabel="Open settings"><Settings size={14} /></Button>
-      <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-secondary" onclick={handleClose} ariaLabel="Close quick panel" title="Close"><X size={15} /></Button>
+      <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-foreground" onclick={handleOpenDashboard} ariaLabel="Open dashboard" title="Open dashboard"><LayoutDashboard size={14} aria-hidden="true" /></Button>
+      <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-secondary" onclick={handleClose} ariaLabel="Close quick panel" title="Close quick panel (Esc)"><X size={15} aria-hidden="true" /></Button>
     </div>
   </div>
 
   <!-- Body Content -->
-  <div class="min-h-0 flex-1 overflow-y-auto py-3 space-y-3 pr-1">
+  <div class="min-h-0 flex-1 overflow-y-auto scroll-stable py-3 space-y-3">
+    {#if capabilitiesFailed}
+      <!-- A failed capability query is not an unsupported platform: offer a retry
+           instead of reporting missing features. -->
+      <InlineNotice
+        variant="error"
+        title="Platform capabilities unavailable"
+        message={platformCapabilitiesStore.error ?? 'Zenith could not read this platform\'s capability matrix from the backend.'}
+        actionLabel="Retry"
+        onAction={() => void retryCapabilities()}
+      />
+    {:else}
     {#each settings.quick_panel_sections as section}
       {#if section === 'cleanup'}
         <!-- Action Hero Card -->
@@ -529,6 +565,7 @@
         </div>
       {/if}
     {/each}
+    {/if}
   </div>
 
   <!-- Footer -->
@@ -555,6 +592,7 @@
       </button>
     </div>
     <div class="flex items-center gap-2">
+      <PreviewModeIndicator />
       <span class="text-caption font-mono text-muted-foreground/60 select-none">{formatVersion(APP_VERSION)}</span>
       <Button
         variant="secondary"
