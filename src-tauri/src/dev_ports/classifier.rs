@@ -1,5 +1,6 @@
+use crate::platform::PlatformPathsProvider;
 use crate::process_owner::ProcessOwner;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct ProcessClassificationInput<'a> {
     pub pid: u32,
@@ -448,7 +449,7 @@ fn argv_has_token_pair(argv: &[String], first: &str, second: &str) -> bool {
         .any(|pair| pair[0].eq_ignore_ascii_case(first) && pair[1].eq_ignore_ascii_case(second))
 }
 
-fn argv_mentions_tool(argv: &[String], tool: &str) -> bool {
+pub fn argv_mentions_tool(argv: &[String], tool: &str) -> bool {
     argv.iter().any(|argument| {
         argument
             .split(['/', '\\'])
@@ -456,7 +457,7 @@ fn argv_mentions_tool(argv: &[String], tool: &str) -> bool {
     })
 }
 
-fn matches_tool_component(component: &str, tool: &str) -> bool {
+pub fn matches_tool_component(component: &str, tool: &str) -> bool {
     component.eq_ignore_ascii_case(tool)
         || ["js", "mjs", "cjs"]
             .iter()
@@ -468,20 +469,23 @@ fn sanitize_project_context(
     cwd: Option<&Path>,
     argv: &[String],
 ) -> (Option<String>, Option<String>) {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = crate::platform::NativePlatformPaths::new().user_home();
 
     // Try cwd first
     if let Some(dir) = cwd {
-        let dir_str = dir.to_string_lossy();
+        let norm_dir = crate::platform::NativePlatformPaths::normalize_verbatim_path(dir);
+        let dir_str = norm_dir.to_string_lossy();
         if !dir_str.is_empty() && dir_str != "/" {
-            let project_name = dir
+            let project_name = norm_dir
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .filter(|n| !n.is_empty() && n != ".");
 
             let working_dir = if let Some(ref home_path) = home {
-                if let Ok(rel) = dir.strip_prefix(home_path) {
-                    Some(format!("~/{}", rel.to_string_lossy()))
+                let norm_home =
+                    crate::platform::NativePlatformPaths::normalize_verbatim_path(home_path);
+                if let Ok(rel) = norm_dir.strip_prefix(&norm_home) {
+                    Some(format!("~/{}", rel.to_string_lossy().replace('\\', "/")))
                 } else {
                     Some(dir_str.to_string())
                 }
@@ -495,16 +499,19 @@ fn sanitize_project_context(
 
     // Fallback: check argv for script paths
     for arg in argv.iter().skip(1) {
-        if arg.starts_with('/') {
-            let path = Path::new(arg);
-            if let Some(parent) = path.parent() {
+        let path = Path::new(arg);
+        if path.is_absolute() {
+            let norm_path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
+            if let Some(parent) = norm_path.parent() {
                 let project_name = parent
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .filter(|n| !n.is_empty());
                 let working_dir = if let Some(ref home_path) = home {
-                    if let Ok(rel) = parent.strip_prefix(home_path) {
-                        Some(format!("~/{}", rel.to_string_lossy()))
+                    let norm_home =
+                        crate::platform::NativePlatformPaths::normalize_verbatim_path(home_path);
+                    if let Ok(rel) = parent.strip_prefix(&norm_home) {
+                        Some(format!("~/{}", rel.to_string_lossy().replace('\\', "/")))
                     } else {
                         Some(parent.to_string_lossy().to_string())
                     }
@@ -587,6 +594,34 @@ mod tests {
         assert_eq!(result.server_name, "Next.js");
         assert_eq!(result.project_name.as_deref(), Some("web-dashboard"));
         assert_eq!(result.blocked_reason, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_resolve_project_and_working_directory() {
+        let argv = vec!["node".to_string(), r"C:\dev\my-app\server.js".to_string()];
+        let input = ProcessClassificationInput {
+            pid: 41000,
+            owner: Some(ProcessOwner::Unix(501)),
+            current_owner: ProcessOwner::Unix(501),
+            zenith_pid: 1000,
+            port: 3001,
+            raw_command: "node",
+            process_name: "node",
+            exe_path: Some(Path::new(r"C:\Program Files\nodejs\node.exe")),
+            cwd: Some(Path::new(r"C:\dev\my-app")),
+            argv: &argv,
+            started_at: Some(1700000000),
+        };
+        let result = classify_listener(&input);
+        assert_eq!(result.project_name.as_deref(), Some("my-app"));
+        assert_eq!(result.working_directory.as_deref(), Some(r"C:\dev\my-app"));
+
+        // Without a cwd, the absolute Windows script path still identifies the
+        // project instead of being skipped by a POSIX prefix test.
+        let input = ProcessClassificationInput { cwd: None, ..input };
+        let result = classify_listener(&input);
+        assert_eq!(result.project_name.as_deref(), Some("my-app"));
     }
 
     #[test]

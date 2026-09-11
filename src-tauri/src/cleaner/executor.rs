@@ -353,7 +353,8 @@ impl CleanExecutor {
             }
         } else {
             let error_str = report.errors.join("; ");
-            let failure_reason = classify_cleanup_failure(&error_str);
+            let failure_reason =
+                classify_cleanup_failure_with_codes(&report.os_error_codes, &error_str);
             CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -369,23 +370,56 @@ impl CleanExecutor {
 }
 
 pub fn classify_cleanup_failure(error_str: &str) -> CleanFailureReason {
-    if error_str.contains("Sharing violation")
-        || error_str.contains("used by another process")
-        || error_str.contains("(os error 32)")
-        || error_str.contains("os error 32:")
-        || error_str.contains("is in use")
+    classify_cleanup_failure_with_codes(&[], error_str)
+}
+
+/// Classifies a cleanup failure. Raw OS error codes take precedence over
+/// message text so localized Windows errors are still classified correctly;
+/// the message fallback covers guard errors that Zenith produces itself.
+pub fn classify_cleanup_failure_with_codes(
+    os_error_codes: &[i32],
+    error_str: &str,
+) -> CleanFailureReason {
+    for code in os_error_codes {
+        match *code {
+            // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+            32 | 33 => return CleanFailureReason::InUse,
+            // ERROR_ACCESS_DENIED
+            5 => return CleanFailureReason::PermissionDenied,
+            // ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND
+            2 | 3 => return CleanFailureReason::NotFound,
+            _ => {}
+        }
+    }
+
+    let lower = error_str.to_ascii_lowercase();
+    if lower.contains("sharing violation")
+        || lower.contains("lock violation")
+        || lower.contains("used by another process")
+        || lower.contains("(os error 32)")
+        || lower.contains("os error 32:")
+        || lower.contains("(os error 33)")
+        || lower.contains("os error 33:")
+        || lower.contains("is in use")
     {
         CleanFailureReason::InUse
-    } else if error_str.contains("Permission denied")
-        || error_str.contains("Access denied")
-        || error_str.contains("Access is denied")
-        || error_str.contains("(os error 5)")
-        || error_str.contains("os error 5:")
+    } else if lower.contains("permission denied")
+        || lower.contains("access denied")
+        || lower.contains("access is denied")
+        || lower.contains("(os error 5)")
+        || lower.contains("os error 5:")
     {
         CleanFailureReason::PermissionDenied
-    } else if error_str.contains("changed during cleanup") {
+    } else if lower.contains("changed during cleanup") {
         CleanFailureReason::ChangedSinceScan
-    } else if error_str.contains("No such file") {
+    } else if lower.contains("no such file")
+        || lower.contains("(os error 2)")
+        || lower.contains("os error 2:")
+        || lower.contains("(os error 3)")
+        || lower.contains("os error 3:")
+        || lower.contains("cannot find the file specified")
+        || lower.contains("cannot find the path specified")
+    {
         CleanFailureReason::NotFound
     } else {
         CleanFailureReason::Unknown
@@ -410,6 +444,14 @@ mod tests {
         );
         assert_eq!(
             classify_cleanup_failure("file is used by another process"),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure("The process cannot access the file because another process has locked a portion of the file. (os error 33)"),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure("Lock violation: resource busy"),
             CleanFailureReason::InUse
         );
     }
@@ -441,6 +483,33 @@ mod tests {
     }
 
     #[test]
+    fn classifies_failures_from_the_os_error_code_not_the_message() {
+        assert_eq!(
+            classify_cleanup_failure_with_codes(
+                &[32],
+                "Der Prozess kann nicht auf die Datei zugreifen."
+            ),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure_with_codes(&[33], "Die Datei ist gesperrt."),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure_with_codes(&[5], "Zugriff verweigert."),
+            CleanFailureReason::PermissionDenied
+        );
+        assert_eq!(
+            classify_cleanup_failure_with_codes(&[2], "Die Datei wurde nicht gefunden."),
+            CleanFailureReason::NotFound
+        );
+        assert_eq!(
+            classify_cleanup_failure_with_codes(&[87], "Ungültiger Parameter."),
+            CleanFailureReason::Unknown
+        );
+    }
+
+    #[test]
     fn classifies_changed_since_scan_and_not_found() {
         assert_eq!(
             classify_cleanup_failure("Directory changed during cleanup: /tmp/app"),
@@ -448,6 +517,14 @@ mod tests {
         );
         assert_eq!(
             classify_cleanup_failure("No such file or directory: /tmp/missing"),
+            CleanFailureReason::NotFound
+        );
+        assert_eq!(
+            classify_cleanup_failure("The system cannot find the file specified. (os error 2)"),
+            CleanFailureReason::NotFound
+        );
+        assert_eq!(
+            classify_cleanup_failure("The system cannot find the path specified. (os error 3)"),
             CleanFailureReason::NotFound
         );
         assert_eq!(

@@ -189,22 +189,14 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
         settings.awake_rules.iter().filter(|r| r.enabled).count()
     ));
 
-    #[cfg(target_os = "macos")]
-    let os_version = {
-        let mut cmd = std::process::Command::new("sw_vers");
-        cmd.arg("-productVersion");
-        crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(2))
-            .ok()
-            .map(|o| format!("macOS {}", String::from_utf8_lossy(&o.stdout).trim()))
-            .unwrap_or_else(|| "macOS".to_string())
-    };
-    #[cfg(not(target_os = "macos"))]
-    let os_version = std::env::consts::OS.to_string();
+    let environment = crate::platform::environment::current();
+    features.extend(environment.diagnostics_lines());
+    let os_version = environment.os_version_label();
 
     DiagnosticsSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         os_version,
-        arch: std::env::consts::ARCH.to_string(),
+        arch: environment.process_architecture.clone(),
         log_path: normalized_log_path(),
         enabled_features: features,
         recent_errors: get_recent_errors(20),
@@ -216,12 +208,8 @@ pub fn open_logs_folder() -> Result<(), String> {
     let dir = log_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create log directory: {e}"))?;
 
-    let mut cmd = std::process::Command::new("open");
-    cmd.arg(&dir);
-    crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5))
-        .map_err(|e| format!("Failed to open logs folder: {e}"))?;
-
-    Ok(())
+    use crate::platform::SystemActionProvider;
+    crate::platform::NativeSystemActions::new().open_folder(&dir)
 }
 
 #[cfg(test)]

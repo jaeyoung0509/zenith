@@ -29,7 +29,7 @@ impl ProviderAdapter for MuseCodeAdapter {
         provider.status_message = if installed {
             "Muse Code is installed; no external structured usage API is public. Quota remains in the client.".into()
         } else {
-            "Muse Code is not installed.".into()
+            "Muse Code was not detected in PATH or known tool locations.".into()
         };
         provider.action_url =
             Some("https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2".into());

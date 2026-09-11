@@ -599,90 +599,9 @@ fn versioned_install_dirs(versions_dir: &Path, leaf: &str) -> Vec<PathBuf> {
 }
 
 pub fn resolve(name: &str) -> Option<PathBuf> {
-    let mut candidates = env::var_os("PATH")
-        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let name_variations = executable_name_variations(name);
 
-    #[cfg(target_os = "macos")]
-    {
-        candidates.extend([
-            PathBuf::from("/opt/homebrew/bin"),
-            PathBuf::from("/usr/local/bin"),
-            PathBuf::from("/usr/bin"),
-        ]);
-
-        if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
-            candidates.extend([
-                home.join(".local/bin"),
-                home.join(".cargo/bin"),
-                home.join(".npm-global/bin"),
-                home.join(".volta/bin"),
-                home.join(".asdf/shims"),
-            ]);
-            // Version-manager installs (nvm) keep one `bin` dir per Node
-            // version; scan them bounded so resolution work cannot grow
-            // without limit.
-            candidates.extend(nvm_node_bin_dirs(&home.join(".nvm/versions/node")));
-        }
-
-        match name {
-            "docker" => candidates.push(PathBuf::from(
-                "/Applications/Docker.app/Contents/Resources/bin",
-            )),
-            "ollama" => {
-                candidates.push(PathBuf::from("/Applications/Ollama.app/Contents/Resources"))
-            }
-            _ => {}
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(prog_files) = env::var_os("ProgramFiles").map(PathBuf::from) {
-            candidates.extend([
-                prog_files.join("Docker\\Docker\\resources\\bin"),
-                prog_files.join("Git\\cmd"),
-                prog_files.join("Git\\bin"),
-                prog_files.join("nodejs"),
-            ]);
-        }
-
-        if let Some(local_appdata) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-            candidates.extend([
-                local_appdata.join("Programs\\Ollama"),
-                local_appdata.join("Programs\\Python\\Launcher"),
-                local_appdata.join("Volta\\bin"),
-            ]);
-            if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
-                // nvm-windows keeps one directory per Node version plus a
-                // `nodejs` junction to the active one; scan bounded.
-                candidates.push(appdata.join("nodejs"));
-                candidates.extend(nvm_windows_bin_dirs(&appdata.join("nvm")));
-            }
-        }
-
-        if let Some(user_profile) = env::var_os("USERPROFILE").map(PathBuf::from) {
-            candidates.extend([
-                user_profile.join(".cargo\\bin"),
-                user_profile.join("AppData\\Roaming\\npm"),
-                user_profile.join(".gemini\\antigravity-cli\\bin"),
-            ]);
-        }
-    }
-
-    // Direct match or with standard extensions on Windows
-    let name_variations: Vec<String> = if cfg!(windows) && !name.contains('.') {
-        vec![
-            format!("{name}.exe"),
-            format!("{name}.cmd"),
-            format!("{name}.bat"),
-            name.to_string(),
-        ]
-    } else {
-        vec![name.to_string()]
-    };
-
-    for directory in candidates {
+    for directory in search_candidates() {
         for variation in &name_variations {
             let candidate = directory.join(variation);
             if is_executable(&candidate) {
@@ -692,6 +611,66 @@ pub fn resolve(name: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Directories consulted by [`resolve`], in priority order. Used to report
+/// honest "not detected" diagnostics with the locations that were searched.
+pub fn search_locations() -> Vec<PathBuf> {
+    search_candidates()
+}
+
+fn search_candidates() -> Vec<PathBuf> {
+    let mut candidates = env::var_os("PATH")
+        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    // One shared root set for discovery and provider allowlisting so a tool
+    // that resolves here cannot be rejected afterwards. `tool_roots` reads
+    // ProgramW6432/ProgramFiles(x86), package-manager environment variables,
+    // Chocolatey/Scoop shims, WinGet Links, and nvm-windows on Windows.
+    candidates.extend(crate::platform::NativePlatformPaths::tool_roots());
+
+    #[cfg(target_os = "macos")]
+    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
+        // Version-manager installs (nvm) keep one `bin` dir per Node version;
+        // scan them bounded so resolution work cannot grow without limit.
+        candidates.extend(nvm_node_bin_dirs(&home.join(".nvm/versions/node")));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
+            candidates.push(appdata.join("nodejs"));
+            candidates.extend(nvm_windows_bin_dirs(&appdata.join("nvm")));
+        }
+        if let Some(nvm_home) = env::var_os("NVM_HOME").map(PathBuf::from) {
+            candidates.extend(nvm_windows_bin_dirs(&nvm_home));
+        }
+    }
+
+    candidates
+}
+
+#[cfg(windows)]
+fn executable_name_variations(name: &str) -> Vec<String> {
+    if name.contains('.') {
+        return vec![name.to_string()];
+    }
+    // Derive extensions from PATHEXT instead of assuming a fixed list.
+    let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let mut variations: Vec<String> = pathext
+        .split(';')
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| format!("{name}{}", extension.to_ascii_lowercase()))
+        .collect();
+    variations.push(name.to_string());
+    variations
+}
+
+#[cfg(not(windows))]
+fn executable_name_variations(name: &str) -> Vec<String> {
+    vec![name.to_string()]
 }
 
 #[cfg(unix)]

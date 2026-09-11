@@ -27,7 +27,7 @@ impl ProviderAdapter for GrokBuildAdapter {
         provider.status_message = if installed {
             "Grok Build does not expose account quota to Zenith; check usage in the provider client.".into()
         } else {
-            "Grok Build is not installed.".into()
+            "Grok Build was not detected in PATH or known tool locations.".into()
         };
         provider.action_url = None;
         Ok(provider)

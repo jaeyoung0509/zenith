@@ -522,8 +522,8 @@ fn application_root_for_path(path: &Path) -> Option<PathBuf> {
         if parent == Path::new("/Applications") {
             return Some(PathBuf::from("/Applications"));
         }
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
+        crate::platform::NativePlatformPaths::new()
+            .home()
             .map(|home| home.join("Applications"))
             .filter(|root| parent == root)
     }
@@ -541,7 +541,7 @@ fn app_data_root_for_path(path: &Path) -> Option<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        let home = crate::platform::NativePlatformPaths::new().home()?;
         const ROOTS: [&str; 10] = [
             "Library/Application Support",
             "Library/Caches",
@@ -567,14 +567,30 @@ fn validate_no_symlink_components(path: &Path, root: &Path) -> Result<(), String
 }
 
 fn is_application_running(path: &Path) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // Fail closed: an application bundle that cannot be resolved is treated as
+    // running so the pre-deletion check never removes an unverifiable app.
+    let Ok(canonical) = path.canonicalize() else {
+        return true;
+    };
+    let canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
     system
         .processes()
         .values()
         .filter_map(|process| process.exe())
-        .any(|executable| executable.starts_with(&canonical))
+        .any(|executable| {
+            #[cfg(target_os = "windows")]
+            {
+                crate::platform::NativePlatformPaths::windows_path_starts_with(
+                    executable, &canonical,
+                )
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                executable.starts_with(&canonical)
+            }
+        })
 }
 
 fn unix_timestamp() -> u64 {
@@ -588,6 +604,15 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn running_check_fails_closed_for_unresolvable_app_paths() {
+        // The pre-deletion check must report "running" when the bundle cannot
+        // be resolved instead of allowing deletion.
+        assert!(is_application_running(std::path::Path::new(
+            "/Applications/ZenithMissingApp_12345.app"
+        )));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

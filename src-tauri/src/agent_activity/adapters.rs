@@ -6,6 +6,9 @@ pub struct AgentToolAdapter {
     pub id: &'static str,
     pub display_name: &'static str,
     pub executables: &'static [&'static str],
+    /// Package or path segments that identify the CLI when the host process is
+    /// a generic runtime (for example `node.exe` running an npm-installed CLI).
+    pub command_markers: &'static [&'static str],
     pub integration_available: bool,
 }
 
@@ -14,65 +17,115 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
         id: "antigravity",
         display_name: "Antigravity",
         executables: &["agy", "antigravity"],
+        command_markers: &[],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "gemini",
         display_name: "Gemini CLI (legacy / enterprise)",
         executables: &["gemini"],
+        command_markers: &["gemini-cli"],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "codex",
         display_name: "Codex CLI",
         executables: &["codex"],
+        command_markers: &[],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "claude",
         display_name: "Claude Code",
         executables: &["claude"],
+        command_markers: &["claude-code"],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "cursor",
         display_name: "Cursor Agent CLI",
         executables: &["cursor-agent"],
+        command_markers: &[],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "grok",
         display_name: "Grok Build",
         executables: &["grok"],
+        command_markers: &[],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "copilot",
         display_name: "GitHub Copilot CLI",
         executables: &["copilot"],
+        command_markers: &[],
         integration_available: false,
     },
     AgentToolAdapter {
         id: "opencode",
         display_name: "OpenCode",
         executables: &["opencode", "omp"],
+        command_markers: &[],
         integration_available: false,
     },
 ];
 
 /// Returns the canonical executable aliases for a known adapter. Keep Awake
 /// typed rules consume this same allowlist instead of maintaining a second
-/// process-signature table.
-pub fn executable_aliases(adapter_id: &str) -> &'static [&'static str] {
+/// process-signature table. Command markers extend the aliases so a CLI hosted
+/// by a generic runtime is recognized from its command line.
+pub fn executable_aliases(adapter_id: &str) -> Vec<&'static str> {
     ADAPTERS
         .iter()
         .find(|adapter| adapter.id == adapter_id)
-        .map_or(&[], |adapter| adapter.executables)
+        .map(|adapter| {
+            adapter
+                .executables
+                .iter()
+                .chain(adapter.command_markers.iter())
+                .copied()
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn adapter_for_executable(path: &Path) -> Option<&'static AgentToolAdapter> {
     let home = crate::platform::NativePlatformPaths::new().home();
     adapter_for_executable_in_roots(path, home.as_deref(), &windows_install_roots())
+}
+
+pub fn adapter_for_process(executable: &Path, cmd: &[String]) -> Option<&'static AgentToolAdapter> {
+    if let Some(adapter) = adapter_for_executable(executable) {
+        return Some(adapter);
+    }
+    let exe_name = executable
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    // Windows-style fixtures keep backslashes when parsed on Unix hosts, so
+    // take the last component for either separator.
+    let exe_name = exe_name.rsplit(['/', '\\']).next().unwrap_or(exe_name);
+    let exe_base =
+        if exe_name.len() >= 4 && exe_name[exe_name.len() - 4..].eq_ignore_ascii_case(".exe") {
+            &exe_name[..exe_name.len() - 4]
+        } else {
+            exe_name
+        };
+    if exe_base.eq_ignore_ascii_case("node") || exe_base.eq_ignore_ascii_case("bun") {
+        for adapter in ADAPTERS {
+            for tool in adapter
+                .executables
+                .iter()
+                .chain(adapter.command_markers.iter())
+            {
+                if crate::dev_ports::classifier::argv_mentions_tool(cmd, tool) {
+                    return Some(adapter);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn adapter_for_executable_in_roots(
@@ -258,6 +311,7 @@ const WINDOWS_USER_ROOTS: &[&str] = &[
     "appdata/local/npm",
     "appdata/local/pnpm",
     "appdata/local/yarn/bin",
+    "appdata/roaming/nvm",
     "scoop/shims",
     "scoop/apps",
 ];
@@ -435,6 +489,49 @@ mod tests {
                 .id,
             "cursor"
         );
+    }
+
+    #[test]
+    fn node_hosted_cli_falls_back_to_command_line_matching() {
+        let node = Path::new("C:\\Program Files\\nodejs\\node.exe");
+        let claude_cmd = vec![
+            "node".to_string(),
+            "C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"
+                .to_string(),
+        ];
+        assert_eq!(adapter_for_process(node, &claude_cmd).unwrap().id, "claude");
+
+        let gemini_cmd = vec![
+            "node".to_string(),
+            "C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\\@google\\gemini-cli\\dist\\index.js"
+                .to_string(),
+        ];
+        assert_eq!(adapter_for_process(node, &gemini_cmd).unwrap().id, "gemini");
+
+        // A Node server without an agent CLI in its command line stays unknown.
+        let plain_server = vec!["node".to_string(), "D:\\dev\\server.js".to_string()];
+        assert!(adapter_for_process(node, &plain_server).is_none());
+
+        // Non-Node hosts never fall back to argument inspection.
+        assert!(adapter_for_process(Path::new("C:\\tools\\python.exe"), &claude_cmd).is_none());
+    }
+
+    #[test]
+    fn command_line_fallback_keeps_exact_component_matching() {
+        assert!(adapter_for_process(
+            Path::new("/usr/local/bin/node"),
+            &[
+                "node".to_string(),
+                "/opt/homebrew/lib/node_modules/claude-code-helper/server.js".to_string(),
+            ]
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn aliases_include_command_markers_for_hosted_clis() {
+        assert_eq!(executable_aliases("claude"), vec!["claude", "claude-code"]);
+        assert_eq!(executable_aliases("opencode"), vec!["opencode", "omp"]);
     }
 
     #[test]

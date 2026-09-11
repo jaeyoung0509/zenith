@@ -103,57 +103,7 @@ impl FileIdentity {
         #[cfg(unix)]
         let (device, inode) = (meta.dev(), meta.ino());
         #[cfg(windows)]
-        let (device, inode) = {
-            use std::os::windows::ffi::OsStrExt;
-            use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-            use windows_sys::Win32::Storage::FileSystem::{
-                CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-                FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-                OPEN_EXISTING,
-            };
-
-            let path_text = path.to_string_lossy();
-            let wide: Vec<u16> = if path_text.starts_with(r"\\?\") {
-                path.as_os_str().encode_wide().chain([0]).collect()
-            } else if let Some(unc_path) = path_text.strip_prefix(r"\\") {
-                format!(r"\\?\UNC\{}", unc_path)
-                    .encode_utf16()
-                    .chain([0])
-                    .collect()
-            } else if path.as_os_str().encode_wide().count() > 240 {
-                format!(r"\\?\{}", path.display())
-                    .encode_utf16()
-                    .chain([0])
-                    .collect()
-            } else {
-                path.as_os_str().encode_wide().chain([0]).collect()
-            };
-
-            unsafe {
-                let handle = CreateFileW(
-                    wide.as_ptr(),
-                    0,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    std::ptr::null(),
-                    OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                    std::ptr::null_mut(),
-                );
-                if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-                    return None;
-                }
-                let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
-                let ok = GetFileInformationByHandle(handle, &mut info);
-                CloseHandle(handle);
-                if ok == 0 || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0) {
-                    return None;
-                }
-                let dev = info.dwVolumeSerialNumber as u64;
-                let ino = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
-                (dev, ino)
-            }
-        };
+        let (device, inode) = crate::safety::toctou::windows_file_identity(path)?;
         #[cfg(not(any(unix, windows)))]
         let (device, inode) = (0, 0);
 
@@ -334,7 +284,10 @@ impl LargeFileScanner {
                     let id = Uuid::new_v4().to_string();
                     #[cfg(unix)]
                     let allocated_size = meta.blocks().saturating_mul(512);
-                    #[cfg(not(unix))]
+                    #[cfg(windows)]
+                    let allocated_size =
+                        crate::scanner::get_allocated_size(&path).unwrap_or(meta.len());
+                    #[cfg(not(any(unix, windows)))]
                     let allocated_size = meta.len();
                     let item = LargeFileItem {
                         id: id.clone(),
@@ -650,7 +603,7 @@ mod tests {
 
     #[test]
     fn dedicated_scope_allows_reviewed_user_content_but_protects_git() {
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
             assert!(is_allowed_large_file_path(
                 &home.join("Documents/video.mov")
             ));

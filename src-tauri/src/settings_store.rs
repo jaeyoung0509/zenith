@@ -168,10 +168,33 @@ pub fn has_corrupted_backup(config_dir: &Path) -> bool {
 pub fn save(config_dir: &Path, settings: &ZenithSettings) -> Result<(), String> {
     fs::create_dir_all(config_dir).map_err(|error| error.to_string())?;
     let path = settings_path(config_dir);
-    let temporary_path = config_dir.join(format!("{SETTINGS_FILE}.tmp"));
+    let temporary_path = config_dir.join(format!("{SETTINGS_FILE}.tmp.{}", uuid::Uuid::new_v4()));
     let contents = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
     fs::write(&temporary_path, contents).map_err(|error| error.to_string())?;
-    fs::rename(&temporary_path, &path).map_err(|error| error.to_string())
+
+    let rename_result = fs::rename(&temporary_path, &path);
+    #[cfg(windows)]
+    let rename_result = match rename_result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if path.exists() {
+                let _ = fs::remove_file(&path);
+            }
+            fs::rename(&temporary_path, &path)
+                .or_else(|_| {
+                    fs::copy(&temporary_path, &path).map(|_| ()).and_then(|_| {
+                        let _ = fs::remove_file(&temporary_path);
+                        Ok(())
+                    })
+                })
+                .map_err(|_| e)
+        }
+    };
+
+    if rename_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    rename_result.map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

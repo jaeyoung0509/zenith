@@ -6,6 +6,7 @@ pub struct SymlinkGuard;
 
 impl SymlinkGuard {
     /// Checks whether the path is a symbolic link or reparse point (junction, mount point) without following it.
+    /// Cloud placeholders (OneDrive), deduplication, and WOF compression are treated as regular entries.
     pub fn is_symlink(path: &Path) -> bool {
         match fs::symlink_metadata(path) {
             Ok(meta) => {
@@ -16,7 +17,7 @@ impl SymlinkGuard {
                 {
                     use std::os::windows::fs::MetadataExt;
                     if meta.file_attributes() & 0x400 != 0 {
-                        return true;
+                        return is_name_surrogate_reparse_point(path);
                     }
                 }
                 false
@@ -198,10 +199,49 @@ impl SymlinkGuard {
         {
             use std::os::windows::fs::MetadataExt;
             if meta.file_attributes() & 0x400 != 0 {
-                return Ok(true);
+                return Ok(is_name_surrogate_reparse_point(path));
             }
         }
         Ok(false)
+    }
+}
+
+#[cfg(windows)]
+fn is_name_surrogate_reparse_point(path: &Path) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
+    unsafe {
+        let handle = CreateFileW(
+            wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            return false;
+        }
+        let mut tag_info: FILE_ATTRIBUTE_TAG_INFO = std::mem::zeroed();
+        let ok = GetFileInformationByHandleEx(
+            handle,
+            FileAttributeTagInfo,
+            &mut tag_info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        );
+        CloseHandle(handle);
+        if ok == 0 {
+            return false;
+        }
+        // IsReparseTagNameSurrogate: ((tag & 0x20000000) != 0)
+        (tag_info.ReparseTag & 0x20000000) != 0
     }
 }
 

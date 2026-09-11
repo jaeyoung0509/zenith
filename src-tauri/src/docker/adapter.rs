@@ -7,9 +7,47 @@ use crate::tooling;
 pub struct DockerAdapter;
 
 impl DockerAdapter {
+    /// Resolves the container CLI. `docker` honors `DOCKER_HOST` and the
+    /// active docker context; Podman's docker-compatible CLI is the fallback
+    /// so Rancher Desktop and Podman users are not told nothing is installed.
+    fn docker_cli() -> &'static str {
+        ["docker", "podman"]
+            .into_iter()
+            .find(|name| tooling::resolve(name).is_some())
+            .unwrap_or("docker")
+    }
+
+    fn missing_cli_message() -> String {
+        match std::env::var_os("DOCKER_HOST") {
+            Some(host) => format!(
+                "DOCKER_HOST={} is set but no docker or podman CLI was detected in PATH or known tool locations.",
+                host.to_string_lossy()
+            ),
+            None => {
+                "No docker or podman CLI was detected in PATH or known tool locations.".to_string()
+            }
+        }
+    }
+
     /// Checks if the Docker CLI is installed and the daemon is currently running.
     pub fn get_status() -> DockerStatus {
-        let mut cli_cmd = tooling::command("docker");
+        let Some(cli) = ["docker", "podman"]
+            .into_iter()
+            .find(|name| tooling::resolve(name).is_some())
+        else {
+            return DockerStatus {
+                is_available: false,
+                is_running: false,
+                version: None,
+                error_message: Some(Self::missing_cli_message()),
+                overview: None,
+                images: Vec::new(),
+                containers: Vec::new(),
+                volumes: Vec::new(),
+            };
+        };
+
+        let mut cli_cmd = tooling::command(cli);
         cli_cmd.arg("--version");
         let cli_check = tooling::run_with_timeout(cli_cmd, std::time::Duration::from_secs(3));
 
@@ -26,7 +64,7 @@ impl DockerAdapter {
                 is_available: false,
                 is_running: false,
                 version: None,
-                error_message: Some("Docker CLI is not installed or not in PATH".to_string()),
+                error_message: Some(Self::missing_cli_message()),
                 overview: None,
                 images: Vec::new(),
                 containers: Vec::new(),
@@ -34,19 +72,29 @@ impl DockerAdapter {
             };
         }
 
-        // Check if Docker daemon is running
-        let mut ping_cmd = tooling::command("docker");
+        // Check if the container daemon is running. The CLI resolves the
+        // active context and DOCKER_HOST automatically.
+        let mut ping_cmd = tooling::command(cli);
         ping_cmd.args(["info", "--format", "{{.ServerVersion}}"]);
         let ping = tooling::run_with_timeout(ping_cmd, std::time::Duration::from_secs(4));
 
         let is_running = matches!(ping, Ok(output) if output.status.success());
 
         if !is_running {
+            let error_message = match std::env::var_os("DOCKER_HOST") {
+                Some(host) => format!(
+                    "The container daemon is not reachable at DOCKER_HOST={}. Start the runtime or clear DOCKER_HOST to use the active context.",
+                    host.to_string_lossy()
+                ),
+                None => {
+                    "No container daemon responded for the active docker context. Start Docker, Podman, or Rancher Desktop.".to_string()
+                }
+            };
             return DockerStatus {
                 is_available: true,
                 is_running: false,
                 version,
-                error_message: Some("Docker daemon is not running".to_string()),
+                error_message: Some(error_message),
                 overview: None,
                 images: Vec::new(),
                 containers: Vec::new(),
@@ -197,7 +245,7 @@ impl DockerAdapter {
 
     /// Queries `docker system df` and parses image, container, volume, and build cache usage.
     pub fn get_overview() -> DockerOverview {
-        let mut cmd = tooling::command("docker");
+        let mut cmd = tooling::command(Self::docker_cli());
         cmd.args(["system", "df", "--format", "{{json .}}"]);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
@@ -303,7 +351,7 @@ impl DockerAdapter {
         let used_images: std::collections::HashSet<String> =
             containers.iter().map(|c| c.image.clone()).collect();
 
-        let mut cmd = tooling::command("docker");
+        let mut cmd = tooling::command(Self::docker_cli());
         cmd.args(["images", "--format", "{{json .}}"]);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
@@ -361,7 +409,7 @@ impl DockerAdapter {
     }
 
     pub fn get_containers() -> Vec<DockerContainerItem> {
-        let mut cmd = tooling::command("docker");
+        let mut cmd = tooling::command(Self::docker_cli());
         cmd.args(["ps", "-a", "--format", "{{json .}}"]);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
@@ -410,7 +458,7 @@ impl DockerAdapter {
     }
 
     pub fn get_volumes() -> Vec<DockerVolumeItem> {
-        let mut cmd = tooling::command("docker");
+        let mut cmd = tooling::command(Self::docker_cli());
         cmd.args(["volume", "ls", "--format", "{{json .}}"]);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
 
@@ -458,7 +506,7 @@ impl DockerAdapter {
 
         let (res, delta_kind) = match signature_id {
             "container.docker.dangling_images" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(Self::docker_cli());
                 cmd.args(["image", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -466,7 +514,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_images" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(Self::docker_cli());
                 cmd.args(["image", "prune", "-a", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -474,7 +522,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.builder" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(Self::docker_cli());
                 cmd.args(["builder", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -482,7 +530,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.stopped_containers" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(Self::docker_cli());
                 cmd.args(["container", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -490,7 +538,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_volumes" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(Self::docker_cli());
                 cmd.args(["volume", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),

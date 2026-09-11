@@ -73,7 +73,7 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
 }
 
 fn format_display_path(path: &Path) -> String {
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
         if let Ok(rel) = path.strip_prefix(&home) {
             return format!("~/{}", rel.display());
         }

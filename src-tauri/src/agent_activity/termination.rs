@@ -90,6 +90,7 @@ pub struct ProcessCheckInfo {
     pub owner: ProcessOwner,
     pub start_time: u64,
     pub executable: Option<PathBuf>,
+    pub cmd: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub parent_pid: Option<u32>,
     pub name: String,
@@ -138,6 +139,11 @@ impl TerminationSystem for RealTerminationSystem {
             owner,
             start_time: process.start_time(),
             executable: process.exe().map(PathBuf::from),
+            cmd: process
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect(),
             cwd: process.cwd().map(PathBuf::from),
             parent_pid: process.parent().map(|p| p.as_u32()),
             name: process.name().to_string_lossy().to_string(),
@@ -181,16 +187,32 @@ impl TerminationSystem for RealTerminationSystem {
             if libc::kill(pid as i32, libc::SIGTERM) == 0 {
                 Ok(())
             } else {
-                Err(format!(
-                    "Failed to send SIGTERM: {}",
-                    std::io::Error::last_os_error()
-                ))
+                let errno = std::io::Error::last_os_error();
+                if errno.raw_os_error() == Some(libc::ESRCH) {
+                    return Ok(());
+                }
+                Err(format!("Failed to send SIGTERM: {errno}"))
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(target_os = "windows")]
+        {
+            // Ownership and identity were verified by `execute_graceful_stop`.
+            // Attempt the shared platform graceful mechanisms (WM_CLOSE,
+            // CTRL_BREAK_EVENT) and only then fall back to force termination.
+            match crate::platform::terminate_process(
+                pid,
+                crate::platform::TerminationMode::Graceful,
+            ) {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    crate::platform::terminate_process(pid, crate::platform::TerminationMode::Force)
+                }
+            }
+        }
+        #[cfg(not(any(unix, target_os = "windows")))]
         {
             let _ = pid;
-            Err("Graceful stop is only supported on Unix systems.".to_string())
+            Err("Graceful stop is only supported on Unix or Windows systems.".to_string())
         }
     }
 }
@@ -223,12 +245,12 @@ pub fn execute_graceful_stop(
     let Some(current_exe) = &info.executable else {
         return Err("Cannot determine process executable path.".to_string());
     };
-    if current_exe != &lease.executable {
+    if !crate::platform::NativePlatformPaths::paths_equal(current_exe, &lease.executable) {
         return Err("Process executable path drift detected.".to_string());
     }
 
     // 6. Check if adapter allows termination
-    if crate::agent_activity::adapters::adapter_for_executable(current_exe).is_none() {
+    if crate::agent_activity::adapters::adapter_for_process(current_exe, &info.cmd).is_none() {
         return Err("Process is not an allowlisted agent CLI.".to_string());
     }
 
@@ -307,6 +329,7 @@ mod tests {
                 owner: ProcessOwner::Unix(501),
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cmd: Vec::new(),
                 cwd: Some(PathBuf::from("/workspace/repo")),
                 parent_pid: Some(10),
                 name: "claude".into(),
@@ -330,6 +353,7 @@ mod tests {
                 owner: ProcessOwner::Unix(501),
                 start_time: 250, // Different start time!
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cmd: Vec::new(),
                 cwd: Some(PathBuf::from("/workspace/repo")),
                 parent_pid: Some(10),
                 name: "claude".into(),
@@ -354,6 +378,7 @@ mod tests {
                 owner: ProcessOwner::Unix(502), // Other user
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cmd: Vec::new(),
                 cwd: Some(PathBuf::from("/workspace/repo")),
                 parent_pid: Some(10),
                 name: "claude".into(),
@@ -382,6 +407,7 @@ mod tests {
                 owner: ProcessOwner::Unix(501),
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cmd: Vec::new(),
                 cwd: Some(PathBuf::from("/workspace/repo")),
                 parent_pid: Some(10),
                 name: "Terminal".into(), // Terminal name!
@@ -458,6 +484,7 @@ mod tests {
                 owner: ProcessOwner::Unix(501),
                 start_time: 200,
                 executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cmd: Vec::new(),
                 cwd: None,
                 parent_pid: Some(10),
                 name: "claude".into(),

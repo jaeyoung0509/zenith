@@ -19,6 +19,9 @@ pub struct TreeDeleteReport {
     pub deleted_files: usize,
     pub skipped_files: usize,
     pub errors: Vec<String>,
+    /// Raw OS error codes recorded alongside `errors`, in push order, so
+    /// failure classification can use the code instead of localized text.
+    pub os_error_codes: Vec<i32>,
 }
 
 impl TreeDeleteReport {
@@ -117,6 +120,16 @@ fn format_io_error(path: &Path, err: &io::Error) -> String {
     format!("{}: {}", path.display(), err)
 }
 
+/// Records a Windows deletion failure with its raw OS error code so callers
+/// can classify it without parsing localized message text.
+#[cfg(windows)]
+fn push_windows_io_error(report: &mut TreeDeleteReport, path: &Path, error: &io::Error) {
+    if let Some(code) = error.raw_os_error() {
+        report.os_error_codes.push(code);
+    }
+    report.errors.push(format_io_error(path, error));
+}
+
 #[cfg(windows)]
 impl WindowsDeleteHandle {
     fn open(path: &Path) -> io::Result<Self> {
@@ -129,22 +142,7 @@ impl WindowsDeleteHandle {
             FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
         };
 
-        let path_text = path.to_string_lossy();
-        let wide: Vec<u16> = if path_text.starts_with(r"\\?\") {
-            path.as_os_str().encode_wide().chain([0]).collect()
-        } else if let Some(unc_path) = path_text.strip_prefix(r"\\") {
-            format!(r"\\?\UNC\{}", unc_path)
-                .encode_utf16()
-                .chain([0])
-                .collect()
-        } else if path.as_os_str().encode_wide().count() > 240 {
-            format!(r"\\?\{}", path.display())
-                .encode_utf16()
-                .chain([0])
-                .collect()
-        } else {
-            path.as_os_str().encode_wide().chain([0]).collect()
-        };
+        let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
 
         let handle = retry_on_sharing_violation(|| {
             let h = unsafe {
@@ -178,14 +176,15 @@ impl WindowsDeleteHandle {
         if unsafe { GetFileInformationByHandle(result.handle, &mut info) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        result.device = info.dwVolumeSerialNumber as u64;
-        result.inode = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
-        if result.device == 0 && result.inode == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "filesystem returned an unverifiable zero file identity",
-            ));
-        }
+        let (dev, ino) = crate::safety::toctou::windows_identity_from_handle(result.handle)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "filesystem returned an unverifiable zero file identity",
+                )
+            })?;
+        result.device = dev;
+        result.inode = ino;
         result.is_dir = info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
         result.is_reparse_point = info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
         result.attributes = info.dwFileAttributes;
@@ -643,7 +642,7 @@ impl SafeTreeDeleter {
                         report.deleted_files += 1;
                     }
                     Err(e) => {
-                        report.errors.push(format_io_error(path, &e));
+                        push_windows_io_error(&mut report, path, &e);
                     }
                 }
                 return;
@@ -745,7 +744,7 @@ impl SafeTreeDeleter {
                     Self::restore_directory_permissions(path, permissions, report);
                 }
                 Err(error) => {
-                    report.errors.push(format_io_error(path, &error));
+                    push_windows_io_error(report, path, &error);
                     Self::restore_directory_permissions(path, permissions, report);
                 }
             }

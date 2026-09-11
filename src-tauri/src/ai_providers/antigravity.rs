@@ -32,7 +32,7 @@ impl ProviderAdapter for AntigravityAdapter {
 
         if !installed {
             return Err(ProviderError::CliNotInstalled(
-                "Antigravity is not installed.".into(),
+                "Antigravity was not detected in PATH or known tool locations.".into(),
             ));
         }
 

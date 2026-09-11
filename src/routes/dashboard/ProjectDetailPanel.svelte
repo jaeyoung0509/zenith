@@ -18,6 +18,7 @@
     ProjectContext,
   } from '../../lib/models/types';
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import { tauriShowInFileManager } from '../../lib/utils/tauri';
   import Badge from '../../lib/components/Badge.svelte';
@@ -31,6 +32,7 @@
   }
 
   let { project, onBack, onNavigateTab }: Props = $props();
+  let isWindows = $derived(platformCapabilitiesStore.capabilities?.platform === 'windows');
   let stoppingSessionIds = $state<Set<string>>(new Set());
   let actionFeedback = $state<string | null>(null);
 
@@ -92,7 +94,9 @@
     stoppingSessionIds = new Set(stoppingSessionIds);
     try {
       await agentActivityStore.stopSession(session.id, session.stop_lease_id);
-      actionFeedback = `Sent graceful stop (SIGTERM) to ${session.tool_name}.`;
+      actionFeedback = isWindows
+        ? `Requested forced stop for ${session.tool_name}. Windows termination cannot be guaranteed graceful.`
+        : `Sent graceful stop (SIGTERM) to ${session.tool_name}.`;
     } catch (err) {
       actionFeedback = `Stop failed: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
@@ -210,7 +214,9 @@
   <div class="space-y-3">
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold tracking-tight">Active Agent Sessions</h3>
-      <span class="text-caption text-muted-foreground">Graceful termination sends SIGTERM only</span>
+      <span class="text-caption text-muted-foreground">
+        {isWindows ? 'Windows stop requests are forced when no window or console channel is available' : 'Graceful termination sends SIGTERM only'}
+      </span>
     </div>
 
     {#if project.sessions.length === 0}
@@ -249,7 +255,7 @@
                   size="sm"
                   disabled={stoppingSessionIds.has(session.id)}
                   onclick={() => handleStopSession(session)}
-                  title="Send graceful SIGTERM to agent process"
+                  title={isWindows ? 'Request forced stop of agent process (Windows)' : 'Send graceful SIGTERM to agent process'}
                 >
                   <Square size={11} class="fill-current" />
                   {stoppingSessionIds.has(session.id) ? 'Stopping...' : 'Stop'}

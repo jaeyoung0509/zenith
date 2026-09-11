@@ -49,7 +49,7 @@ impl std::fmt::Display for ProviderError {
             Self::AuthenticationFailed(msg) => write!(f, "Authentication failed: {msg}"),
             Self::Network(msg) => write!(f, "Network error: {msg}"),
             Self::InvalidResponse(msg) => write!(f, "Invalid response: {msg}"),
-            Self::CliNotInstalled(msg) => write!(f, "CLI not installed: {msg}"),
+            Self::CliNotInstalled(msg) => write!(f, "CLI not detected: {msg}"),
             Self::CliFailed(msg) => write!(f, "CLI execution failed: {msg}"),
             Self::ExecutionFailed(msg) => write!(f, "Execution failed: {msg}"),
             Self::Timeout => write!(f, "Operation timed out"),

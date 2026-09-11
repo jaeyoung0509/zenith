@@ -37,7 +37,7 @@ impl ProviderAdapter for CodexAdapter {
             Ok(child) => child,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(ProviderError::CliNotInstalled(
-                    "Codex CLI is not installed.".into(),
+                    "Codex CLI was not detected in PATH or known tool locations.".into(),
                 ));
             }
             Err(error) => {

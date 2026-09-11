@@ -10,7 +10,7 @@ pub mod termination;
 use crate::models::{
     AgentActivitySnapshot, AgentActivityStatus, AgentEvidence, AgentSession, SnapshotQuality,
 };
-use adapters::{adapter_for_executable, health_with_integrations};
+use adapters::health_with_integrations;
 use projects::{opaque_id, resolve_project};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -33,6 +33,7 @@ pub struct ProcessRecord {
     pub owner: Option<crate::process_owner::ProcessOwner>,
     pub started_at: u64,
     pub executable: Option<PathBuf>,
+    pub cmd: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
@@ -100,6 +101,11 @@ pub fn collect_registry_with_inactivity_threshold(
             ),
             started_at: process.start_time(),
             executable: process.exe().map(PathBuf::from),
+            cmd: process
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect(),
             cwd: process.cwd().map(PathBuf::from),
             cpu_percent: process.cpu_usage(),
             memory_bytes: process.memory(),
@@ -152,7 +158,7 @@ fn registry_from_records_with_inactivity_threshold(
         .into_iter()
         .filter_map(|record| {
             let executable = record.executable.as_deref()?;
-            let adapter = adapter_for_executable(executable)?;
+            let adapter = adapters::adapter_for_process(executable, &record.cmd)?;
             if record.owner != Some(current_owner.clone())
                 || record.started_at == 0
                 || record.pid <= 1
@@ -204,9 +210,8 @@ fn registry_from_records_with_inactivity_threshold(
         let session_id = session_id(adapter.id, record.pid, record.started_at);
         current_observed_session_ids.insert(session_id.clone());
 
-        // Agent stop is SIGTERM-only. Do not advertise or mint an unusable
-        // lease on platforms without that graceful adapter.
-        let stop_lease_id = cfg!(unix).then(|| {
+        // Agent stop lease: enable on Unix (SIGTERM) and Windows (TerminateProcess).
+        let stop_lease_id = (cfg!(unix) || cfg!(windows)).then(|| {
             store.stop_leases.create_lease(
                 &session_id,
                 record.pid,
@@ -434,6 +439,7 @@ mod tests {
             owner,
             started_at,
             executable: Some(PathBuf::from(executable)),
+            cmd: Vec::new(),
             cwd,
             cpu_percent: 2.5,
             memory_bytes: 1024,
@@ -453,6 +459,7 @@ mod tests {
             owner: Some(crate::process_owner::ProcessOwner::Unix(501)),
             started_at,
             executable: Some(PathBuf::from(executable)),
+            cmd: Vec::new(),
             cwd,
             cpu_percent,
             memory_bytes: 1024,

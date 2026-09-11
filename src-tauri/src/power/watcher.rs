@@ -663,12 +663,23 @@ impl KeepAwakeManager {
         }) {
             return true;
         }
-        proc.cmd().iter().any(|argument| {
+        if proc.cmd().iter().any(|argument| {
             let value = argument.to_string_lossy();
             aliases
                 .iter()
                 .any(|alias| Self::matches_executable_alias(&value, alias))
-        })
+        }) {
+            return true;
+        }
+
+        let cmd_strings: Vec<String> = proc
+            .cmd()
+            .iter()
+            .map(|argument| argument.to_string_lossy().to_string())
+            .collect();
+        aliases
+            .iter()
+            .any(|alias| crate::dev_ports::classifier::argv_mentions_tool(&cmd_strings, alias))
     }
 
     pub(crate) fn application_executable_path_matches(
@@ -716,7 +727,18 @@ impl KeepAwakeManager {
             } else {
                 basename
             };
-        basename.eq_ignore_ascii_case(alias)
+        if basename.eq_ignore_ascii_case(alias) {
+            return true;
+        }
+        for ext in [".js", ".mjs", ".cjs"] {
+            if basename.len() >= ext.len()
+                && basename[basename.len() - ext.len()..].eq_ignore_ascii_case(ext)
+                && basename[..basename.len() - ext.len()].eq_ignore_ascii_case(alias)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn matches_strings(
@@ -1073,7 +1095,7 @@ mod tests {
     #[test]
     fn typed_agent_aliases_are_exact_and_include_omp() {
         let aliases = crate::agent_activity::adapters::executable_aliases("opencode");
-        assert_eq!(aliases, &["opencode", "omp"]);
+        assert_eq!(aliases, vec!["opencode", "omp"]);
         assert!(KeepAwakeManager::matches_executable_alias("omp", "omp"));
         assert!(KeepAwakeManager::matches_executable_alias(
             r"C:\Users\me\bin\ANTIGRAVITY.EXE",
@@ -1086,6 +1108,30 @@ mod tests {
         assert!(!KeepAwakeManager::matches_executable_alias(
             "/Users/me/.opencode/bin/runner",
             "opencode"
+        ));
+    }
+
+    #[test]
+    fn agent_alias_matching_understands_node_script_suffixes() {
+        assert!(KeepAwakeManager::matches_executable_alias(
+            "opencode.js",
+            "opencode"
+        ));
+        assert!(KeepAwakeManager::matches_executable_alias(
+            "C:\\tools\\opencode.mjs",
+            "opencode"
+        ));
+        assert!(KeepAwakeManager::matches_executable_alias(
+            "claude-code",
+            "claude-code"
+        ));
+        assert!(!KeepAwakeManager::matches_executable_alias(
+            "server.js",
+            "opencode"
+        ));
+        assert!(!KeepAwakeManager::matches_executable_alias(
+            "claude-code-helper",
+            "claude-code"
         ));
     }
 

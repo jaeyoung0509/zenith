@@ -151,33 +151,76 @@ impl ToctouGuard {
 }
 
 /// Opens a path without following reparse points and returns its stable
-/// volume/file identity. Used on Windows so directory identity capture never
-/// traverses a junction or symlink and never accepts `(0, 0)` as verified.
+/// volume/file identity with ordered fallback (ReFS FileIdInfo -> BY_HANDLE_FILE_INFORMATION -> weaker verification).
 #[cfg(windows)]
-fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
-    use std::os::windows::ffi::OsStrExt;
+pub fn windows_identity_from_handle(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<(u64, u64)> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
+    };
+
+    // 1. ReFS/NTFS 128-bit file ID via FileIdInfo
+    unsafe {
+        let mut file_id_info: FILE_ID_INFO = std::mem::zeroed();
+        let ok = GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            &mut file_id_info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        );
+        if ok != 0 {
+            let volume = file_id_info.VolumeSerialNumber;
+            let id_bytes = file_id_info.FileId.Identifier;
+            let low = u64::from_le_bytes(id_bytes[0..8].try_into().unwrap());
+            let high = u64::from_le_bytes(id_bytes[8..16].try_into().unwrap());
+            let inode = low ^ high;
+            if volume != 0 || inode != 0 {
+                return Some((volume, inode));
+            }
+        }
+    }
+
+    // 2. Fall back to standard 64-bit file index via GetFileInformationByHandle
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        let ok = GetFileInformationByHandle(handle, &mut info);
+        if ok != 0 {
+            let device = info.dwVolumeSerialNumber as u64;
+            let inode = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+            if device != 0 || inode != 0 {
+                return Some((device, inode));
+            }
+
+            // 3. Fallback for FAT32 / exFAT / network shares that do not supply a file index.
+            // Degrade to documented weaker verification combining volume serial with creation time and size.
+            let ctime = ((info.ftCreationTime.dwHighDateTime as u64) << 32)
+                | (info.ftCreationTime.dwLowDateTime as u64);
+            let size = ((info.nFileSizeHigh as u64) << 32) | (info.nFileSizeLow as u64);
+            let weak_inode = (ctime ^ size).max(1);
+            let weak_device = if device == 0 { 1 } else { device };
+            return Some((weak_device, weak_inode));
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+pub fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
         FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-    // `\\?\` prefix allows long paths beyond MAX_PATH.
-    let wide_prefixed: Vec<u16> =
-        if path.as_os_str().len() > 240 && !path.to_string_lossy().starts_with(r"\\?\") {
-            format!(r"\\?\{}", path.display())
-                .encode_utf16()
-                .chain([0])
-                .collect()
-        } else {
-            wide
-        };
+    let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
 
     unsafe {
+        // Request minimum access (0) so locked/open files (node.exe logs, docker vhdx) can still be measured
         let handle = CreateFileW(
-            wide_prefixed.as_ptr(),
+            wide.as_ptr(),
             0,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             std::ptr::null(),
@@ -188,17 +231,8 @@ fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
         if handle == INVALID_HANDLE_VALUE || handle.is_null() {
             return None;
         }
-        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
-        let ok = GetFileInformationByHandle(handle, &mut info);
+        let identity = windows_identity_from_handle(handle);
         CloseHandle(handle);
-        if ok == 0 {
-            return None;
-        }
-        let device = info.dwVolumeSerialNumber as u64;
-        let inode = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
-        if device == 0 && inode == 0 {
-            return None;
-        }
-        Some((device, inode))
+        identity
     }
 }

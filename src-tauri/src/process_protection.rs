@@ -46,7 +46,9 @@ pub fn is_protected_process(
         "hyper",
         "rio",
         "wt",
+        "windowsterminal",
         "conhost",
+        "openconsole",
         "mintty",
     ];
     if matches_any(TERMINALS) {
@@ -120,6 +122,7 @@ pub fn is_protected_process(
         "msmpeng",
         "securityhealthservice",
         "system",
+        "ctfmon",
     ];
     if matches_any(SYSTEM) {
         return true;
@@ -173,7 +176,16 @@ mod tests {
 
     #[test]
     fn protects_platform_system_processes() {
-        for name in ["launchd", "svchost", "csrss", "lsass", "explorer", "system"] {
+        for name in [
+            "launchd",
+            "svchost",
+            "csrss",
+            "lsass",
+            "explorer",
+            "system",
+            "ctfmon",
+            "ctfmon.exe",
+        ] {
             assert!(
                 is_protected_process(name, None, None),
                 "expected {name} to be protected"

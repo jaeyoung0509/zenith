@@ -4,17 +4,23 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::System::Power::{
     PowerClearRequest, PowerCreateRequest, PowerRequestDisplayRequired, PowerRequestSystemRequired,
-    PowerSetRequest, POWER_REQUEST_TYPE,
+    PowerSetRequest, SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED,
+    ES_SYSTEM_REQUIRED, POWER_REQUEST_TYPE,
 };
 use windows_sys::Win32::System::Threading::{
     POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT, REASON_CONTEXT_0,
 };
 
 #[derive(Debug)]
-pub(super) struct WindowsPowerRequest {
-    handle: OwnedHandle,
-    requests: &'static [POWER_REQUEST_TYPE],
-    active_count: usize,
+pub(super) enum WindowsPowerRequest {
+    Request {
+        handle: OwnedHandle,
+        requests: &'static [POWER_REQUEST_TYPE],
+        active_count: usize,
+    },
+    ThreadExecutionState {
+        _previous: u32,
+    },
 }
 
 impl WindowsPowerRequest {
@@ -24,50 +30,82 @@ impl WindowsPowerRequest {
                 "Power request reason contains a NUL character".into(),
             ));
         }
-        let mut reason: Vec<u16> = reason.encode_utf16().chain(Some(0)).collect();
+        let mut reason_u16: Vec<u16> = reason.encode_utf16().chain(Some(0)).collect();
         let context = REASON_CONTEXT {
             Version: 0,
             Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
             Reason: REASON_CONTEXT_0 {
-                SimpleReasonString: reason.as_mut_ptr(),
+                SimpleReasonString: reason_u16.as_mut_ptr(),
             },
         };
         // The reason buffer and context remain valid for the complete FFI call.
         let raw = unsafe { PowerCreateRequest(&context) };
-        if raw.is_null() || raw == INVALID_HANDLE_VALUE {
-            return Err(last_error("PowerCreateRequest"));
-        }
-        let mut request = Self {
-            // SAFETY: PowerCreateRequest returned a fresh, valid owned handle.
-            handle: unsafe { OwnedHandle::from_raw_handle(raw) },
-            requests: match behavior {
-                AwakeBehavior::PreventSystemSleep => &[PowerRequestSystemRequired],
+        if !raw.is_null() && raw != INVALID_HANDLE_VALUE {
+            let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+            let requests = match behavior {
+                AwakeBehavior::PreventSystemSleep => &[PowerRequestSystemRequired][..],
                 AwakeBehavior::KeepDisplayAwake => {
-                    &[PowerRequestSystemRequired, PowerRequestDisplayRequired]
+                    &[PowerRequestSystemRequired, PowerRequestDisplayRequired][..]
                 }
-            },
-            active_count: 0,
-        };
-        for (index, &kind) in request.requests.iter().enumerate() {
-            // The owned handle remains alive throughout this call.
-            if unsafe { PowerSetRequest(request.handle.as_raw_handle(), kind) } == 0 {
-                return Err(last_error("PowerSetRequest"));
+            };
+            let mut active_count = 0;
+            let mut success = true;
+            for (index, &kind) in requests.iter().enumerate() {
+                if unsafe { PowerSetRequest(handle.as_raw_handle(), kind) } == 0 {
+                    success = false;
+                    break;
+                }
+                active_count = index + 1;
             }
-            request.active_count = index + 1;
+            if success {
+                return Ok(WindowsPowerRequest::Request {
+                    handle,
+                    requests: match behavior {
+                        AwakeBehavior::PreventSystemSleep => &[PowerRequestSystemRequired],
+                        AwakeBehavior::KeepDisplayAwake => {
+                            &[PowerRequestSystemRequired, PowerRequestDisplayRequired]
+                        }
+                    },
+                    active_count,
+                });
+            }
         }
-        Ok(request)
+
+        // Fallback to SetThreadExecutionState if PowerCreateRequest / PowerSetRequest is unavailable.
+        let flags = match behavior {
+            AwakeBehavior::PreventSystemSleep => ES_CONTINUOUS | ES_SYSTEM_REQUIRED,
+            AwakeBehavior::KeepDisplayAwake => {
+                ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+            }
+        };
+        let previous = unsafe { SetThreadExecutionState(flags) };
+        if previous == 0 {
+            return Err(last_error("SetThreadExecutionState"));
+        }
+        Ok(WindowsPowerRequest::ThreadExecutionState {
+            _previous: previous,
+        })
     }
 }
 
 impl Drop for WindowsPowerRequest {
     fn drop(&mut self) {
-        for &kind in self.requests[..self.active_count].iter().rev() {
-            // Clear only requests that succeeded, including partial acquisition.
-            unsafe {
-                PowerClearRequest(self.handle.as_raw_handle(), kind);
+        match self {
+            WindowsPowerRequest::Request {
+                handle,
+                requests,
+                active_count,
+            } => {
+                for &kind in requests[..*active_count].iter().rev() {
+                    unsafe {
+                        PowerClearRequest(handle.as_raw_handle(), kind);
+                    }
+                }
             }
+            WindowsPowerRequest::ThreadExecutionState { .. } => unsafe {
+                SetThreadExecutionState(ES_CONTINUOUS);
+            },
         }
-        // OwnedHandle closes the handle after this destructor, on any thread.
     }
 }
 

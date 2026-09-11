@@ -14,7 +14,7 @@ pub struct OrbStackAdapter;
 impl OrbStackAdapter {
     /// Reports OrbStack's stateful VM disk for visibility without making it cleanable.
     pub fn scan_items() -> Vec<ScanItem> {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = crate::platform::NativePlatformPaths::new().home() else {
             return Vec::new();
         };
         Self::scan_path(&Self::storage_path_for_home(&home))

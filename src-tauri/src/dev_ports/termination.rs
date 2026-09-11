@@ -16,9 +16,11 @@ const GRACEFUL_TERMINATION_SIGNAL: i32 = libc::SIGTERM;
 #[cfg(unix)]
 const FORCE_TERMINATION_SIGNAL: i32 = libc::SIGKILL;
 
-// Windows only supports force termination via TerminateProcess. Graceful mode
-// is reported as unavailable before any signal is sent, so TerminateProcess
-// is never labeled as graceful.
+// Windows graceful release uses the shared platform chain (WM_CLOSE and
+// CTRL_BREAK_EVENT); force release uses TerminateProcess. The signal constants
+// stay local so the lease and test contracts keep their integer values.
+#[cfg(target_os = "windows")]
+const GRACEFUL_TERMINATION_SIGNAL: i32 = 15;
 #[cfg(target_os = "windows")]
 const FORCE_TERMINATION_SIGNAL: i32 = 9;
 #[cfg(not(any(unix, target_os = "windows")))]
@@ -183,39 +185,16 @@ impl DevPortSystem for RealDevPortSystem {
         }
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::Foundation::CloseHandle;
-            use windows_sys::Win32::System::Threading::{
-                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-            };
-
-            // Windows exposes only force termination. Graceful mode is rejected
-            // in release_listener before reaching this adapter, so a graceful
-            // signal value can never arrive here on Windows.
+            // Ownership/identity checks already ran in `release_listener`.
+            // Force terminates; a graceful signal routes through the shared
+            // window-close and console-control chain.
             if signal != FORCE_TERMINATION_SIGNAL {
-                return Err(
-                    "Graceful termination is unavailable on Windows for this process type."
-                        .to_string(),
+                return crate::platform::terminate_process(
+                    pid,
+                    crate::platform::TerminationMode::Graceful,
                 );
             }
-
-            unsafe {
-                let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-                if handle.is_null() {
-                    let errno = std::io::Error::last_os_error();
-                    if errno.raw_os_error() == Some(5) {
-                        return Err("Access denied terminating process".to_string());
-                    }
-                    return Ok(()); // Process already exited
-                }
-
-                let success = TerminateProcess(handle, 1);
-                CloseHandle(handle);
-
-                if success == 0 {
-                    return Err("Failed to terminate process on Windows".to_string());
-                }
-            }
-            Ok(())
+            crate::platform::terminate_process(pid, crate::platform::TerminationMode::Force)
         }
         #[cfg(not(any(unix, target_os = "windows")))]
         {
@@ -504,6 +483,16 @@ pub fn list_listeners(
     Ok(listeners)
 }
 
+/// Compares executable paths with platform case rules so a Windows lease
+/// recorded with different casing still revalidates.
+fn executable_paths_equal(left: &Option<PathBuf>, right: &Option<PathBuf>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => crate::platform::NativePlatformPaths::paths_equal(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// Safely terminates a development listener after revalidating process ownership and identity.
 pub fn release_listener(
     store: &Mutex<DevelopmentPortStore>,
@@ -511,18 +500,6 @@ pub fn release_listener(
     lease_id: &str,
     mode: ReleaseMode,
 ) -> Result<ReleaseDevelopmentListenerResult, String> {
-    // Windows never labels TerminateProcess as graceful.
-    #[cfg(target_os = "windows")]
-    if mode == ReleaseMode::Graceful {
-        return Err(
-            "Graceful release is unavailable on Windows for this process type.".to_string(),
-        );
-    }
-    #[cfg(not(any(unix, target_os = "windows")))]
-    if mode == ReleaseMode::Graceful {
-        return Err("Graceful release is only supported on Unix or Windows systems.".to_string());
-    }
-
     let now = system.now();
 
     // 1. One-shot consumption: take lease from store
@@ -591,7 +568,7 @@ pub fn release_listener(
     // Verify owner SID/UID, start time, and executable path
     if proc_info.owner != Some(lease.owner.clone())
         || proc_info.start_time != lease.started_at.unwrap_or(0)
-        || proc_info.exe_path != lease.exe_path
+        || !executable_paths_equal(&proc_info.exe_path, &lease.exe_path)
     {
         return Ok(ReleaseDevelopmentListenerResult {
             port: lease.port,
@@ -621,16 +598,19 @@ pub fn release_listener(
         return Err("This listener is protected and cannot be released.".to_string());
     }
 
-    // 5. Send Signal (graceful is Unix-only; Windows force uses TerminateProcess)
+    // 5. Send Signal (graceful attempts the shared platform chain; Windows
+    // force uses TerminateProcess through the same helper)
     let sig = match mode {
         ReleaseMode::Graceful => {
-            #[cfg(unix)]
+            #[cfg(any(unix, target_os = "windows"))]
             {
                 GRACEFUL_TERMINATION_SIGNAL
             }
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, target_os = "windows")))]
             {
-                return Err("Graceful release is unavailable on this platform.".to_string());
+                return Err(
+                    "Graceful release is only supported on Unix or Windows systems.".to_string(),
+                );
             }
         }
         ReleaseMode::Force => FORCE_TERMINATION_SIGNAL,
@@ -698,7 +678,7 @@ pub fn release_listener(
     if found_post.pid == lease.pid {
         if let Some(post_proc) = system.get_process_info(lease.pid) {
             if post_proc.start_time == lease.started_at.unwrap_or(0)
-                && post_proc.exe_path == lease.exe_path
+                && executable_paths_equal(&post_proc.exe_path, &lease.exe_path)
                 && post_proc.owner == Some(lease.owner.clone())
             {
                 // Same process remains listening! Create a fresh lease for possible Force action.
@@ -1276,7 +1256,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_graceful_release_is_unavailable() {
+    fn windows_graceful_release_attempts_the_shared_chain() {
         let owner = ProcessOwner::Windows("S-1-5-21-100".to_string());
         let fake = FakeDevPortSystem::with_owner(owner.clone());
         fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
@@ -1292,18 +1272,18 @@ mod tests {
         });
         let store = Mutex::new(DevelopmentPortStore::default());
         let listener = list_listeners(&store, &fake).unwrap().remove(0);
-        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unavailable on Windows"));
-        assert!(fake.signaled_pids.lock().unwrap().is_empty());
 
-        // The rejected graceful request does not consume the force-authorized
-        // Windows lease. A separately confirmed force action can still use it.
-        let forced = release_listener(&store, &fake, &listener.id, ReleaseMode::Force).unwrap();
-        assert_eq!(forced.outcome, ReleaseOutcome::Released);
+        // Graceful no longer short-circuits: the platform adapter receives the
+        // graceful signal and attempts the shared window/console chain.
+        let graceful =
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        assert_eq!(graceful.outcome, ReleaseOutcome::Released);
         assert_eq!(
             fake.signaled_pids.lock().unwrap().as_slice(),
-            &[(32892, FORCE_TERMINATION_SIGNAL)]
+            &[(32892, GRACEFUL_TERMINATION_SIGNAL)]
         );
+
+        // The one-shot lease is consumed by the graceful attempt.
+        assert!(release_listener(&store, &fake, &listener.id, ReleaseMode::Force).is_err());
     }
 }
