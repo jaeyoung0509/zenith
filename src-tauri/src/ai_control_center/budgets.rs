@@ -129,6 +129,8 @@ mod tests {
             }],
             action_url: None,
             partial_error: None,
+            model_vendor: None,
+            model_identity: None,
         };
         let result = statuses(
             &[budget],

@@ -54,6 +54,16 @@ const KNOWN_PROVIDER_NAMES: Record<string, string> = {
   claude: 'Claude Code',
   opencode: 'OpenCode',
   openrouter: 'OpenRouter',
+  cursor: 'Cursor',
+  'grok-build': 'Grok Build',
+  grok: 'Grok Build',
+  'xai-api': 'xAI API',
+  'openai-api': 'OpenAI API',
+  'anthropic-api': 'Anthropic API',
+  'muse-code': 'Muse Code',
+  'meta-model-api': 'Meta Model API',
+  'mistral-api': 'Mistral API',
+  'fireworks-api': 'Fireworks API',
 };
 
 export function projectAiProviders(

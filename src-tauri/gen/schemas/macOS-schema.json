@@ -267,6 +267,12 @@
           "markdownDescription": "Enables the get_ai_control_quick_summary command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_ai_provider_descriptors command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-provider-descriptors",
+          "markdownDescription": "Enables the get_ai_provider_descriptors command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_ai_usage command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-ai-usage",
@@ -625,6 +631,12 @@
           "type": "string",
           "const": "deny-get-ai-control-quick-summary",
           "markdownDescription": "Denies the get_ai_control_quick_summary command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ai_provider_descriptors command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-provider-descriptors",
+          "markdownDescription": "Denies the get_ai_provider_descriptors command without any pre-configured scope."
         },
         {
           "description": "Denies the get_ai_usage command without any pre-configured scope.",

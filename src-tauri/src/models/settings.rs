@@ -224,20 +224,10 @@ impl Default for ZenithSettings {
                 },
             ],
             quick_panel_sections: QuickPanelSection::DEFAULTS.to_vec(),
-            quick_panel_ai_providers: vec![
-                "codex".to_string(),
-                "claude".to_string(),
-                "opencode".to_string(),
-                "openrouter".to_string(),
-                "antigravity".to_string(),
-            ],
-            ai_accounts_quota_providers: vec![
-                "codex".to_string(),
-                "claude".to_string(),
-                "opencode".to_string(),
-                "openrouter".to_string(),
-                "antigravity".to_string(),
-            ],
+            quick_panel_ai_providers:
+                crate::ai_providers::ProviderRegistry::default_quick_panel_providers(),
+            ai_accounts_quota_providers:
+                crate::ai_providers::ProviderRegistry::default_account_providers(),
             dashboard_tabs: DashboardTab::ALL.to_vec(),
             dashboard_tabs_revision: 5,
             sidebar_collapsed: false,
@@ -402,24 +392,30 @@ impl ZenithSettings {
             }
         }
 
-        const SUPPORTED_PROVIDERS: [&str; 5] =
-            ["codex", "claude", "opencode", "openrouter", "antigravity"];
+        for provider in &mut self.quick_panel_ai_providers {
+            if let Some(normalized) =
+                crate::ai_providers::ProviderRegistry::normalize_provider_id(provider)
+            {
+                *provider = normalized.to_string();
+            }
+        }
+        for provider in &mut self.ai_accounts_quota_providers {
+            if let Some(normalized) =
+                crate::ai_providers::ProviderRegistry::normalize_provider_id(provider)
+            {
+                *provider = normalized.to_string();
+            }
+        }
+
         let mut providers = HashSet::new();
         self.quick_panel_ai_providers.retain(|provider| {
-            SUPPORTED_PROVIDERS.contains(&provider.as_str()) && providers.insert(provider.clone())
+            crate::ai_providers::ProviderRegistry::supports_quick_panel(provider)
+                && providers.insert(provider.clone())
         });
-        const SUPPORTED_ACCOUNT_PROVIDERS: [&str; 7] = [
-            "codex",
-            "claude",
-            "opencode",
-            "openrouter",
-            "antigravity",
-            "cursor",
-            "grok",
-        ];
+
         let mut account_providers = HashSet::new();
         self.ai_accounts_quota_providers.retain(|provider| {
-            SUPPORTED_ACCOUNT_PROVIDERS.contains(&provider.as_str())
+            crate::ai_providers::ProviderRegistry::is_supported(provider)
                 && account_providers.insert(provider.clone())
         });
         if self.ai_accounts_quota_providers.is_empty() {
@@ -502,8 +498,20 @@ mod tests {
         assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
         assert_eq!(
             sanitized.ai_accounts_quota_providers,
-            vec!["cursor", "grok"]
+            vec!["cursor", "grok-build"]
         );
+    }
+
+    #[test]
+    fn sanitize_migrates_legacy_grok_to_grok_build() {
+        let settings = ZenithSettings {
+            ai_accounts_quota_providers: vec!["grok".into()],
+            quick_panel_ai_providers: vec!["grok".into()],
+            ..ZenithSettings::default()
+        };
+        let sanitized = settings.sanitize();
+        assert_eq!(sanitized.ai_accounts_quota_providers, vec!["grok-build"]);
+        assert!(sanitized.quick_panel_ai_providers.is_empty());
     }
 
     #[test]

@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiProviderUsage, AiUsageSnapshot } from '../lib/models/types';
 import { UsageStore, projectProviderSlots } from '../lib/stores/usage.svelte';
-import { tauriGetAiUsage } from '../lib/utils/tauri';
+import { tauriGetAiProviderDescriptors, tauriGetAiUsage } from '../lib/utils/tauri';
 
 vi.mock('../lib/utils/tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/utils/tauri')>();
   return {
     ...actual,
     tauriGetAiUsage: vi.fn(),
+    tauriGetAiProviderDescriptors: vi.fn(),
   };
 });
 
@@ -37,10 +38,10 @@ function provider(id: string, name: string): AiProviderUsage {
 
 describe('AI Accounts & Quota provider projection', () => {
   it('shows only selected providers in configured order', () => {
-    const providers = [provider('codex', 'Codex'), provider('cursor', 'Cursor'), provider('grok', 'Grok Build')];
+    const providers = [provider('codex', 'Codex'), provider('cursor', 'Cursor'), provider('grok-build', 'Grok Build')];
 
     expect(projectProviderSlots(providers, false, ['grok', 'cursor']).map((item) => item.id)).toEqual([
-      'grok',
+      'grok-build',
       'cursor',
     ]);
   });
@@ -48,7 +49,7 @@ describe('AI Accounts & Quota provider projection', () => {
   it('creates loading shells only for selected providers', () => {
     const projected = projectProviderSlots([], true, ['cursor', 'grok']);
 
-    expect(projected.map((item) => item.id)).toEqual(['cursor', 'grok']);
+    expect(projected.map((item) => item.id)).toEqual(['cursor', 'grok-build']);
     expect(projected.map((item) => item.name)).toEqual(['Cursor', 'Grok Build']);
   });
 });
@@ -135,5 +136,54 @@ describe('AI usage auto-refresh while visible', () => {
     expect(vi.getTimerCount()).toBe(1);
     second();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('provider descriptor registry integration', () => {
+  it('loads provider descriptors and derives provider options', async () => {
+    const store = new UsageStore();
+    const mockDescriptors = [
+      {
+        id: 'codex',
+        display_name: 'Codex',
+        scope: 'subscription' as const,
+        credential_kind: 'o_auth' as const,
+        source_kind: 'live_quota' as const,
+        supports_quick_panel: true,
+        model_vendor: 'OpenAI',
+        model_identity: null,
+        description: 'ChatGPT OAuth',
+        default_quota_provider: true,
+      },
+      {
+        id: 'xai-api',
+        display_name: 'xAI API',
+        scope: 'organization' as const,
+        credential_kind: 'api_key' as const,
+        source_kind: 'live_authoritative' as const,
+        supports_quick_panel: false,
+        model_vendor: 'xAI',
+        model_identity: null,
+        description: 'Official xAI API',
+        default_quota_provider: false,
+      },
+    ];
+    vi.mocked(tauriGetAiProviderDescriptors).mockResolvedValue(mockDescriptors);
+
+    await store.loadDescriptors();
+    expect(store.descriptors).toEqual(mockDescriptors);
+    expect(store.quickPanelProviderOptions).toEqual([{ id: 'codex', label: 'Codex' }]);
+    expect(store.accountProviderOptions).toEqual([
+      { id: 'codex', label: 'Codex', description: 'ChatGPT OAuth' },
+      { id: 'xai-api', label: 'xAI API', description: 'Official xAI API' },
+    ]);
+  });
+
+  it('transparently matches grok-build when legacy grok ID is requested', () => {
+    const providers = [provider('grok-build', 'Grok Build')];
+    const projected = projectProviderSlots(providers, false, ['grok']);
+    expect(projected.length).toBe(1);
+    expect(projected[0].id).toBe('grok-build');
+    expect(projected[0].name).toBe('Grok Build');
   });
 });

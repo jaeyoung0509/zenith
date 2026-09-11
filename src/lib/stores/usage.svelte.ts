@@ -1,5 +1,9 @@
-import type { AiProviderUsage, AiUsageSnapshot } from '../models/types';
-import { tauriConnectOpenRouter, tauriGetAiUsage } from '../utils/tauri';
+import type { AiProviderUsage, AiUsageSnapshot, ProviderDescriptor } from '../models/types';
+import {
+  tauriConnectOpenRouter,
+  tauriGetAiProviderDescriptors,
+  tauriGetAiUsage,
+} from '../utils/tauri';
 import { settingsStore } from './settings.svelte';
 
 const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
@@ -9,7 +13,15 @@ const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('openrouter', 'OpenRouter', 'OAuth PKCE'),
   providerShell('antigravity', 'Antigravity', 'Google OAuth'),
   providerShell('cursor', 'Cursor', 'Cursor account'),
+  providerShell('grok-build', 'Grok Build', 'xAI account'),
   providerShell('grok', 'Grok Build', 'xAI account'),
+  providerShell('xai-api', 'xAI API', 'API Key'),
+  providerShell('openai-api', 'OpenAI API', 'API Key'),
+  providerShell('anthropic-api', 'Anthropic API', 'API Key'),
+  providerShell('muse-code', 'Muse Code', 'Meta CLI'),
+  providerShell('meta-model-api', 'Meta Model API', 'API Key'),
+  providerShell('mistral-api', 'Mistral API', 'API Key'),
+  providerShell('fireworks-api', 'Fireworks API', 'API Key'),
 ];
 
 function providerShell(id: string, name: string, authLabel: string): AiProviderUsage {
@@ -43,15 +55,17 @@ export function projectProviderSlots(
 ): AiProviderUsage[] {
   return providerIds
     .map((id) => {
-      const provider = providers.find((candidate) => candidate.id === id);
+      const canonicalId = id === 'grok' ? 'grok-build' : id;
+      const provider = providers.find((candidate) => candidate.id === canonicalId || candidate.id === id);
       if (provider || !isLoading) return provider;
-      return PROVIDER_SHELLS.find((shell) => shell.id === id);
+      return PROVIDER_SHELLS.find((shell) => shell.id === canonicalId || shell.id === id);
     })
     .filter((provider): provider is AiProviderUsage => Boolean(provider));
 }
 
 export class UsageStore {
   snapshot = $state<AiUsageSnapshot | null>(null);
+  descriptors = $state<ProviderDescriptor[]>([]);
   loadingProviders = $state<string[]>([]);
   isLoading = $state(false);
   error = $state<string | null>(null);
@@ -120,9 +134,37 @@ export class UsageStore {
     await this.refresh(false);
   }
 
+  async loadDescriptors(): Promise<ProviderDescriptor[]> {
+    if (this.descriptors.length > 0) return this.descriptors;
+    try {
+      this.descriptors = await tauriGetAiProviderDescriptors();
+    } catch {
+      // Keep empty if unavailable
+    }
+    return this.descriptors;
+  }
+
+  get quickPanelProviderOptions() {
+    return this.descriptors
+      .filter((d) => d.supports_quick_panel)
+      .map((d) => ({
+        id: d.id,
+        label: d.display_name,
+      }));
+  }
+
+  get accountProviderOptions() {
+    return this.descriptors.map((d) => ({
+      id: d.id,
+      label: d.display_name,
+      description: d.description,
+    }));
+  }
+
   private async performRefresh(force: boolean) {
     this.isLoading = true;
     this.error = null;
+    void this.loadDescriptors();
     this.loadingProviders = [...settingsStore.settings.ai_accounts_quota_providers];
     try {
       this.snapshot = await tauriGetAiUsage(force, (provider) => {

@@ -105,13 +105,14 @@ pub async fn fetch_usage_snapshot(
     singleflight: &Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     generation: &Arc<AtomicU64>,
     metrics: &Arc<RuntimeMetrics>,
+    credentials: Arc<dyn crate::ai_providers::CredentialStore>,
     providers: Vec<String>,
-    openrouter_key: Option<String>,
     force: bool,
     on_provider: impl Fn(AiProviderUsage) + Send + Sync + Clone + 'static,
 ) -> Result<AiUsageSnapshot, String> {
     let gen = generation.load(Ordering::SeqCst);
-    let key = usage_request_key(&providers, openrouter_key.is_some());
+    let has_openrouter_key = credentials.get("openrouter").ok().flatten().is_some();
+    let key = usage_request_key(&providers, has_openrouter_key);
     let now = unix_timestamp();
 
     if !force {
@@ -135,8 +136,6 @@ pub async fn fetch_usage_snapshot(
             Ok(snapshot)
         }
         Admission::Own(inflight) => {
-            // Recheck at admission: another path may have populated the cache
-            // while we awaited the admission lock.
             if !force {
                 if let Some(snapshot) = usage_cache_hit(cache, metrics, &providers, now) {
                     for provider in &snapshot.providers {
@@ -149,6 +148,9 @@ pub async fn fetch_usage_snapshot(
             }
             let progress_sf = singleflight.clone();
             let progress_entry = inflight.clone();
+            let creds = credentials.clone();
+            let provs = providers.clone();
+            let service = crate::ai_providers::ProviderCollectionService::default();
             supervise_collection(
                 cache.clone(),
                 generation.clone(),
@@ -156,11 +158,9 @@ pub async fn fetch_usage_snapshot(
                 singleflight.clone(),
                 inflight.clone(),
                 move || {
-                    crate::ai_usage::AiUsageCollector::collect_parallel(
-                        openrouter_key,
-                        &providers,
-                        |provider| progress_sf.push_progress(&progress_entry, provider),
-                    )
+                    service.collect_parallel(creds, &provs, move |provider| {
+                        progress_sf.push_progress(&progress_entry, provider)
+                    })
                 },
             );
             singleflight
@@ -388,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_usage_requests_share_one_collection() {
         let (cache, flight, generation, metrics) = test_state();
-        let providers = vec!["cursor".to_string(), "grok".to_string()];
+        let providers = vec!["cursor".to_string(), "grok-build".to_string()];
         let barrier = Arc::new(tokio::sync::Barrier::new(6));
         let mut handles = Vec::new();
         for _ in 0..6 {
@@ -407,8 +407,8 @@ mod tests {
                     &flight,
                     &generation,
                     &metrics,
+                    Arc::new(crate::ai_providers::InMemoryCredentialStore::new()),
                     providers,
-                    None,
                     false,
                     |_| {},
                 )
@@ -428,7 +428,7 @@ mod tests {
                     .iter()
                     .map(|p| p.id.as_str())
                     .collect::<Vec<_>>(),
-                vec!["cursor", "grok"]
+                vec!["cursor", "grok-build"]
             );
         }
         let counts = metrics.snapshot();
@@ -460,8 +460,8 @@ mod tests {
                     &flight,
                     &generation,
                     &metrics,
+                    Arc::new(crate::ai_providers::InMemoryCredentialStore::new()),
                     providers,
-                    None,
                     force,
                     |_| {},
                 )

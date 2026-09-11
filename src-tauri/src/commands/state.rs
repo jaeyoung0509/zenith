@@ -14,7 +14,7 @@ pub struct AppState {
     pub awake_manager: Arc<KeepAwakeManager>,
     pub settings: Arc<Mutex<ZenithSettings>>,
     pub last_scan: Arc<Mutex<Option<ScanResult>>>,
-    pub openrouter_key: Arc<Mutex<Option<String>>>,
+    pub credentials: Arc<dyn crate::ai_providers::CredentialStore>,
     pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
     pub usage_singleflight: Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     pub usage_generation: Arc<AtomicU64>,

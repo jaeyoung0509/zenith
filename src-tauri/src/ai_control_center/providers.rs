@@ -52,7 +52,7 @@ pub fn normalize(
     let mut observations = existing
         .providers
         .iter()
-        .map(|provider| from_legacy(provider, existing.fetched_at))
+        .map(|provider| from_provider_usage(provider, existing.fetched_at))
         .collect::<Vec<_>>();
     for manual in &preferences.manual_usage {
         let display_name = observations
@@ -89,35 +89,55 @@ pub fn normalize(
             }],
             action_url: None,
             partial_error: None,
+            model_vendor: None,
+            model_identity: None,
         });
     }
-    observations.extend(optional_organization_rows(existing.fetched_at));
+    observations.extend(optional_organization_rows(
+        existing.fetched_at,
+        &observations,
+    ));
     observations
 }
 
-fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservation {
-    let (source_kind, scope) = match provider.id.as_str() {
-        "codex" => (
-            ObservationSourceKind::LiveQuota,
-            ObservationScope::Subscription,
-        ),
-        "antigravity" if provider.connected => (
-            ObservationSourceKind::LiveQuota,
-            ObservationScope::Subscription,
-        ),
-        "openrouter" => (
-            ObservationSourceKind::LiveAuthoritative,
-            ObservationScope::ApiKey,
-        ),
-        "opencode" => (
-            ObservationSourceKind::LocalEstimate,
-            ObservationScope::LocalSessions,
-        ),
-        _ => (
-            ObservationSourceKind::Manual,
-            ObservationScope::Subscription,
-        ),
+fn from_provider_usage(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservation {
+    let descriptor = crate::ai_providers::ProviderRegistry::find(&provider.id);
+    let (source_kind, scope) = if let Some(d) = descriptor {
+        (d.source_kind, d.scope)
+    } else {
+        match provider.id.as_str() {
+            "codex" => (
+                ObservationSourceKind::LiveQuota,
+                ObservationScope::Subscription,
+            ),
+            "antigravity" if provider.connected => (
+                ObservationSourceKind::LiveQuota,
+                ObservationScope::Subscription,
+            ),
+            "openrouter" => (
+                ObservationSourceKind::LiveAuthoritative,
+                ObservationScope::ApiKey,
+            ),
+            "opencode" => (
+                ObservationSourceKind::LocalEstimate,
+                ObservationScope::LocalSessions,
+            ),
+            _ => (
+                ObservationSourceKind::Manual,
+                ObservationScope::Subscription,
+            ),
+        }
     };
+
+    let model_vendor = provider
+        .model_vendor
+        .clone()
+        .or_else(|| descriptor.and_then(|d| d.model_vendor.map(String::from)));
+    let model_identity = provider
+        .model_identity
+        .clone()
+        .or_else(|| descriptor.and_then(|d| d.model_identity.map(String::from)));
+
     let mut metrics = provider
         .windows
         .iter()
@@ -173,8 +193,6 @@ fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservat
             !provider.connected
         }
         ObservationSourceKind::LocalEstimate => !has_measurement,
-        // Capability/install detection is not a manual observation. Only an explicit
-        // user entry added by `normalize` below receives a fresh manual timestamp.
         ObservationSourceKind::Manual => true,
     };
     ProviderObservation {
@@ -216,26 +234,61 @@ fn from_legacy(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservat
         action_url: provider.action_url.clone(),
         partial_error: (unavailable && source_kind != ObservationSourceKind::Manual)
             .then(|| provider.status_message.clone()),
+        model_vendor,
+        model_identity,
     }
 }
 
-fn optional_organization_rows(observed_at: u64) -> Vec<ProviderObservation> {
-    [
-        ("openai-api", "OpenAI API organization", ObservationScope::Organization, "Separate from Codex subscription; optional managed credentials must use Keychain."),
-        ("anthropic-api", "Anthropic organization API", ObservationScope::Organization, "Optional organization adapter; individual Claude subscriptions remain manual."),
-        ("cursor-org", "Cursor Teams / Enterprise", ObservationScope::Organization, "Optional admin adapter; individual Cursor usage remains external."),
-        ("xai-api", "xAI API team", ObservationScope::Organization, "Separate from Grok Build subscription usage."),
-        ("gemini-enterprise", "Gemini Code Assist Standard / Enterprise", ObservationScope::Organization, "Enterprise/API usage remains supported; consumer individual access moved to Antigravity."),
-        ("grok-individual", "Grok Build subscription", ObservationScope::Subscription, "Manual/external; no documented subscription usage endpoint is available."),
-        ("cursor-individual", "Cursor individual", ObservationScope::Subscription, "Manual/external; Zenith does not inspect private editor state."),
-        ("claude-individual", "Claude individual", ObservationScope::Subscription, "Manual/external; use Claude Code /usage without scraping credentials or the TUI."),
-    ].into_iter().map(|(id, name, scope, message)| ProviderObservation {
-        provider_id: id.into(), display_name: name.into(), source_kind: ObservationSourceKind::Manual,
-        source_id: format!("{id}.capability"), scope, observed_at,
-        period: ObservationPeriod { starts_at: None, ends_at: None, resets_at: None, label: "Unavailable".into() },
-        fresh_for_seconds: 300, quality: ObservationQuality::Unavailable, installed: false, connected: false,
-        status_message: message.into(), metrics: vec![], action_url: None, partial_error: None,
-    }).collect()
+fn optional_organization_rows(
+    observed_at: u64,
+    existing: &[ProviderObservation],
+) -> Vec<ProviderObservation> {
+    let candidates = [
+        ("openai-api", "OpenAI API", ObservationScope::Organization, "Separate from Codex subscription; optional managed credentials must use Keychain.", Some("OpenAI"), None),
+        ("anthropic-api", "Anthropic API", ObservationScope::Organization, "Optional organization adapter; individual Claude subscriptions remain manual.", Some("Anthropic"), None),
+        ("cursor-org", "Cursor Teams / Enterprise", ObservationScope::Organization, "Optional admin adapter; individual Cursor usage remains external.", None, None),
+        ("xai-api", "xAI API", ObservationScope::Organization, "Separate from Grok Build subscription usage.", Some("xAI"), None),
+        ("gemini-enterprise", "Gemini Code Assist Standard / Enterprise", ObservationScope::Organization, "Enterprise/API usage remains supported; consumer individual access moved to Antigravity.", Some("Google"), None),
+        ("grok-individual", "Grok Build subscription", ObservationScope::Subscription, "Manual/external; no documented subscription usage endpoint is available.", Some("xAI"), None),
+        ("grok-build", "Grok Build", ObservationScope::Subscription, "Manual/external; quota stays in the provider client.", Some("xAI"), None),
+        ("cursor-individual", "Cursor individual", ObservationScope::Subscription, "Manual/external; Zenith does not inspect private editor state.", None, None),
+        ("claude-individual", "Claude individual", ObservationScope::Subscription, "Manual/external; use Claude Code /usage without scraping credentials or the TUI.", Some("Anthropic"), None),
+        ("muse-code", "Muse Code", ObservationScope::Subscription, "Meta terminal coding agent powered by Muse Spark.", Some("Meta"), Some("Muse Spark")),
+        ("meta-model-api", "Meta Model API", ObservationScope::ApiKey, "Direct API access to Muse Spark 1.3 models.", Some("Meta"), Some("Muse Spark 1.3")),
+        ("mistral-api", "Mistral API", ObservationScope::Organization, "Official Mistral workspace usage and billing.", Some("Mistral"), None),
+        ("fireworks-api", "Fireworks API", ObservationScope::Organization, "Official Fireworks AI developer usage and billing.", Some("Fireworks"), None),
+    ];
+
+    candidates
+        .into_iter()
+        .filter(|(id, _, _, _, _, _)| !existing.iter().any(|item| item.provider_id == *id))
+        .map(
+            |(id, name, scope, message, vendor, model)| ProviderObservation {
+                provider_id: id.into(),
+                display_name: name.into(),
+                source_kind: ObservationSourceKind::Manual,
+                source_id: format!("{id}.capability"),
+                scope,
+                observed_at,
+                period: ObservationPeriod {
+                    starts_at: None,
+                    ends_at: None,
+                    resets_at: None,
+                    label: "Unavailable".into(),
+                },
+                fresh_for_seconds: 300,
+                quality: ObservationQuality::Unavailable,
+                installed: false,
+                connected: false,
+                status_message: message.into(),
+                metrics: vec![],
+                action_url: None,
+                partial_error: None,
+                model_vendor: vendor.map(String::from),
+                model_identity: model.map(String::from),
+            },
+        )
+        .collect()
 }
 
 fn manual_scope(provider_id: &str) -> ObservationScope {
@@ -273,6 +326,8 @@ mod tests {
                 windows: vec![],
                 summary: UsageSummary::default(),
                 action_url: None,
+                model_vendor: None,
+                model_identity: None,
             }],
         };
         let rows = normalize(&existing, &AiControlPreferences::default());
@@ -321,6 +376,8 @@ mod tests {
                 windows: vec![],
                 summary: UsageSummary::default(),
                 action_url: None,
+                model_vendor: None,
+                model_identity: None,
             }],
         };
         let rows = normalize(&existing, &AiControlPreferences::default());
@@ -359,6 +416,8 @@ mod tests {
                 windows: vec![],
                 summary: UsageSummary::default(),
                 action_url: None,
+                model_vendor: None,
+                model_identity: None,
             }],
         };
         let rows = normalize(&existing, &AiControlPreferences::default());
@@ -409,6 +468,8 @@ mod tests {
                 metrics: vec![],
                 action_url: None,
                 partial_error: (self.0 == ObservationQuality::Partial).then(|| "partial".into()),
+                model_vendor: None,
+                model_identity: None,
             }
         }
     }

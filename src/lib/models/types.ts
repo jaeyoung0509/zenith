@@ -100,8 +100,10 @@ export type {
   PlatformKind,
   ProjectContext,
   ProjectIdentity,
+  ProviderDescriptor,
   ProviderMetric,
   ProviderObservation,
+  CredentialKind,
   QuickPanelSection,
   RecommendationKind,
   ReleaseDevelopmentListenerResult,
@@ -157,7 +159,16 @@ export type AiProviderId =
   | 'openrouter'
   | 'antigravity'
   | 'cursor'
-  | 'grok';
+  | 'grok'
+  | 'grok-build'
+  | 'xai-api'
+  | 'openai-api'
+  | 'anthropic-api'
+  | 'muse-code'
+  | 'meta-model-api'
+  | 'mistral-api'
+  | 'fireworks-api'
+  | string;
 
 export type CleanStrategy =
   | 'delete_contents'

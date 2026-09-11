@@ -28,6 +28,7 @@ import type {
   MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
+  ProviderDescriptor,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -92,6 +93,10 @@ export const nativeApi = {
       onProvider?.(provider);
     };
     return await unwrap(commands.getAiUsage(channel, force));
+  },
+
+  async getAiProviderDescriptors(): Promise<ProviderDescriptor[]> {
+    return await commands.getAiProviderDescriptors();
   },
 
   async getAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {

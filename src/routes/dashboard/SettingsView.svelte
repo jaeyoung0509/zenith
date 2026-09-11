@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { usageStore } from '../../lib/stores/usage.svelte';
   import type {
     AgentNotificationPreferences,
     AiProviderId,
@@ -51,22 +52,40 @@
     { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
     { id: 'agent_activity', label: 'AI & Agents', description: 'Active AI agent sessions and account token limits.' },
   ];
-  const quickPanelProviderOptions: { id: AiProviderId; label: string }[] = [
+  const DEFAULT_QUICK_PANEL_PROVIDER_OPTIONS: { id: string; label: string }[] = [
     { id: 'codex', label: 'Codex' },
     { id: 'claude', label: 'Claude Code' },
     { id: 'opencode', label: 'OpenCode' },
     { id: 'openrouter', label: 'OpenRouter' },
     { id: 'antigravity', label: 'Antigravity' },
   ];
-  const accountProviderOptions: { id: AiProviderId; label: string; description: string }[] = [
+  const DEFAULT_ACCOUNT_PROVIDER_OPTIONS: { id: string; label: string; description: string }[] = [
     { id: 'codex', label: 'Codex', description: 'Live ChatGPT account limits through the official app server.' },
     { id: 'claude', label: 'Claude Code', description: 'Local availability with quota checked in Claude /usage.' },
     { id: 'opencode', label: 'OpenCode', description: 'Local sessions and cost from connected providers.' },
     { id: 'openrouter', label: 'OpenRouter', description: 'Live key usage through Zenith OAuth.' },
     { id: 'antigravity', label: 'Antigravity', description: 'Live Gemini and Claude/GPT limits from agy.' },
     { id: 'cursor', label: 'Cursor', description: 'Local availability; quota stays in Cursor settings.' },
-    { id: 'grok', label: 'Grok Build', description: 'Local availability; quota stays in the provider client.' },
+    { id: 'grok-build', label: 'Grok Build', description: 'Local availability; quota stays in the provider client.' },
+    { id: 'xai-api', label: 'xAI API', description: 'xAI team/organization usage and costs via official management API.' },
+    { id: 'openai-api', label: 'OpenAI API', description: 'Official OpenAI organization usage and costs.' },
+    { id: 'anthropic-api', label: 'Anthropic API', description: 'Organization API usage and costs separate from Claude individual subscription.' },
+    { id: 'muse-code', label: 'Muse Code', description: 'Meta terminal coding agent powered by Muse Spark.' },
+    { id: 'meta-model-api', label: 'Meta Model API', description: 'Direct API access to Muse Spark models.' },
+    { id: 'mistral-api', label: 'Mistral API', description: 'Official Mistral workspace usage and billing.' },
+    { id: 'fireworks-api', label: 'Fireworks API', description: 'Official Fireworks AI developer usage and billing.' },
   ];
+
+  let quickPanelProviderOptions = $derived(
+    usageStore.quickPanelProviderOptions.length > 0
+      ? usageStore.quickPanelProviderOptions
+      : DEFAULT_QUICK_PANEL_PROVIDER_OPTIONS
+  );
+  let accountProviderOptions = $derived(
+    usageStore.accountProviderOptions.length > 0
+      ? usageStore.accountProviderOptions
+      : DEFAULT_ACCOUNT_PROVIDER_OPTIONS
+  );
 
   let settings = $derived(settingsStore.settings);
 
@@ -128,6 +147,7 @@
 
   onMount(() => {
     void loadDiagnostics();
+    void usageStore.loadDescriptors();
   });
 
   async function loadDiagnostics() {

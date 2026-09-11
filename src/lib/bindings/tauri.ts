@@ -5,6 +5,7 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getAiUsage: (onEvent: Channel<AiProviderUsage_Deserialize>, force: boolean | null) => typedError<AiUsageSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_usage", { onEvent, force })),
+	getAiProviderDescriptors: () => __TAURI_INVOKE<ProviderDescriptor[]>("get_ai_provider_descriptors"),
 	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot_Serialize, string>(__TAURI_INVOKE("get_project_context", { force })),
 	requestStopAgentSession: (sessionId: string, leaseId: string) => typedError<null, string>(__TAURI_INVOKE("request_stop_agent_session", { sessionId, leaseId })),
 	getAgentIntegrations: () => typedError<AgentIntegrationInfo[], string>(__TAURI_INVOKE("get_agent_integrations")),
@@ -314,6 +315,8 @@ export type AiProviderUsage_Deserialize = {
 	windows: UsageWindow_Deserialize[],
 	summary: UsageSummary_Deserialize,
 	action_url: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type AiProviderUsage_Serialize = {
@@ -327,6 +330,8 @@ export type AiProviderUsage_Serialize = {
 	windows: UsageWindow_Serialize[],
 	summary: UsageSummary_Serialize,
 	action_url: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type AiUsageSnapshot = AiUsageSnapshot_Serialize | AiUsageSnapshot_Deserialize;
@@ -645,6 +650,8 @@ export type ControlCenterQuickSummary_Serialize = {
 	safety_findings: number,
 	quality: ObservationQuality,
 };
+
+export type CredentialKind = "none" | "api_key" | "o_auth" | "cli";
 
 export type DashboardRoute = DashboardRoute_Serialize | DashboardRoute_Deserialize;
 
@@ -1410,6 +1417,19 @@ export type ProjectIdentity = {
 	is_detached: boolean,
 };
 
+export type ProviderDescriptor = {
+	id: string,
+	display_name: string,
+	scope: ObservationScope,
+	credential_kind: CredentialKind,
+	source_kind: ObservationSourceKind,
+	supports_quick_panel: boolean,
+	model_vendor: string | null,
+	model_identity: string | null,
+	description: string,
+	default_quota_provider: boolean,
+};
+
 export type ProviderMetric = ProviderMetric_Serialize | ProviderMetric_Deserialize;
 
 export type ProviderMetric_Deserialize = {
@@ -1444,6 +1464,8 @@ export type ProviderObservation_Deserialize = {
 	metrics: ProviderMetric_Deserialize[],
 	action_url: string | null,
 	partial_error: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type ProviderObservation_Serialize = {
@@ -1462,6 +1484,8 @@ export type ProviderObservation_Serialize = {
 	metrics: ProviderMetric_Serialize[],
 	action_url: string | null,
 	partial_error: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control" | "agent_activity";

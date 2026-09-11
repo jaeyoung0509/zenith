@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+
+use crate::ai_providers::CredentialStore;
 use crate::models::{AiProviderUsage, AiUsageSnapshot, UsageSummary, UsageSupport, UsageWindow};
 use crate::tooling;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -28,42 +31,15 @@ impl AiUsageCollector {
         on_provider: F,
     ) -> AiUsageSnapshot
     where
-        F: Fn(AiProviderUsage) + Send + Sync,
+        F: Fn(AiProviderUsage) + Send + Sync + 'static,
     {
-        let on_p = &on_provider;
-        let providers = std::thread::scope(|scope| {
-            let handles = provider_ids
-                .iter()
-                .map(|provider_id| {
-                    let provider_id = provider_id.clone();
-                    let failed_id = provider_id.clone();
-                    let openrouter_key = openrouter_key.as_deref();
-                    (
-                        failed_id,
-                        scope.spawn(move || {
-                            let provider = Self::collect_provider(&provider_id, openrouter_key);
-                            on_p(provider.clone());
-                            provider
-                        }),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            handles
-                .into_iter()
-                .map(|(provider_id, handle)| match handle.join() {
-                    Ok(provider) => provider,
-                    Err(_) => {
-                        Self::failed_provider(&provider_id, Self::provider_name(&provider_id))
-                    }
-                })
-                .collect()
-        });
-
-        AiUsageSnapshot {
-            providers,
-            fetched_at: now_secs(),
+        let credentials =
+            std::sync::Arc::new(crate::ai_providers::InMemoryCredentialStore::default());
+        if let Some(key) = openrouter_key {
+            let _ = credentials.set("openrouter", crate::ai_providers::SecretString::new(key));
         }
+        let service = crate::ai_providers::ProviderCollectionService::default();
+        service.collect_parallel(credentials, provider_ids, on_provider)
     }
 
     fn collect_provider(provider_id: &str, openrouter_key: Option<&str>) -> AiProviderUsage {
@@ -224,6 +200,8 @@ impl AiUsageCollector {
             windows: vec![],
             summary: UsageSummary::default(),
             action_url: Some("https://claude.ai/settings/usage".into()),
+            model_vendor: None,
+            model_identity: None,
         }
     }
 
@@ -246,6 +224,8 @@ impl AiUsageCollector {
             windows: vec![],
             summary: UsageSummary::default(),
             action_url: None,
+            model_vendor: None,
+            model_identity: None,
         }
     }
 
@@ -266,6 +246,8 @@ impl AiUsageCollector {
             windows: vec![],
             summary: UsageSummary::default(),
             action_url: None,
+            model_vendor: None,
+            model_identity: None,
         }
     }
 
@@ -325,6 +307,8 @@ impl AiUsageCollector {
             windows: vec![],
             summary: UsageSummary::default(),
             action_url: Some("https://openrouter.ai/activity".into()),
+            model_vendor: None,
+            model_identity: None,
         };
 
         let Some(key) = key else {
@@ -549,6 +533,8 @@ fn base_provider(id: &str, name: &str, auth_label: &str) -> AiProviderUsage {
         windows: vec![],
         summary: UsageSummary::default(),
         action_url: None,
+        model_vendor: None,
+        model_identity: None,
     }
 }
 
@@ -845,7 +831,7 @@ mod tests {
 
     #[test]
     fn collection_runs_only_selected_providers_in_configured_order() {
-        let selected = vec!["cursor".to_string(), "grok".to_string()];
+        let selected = vec!["cursor".to_string(), "grok-build".to_string()];
         let snapshot = AiUsageCollector::collect(None, &selected);
         assert_eq!(
             snapshot
@@ -853,8 +839,15 @@ mod tests {
                 .iter()
                 .map(|provider| provider.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["cursor", "grok"]
+            vec!["cursor", "grok-build"]
         );
+    }
+
+    #[test]
+    fn legacy_grok_normalizes_to_grok_build() {
+        let selected = vec!["grok".to_string()];
+        let snapshot = AiUsageCollector::collect(None, &selected);
+        assert_eq!(snapshot.providers[0].id, "grok-build");
     }
 
     #[test]

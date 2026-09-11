@@ -51,6 +51,10 @@ pub struct AiProviderUsage {
     pub windows: Vec<UsageWindow>,
     pub summary: UsageSummary,
     pub action_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]

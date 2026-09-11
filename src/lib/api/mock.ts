@@ -24,6 +24,7 @@ import type {
   MemoryMetrics,
   PlanPreview,
   PlatformCapabilities,
+  ProviderDescriptor,
   RecommendationPreview,
   SafetySnapshot,
   ScanEvent,
@@ -37,6 +38,177 @@ import type { nativeApi } from './native';
 import { createDevelopmentPortsMock } from './mocks/developmentPorts';
 
 type ZenithApi = typeof nativeApi;
+
+const MOCK_PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
+  {
+    id: 'codex',
+    display_name: 'Codex',
+    scope: 'subscription',
+    credential_kind: 'o_auth',
+    source_kind: 'live_quota',
+    supports_quick_panel: true,
+    model_vendor: 'OpenAI',
+    model_identity: null,
+    description: 'Live ChatGPT account limits through the official app server.',
+    default_quota_provider: true,
+  },
+  {
+    id: 'claude',
+    display_name: 'Claude Code',
+    scope: 'subscription',
+    credential_kind: 'cli',
+    source_kind: 'manual',
+    supports_quick_panel: true,
+    model_vendor: 'Anthropic',
+    model_identity: null,
+    description: 'Local availability with quota checked in Claude /usage.',
+    default_quota_provider: true,
+  },
+  {
+    id: 'opencode',
+    display_name: 'OpenCode',
+    scope: 'local_sessions',
+    credential_kind: 'cli',
+    source_kind: 'local_estimate',
+    supports_quick_panel: true,
+    model_vendor: null,
+    model_identity: null,
+    description: 'Local sessions and cost from connected providers.',
+    default_quota_provider: true,
+  },
+  {
+    id: 'openrouter',
+    display_name: 'OpenRouter',
+    scope: 'api_key',
+    credential_kind: 'o_auth',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: true,
+    model_vendor: null,
+    model_identity: null,
+    description: 'Live key usage through Zenith OAuth.',
+    default_quota_provider: true,
+  },
+  {
+    id: 'antigravity',
+    display_name: 'Antigravity',
+    scope: 'subscription',
+    credential_kind: 'o_auth',
+    source_kind: 'live_quota',
+    supports_quick_panel: true,
+    model_vendor: 'Google',
+    model_identity: null,
+    description: 'Live Gemini and Claude/GPT limits from agy.',
+    default_quota_provider: true,
+  },
+  {
+    id: 'cursor',
+    display_name: 'Cursor',
+    scope: 'subscription',
+    credential_kind: 'none',
+    source_kind: 'manual',
+    supports_quick_panel: false,
+    model_vendor: null,
+    model_identity: null,
+    description: 'Local availability; quota stays in Cursor settings.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'grok-build',
+    display_name: 'Grok Build',
+    scope: 'subscription',
+    credential_kind: 'none',
+    source_kind: 'manual',
+    supports_quick_panel: false,
+    model_vendor: 'xAI',
+    model_identity: null,
+    description: 'Local availability; quota stays in the provider client.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'xai-api',
+    display_name: 'xAI API',
+    scope: 'organization',
+    credential_kind: 'api_key',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: false,
+    model_vendor: 'xAI',
+    model_identity: null,
+    description: 'xAI team/organization usage and costs via official management API.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'openai-api',
+    display_name: 'OpenAI API',
+    scope: 'organization',
+    credential_kind: 'api_key',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: false,
+    model_vendor: 'OpenAI',
+    model_identity: null,
+    description: 'Official OpenAI organization usage and costs.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'anthropic-api',
+    display_name: 'Anthropic API',
+    scope: 'organization',
+    credential_kind: 'api_key',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: false,
+    model_vendor: 'Anthropic',
+    model_identity: null,
+    description: 'Organization API usage and costs separate from Claude individual subscription.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'muse-code',
+    display_name: 'Muse Code',
+    scope: 'subscription',
+    credential_kind: 'cli',
+    source_kind: 'manual',
+    supports_quick_panel: false,
+    model_vendor: 'Meta',
+    model_identity: 'Muse Spark',
+    description: 'Meta terminal coding agent powered by Muse Spark.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'meta-model-api',
+    display_name: 'Meta Model API',
+    scope: 'api_key',
+    credential_kind: 'api_key',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: false,
+    model_vendor: 'Meta',
+    model_identity: 'Muse Spark 1.3',
+    description: 'Direct API access to Muse Spark models.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'mistral-api',
+    display_name: 'Mistral API',
+    scope: 'organization',
+    credential_kind: 'api_key',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: false,
+    model_vendor: 'Mistral',
+    model_identity: null,
+    description: 'Official Mistral workspace usage and billing.',
+    default_quota_provider: false,
+  },
+  {
+    id: 'fireworks-api',
+    display_name: 'Fireworks API',
+    scope: 'organization',
+    credential_kind: 'api_key',
+    source_kind: 'live_authoritative',
+    supports_quick_panel: false,
+    model_vendor: 'Fireworks',
+    model_identity: null,
+    description: 'Official Fireworks AI developer usage and billing.',
+    default_quota_provider: false,
+  },
+];
 
 const developmentPortsMock = createDevelopmentPortsMock();
 
@@ -430,7 +602,7 @@ export const mockApi = {
           action_url: null,
         },
         {
-          id: 'grok',
+          id: 'grok-build',
           name: 'Grok Build',
           installed: true,
           connected: false,
@@ -466,7 +638,7 @@ export const mockApi = {
     const snapshot: AiUsageSnapshot = {
       fetched_at: Math.floor(Date.now() / 1000),
       providers: selectedProviderIds
-        .map((id) => providers.find((provider) => provider.id === id))
+        .map((id) => providers.find((provider) => provider.id === (id === 'grok' ? 'grok-build' : id)))
         .filter((provider): provider is AiProviderUsage => Boolean(provider)),
     };
     if (onProvider) {
@@ -475,6 +647,10 @@ export const mockApi = {
       }
     }
     return snapshot;
+  },
+
+  async getAiProviderDescriptors(): Promise<ProviderDescriptor[]> {
+    return MOCK_PROVIDER_DESCRIPTORS;
   },
 
   async getAiControlCenter(_force = false): Promise<AiControlCenterSnapshot> {
