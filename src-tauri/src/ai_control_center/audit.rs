@@ -70,13 +70,39 @@ impl AuditStore {
         self.entries.iter().rev().take(100).cloned().collect()
     }
     pub fn save(&self, config: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(config).map_err(|error| error.to_string())?;
         let path = config.join(FILE_NAME);
         let bytes = serde_json::to_vec(&self.entries).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err("AI Control Center audit cap exceeded".into());
         }
-        crate::platform::file_ops::atomic_write(&path, &bytes).map_err(|error| error.to_string())
+        let temp = config.join(format!("{FILE_NAME}.tmp.{}", uuid::Uuid::new_v4()));
+        if let Err(error) = write_owner_only(&temp, &bytes) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.to_string());
+        }
+        if let Err(error) = crate::platform::file_ops::atomic_replace(&temp, &path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.to_string());
+        }
+        Ok(())
     }
+}
+
+/// Creates the file owner-only from the first byte; the audit log can quote
+/// project content and must never be world-readable, even briefly.
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 fn safe_label(value: &str) -> String {
     value
@@ -108,6 +134,48 @@ mod tests {
             .contains("abcdefghijklmnop1234"));
         store.save(temp.path()).unwrap();
         assert_eq!(AuditStore::load(temp.path()).entries.len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn audit_save_creates_a_missing_config_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("not-created/yet");
+        assert!(!config.exists());
+        let mut store = AuditStore::default();
+        store.append(1, "scan", "ok", None, "clean", 30);
+        store.save(&config).unwrap();
+        assert!(config.join(FILE_NAME).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = AuditStore::default();
+        store.append(1, "scan", "ok", None, "clean", 30);
+        store.save(temp.path()).unwrap();
+        let mode = std::fs::metadata(temp.path().join(FILE_NAME))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn audit_messages_mask_home_paths_and_credentials() {
+        let mut store = AuditStore::default();
+        store.append(
+            1,
+            "scan",
+            "ok",
+            None,
+            "token=abcdef123456 at /Users/example/secret-project",
+            30,
+        );
+        let serialized = serde_json::to_string(&store.entries()).unwrap();
+        assert!(!serialized.contains("abcdef123456"));
+        assert!(!serialized.contains("/Users/example"));
     }
 
     #[test]

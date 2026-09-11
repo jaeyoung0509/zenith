@@ -59,7 +59,9 @@ impl LocalModelManager {
         if !output.status.success() {
             let err_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
             crate::diagnostics::log_error("models", &err_str);
-            return Err(ZenithError::ExternalCommandFailed(err_str));
+            return Err(ZenithError::ExternalCommandFailed(
+                crate::diagnostics::sanitize_log(&err_str),
+            ));
         }
 
         let after_bytes = blobs_dir

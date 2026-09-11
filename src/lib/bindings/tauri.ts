@@ -6,7 +6,6 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 export const commands = {
 	getAiUsage: (onEvent: Channel<AiProviderUsage_Deserialize>, force: boolean | null) => typedError<AiUsageSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_usage", { onEvent, force })),
 	getAiProviderDescriptors: () => __TAURI_INVOKE<ProviderDescriptor_Serialize[]>("get_ai_provider_descriptors"),
-	setAiProviderCredential: (provider: ProviderId_Deserialize, secret: string) => typedError<null, string>(__TAURI_INVOKE("set_ai_provider_credential", { provider, secret })),
 	deleteAiProviderCredential: (provider: ProviderId_Deserialize) => typedError<null, string>(__TAURI_INVOKE("delete_ai_provider_credential", { provider })),
 	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot_Serialize, string>(__TAURI_INVOKE("get_project_context", { force })),
 	requestStopAgentSession: (sessionId: string, leaseId: string) => typedError<null, string>(__TAURI_INVOKE("request_stop_agent_session", { sessionId, leaseId })),
@@ -1683,6 +1682,8 @@ export type SafetySnapshot_Deserialize = {
 	findings: SafetyFinding_Deserialize[],
 	scanned_files: number,
 	skipped_files: number,
+	inspected_roots: string[],
+	unreached_roots: string[],
 	status_message: string,
 };
 
@@ -1692,6 +1693,8 @@ export type SafetySnapshot_Serialize = {
 	findings: SafetyFinding_Serialize[],
 	scanned_files: number,
 	skipped_files: number,
+	inspected_roots: string[],
+	unreached_roots: string[],
 	status_message: string,
 };
 

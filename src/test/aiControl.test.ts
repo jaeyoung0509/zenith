@@ -225,6 +225,8 @@ const sampleSnapshot: AiControlCenterSnapshot = {
     ],
     scanned_files: 84,
     skipped_files: 2,
+    inspected_roots: ['project-zenith'],
+    unreached_roots: [],
     status_message: 'Bounded local inspection completed.',
   },
   git_summaries: [

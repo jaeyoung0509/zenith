@@ -143,7 +143,7 @@ impl AiControlRuntime {
             .then(|| self.memory_sampler.sample());
         let awake_state = self.awake_manager.get_state();
         let listeners = if preferences.autopilot.notify_on_session_completion {
-            crate::dev_ports::list_listeners(
+            crate::dev_ports::list_listeners_with_context(
                 &self.dev_port_store,
                 &crate::dev_ports::RealDevPortSystem::default(),
             )

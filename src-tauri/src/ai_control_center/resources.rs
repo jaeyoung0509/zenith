@@ -1,11 +1,12 @@
+use crate::dev_ports::ClassifiedListener;
 use crate::models::*;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn attribute(
     snapshot: &AgentActivitySnapshot,
     roots: &HashMap<String, PathBuf>,
-    listeners: &[DevelopmentListener],
+    listeners: &[ClassifiedListener],
     power: PowerSourceType,
     ac_only: bool,
 ) -> Vec<ResourceAttribution> {
@@ -14,7 +15,7 @@ pub fn attribute(
         let Some(directory) = listener.working_directory.as_deref() else {
             continue;
         };
-        let Ok(directory) = Path::new(directory).canonicalize() else {
+        let Ok(directory) = directory.canonicalize() else {
             continue;
         };
         for (project_id, root) in roots {

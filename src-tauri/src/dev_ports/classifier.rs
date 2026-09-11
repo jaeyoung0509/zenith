@@ -1,6 +1,5 @@
-use crate::platform::PlatformPathsProvider;
 use crate::process_owner::ProcessOwner;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct ProcessClassificationInput<'a> {
     pub pid: u32,
@@ -20,7 +19,9 @@ pub struct ProcessClassificationInput<'a> {
 pub struct ClassificationResult {
     pub server_name: String,
     pub project_name: Option<String>,
-    pub working_directory: Option<String>,
+    /// Raw, normalized working directory. This stays a real path for internal
+    /// correlation; masking happens only when the IPC model is built.
+    pub working_directory: Option<PathBuf>,
     pub can_release: bool,
     pub blocked_reason: Option<String>,
 }
@@ -468,9 +469,7 @@ pub fn matches_tool_component(component: &str, tool: &str) -> bool {
 fn sanitize_project_context(
     cwd: Option<&Path>,
     argv: &[String],
-) -> (Option<String>, Option<String>) {
-    let home = crate::platform::NativePlatformPaths::new().user_home();
-
+) -> (Option<String>, Option<PathBuf>) {
     // Try cwd first
     if let Some(dir) = cwd {
         let norm_dir = crate::platform::NativePlatformPaths::normalize_verbatim_path(dir);
@@ -480,20 +479,7 @@ fn sanitize_project_context(
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .filter(|n| !n.is_empty() && n != ".");
-
-            let working_dir = if let Some(ref home_path) = home {
-                let norm_home =
-                    crate::platform::NativePlatformPaths::normalize_verbatim_path(home_path);
-                if let Ok(rel) = norm_dir.strip_prefix(&norm_home) {
-                    Some(format!("~/{}", rel.to_string_lossy().replace('\\', "/")))
-                } else {
-                    Some(dir_str.to_string())
-                }
-            } else {
-                Some(dir_str.to_string())
-            };
-
-            return (project_name, working_dir);
+            return (project_name, Some(norm_dir));
         }
     }
 
@@ -507,18 +493,7 @@ fn sanitize_project_context(
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .filter(|n| !n.is_empty());
-                let working_dir = if let Some(ref home_path) = home {
-                    let norm_home =
-                        crate::platform::NativePlatformPaths::normalize_verbatim_path(home_path);
-                    if let Ok(rel) = parent.strip_prefix(&norm_home) {
-                        Some(format!("~/{}", rel.to_string_lossy().replace('\\', "/")))
-                    } else {
-                        Some(parent.to_string_lossy().to_string())
-                    }
-                } else {
-                    Some(parent.to_string_lossy().to_string())
-                };
-                return (project_name, working_dir);
+                return (project_name, Some(parent.to_path_buf()));
             }
         }
     }
@@ -615,7 +590,12 @@ mod tests {
         };
         let result = classify_listener(&input);
         assert_eq!(result.project_name.as_deref(), Some("my-app"));
-        assert_eq!(result.working_directory.as_deref(), Some(r"C:\dev\my-app"));
+        // The classifier keeps the real path; masking is applied only when the
+        // IPC model is built.
+        assert_eq!(
+            result.working_directory.as_deref(),
+            Some(Path::new(r"C:\dev\my-app"))
+        );
 
         // Without a cwd, the absolute Windows script path still identifies the
         // project instead of being skipped by a POSIX prefix test.
@@ -1047,7 +1027,7 @@ mod tests {
         assert!(!result.server_name.contains("SUPER_SECRET"));
         assert!(!result.server_name.contains("SECRET_API_KEY"));
         if let Some(wd) = result.working_directory {
-            assert!(!wd.contains("SUPER_SECRET"));
+            assert!(!wd.to_string_lossy().contains("SUPER_SECRET"));
         }
     }
 }

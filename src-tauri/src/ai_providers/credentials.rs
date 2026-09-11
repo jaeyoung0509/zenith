@@ -93,8 +93,15 @@ impl CredentialStore for InMemoryCredentialStore {
 
 /// OS-backed secure credential store with in-memory session caching.
 ///
-/// On macOS, uses Keychain via `/usr/bin/security`.
+/// On macOS, uses the Keychain through the `security_framework` crate's
+/// generic-password API. It never shells out to a credential CLI, because those
+/// accept the secret as a command-line argument that any process running as the
+/// same user can read.
 /// On Windows, uses native Windows Credentials API (CredReadW, CredWriteW, CredDeleteW).
+///
+/// On every other platform the store is deliberately unavailable. A plaintext
+/// file fallback is not an acceptable substitute and must not be added: it would
+/// silently downgrade every other platform below the macOS/Windows guarantee.
 #[derive(Default)]
 pub struct OsCredentialStore {
     session_cache: Mutex<HashMap<ProviderId, SecretString>>,
@@ -273,7 +280,11 @@ impl OsCredentialStore {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn get_os(&self, _provider: ProviderId) -> Result<Option<SecretString>, CredentialError> {
-        Ok(None)
+        // Fail closed instead of returning `Ok(None)`: an empty result would
+        // invite a plaintext file fallback at this call site.
+        Err(CredentialError::StorageUnavailable(
+            "OS secure storage not supported on this platform".into(),
+        ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

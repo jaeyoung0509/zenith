@@ -383,7 +383,7 @@ pub async fn get_ai_control_center(
         // Blocking-safe observations outside the Control Center lock.
         let memory = memory_sampler.sample();
         let awake_state = awake.get_state();
-        let listeners = crate::dev_ports::list_listeners(
+        let listeners = crate::dev_ports::list_listeners_with_context(
             &dev_store,
             &crate::dev_ports::RealDevPortSystem::default(),
         )
@@ -867,30 +867,15 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
     let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
         .await
         .map_err(|error| error.to_string())??;
-    credentials
-        .set(
-            crate::models::ProviderId::OpenRouter,
-            crate::ai_providers::SecretString::new(key),
-        )
-        .map_err(|error| error.to_string())?;
-    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_ai_provider_credential(
-    provider: crate::models::ProviderId,
-    secret: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    if secret.trim().is_empty() {
-        return Err("Credential cannot be empty".to_string());
+    let secret = crate::ai_providers::SecretString::new(key);
+    if let Err(error) = credentials.set(crate::models::ProviderId::OpenRouter, secret) {
+        // OpenRouter's documented key-deletion API requires a management key,
+        // so an OAuth key cannot self-revoke. Say so instead of pretending the
+        // issued key was invalidated.
+        return Err(format!(
+            "Could not persist the OpenRouter credential ({error}). OpenRouter issued a key that could not be stored; revoke it manually in the OpenRouter dashboard."
+        ));
     }
-    let credentials = state.credentials.clone();
-    credentials
-        .set(provider, crate::ai_providers::SecretString::new(secret))
-        .map_err(|error| error.to_string())?;
     crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())
 }
@@ -902,11 +887,23 @@ pub async fn delete_ai_provider_credential(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let credentials = state.credentials.clone();
-    credentials
-        .remove(provider)
-        .map_err(|error| error.to_string())?;
-    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
-    Ok(())
+    let usage_cache = state.ai_usage_cache.clone();
+    let usage_generation = state.usage_generation.clone();
+    run_blocking(
+        move || {
+            // Local disconnect only: the provider key is removed from Zenith.
+            // OpenRouter manages this key with a management credential that
+            // Zenith never holds, so the UI links to the dashboard for manual
+            // deletion rather than claiming a remote revocation.
+            credentials
+                .remove(provider)
+                .map_err(|error| error.to_string())?;
+            crate::ai_snapshots::invalidate_snapshot(&usage_cache, &usage_generation);
+            Ok(())
+        },
+        "Provider disconnect worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]

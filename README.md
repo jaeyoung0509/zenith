@@ -33,7 +33,10 @@ remain outside the cleanup boundary.
 - A local Projects cockpit that groups supported AI CLI processes by canonical
   repository/worktree identity. Process-only evidence is labelled honestly,
   inaccessible contexts stay Unassigned, and PID, argv, prompts, transcripts,
-  credentials, and absolute paths never cross into the WebView.
+  and credentials never cross into the WebView. Identity paths are masked to
+  `~/…` or a basename; features whose purpose is to display a location (Storage,
+  Developer Artifacts, Large Files, and App Uninstaller) are explicit exceptions
+  that may show an absolute path the user selected or already owns.
 - AI usage summaries for Codex, OpenCode, and OpenRouter. Providers without an
   external usage API are clearly marked as manual.
 - AI Control Center: provenance-aware usage tracking, local budget alert thresholds,
@@ -171,8 +174,10 @@ in [`src-tauri/tests/`](src-tauri/tests).
 The two Tauri windows are a persistent menu-bar quick panel and the main
 dashboard. Both use typed IPC commands backed by Rust modules for scanning,
 cleanup, metrics, provider integrations, and power management. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the runtime and data flow, and
-[`docs/SAFETY.md`](docs/SAFETY.md) for the deletion trust boundaries.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the runtime and data flow,
+[`docs/SAFETY.md`](docs/SAFETY.md) for the deletion trust boundaries, and
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for the credential and privacy
+boundaries plus the platform ceilings that cannot be removed.
 Windows contributors can follow [`docs/WINDOWS.md`](docs/WINDOWS.md) for the
 MSVC, Tauri, and NSIS development workflow.
 

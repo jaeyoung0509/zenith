@@ -251,7 +251,7 @@ pub fn enrich_activity_for_project_view(
     dev_store: &Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
     storage_state: &Arc<crate::storage_commands::StorageWorkflowState>,
 ) -> AgentActivityRegistry {
-    let listeners = crate::dev_ports::list_listeners(
+    let listeners = crate::dev_ports::list_listeners_with_context(
         dev_store,
         &crate::dev_ports::RealDevPortSystem::default(),
     )
@@ -261,11 +261,14 @@ pub fn enrich_activity_for_project_view(
         if let Some(root) = registry.project_roots.get(&project.identity.id) {
             project.artifact_size_bytes = artifact_sizes.get(root).copied();
             for listener in &listeners {
-                if let Some(dir) = listener.working_directory.as_deref() {
-                    if let Ok(canon) = std::path::Path::new(dir).canonicalize() {
-                        if canon.starts_with(root) && !project.dev_ports.contains(&listener.port) {
-                            project.dev_ports.push(listener.port);
-                        }
+                let Some(path) = listener.working_directory.as_deref() else {
+                    continue;
+                };
+                if let Ok(canon) = path.canonicalize() {
+                    if canon.starts_with(root)
+                        && !project.dev_ports.contains(&listener.listener.port)
+                    {
+                        project.dev_ports.push(listener.listener.port);
                     }
                 }
             }

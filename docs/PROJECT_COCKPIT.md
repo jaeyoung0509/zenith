@@ -116,8 +116,11 @@ Zenith strictly distinguishes between vendor-confirmed events and ambient OS pro
 - **Opt-In**: Notifications are disabled by default.
 - **Configurable Events**: Repeatedly observed inactivity alerts are active. Turn-complete
   and approval/input alerts remain dormant until a verified vendor event bridge is available.
-- **Privacy Masking**: Full paths, branch names, prompts, transcripts, and credentials are
-  strictly omitted. The "Hide project name" option replaces folder names with "an active project".
+- **Privacy Masking**: Locations are masked before they cross IPC: paths under the user
+  home render as `~/…`, and paths outside it reduce to a basename with an out-of-home
+  marker, never the absolute path. Prompts, transcripts, credentials, raw argv, and
+  provider key nicknames are never included. The "Hide project name" option replaces
+  folder names with "an active project".
 - **Deduplication**: Filtered by `(session_id, event_kind, turn_id)` to prevent spam.
 
 ## Menu Bar Quick Panel Section

@@ -1529,7 +1529,9 @@ fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
             .output()
             .map_err(|error| format!("Could not open the workspace picker: {error}"))?;
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            return Err(crate::diagnostics::sanitize_log(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if path.is_empty() {

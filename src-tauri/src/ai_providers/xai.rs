@@ -2,7 +2,6 @@ use super::registry::ProviderRegistry;
 use super::support::{base_provider, command_exists};
 use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
 use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
-use serde_json::Value;
 
 #[derive(Default)]
 pub struct GrokBuildAdapter;
@@ -80,13 +79,30 @@ impl ProviderAdapter for XaiApiAdapter {
         provider.support = UsageSupport::Live;
         provider.status_message = "xAI API key validated via official xAI API.".into();
         provider.action_url = Some("https://console.x.ai/team/billing".into());
-
-        if let Ok(data) = response.json::<Value>() {
-            if let Some(name) = data.get("name").and_then(Value::as_str) {
-                provider.auth_label = format!("API Key · {name}");
-            }
-        }
-
+        // The provider-assigned key nickname can contain a person, team, or
+        // machine name, so it is deliberately never read or surfaced.
         Ok(provider)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_supplied_key_nicknames_are_never_surfaced() {
+        // The adapter must not copy `name` from the upstream response.
+        let source = include_str!("xai.rs");
+        let body = source
+            .split("impl ProviderAdapter for XaiApiAdapter")
+            .nth(1)
+            .and_then(|rest| rest.split("#[cfg(test)]").next())
+            .expect("adapter is defined");
+        assert!(
+            !body.contains(r#"data.get("name")"#),
+            "xAI key nickname must not be read into auth_label"
+        );
+        let provider = base_provider(ProviderId::XaiApi, "xAI API", "API Key");
+        assert_eq!(provider.auth_label, "API Key");
     }
 }

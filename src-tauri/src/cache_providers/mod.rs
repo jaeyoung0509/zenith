@@ -465,9 +465,9 @@ fn matching_process_is_active(provider: ProviderKind) -> bool {
 }
 
 fn bounded_message(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(&bytes[..bytes.len().min(1024)])
-        .trim()
-        .to_string()
+    crate::diagnostics::sanitize_log(
+        String::from_utf8_lossy(&bytes[..bytes.len().min(1024)]).trim(),
+    )
 }
 
 #[cfg(test)]
