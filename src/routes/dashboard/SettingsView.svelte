@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { usageStore } from '../../lib/stores/usage.svelte';
   import type {
     AgentNotificationPreferences,
     AiProviderId,
     DashboardTab,
     DiagnosticsSnapshot,
+    ProviderId,
     QuickPanelSection,
   } from '../../lib/models/types';
   import { tauriGetDiagnostics, tauriOpenLogsFolder } from '../../lib/utils/tauri';
@@ -51,22 +53,44 @@
     { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
     { id: 'agent_activity', label: 'AI & Agents', description: 'Active AI agent sessions and account token limits.' },
   ];
-  const quickPanelProviderOptions: { id: AiProviderId; label: string }[] = [
+  const FALLBACK_QUICK_PANEL_OPTIONS: { id: ProviderId; label: string }[] = [
     { id: 'codex', label: 'Codex' },
     { id: 'claude', label: 'Claude Code' },
     { id: 'opencode', label: 'OpenCode' },
     { id: 'openrouter', label: 'OpenRouter' },
     { id: 'antigravity', label: 'Antigravity' },
   ];
-  const accountProviderOptions: { id: AiProviderId; label: string; description: string }[] = [
-    { id: 'codex', label: 'Codex', description: 'Live ChatGPT account limits through the official app server.' },
-    { id: 'claude', label: 'Claude Code', description: 'Local availability with quota checked in Claude /usage.' },
-    { id: 'opencode', label: 'OpenCode', description: 'Local sessions and cost from connected providers.' },
-    { id: 'openrouter', label: 'OpenRouter', description: 'Live key usage through Zenith OAuth.' },
-    { id: 'antigravity', label: 'Antigravity', description: 'Live Gemini and Claude/GPT limits from agy.' },
-    { id: 'cursor', label: 'Cursor', description: 'Local availability; quota stays in Cursor settings.' },
-    { id: 'grok', label: 'Grok Build', description: 'Local availability; quota stays in the provider client.' },
+  const FALLBACK_ACCOUNT_PROVIDER_IDS: readonly ProviderId[] = [
+    'codex',
+    'claude',
+    'opencode',
+    'openrouter',
+    'antigravity',
+    'cursor',
+    'grok-build',
+    'xai-api',
+    'openai-api',
+    'anthropic-api',
+    'muse-code',
+    'meta-model-api',
+    'mistral-api',
+    'fireworks-api',
   ];
+
+  let quickPanelProviderOptions = $derived(
+    usageStore.quickPanelProviderOptions.length > 0
+      ? usageStore.quickPanelProviderOptions
+      : FALLBACK_QUICK_PANEL_OPTIONS
+  );
+  let accountProviderOptions = $derived(
+    usageStore.accountProviderOptions.length > 0
+      ? usageStore.accountProviderOptions
+      : FALLBACK_ACCOUNT_PROVIDER_IDS.map((id) => ({
+          id,
+          label: id === 'grok-build' ? 'Grok Build' : id.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' '),
+          description: '',
+        }))
+  );
 
   let settings = $derived(settingsStore.settings);
 
@@ -128,6 +152,7 @@
 
   onMount(() => {
     void loadDiagnostics();
+    void usageStore.loadDescriptors();
   });
 
   async function loadDiagnostics() {

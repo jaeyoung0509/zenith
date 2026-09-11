@@ -1,4 +1,4 @@
-use crate::models::{AiControlPreferences, AwakeRule};
+use crate::models::{AiControlPreferences, AwakeRule, ProviderId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -96,6 +96,25 @@ impl DashboardTab {
     ];
 }
 
+fn default_quick_panel_ai_providers() -> Vec<ProviderId> {
+    crate::ai_providers::ProviderRegistry::default_quick_panel_providers()
+}
+
+fn default_ai_accounts_quota_providers() -> Vec<ProviderId> {
+    crate::ai_providers::ProviderRegistry::default_account_providers()
+}
+
+fn deserialize_tolerant_provider_ids<'de, D>(deserializer: D) -> Result<Vec<ProviderId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<String>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|id| ProviderId::parse_legacy(&id))
+        .collect())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(default)]
 pub struct ZenithSettings {
@@ -110,8 +129,18 @@ pub struct ZenithSettings {
     pub excluded_signatures: Vec<String>,
     pub awake_rules: Vec<AwakeRule>,
     pub quick_panel_sections: Vec<QuickPanelSection>,
-    pub quick_panel_ai_providers: Vec<String>,
-    pub ai_accounts_quota_providers: Vec<String>,
+    #[serde(
+        default = "default_quick_panel_ai_providers",
+        deserialize_with = "deserialize_tolerant_provider_ids"
+    )]
+    #[specta(type = Vec<ProviderId>)]
+    pub quick_panel_ai_providers: Vec<ProviderId>,
+    #[serde(
+        default = "default_ai_accounts_quota_providers",
+        deserialize_with = "deserialize_tolerant_provider_ids"
+    )]
+    #[specta(type = Vec<ProviderId>)]
+    pub ai_accounts_quota_providers: Vec<ProviderId>,
     pub dashboard_tabs: Vec<DashboardTab>,
     #[serde(default = "legacy_dashboard_tabs_revision")]
     pub dashboard_tabs_revision: u8,
@@ -224,20 +253,10 @@ impl Default for ZenithSettings {
                 },
             ],
             quick_panel_sections: QuickPanelSection::DEFAULTS.to_vec(),
-            quick_panel_ai_providers: vec![
-                "codex".to_string(),
-                "claude".to_string(),
-                "opencode".to_string(),
-                "openrouter".to_string(),
-                "antigravity".to_string(),
-            ],
-            ai_accounts_quota_providers: vec![
-                "codex".to_string(),
-                "claude".to_string(),
-                "opencode".to_string(),
-                "openrouter".to_string(),
-                "antigravity".to_string(),
-            ],
+            quick_panel_ai_providers:
+                crate::ai_providers::ProviderRegistry::default_quick_panel_providers(),
+            ai_accounts_quota_providers:
+                crate::ai_providers::ProviderRegistry::default_account_providers(),
             dashboard_tabs: DashboardTab::ALL.to_vec(),
             dashboard_tabs_revision: 5,
             sidebar_collapsed: false,
@@ -402,28 +421,19 @@ impl ZenithSettings {
             }
         }
 
-        const SUPPORTED_PROVIDERS: [&str; 5] =
-            ["codex", "claude", "opencode", "openrouter", "antigravity"];
         let mut providers = HashSet::new();
         self.quick_panel_ai_providers.retain(|provider| {
-            SUPPORTED_PROVIDERS.contains(&provider.as_str()) && providers.insert(provider.clone())
+            crate::ai_providers::ProviderRegistry::supports_quick_panel(*provider)
+                && providers.insert(*provider)
         });
-        const SUPPORTED_ACCOUNT_PROVIDERS: [&str; 7] = [
-            "codex",
-            "claude",
-            "opencode",
-            "openrouter",
-            "antigravity",
-            "cursor",
-            "grok",
-        ];
+
         let mut account_providers = HashSet::new();
         self.ai_accounts_quota_providers.retain(|provider| {
-            SUPPORTED_ACCOUNT_PROVIDERS.contains(&provider.as_str())
-                && account_providers.insert(provider.clone())
+            crate::ai_providers::ProviderRegistry::is_supported(*provider)
+                && account_providers.insert(*provider)
         });
         if self.ai_accounts_quota_providers.is_empty() {
-            self.ai_accounts_quota_providers.push("codex".into());
+            self.ai_accounts_quota_providers.push(ProviderId::Codex);
         }
         self.agent_notifications.inactivity_threshold_minutes = self
             .agent_notifications
@@ -453,7 +463,7 @@ fn legacy_dashboard_tabs_revision() -> u8 {
 mod tests {
     use crate::models::{ApplicationIdentity, AwakeAgentId};
 
-    use super::{DashboardTab, QuickPanelSection, ZenithSettings};
+    use super::{DashboardTab, ProviderId, QuickPanelSection, ZenithSettings};
 
     #[test]
     fn sanitize_keeps_at_least_one_section_and_tab() {
@@ -471,7 +481,10 @@ mod tests {
             vec![QuickPanelSection::Storage]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
-        assert_eq!(sanitized.ai_accounts_quota_providers, vec!["codex"]);
+        assert_eq!(
+            sanitized.ai_accounts_quota_providers,
+            vec![ProviderId::Codex]
+        );
     }
 
     #[test]
@@ -483,12 +496,11 @@ mod tests {
                 QuickPanelSection::Memory,
             ],
             dashboard_tabs: vec![DashboardTab::Usage, DashboardTab::Usage, DashboardTab::Disk],
-            quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
+            quick_panel_ai_providers: vec![ProviderId::Codex, ProviderId::Codex],
             ai_accounts_quota_providers: vec![
-                "cursor".into(),
-                "unknown".into(),
-                "grok".into(),
-                "cursor".into(),
+                ProviderId::Cursor,
+                ProviderId::GrokBuild,
+                ProviderId::Cursor,
             ],
             ..ZenithSettings::default()
         };
@@ -499,11 +511,41 @@ mod tests {
             vec![QuickPanelSection::Memory]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
-        assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
+        assert_eq!(sanitized.quick_panel_ai_providers, vec![ProviderId::Codex]);
         assert_eq!(
             sanitized.ai_accounts_quota_providers,
-            vec!["cursor", "grok"]
+            vec![ProviderId::Cursor, ProviderId::GrokBuild]
         );
+    }
+
+    #[test]
+    fn sanitize_migrates_legacy_grok_to_grok_build() {
+        let raw = r#"{
+            "ai_accounts_quota_providers": ["grok"],
+            "quick_panel_ai_providers": ["grok"]
+        }"#;
+        let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
+        let sanitized = parsed.sanitize();
+        assert_eq!(
+            sanitized.ai_accounts_quota_providers,
+            vec![ProviderId::GrokBuild]
+        );
+        assert!(sanitized.quick_panel_ai_providers.is_empty());
+    }
+
+    #[test]
+    fn settings_deserializes_tolerantly_with_unknown_providers() {
+        let raw = r#"{
+            "ai_accounts_quota_providers": ["codex", "future-ai-superprovider", "claude"],
+            "quick_panel_ai_providers": ["unknown-ai", "cursor"]
+        }"#;
+        let parsed: ZenithSettings =
+            serde_json::from_str(raw).expect("unknown providers should be safely skipped");
+        assert_eq!(
+            parsed.ai_accounts_quota_providers,
+            vec![ProviderId::Codex, ProviderId::Claude]
+        );
+        assert_eq!(parsed.quick_panel_ai_providers, vec![ProviderId::Cursor]);
     }
 
     #[test]
@@ -519,7 +561,13 @@ mod tests {
         assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert_eq!(
             parsed.ai_accounts_quota_providers,
-            vec!["codex", "claude", "opencode", "openrouter", "antigravity"]
+            vec![
+                ProviderId::Codex,
+                ProviderId::Claude,
+                ProviderId::OpenCode,
+                ProviderId::OpenRouter,
+                ProviderId::Antigravity,
+            ]
         );
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");

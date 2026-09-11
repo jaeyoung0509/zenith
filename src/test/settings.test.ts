@@ -203,9 +203,9 @@ describe('SettingsStore persistence and lifecycle', () => {
     await store.toggleAccountsQuotaProvider('cursor');
     expect(store.settings.ai_accounts_quota_providers).toEqual(['cursor']);
 
-    await store.toggleAccountsQuotaProvider('grok');
-    await store.moveAccountsQuotaProvider('grok', -1);
-    expect(store.settings.ai_accounts_quota_providers).toEqual(['grok', 'cursor']);
+    await store.toggleAccountsQuotaProvider('grok-build');
+    await store.moveAccountsQuotaProvider('grok-build', -1);
+    expect(store.settings.ai_accounts_quota_providers).toEqual(['grok-build', 'cursor']);
   });
 
   it('persists the sidebar collapse preference with the rest of the settings', async () => {

@@ -33,6 +33,7 @@ import type {
   MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
+  ProviderDescriptor,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -89,6 +90,10 @@ export function tauriGetAiUsage(
   onProvider?: (provider: AiProviderUsage) => void
 ): Promise<AiUsageSnapshot> {
   return api.getAiUsage(force, onProvider);
+}
+
+export function tauriGetAiProviderDescriptors(): Promise<ProviderDescriptor[]> {
+  return api.getAiProviderDescriptors();
 }
 
 export function tauriGetAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {

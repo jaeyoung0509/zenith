@@ -3,6 +3,9 @@ fn main() {
 
     const COMMANDS: &[&str] = &[
         "get_ai_usage",
+        "get_ai_provider_descriptors",
+        "set_ai_provider_credential",
+        "delete_ai_provider_credential",
         "get_project_context",
         "request_stop_agent_session",
         "get_agent_integrations",

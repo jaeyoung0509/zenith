@@ -5,6 +5,9 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getAiUsage: (onEvent: Channel<AiProviderUsage_Deserialize>, force: boolean | null) => typedError<AiUsageSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_usage", { onEvent, force })),
+	getAiProviderDescriptors: () => __TAURI_INVOKE<ProviderDescriptor_Serialize[]>("get_ai_provider_descriptors"),
+	setAiProviderCredential: (provider: ProviderId_Deserialize, secret: string) => typedError<null, string>(__TAURI_INVOKE("set_ai_provider_credential", { provider, secret })),
+	deleteAiProviderCredential: (provider: ProviderId_Deserialize) => typedError<null, string>(__TAURI_INVOKE("delete_ai_provider_credential", { provider })),
 	getProjectContext: (force: boolean | null) => typedError<AgentActivitySnapshot_Serialize, string>(__TAURI_INVOKE("get_project_context", { force })),
 	requestStopAgentSession: (sessionId: string, leaseId: string) => typedError<null, string>(__TAURI_INVOKE("request_stop_agent_session", { sessionId, leaseId })),
 	getAgentIntegrations: () => typedError<AgentIntegrationInfo[], string>(__TAURI_INVOKE("get_agent_integrations")),
@@ -304,7 +307,7 @@ export type AiControlPreferences_Serialize = {
 export type AiProviderUsage = AiProviderUsage_Serialize | AiProviderUsage_Deserialize;
 
 export type AiProviderUsage_Deserialize = {
-	id: string,
+	id: ProviderId_Deserialize,
 	name: string,
 	installed: boolean,
 	connected: boolean,
@@ -314,10 +317,12 @@ export type AiProviderUsage_Deserialize = {
 	windows: UsageWindow_Deserialize[],
 	summary: UsageSummary_Deserialize,
 	action_url: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type AiProviderUsage_Serialize = {
-	id: string,
+	id: ProviderId_Serialize,
 	name: string,
 	installed: boolean,
 	connected: boolean,
@@ -327,6 +332,8 @@ export type AiProviderUsage_Serialize = {
 	windows: UsageWindow_Serialize[],
 	summary: UsageSummary_Serialize,
 	action_url: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type AiUsageSnapshot = AiUsageSnapshot_Serialize | AiUsageSnapshot_Deserialize;
@@ -645,6 +652,8 @@ export type ControlCenterQuickSummary_Serialize = {
 	safety_findings: number,
 	quality: ObservationQuality,
 };
+
+export type CredentialKind = "none" | "api_key" | "oauth" | "cli";
 
 export type DashboardRoute = DashboardRoute_Serialize | DashboardRoute_Deserialize;
 
@@ -1257,7 +1266,7 @@ export type ObservationQuality = "fresh" | "stale" | "partial" | "unavailable";
 
 export type ObservationScope = "subscription" | "api_key" | "project" | "organization" | "local_sessions";
 
-export type ObservationSourceKind = "live_authoritative" | "live_quota" | "local_estimate" | "manual";
+export type ObservationSourceKind = "live_authoritative" | "live_quota" | "local_estimate" | "credential_validated" | "manual";
 
 export type PlanPreview = PlanPreview_Serialize | PlanPreview_Deserialize;
 
@@ -1410,6 +1419,40 @@ export type ProjectIdentity = {
 	is_detached: boolean,
 };
 
+export type ProviderDescriptor = ProviderDescriptor_Serialize | ProviderDescriptor_Deserialize;
+
+export type ProviderDescriptor_Deserialize = {
+	id: ProviderId_Deserialize,
+	display_name: string,
+	scope: ObservationScope,
+	credential_kind: CredentialKind,
+	source_kind: ObservationSourceKind,
+	supports_quick_panel: boolean,
+	model_vendor: string | null,
+	model_identity: string | null,
+	description: string,
+	default_quota_provider: boolean,
+};
+
+export type ProviderDescriptor_Serialize = {
+	id: ProviderId_Serialize,
+	display_name: string,
+	scope: ObservationScope,
+	credential_kind: CredentialKind,
+	source_kind: ObservationSourceKind,
+	supports_quick_panel: boolean,
+	model_vendor: string | null,
+	model_identity: string | null,
+	description: string,
+	default_quota_provider: boolean,
+};
+
+export type ProviderId = ProviderId_Serialize | ProviderId_Deserialize;
+
+export type ProviderId_Deserialize = "codex" | "claude" | "opencode" | "openrouter" | "antigravity" | "cursor" | "grok-build" | "grok" | "xai-api" | "openai-api" | "anthropic-api" | "muse-code" | "meta-model-api" | "mistral-api" | "fireworks-api";
+
+export type ProviderId_Serialize = "codex" | "claude" | "opencode" | "openrouter" | "antigravity" | "cursor" | "grok-build" | "xai-api" | "openai-api" | "anthropic-api" | "muse-code" | "meta-model-api" | "mistral-api" | "fireworks-api";
+
 export type ProviderMetric = ProviderMetric_Serialize | ProviderMetric_Deserialize;
 
 export type ProviderMetric_Deserialize = {
@@ -1444,6 +1487,8 @@ export type ProviderObservation_Deserialize = {
 	metrics: ProviderMetric_Deserialize[],
 	action_url: string | null,
 	partial_error: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type ProviderObservation_Serialize = {
@@ -1462,6 +1507,8 @@ export type ProviderObservation_Serialize = {
 	metrics: ProviderMetric_Serialize[],
 	action_url: string | null,
 	partial_error: string | null,
+	model_vendor?: string | null,
+	model_identity?: string | null,
 };
 
 export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control" | "agent_activity";
@@ -1818,8 +1865,8 @@ export type ZenithSettings_Deserialize = {
 	excluded_signatures?: string[],
 	awake_rules?: AwakeRule_Deserialize[],
 	quick_panel_sections?: QuickPanelSection[],
-	quick_panel_ai_providers?: string[],
-	ai_accounts_quota_providers?: string[],
+	quick_panel_ai_providers?: ProviderId_Deserialize[],
+	ai_accounts_quota_providers?: ProviderId_Deserialize[],
 	dashboard_tabs?: DashboardTab_Deserialize[],
 	dashboard_tabs_revision?: number,
 	sidebar_collapsed?: boolean,
@@ -1839,8 +1886,8 @@ export type ZenithSettings_Serialize = {
 	excluded_signatures: string[],
 	awake_rules: AwakeRule_Serialize[],
 	quick_panel_sections: QuickPanelSection[],
-	quick_panel_ai_providers: string[],
-	ai_accounts_quota_providers: string[],
+	quick_panel_ai_providers: ProviderId_Serialize[],
+	ai_accounts_quota_providers: ProviderId_Serialize[],
 	dashboard_tabs: DashboardTab_Serialize[],
 	dashboard_tabs_revision: number,
 	sidebar_collapsed: boolean,

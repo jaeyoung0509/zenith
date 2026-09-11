@@ -1,4 +1,4 @@
-import type { AiProviderUsage, UsageWindow } from '../models/types';
+import type { AiProviderUsage, ProviderId, UsageWindow } from '../models/types';
 
 export interface QuickUsageWindowPair {
   fiveHour: UsageWindow;
@@ -54,10 +54,20 @@ const KNOWN_PROVIDER_NAMES: Record<string, string> = {
   claude: 'Claude Code',
   opencode: 'OpenCode',
   openrouter: 'OpenRouter',
+  cursor: 'Cursor',
+  'grok-build': 'Grok Build',
+  grok: 'Grok Build',
+  'xai-api': 'xAI API',
+  'openai-api': 'OpenAI API',
+  'anthropic-api': 'Anthropic API',
+  'muse-code': 'Muse Code',
+  'meta-model-api': 'Meta Model API',
+  'mistral-api': 'Mistral API',
+  'fireworks-api': 'Fireworks API',
 };
 
 export function projectAiProviders(
-  configuredIds: readonly string[],
+  configuredIds: readonly (ProviderId | string)[],
   providers: readonly AiProviderUsage[] | undefined,
   isLoading = false
 ): AiProviderUsage[] {
@@ -66,10 +76,11 @@ export function projectAiProviders(
 
   if (isLoading) {
     return configuredIds.map((id) => {
-      const existing = providers?.find((provider) => provider.id === id);
+      const canonicalId: ProviderId = ((id === 'grok' ? 'grok-build' : id) as ProviderId);
+      const existing = providers?.find((provider) => provider.id === canonicalId || (provider.id as string) === id);
       if (existing) return existing;
       return {
-        id,
+        id: canonicalId,
         name: KNOWN_PROVIDER_NAMES[id] || id,
         installed: true,
         connected: false,

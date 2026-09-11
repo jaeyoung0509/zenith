@@ -37,12 +37,14 @@
       <div class="flex items-start justify-between gap-3">
         <div class="flex items-center gap-2.5 min-w-0">
           <div class="h-8 w-8 shrink-0 rounded-lg bg-secondary flex items-center justify-center text-foreground">
-            {#if provider.id === 'codex'}<Zap size={16} />
-            {:else if provider.id === 'opencode'}<Terminal size={16} />
+            {#if provider.id === 'codex' || provider.id === 'openai-api'}<Zap size={16} />
+            {:else if provider.id === 'opencode' || provider.id === 'muse-code'}<Terminal size={16} />
             {:else}<Bot size={16} />{/if}
           </div>
           <div class="min-w-0">
-            <h3 class="truncate text-sm font-semibold">{provider.name}</h3>
+            <h3 class="truncate text-sm font-semibold">
+              {provider.name}{provider.model_identity ? ` · ${provider.model_identity}` : ''}
+            </h3>
             <p class="truncate text-caption text-muted-foreground">{provider.auth_label}</p>
           </div>
         </div>

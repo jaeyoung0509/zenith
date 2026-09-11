@@ -32,11 +32,18 @@ pub const MAX_PROGRESS_BUFFER: usize = 64;
 /// Stale owner TTL: entries older than this are evicted on admission.
 const INFLIGHT_TTL: Duration = Duration::from_secs(300);
 
+use crate::models::ProviderId;
+
 /// Normalized usage request key. Provider order is significant so each
 /// consumer's response contract and ordering are preserved.
-pub fn usage_request_key(provider_ids: &[String], has_openrouter_key: bool) -> String {
+pub fn usage_request_key(provider_ids: &[ProviderId], has_openrouter_key: bool) -> String {
     let mut key = String::from("usage:");
-    key.push_str(&provider_ids.join(","));
+    for (i, id) in provider_ids.iter().enumerate() {
+        if i > 0 {
+            key.push(',');
+        }
+        key.push_str(id.as_str());
+    }
     key.push_str(if has_openrouter_key {
         "|openrouter-key"
     } else {
@@ -429,8 +436,8 @@ mod tests {
 
     #[tokio::test]
     async fn provider_ordering_is_part_of_the_key() {
-        let a = usage_request_key(&["cursor".to_string(), "grok".to_string()], false);
-        let b = usage_request_key(&["grok".to_string(), "cursor".to_string()], false);
+        let a = usage_request_key(&[ProviderId::Cursor, ProviderId::GrokBuild], false);
+        let b = usage_request_key(&[ProviderId::GrokBuild, ProviderId::Cursor], false);
         assert_ne!(a, b, "order-sensitive key preserves response ordering");
 
         let flight = SingleFlight::<String, String>::new();
@@ -509,7 +516,7 @@ mod tests {
 
     #[test]
     fn usage_key_never_embeds_secrets() {
-        let key = usage_request_key(&["openrouter".to_string()], true);
+        let key = usage_request_key(&[ProviderId::OpenRouter], true);
         assert!(key.contains("openrouter-key"));
         assert!(!key.contains("sk-"));
     }

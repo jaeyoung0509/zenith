@@ -2,8 +2,8 @@
 
 use super::state::AppState;
 use super::support::{lock_or_state_error, run_blocking, unix_timestamp, user_home};
+use crate::ai_providers::connect_openrouter;
 use crate::ai_snapshots::{enrich_activity_for_project_view, fetch_activity_registry};
-use crate::ai_usage::connect_openrouter;
 use crate::models::{
     AgentActivitySnapshot, AgentActivityStatus, AgentIntegrationInfo, AgentIntegrationResult,
     AgentQuickSessionRow, AgentQuickSummary, AiControlCenterSnapshot, AiControlPreferences,
@@ -21,27 +21,20 @@ pub async fn get_ai_usage(
     force: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<AiUsageSnapshot, String> {
-    let (provider_ids, openrouter_key) = {
-        let settings_providers = state
-            .settings
-            .lock()
-            .expect("settings poisoned")
-            .ai_accounts_quota_providers
-            .clone();
-        let key = state
-            .openrouter_key
-            .lock()
-            .expect("openrouter_key poisoned")
-            .clone();
-        (settings_providers, key)
-    };
+    let provider_ids = state
+        .settings
+        .lock()
+        .expect("settings poisoned")
+        .ai_accounts_quota_providers
+        .clone();
     crate::ai_snapshots::fetch_usage_snapshot(
         &state.ai_usage_cache,
         &state.usage_singleflight,
         &state.usage_generation,
         &state.runtime_metrics,
+        state.ai_collection_service.clone(),
+        state.credentials.clone(),
         provider_ids,
-        openrouter_key,
         force.unwrap_or(false),
         move |provider| {
             let _ = on_event.send(provider);
@@ -313,11 +306,6 @@ pub async fn get_ai_control_center(
             u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60,
         )
     };
-    let openrouter_key = state
-        .openrouter_key
-        .lock()
-        .expect("openrouter key poisoned")
-        .clone();
     let config_dir = app_handle
         .path()
         .app_config_dir()
@@ -340,8 +328,9 @@ pub async fn get_ai_control_center(
         &state.usage_singleflight,
         &state.usage_generation,
         &state.runtime_metrics,
+        state.ai_collection_service.clone(),
+        state.credentials.clone(),
         provider_ids.clone(),
-        openrouter_key,
         false,
         |_| {},
     )
@@ -874,11 +863,54 @@ pub async fn get_ai_control_git_diff(
 #[tauri::command]
 #[specta::specta]
 pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), String> {
-    let openrouter_key = state.openrouter_key.clone();
+    let credentials = state.credentials.clone();
     let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
         .await
         .map_err(|error| error.to_string())??;
-    *openrouter_key.lock().expect("openrouter_key poisoned") = Some(key);
+    credentials
+        .set(
+            crate::models::ProviderId::OpenRouter,
+            crate::ai_providers::SecretString::new(key),
+        )
+        .map_err(|error| error.to_string())?;
     crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_ai_provider_credential(
+    provider: crate::models::ProviderId,
+    secret: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if secret.trim().is_empty() {
+        return Err("Credential cannot be empty".to_string());
+    }
+    let credentials = state.credentials.clone();
+    credentials
+        .set(provider, crate::ai_providers::SecretString::new(secret))
+        .map_err(|error| error.to_string())?;
+    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_ai_provider_credential(
+    provider: crate::models::ProviderId,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let credentials = state.credentials.clone();
+    credentials
+        .remove(provider)
+        .map_err(|error| error.to_string())?;
+    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_ai_provider_descriptors() -> Vec<crate::ai_providers::ProviderDescriptor> {
+    crate::ai_providers::ProviderRegistry::all()
 }

@@ -1,7 +1,5 @@
 // Re-export generated types from Tauri Specta bindings
 export type {
-  AiProviderUsage,
-  AiUsageSnapshot,
   AgentActivitySnapshot,
   AgentActivityStatus,
   AgentAdapterHealth,
@@ -100,8 +98,17 @@ export type {
   PlatformKind,
   ProjectContext,
   ProjectIdentity,
+  ProviderId_Deserialize,
+  ProviderId_Serialize,
+  ProviderDescriptor_Deserialize,
+  ProviderDescriptor_Serialize,
+  AiProviderUsage_Deserialize,
+  AiProviderUsage_Serialize,
+  AiUsageSnapshot_Deserialize,
+  AiUsageSnapshot_Serialize,
   ProviderMetric,
   ProviderObservation,
+  CredentialKind,
   QuickPanelSection,
   RecommendationKind,
   ReleaseDevelopmentListenerResult,
@@ -133,14 +140,18 @@ export type {
 import type {
   AiControlPreferences_Serialize,
   AiControlCenterSnapshot_Serialize,
+  AiProviderUsage_Serialize,
+  AiUsageSnapshot_Serialize,
   DashboardRoute_Serialize,
   DashboardTab_Serialize,
+  ProviderDescriptor_Serialize,
+  ProviderId_Serialize,
   Recommendation_Serialize,
   RecommendationPreview_Serialize,
   ZenithSettings_Serialize,
 } from '../bindings/tauri';
 
-// In the frontend runtime, settings and tabs are always fully resolved/serialized shapes
+// In the frontend runtime, settings, snapshots, and provider structures are always fully resolved/serialized shapes
 export type ZenithSettings = ZenithSettings_Serialize;
 export type AiControlPreferences = AiControlPreferences_Serialize;
 export type DashboardTab = DashboardTab_Serialize;
@@ -148,16 +159,13 @@ export type DashboardRoute = DashboardRoute_Serialize;
 export type Recommendation = Recommendation_Serialize;
 export type RecommendationPreview = RecommendationPreview_Serialize;
 export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize;
+export type ProviderId = ProviderId_Serialize;
+export type AiProviderUsage = AiProviderUsage_Serialize;
+export type AiUsageSnapshot = AiUsageSnapshot_Serialize;
+export type ProviderDescriptor = ProviderDescriptor_Serialize;
 
 // Frontend-specific helper types and aliases
-export type AiProviderId =
-  | 'codex'
-  | 'claude'
-  | 'opencode'
-  | 'openrouter'
-  | 'antigravity'
-  | 'cursor'
-  | 'grok';
+export type AiProviderId = ProviderId;
 
 export type CleanStrategy =
   | 'delete_contents'

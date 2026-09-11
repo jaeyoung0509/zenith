@@ -7,6 +7,7 @@ pub enum ObservationSourceKind {
     LiveAuthoritative,
     LiveQuota,
     LocalEstimate,
+    CredentialValidated,
     Manual,
 }
 
@@ -97,6 +98,10 @@ pub struct ProviderObservation {
     pub metrics: Vec<ProviderMetric>,
     pub action_url: Option<String>,
     pub partial_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

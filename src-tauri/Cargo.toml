@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.3.13"
+version = "0.3.14"
 description = "Zenith - cross-platform AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
@@ -42,6 +42,7 @@ tokio = { version = "1", features = ["sync", "time", "rt", "macros", "process", 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2.0", features = ["macos-private-api"] }
+security-framework = "3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -52,6 +53,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_Storage_FileSystem",
     "Win32_Security",
+    "Win32_Security_Credentials",
     "Win32_UI_WindowsAndMessaging",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",
