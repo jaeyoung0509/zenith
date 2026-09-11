@@ -51,6 +51,7 @@
     "allow-save-settings",
     "allow-get-platform-capabilities",
     "allow-get-platform-context",
+    "allow-run-environment-self-check",
     "allow-show-in-file-manager",
     "allow-open-dashboard-window",
     "allow-toggle-quick-panel",

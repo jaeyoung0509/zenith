@@ -320,10 +320,15 @@ pub fn run() {
         settings.clone(),
     ));
     let platform_capabilities: Arc<dyn PlatformCapabilitiesProvider> =
-        Arc::new(NativePlatformCapabilities::new());
+        Arc::new(NativePlatformCapabilities::new(environment.clone()));
+    // The container host is observed once, at the composition root. The
+    // adapter never reads the process environment itself.
+    let container_host =
+        crate::docker::adapter::ContainerHost::from_value(std::env::var("DOCKER_HOST").ok());
 
     let app_state = AppState {
         environment: environment.clone(),
+        container_host,
         registry,
         awake_manager: awake_manager.clone(),
         settings: settings.clone(),
@@ -538,6 +543,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::get_app_version,
             commands::get_platform_capabilities,
             commands::get_platform_context,
+            commands::run_environment_self_check,
             commands::toggle_quick_panel,
             commands::get_diagnostics,
             commands::open_logs_folder,

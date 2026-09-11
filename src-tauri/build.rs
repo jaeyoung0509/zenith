@@ -49,6 +49,7 @@ fn main() {
         "get_app_version",
         "get_platform_capabilities",
         "get_platform_context",
+        "run_environment_self_check",
         "get_diagnostics",
         "open_logs_folder",
         "list_development_listeners",

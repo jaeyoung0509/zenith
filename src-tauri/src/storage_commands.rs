@@ -175,13 +175,14 @@ pub async fn start_large_file_scan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
+    let environment = state.environment.clone();
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_read(|| {
             let mut emitted_result: Option<LargeFileScanResult> = None;
             let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
-            let inventory_result = LargeFileScanner::scan(&request, cancel_for_worker, |event| {
+            let inventory_result = LargeFileScanner::scan(&environment, &request, cancel_for_worker, |event| {
                 if let LargeFileScanEvent::Started { scan_id } = &event {
                     active_scan_id = Some(scan_id.clone());
                     worker_storage_state
@@ -236,8 +237,9 @@ pub async fn pick_developer_workspace(
     state: State<'_, AppState>,
 ) -> Result<Option<DeveloperWorkspace>, String> {
     let storage_state = state.storage_state.clone();
+    let environment = state.environment.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::developer_artifacts::pick_workspace(&storage_state.workspaces)
+        crate::developer_artifacts::pick_workspace(&environment, &storage_state.workspaces)
     })
     .await
     .map_err(|_| "Developer workspace picker worker panicked".to_string())?
@@ -249,8 +251,9 @@ pub async fn register_developer_home_workspace(
     state: State<'_, AppState>,
 ) -> Result<DeveloperWorkspace, String> {
     let storage_state = state.storage_state.clone();
+    let environment = state.environment.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::developer_artifacts::register_home_workspace(&storage_state.workspaces)
+        crate::developer_artifacts::register_home_workspace(&environment, &storage_state.workspaces)
     })
     .await
     .map_err(|_| "Developer home workspace worker panicked".to_string())?
@@ -276,6 +279,7 @@ pub async fn start_developer_artifact_scan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
+    let environment = state.environment.clone();
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_read(|| {
@@ -283,6 +287,7 @@ pub async fn start_developer_artifact_scan(
             let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
             let inventory_result = DeveloperArtifactScanner::scan(
+                &environment,
                 &workspace_ids,
                 &worker_storage_state.workspaces,
                 cancel_for_worker,
@@ -406,7 +411,7 @@ pub fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<
         .get(&item_id)
         .ok_or_else(|| "That item is no longer part of the current scan.".to_string())?;
 
-    if !crate::large_files::is_allowed_large_file_path(&record.path) {
+    if !crate::large_files::is_allowed_large_file_path(&state.environment, &record.path) {
         return Err("That path is no longer inside an approved folder.".to_string());
     }
 
@@ -457,9 +462,10 @@ pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<Instal
 
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
+    let environment = state.environment.clone();
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let inventory = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run_read(ApplicationScanner::scan)
+        operation_gate.run_read(|| ApplicationScanner::scan(&environment))
     })
     .await
     .map_err(|_| "Application inventory worker panicked".to_string())?;
@@ -498,6 +504,7 @@ pub async fn inspect_app_uninstall(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
+    let environment = state.environment.clone();
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let inspection = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_read(|| {
@@ -512,7 +519,7 @@ pub async fn inspect_app_uninstall(
                 .ok_or_else(|| {
                     "Application inventory expired. Refresh applications.".to_string()
                 })?;
-            ApplicationScanner::inspect(&inventory, &app_id)
+            ApplicationScanner::inspect(&environment, &inventory, &app_id)
         })
     })
     .await
@@ -552,7 +559,11 @@ pub fn prepare_app_uninstall(
             is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
         })
         .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
-    let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
+    let plan = TrashPlanner::from_app_inspection(
+        &state.environment,
+        &inspection,
+        &selected_related_ids,
+    )?;
     let preview = plan.preview();
     state.storage_state.store_plan(plan);
     Ok(preview)
@@ -566,6 +577,7 @@ pub async fn execute_trash_plan(
 ) -> Result<TrashResult, String> {
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
+    let environment = state.environment.clone();
     tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_write(|| {
             let plan = storage_state
@@ -577,7 +589,7 @@ pub async fn execute_trash_plan(
             if plan.is_expired() {
                 return Err("Trash plan expired. Review the items again.".to_string());
             }
-            Ok(TrashExecutor::execute(plan))
+            Ok(TrashExecutor::execute(&environment, plan))
         })
     })
     .await

@@ -575,6 +575,7 @@ pub async fn run_ai_safety_scan(
     state: State<'_, AppState>,
 ) -> Result<crate::models::SafetySnapshot, String> {
     let control = state.ai_control_state.clone();
+    let environment = state.environment.clone();
     let (preferences, inactivity_threshold_secs) = {
         let settings = lock_or_state_error(&state.settings, "Settings")?;
         (
@@ -600,6 +601,7 @@ pub async fn run_ai_safety_scan(
     tauri::async_runtime::spawn_blocking(move || {
         let now = unix_timestamp();
         let snapshot = crate::ai_control_center::safety::inspect(
+            &environment,
             &registry.project_roots,
             &preferences.dismissed_findings,
             now,
