@@ -1,0 +1,213 @@
+{
+  "linux": {
+    "ai_integrations": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "app_uninstall": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "cleanup": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "developer_artifacts": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "development_ports": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "docker": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "installed_apps": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "intensive_cleanup": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "keep_awake": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "large_files": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "local_models": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "memory_metrics": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "platform": "linux",
+    "process_termination": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "system_actions": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    }
+  },
+  "macos": {
+    "ai_integrations": {
+      "status": "available"
+    },
+    "app_uninstall": {
+      "status": "available"
+    },
+    "cleanup": {
+      "status": "available"
+    },
+    "developer_artifacts": {
+      "status": "available"
+    },
+    "development_ports": {
+      "status": "available"
+    },
+    "docker": {
+      "status": "available"
+    },
+    "installed_apps": {
+      "status": "available"
+    },
+    "intensive_cleanup": {
+      "status": "available"
+    },
+    "keep_awake": {
+      "status": "available"
+    },
+    "large_files": {
+      "status": "available"
+    },
+    "local_models": {
+      "status": "available"
+    },
+    "memory_metrics": {
+      "status": "available"
+    },
+    "platform": "macos",
+    "process_termination": {
+      "status": "available"
+    },
+    "system_actions": {
+      "status": "available"
+    }
+  },
+  "other": {
+    "ai_integrations": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "app_uninstall": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "cleanup": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "developer_artifacts": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "development_ports": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "docker": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "installed_apps": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "intensive_cleanup": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "keep_awake": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "large_files": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "local_models": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "memory_metrics": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "platform": "other",
+    "process_termination": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "system_actions": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    }
+  },
+  "windows": {
+    "ai_integrations": {
+      "status": "available"
+    },
+    "app_uninstall": {
+      "reason": "Zenith does not implement Windows application uninstallation yet; the registry UninstallString exists but is not executed.",
+      "status": "unavailable"
+    },
+    "cleanup": {
+      "status": "available"
+    },
+    "developer_artifacts": {
+      "status": "available"
+    },
+    "development_ports": {
+      "status": "available"
+    },
+    "docker": {
+      "status": "available"
+    },
+    "installed_apps": {
+      "reason": "Zenith does not implement Windows application inventory yet; registry uninstall keys exist but are not read.",
+      "status": "unavailable"
+    },
+    "intensive_cleanup": {
+      "reason": "Zenith does not implement intensive cleanup on Windows yet; no Windows-specific intensive signatures are defined.",
+      "status": "unavailable"
+    },
+    "keep_awake": {
+      "status": "available"
+    },
+    "large_files": {
+      "status": "available"
+    },
+    "local_models": {
+      "status": "available"
+    },
+    "memory_metrics": {
+      "status": "available"
+    },
+    "platform": "windows",
+    "process_termination": {
+      "status": "available"
+    },
+    "system_actions": {
+      "status": "available"
+    }
+  }
+}

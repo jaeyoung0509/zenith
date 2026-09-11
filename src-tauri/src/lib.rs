@@ -482,4 +482,28 @@ mod tests {
             )
             .expect("Failed to export TypeScript bindings");
     }
+
+    /// Exports the capability snapshots the frontend renders.
+    ///
+    /// The frontend consumes this file instead of a hand-written literal, so
+    /// its idea of what Windows can do cannot drift from the backend's. The
+    /// binding drift gate in CI covers this file at no additional cost.
+    #[test]
+    #[ignore = "code generation"]
+    fn export_platform_capability_golden() {
+        use crate::models::{PlatformCapabilities, PlatformKind};
+        let golden = serde_json::json!({
+            "macos": PlatformCapabilities::macos(),
+            "windows": PlatformCapabilities::windows(),
+            "linux": PlatformCapabilities::unsupported(PlatformKind::Linux),
+            "other": PlatformCapabilities::unsupported(PlatformKind::Other),
+        });
+        let rendered =
+            serde_json::to_string_pretty(&golden).expect("serialize capability golden data") + "\n";
+        std::fs::write(
+            "../src/lib/bindings/platform-capabilities.golden.json",
+            rendered,
+        )
+        .expect("write capability golden data");
+    }
 }
