@@ -447,6 +447,7 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::AppInstallSource;
     use std::io::Write;
 
     #[test]

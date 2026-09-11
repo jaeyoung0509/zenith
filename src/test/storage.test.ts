@@ -394,4 +394,18 @@ describe('detected versus reclaimable storage copy', () => {
 
     expect(rendered.body).toContain('Applications');
   });
+
+  it('shows the Applications tab when installed_apps is read_only', async () => {
+    platformCapabilitiesStore.capabilities = {
+      ...(await mockApi.getPlatformCapabilities()),
+      platform: 'windows',
+      installed_apps: { status: 'read_only', reason: 'Inspection only' },
+    };
+
+    const rendered = render(StorageView, {
+      props: { onSelectCategory: vi.fn() },
+    });
+
+    expect(rendered.body).toContain('Applications');
+  });
 });

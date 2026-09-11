@@ -30,6 +30,18 @@ describe('ApplicationsView responsive layout contract', () => {
     expect(body).toContain('Applications unavailable');
     expect(body).toContain('Windows application inventory is not supported. Use Windows Settings.');
   });
+
+  it('allows inspection when installed_apps is read_only', async () => {
+    platformCapabilitiesStore.capabilities = {
+      ...await mockApi.getPlatformCapabilities(),
+      platform: 'windows',
+      installed_apps: { status: 'read_only', reason: 'Inspection only' },
+      app_uninstall: { status: 'unavailable', reason: 'Use Windows Settings to uninstall applications.' },
+    };
+    const { body } = render(ApplicationsView, { props: { onBack: vi.fn() } });
+    expect(body).not.toContain('Applications unavailable');
+    expect(body).toContain('Uninstallation unavailable');
+  });
   it('bounds the inventory and reserves a desktop detail pane at the 960px baseline', () => {
     const rendered = render(ApplicationsView, {
       props: {

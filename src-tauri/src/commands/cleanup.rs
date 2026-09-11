@@ -31,24 +31,22 @@ pub async fn start_scan(
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
     let operation_gate = state.storage_operation_gate.clone();
-    let (excluded_signatures, mut intensive_cleanup) = {
+    let (excluded_signatures, intensive_cleanup) = {
         let settings = lock_or_state_error(&state.settings, "Settings")?;
         (
             settings.excluded_signatures.clone(),
             settings.intensive_cleanup,
         )
     };
-    if intensive_cleanup
-        && state
+    if intensive_cleanup {
+        state
             .platform_capabilities
             .capabilities()
             .require(
                 crate::models::PlatformFeature::IntensiveCleanup,
                 crate::models::CapabilityAccess::Inspect,
             )
-            .is_err()
-    {
-        intensive_cleanup = false;
+            .map_err(|e| e.to_string())?;
     }
     let _permit = execution_budgets.acquire_storage_read().await?;
 

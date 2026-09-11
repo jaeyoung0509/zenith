@@ -58,12 +58,12 @@
 
   let activeSecondaryTab = $state<'cleanup' | 'developer-artifacts' | 'large-files' | 'applications' | 'disks'>('cleanup');
 
-  let isApplicationsAvailable = $derived(
-    platformCapabilitiesStore.isAvailable('installed_apps')
+  let isApplicationsInspectable = $derived(
+    platformCapabilitiesStore.isInspectable('installed_apps')
   );
 
   $effect(() => {
-    if (initialTab === 'applications' && !isApplicationsAvailable) {
+    if (initialTab === 'applications' && !isApplicationsInspectable) {
       activeSecondaryTab = 'cleanup';
     } else {
       activeSecondaryTab = initialTab;
@@ -82,7 +82,7 @@
     { id: 'disks', label: 'Disks', icon: HardDrive },
   ];
   let storageTabs = $derived(
-    baseStorageTabs.filter((tab) => tab.id !== 'applications' || isApplicationsAvailable)
+    baseStorageTabs.filter((tab) => tab.id !== 'applications' || isApplicationsInspectable)
   );
   let volumes = $derived(memoryStore.volumes);
 
@@ -125,7 +125,7 @@
   }
 
   function handleTabClick(tab: 'cleanup' | 'developer-artifacts' | 'large-files' | 'applications' | 'disks') {
-    if (tab === 'applications' && !isApplicationsAvailable) {
+    if (tab === 'applications' && !isApplicationsInspectable) {
       return;
     }
     if (tab === 'developer-artifacts' && onOpenDeveloperArtifacts) {

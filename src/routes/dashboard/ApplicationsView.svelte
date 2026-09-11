@@ -54,8 +54,8 @@
   let trashResult = $state<TrashResult | null>(null);
   let error = $state<string | null>(null);
 
-  let isInstalledAppsAvailable = $derived(
-    platformCapabilitiesStore.isAvailable('installed_apps')
+  let isInstalledAppsInspectable = $derived(
+    platformCapabilitiesStore.isInspectable('installed_apps')
   );
   let installedAppsReason = $derived(
     platformCapabilitiesStore.feature('installed_apps')?.reason ??
@@ -232,9 +232,11 @@
   }
 
   onMount(() => {
-    if (!platformCapabilitiesStore.capabilities || isInstalledAppsAvailable) {
-      void loadApps();
-    }
+    void platformCapabilitiesStore.load().then(() => {
+      if (platformCapabilitiesStore.isInspectable('installed_apps')) {
+        void loadApps();
+      }
+    });
   });
 
   $effect(() => {
@@ -263,7 +265,7 @@
     </div>
   </div>
 
-  {#if platformCapabilitiesStore.feature('installed_apps') && !isInstalledAppsAvailable}
+  {#if platformCapabilitiesStore.feature('installed_apps') && !isInstalledAppsInspectable}
     <div class="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5 text-xs text-muted-foreground">
       <p class="font-medium text-foreground">Applications unavailable</p>
       <p>{installedAppsReason}</p>
@@ -308,7 +310,7 @@
           <h2 class="text-sm font-semibold">Installed apps</h2>
           <p class="text-caption text-muted-foreground mt-0.5">Configured application folders</p>
         </div>
-        <Button variant="ghost" size="icon" onclick={loadApps} disabled={isLoading || (platformCapabilitiesStore.capabilities !== null && !isInstalledAppsAvailable)} ariaLabel="Refresh applications">
+        <Button variant="ghost" size="icon" onclick={loadApps} disabled={isLoading || !isInstalledAppsInspectable} ariaLabel="Refresh applications">
           <RefreshCw size={14} class={isLoading ? 'animate-gentle-spin' : ''} />
         </Button>
       </div>

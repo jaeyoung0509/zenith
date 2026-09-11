@@ -131,6 +131,36 @@ impl SignatureRegistry {
             .filter_map(|p| SignatureLoader::expand_path(p))
             .collect()
     }
+
+    /// Returns which platform (if any) a path pattern or placeholder is specifically tied to.
+    pub fn is_platform_specific_path(pattern: &str) -> Option<crate::models::PlatformKind> {
+        let p = pattern.trim();
+        if p.starts_with("~/Library")
+            || p.starts_with("/Applications")
+            || p.starts_with("/Library")
+            || p.starts_with("/System")
+            || p.starts_with("/private/")
+        {
+            Some(crate::models::PlatformKind::Macos)
+        } else if p.contains("${LOCAL_APP_DATA}")
+            || p.contains("${ROAMING_APP_DATA}")
+            || p.contains("${PROGRAM_DATA}")
+            || p.contains("${PROGRAM_FILES}")
+            || p.starts_with("C:\\")
+            || p.starts_with("c:\\")
+            || p.starts_with("%USERPROFILE%")
+            || p.starts_with("%APPDATA%")
+            || p.starts_with("%LOCALAPPDATA%")
+            || p.starts_with("%PROGRAMDATA%")
+            || p.starts_with("%PROGRAMFILES%")
+            || p.starts_with("%SYSTEMROOT%")
+            || p.starts_with("%WINDIR%")
+        {
+            Some(crate::models::PlatformKind::Windows)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -247,53 +277,24 @@ mod tests {
     fn every_signature_resolving_to_platform_specific_root_declares_platforms() {
         let registry = SignatureRegistry::load_embedded().unwrap();
         for signature in registry.all() {
-            let has_macos_root = signature.paths.iter().any(|p| {
-                p.starts_with("~/Library")
-                    || p.starts_with("/Applications")
-                    || p.starts_with("/Library")
-                    || p.starts_with("/System")
-            });
-            let has_windows_root = signature.paths.iter().any(|p| {
-                p.contains("${LOCAL_APP_DATA}")
-                    || p.contains("${ROAMING_APP_DATA}")
-                    || p.contains("${PROGRAM_DATA}")
-                    || p.contains("${PROGRAM_FILES}")
-            });
-
-            // If a signature contains a macOS-specific root but no Windows path alternative, it must declare platforms
-            if has_macos_root && !has_windows_root {
-                assert!(
-                    !signature.platforms.is_empty(),
-                    "Signature {} has macOS-specific root but does not declare `platforms`",
-                    signature.id
-                );
-                assert!(
-                    signature
-                        .platforms
-                        .contains(&crate::models::PlatformKind::Macos),
-                    "Signature {} must include Macos in `platforms`",
-                    signature.id
-                );
+            let mut specific_platforms = std::collections::HashSet::new();
+            for path in &signature.paths {
+                if let Some(platform) = SignatureRegistry::is_platform_specific_path(path) {
+                    specific_platforms.insert(platform);
+                }
             }
 
-            // If a signature contains a Windows-specific root but no macOS/Unix path alternative, it must declare platforms
-            let has_unix_path = signature.paths.iter().any(|p| {
-                p.starts_with("~/Library")
-                    || p.starts_with("~/.cache")
-                    || p.starts_with("/tmp")
-                    || p.contains("$TMPDIR")
-            });
-            if has_windows_root && !has_unix_path {
+            // If a signature only resolves to roots for a single platform, it must declare `platforms`
+            if specific_platforms.len() == 1 {
+                let target_platform = specific_platforms.into_iter().next().unwrap();
                 assert!(
                     !signature.platforms.is_empty(),
-                    "Signature {} has Windows-specific root but does not declare `platforms`",
+                    "Signature {} resolves to {target_platform:?}-specific root but does not declare `platforms`",
                     signature.id
                 );
                 assert!(
-                    signature
-                        .platforms
-                        .contains(&crate::models::PlatformKind::Windows),
-                    "Signature {} must include Windows in `platforms`",
+                    signature.platforms.contains(&target_platform),
+                    "Signature {} must include {target_platform:?} in `platforms`",
                     signature.id
                 );
             }
