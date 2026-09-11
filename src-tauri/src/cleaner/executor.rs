@@ -332,6 +332,15 @@ impl CleanExecutor {
             }
         } else if report.reclaimed_bytes > 0 {
             // Partial success: accurately record partial status and reclaimed bytes
+            let error_msg = if report.errors.is_empty() {
+                "Some file(s) could not be removed (e.g. locked or permission denied)".to_string()
+            } else {
+                format!(
+                    "{} file(s) could not be removed: {}",
+                    report.errors.len(),
+                    report.errors.join("; ")
+                )
+            };
             CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -340,14 +349,21 @@ impl CleanExecutor {
                 success: true,
                 bytes_reclaimed: report.reclaimed_bytes,
                 failure_reason: None,
-                error_message: Some(format!(
-                    "{} file(s) could not be removed (e.g. locked or permission denied)",
-                    report.errors.len()
-                )),
+                error_message: Some(error_msg),
             }
         } else {
             let error_str = report.errors.join("; ");
-            let failure_reason = if error_str.contains("Permission denied") {
+            let failure_reason = if error_str.contains("Sharing violation")
+                || error_str.contains("used by another process")
+                || error_str.contains("os error 32")
+                || error_str.contains("is in use")
+            {
+                CleanFailureReason::InUse
+            } else if error_str.contains("Permission denied")
+                || error_str.contains("Access denied")
+                || error_str.contains("Access is denied")
+                || error_str.contains("os error 5")
+            {
                 CleanFailureReason::PermissionDenied
             } else if error_str.contains("changed during cleanup") {
                 CleanFailureReason::ChangedSinceScan
@@ -367,5 +383,28 @@ impl CleanExecutor {
                 error_message: Some(error_str),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn executor_maps_sharing_violation_to_in_use() {
+        let error_str = "Sharing violation (os error 32): file is locked";
+        let is_in_use = error_str.contains("Sharing violation")
+            || error_str.contains("used by another process")
+            || error_str.contains("os error 32")
+            || error_str.contains("is in use");
+        assert!(is_in_use);
+    }
+
+    #[test]
+    fn executor_maps_access_denied_to_permission_denied() {
+        let error_str = "Access denied (os error 5)";
+        let is_perm_denied = error_str.contains("Permission denied")
+            || error_str.contains("Access denied")
+            || error_str.contains("Access is denied")
+            || error_str.contains("os error 5");
+        assert!(is_perm_denied);
     }
 }
