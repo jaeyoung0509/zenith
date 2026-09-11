@@ -303,12 +303,21 @@ mod tests {
     #[test]
     fn intensive_signatures_are_unavailable_on_windows() {
         let registry = SignatureRegistry::load_embedded().unwrap();
-        let intensive_sigs: Vec<_> = registry.all().into_iter().filter(|s| s.intensive_only).collect();
-        assert!(!intensive_sigs.is_empty(), "Expected at least one intensive signature");
+        let intensive_sigs: Vec<_> = registry
+            .all()
+            .into_iter()
+            .filter(|s| s.intensive_only)
+            .collect();
+        assert!(
+            !intensive_sigs.is_empty(),
+            "Expected at least one intensive signature"
+        );
         for sig in intensive_sigs {
             assert!(
                 sig.platforms.contains(&crate::models::PlatformKind::Macos)
-                    && !sig.platforms.contains(&crate::models::PlatformKind::Windows),
+                    && !sig
+                        .platforms
+                        .contains(&crate::models::PlatformKind::Windows),
                 "Intensive signature {} must not target Windows",
                 sig.id
             );

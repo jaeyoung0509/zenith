@@ -120,7 +120,10 @@ impl std::fmt::Display for PlatformCapabilityError {
             }
             Self::Unavailable { feature, reason } => {
                 if let Some(r) = reason {
-                    write!(f, "Feature {feature:?} is unavailable on this platform: {r}")
+                    write!(
+                        f,
+                        "Feature {feature:?} is unavailable on this platform: {r}"
+                    )
                 } else {
                     write!(f, "Feature {feature:?} is unavailable on this platform.")
                 }
@@ -342,7 +345,9 @@ mod tests {
 
     #[test]
     fn require_enforces_platform_feature_and_access() {
-        use super::{CapabilityAccess, PlatformCapabilityError, PlatformFeature, PlatformFeatureCapability};
+        use super::{
+            CapabilityAccess, PlatformCapabilityError, PlatformFeature, PlatformFeatureCapability,
+        };
 
         let windows = PlatformCapabilities::windows();
 
@@ -374,6 +379,9 @@ mod tests {
         let err = readonly_caps
             .require(PlatformFeature::Cleanup, CapabilityAccess::Mutate)
             .unwrap_err();
-        assert_eq!(err, PlatformCapabilityError::ReadOnly(PlatformFeature::Cleanup));
+        assert_eq!(
+            err,
+            PlatformCapabilityError::ReadOnly(PlatformFeature::Cleanup)
+        );
     }
 }

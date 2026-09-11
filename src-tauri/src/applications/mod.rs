@@ -109,7 +109,8 @@ impl ApplicationScanner {
                         .unwrap_or_else(|| "Unknown App".to_string());
 
                     let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
-                    let is_system_protected = is_zenith_identity(&name, metadata.bundle_id.as_deref());
+                    let is_system_protected =
+                        is_zenith_identity(&name, metadata.bundle_id.as_deref());
                     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
                     let is_running = running_paths.iter().any(|exe| exe.starts_with(&canonical));
                     let id = Uuid::new_v4().to_string();
