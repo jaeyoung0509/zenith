@@ -131,6 +131,36 @@ impl SignatureRegistry {
             .filter_map(|p| SignatureLoader::expand_path(p))
             .collect()
     }
+
+    /// Returns which platform (if any) a path pattern or placeholder is specifically tied to.
+    pub fn is_platform_specific_path(pattern: &str) -> Option<crate::models::PlatformKind> {
+        let p = pattern.trim();
+        if p.starts_with("~/Library")
+            || p.starts_with("/Applications")
+            || p.starts_with("/Library")
+            || p.starts_with("/System")
+            || p.starts_with("/private/")
+        {
+            Some(crate::models::PlatformKind::Macos)
+        } else if p.contains("${LOCAL_APP_DATA}")
+            || p.contains("${ROAMING_APP_DATA}")
+            || p.contains("${PROGRAM_DATA}")
+            || p.contains("${PROGRAM_FILES}")
+            || p.starts_with("C:\\")
+            || p.starts_with("c:\\")
+            || p.starts_with("%USERPROFILE%")
+            || p.starts_with("%APPDATA%")
+            || p.starts_with("%LOCALAPPDATA%")
+            || p.starts_with("%PROGRAMDATA%")
+            || p.starts_with("%PROGRAMFILES%")
+            || p.starts_with("%SYSTEMROOT%")
+            || p.starts_with("%WINDIR%")
+        {
+            Some(crate::models::PlatformKind::Windows)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -145,9 +175,19 @@ mod tests {
         let standard = registry.by_category_for_mode(Category::System, false);
         assert!(standard.iter().all(|signature| !signature.intensive_only));
 
-        let intensive = registry.by_category_for_mode(Category::System, true);
-        assert!(intensive.iter().any(|signature| signature.intensive_only));
-        assert!(intensive.len() > standard.len());
+        #[cfg(target_os = "macos")]
+        {
+            let intensive = registry.by_category_for_mode(Category::System, true);
+            assert!(intensive.iter().any(|signature| signature.intensive_only));
+            assert!(intensive.len() > standard.len());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let intensive = registry.by_category_for_mode(Category::System, true);
+            assert_eq!(intensive.len(), standard.len());
+            assert!(intensive.iter().all(|signature| !signature.intensive_only));
+        }
     }
 
     #[test]
@@ -241,5 +281,57 @@ mod tests {
             registry.get("dev.npm.cache").unwrap().strategy,
             crate::models::CleanStrategy::ExternalCommand
         );
+    }
+
+    #[test]
+    fn every_signature_resolving_to_platform_specific_root_declares_platforms() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        for signature in registry.all() {
+            let mut specific_platforms = std::collections::HashSet::new();
+            for path in &signature.paths {
+                if let Some(platform) = SignatureRegistry::is_platform_specific_path(path) {
+                    specific_platforms.insert(platform);
+                }
+            }
+
+            // If a signature only resolves to roots for a single platform, it must declare `platforms`
+            if specific_platforms.len() == 1 {
+                let target_platform = specific_platforms.into_iter().next().unwrap();
+                assert!(
+                    !signature.platforms.is_empty(),
+                    "Signature {} resolves to {target_platform:?}-specific root but does not declare `platforms`",
+                    signature.id
+                );
+                assert!(
+                    signature.platforms.contains(&target_platform),
+                    "Signature {} must include {target_platform:?} in `platforms`",
+                    signature.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn intensive_signatures_are_unavailable_on_windows() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let intensive_sigs: Vec<_> = registry
+            .all()
+            .into_iter()
+            .filter(|s| s.intensive_only)
+            .collect();
+        assert!(
+            !intensive_sigs.is_empty(),
+            "Expected at least one intensive signature"
+        );
+        for sig in intensive_sigs {
+            assert!(
+                sig.platforms.contains(&crate::models::PlatformKind::Macos)
+                    && !sig
+                        .platforms
+                        .contains(&crate::models::PlatformKind::Windows),
+                "Intensive signature {} must not target Windows",
+                sig.id
+            );
+        }
     }
 }

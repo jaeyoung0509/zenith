@@ -1,7 +1,8 @@
 use crate::large_files::FileIdentity;
+#[cfg(not(target_os = "windows"))]
+use crate::models::AppInstallSource;
 use crate::models::{
-    AppInstallSource, AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection,
-    InstalledApp,
+    AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
 };
 use crate::safety::Blacklist;
 #[cfg(not(target_os = "windows"))]
@@ -10,6 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(not(target_os = "windows"))]
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
 
@@ -50,55 +52,53 @@ pub struct ApplicationScanner;
 
 impl ApplicationScanner {
     pub fn scan() -> AppInventory {
-        let mut records = HashMap::new();
-        #[cfg(not(target_os = "windows"))]
-        let home = crate::platform::paths::NativePlatformPaths::new().home();
-
-        #[cfg(not(target_os = "windows"))]
-        let mut roots = vec![PathBuf::from("/Applications")];
-        #[cfg(not(target_os = "windows"))]
-        if let Some(home) = &home {
-            roots.push(home.join("Applications"));
+        #[cfg(target_os = "windows")]
+        {
+            AppInventory {
+                inventory_id: Uuid::new_v4().to_string(),
+                records: HashMap::new(),
+                created_at: unix_timestamp(),
+            }
         }
 
-        #[cfg(target_os = "windows")]
-        let roots = crate::platform::NativePlatformPaths::new().application_roots();
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut records = HashMap::new();
+            let home = crate::platform::paths::NativePlatformPaths::new().home();
 
-        let mut system = System::new_all();
-        system.refresh_processes(ProcessesToUpdate::All, true);
-        let running_paths = system
-            .processes()
-            .values()
-            .filter_map(|process| process.exe().map(Path::to_path_buf))
-            .collect::<Vec<_>>();
-
-        for root in roots {
-            if fs::symlink_metadata(&root)
-                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
-                .unwrap_or(true)
-            {
-                continue;
+            let mut roots = vec![PathBuf::from("/Applications")];
+            if let Some(home) = &home {
+                roots.push(home.join("Applications"));
             }
-            let Ok(entries) = fs::read_dir(root) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                #[cfg(not(target_os = "windows"))]
-                if path.extension().and_then(|value| value.to_str()) != Some("app") {
-                    continue;
-                }
-                #[cfg(target_os = "windows")]
-                if !path.is_dir() {
-                    continue;
-                }
 
-                let Some(identity) = FileIdentity::from_path(&path) else {
+            let mut system = System::new_all();
+            system.refresh_processes(ProcessesToUpdate::All, true);
+            let running_paths = system
+                .processes()
+                .values()
+                .filter_map(|process| process.exe().map(Path::to_path_buf))
+                .collect::<Vec<_>>();
+
+            for root in roots {
+                if fs::symlink_metadata(&root)
+                    .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
+                let Ok(entries) = fs::read_dir(root) else {
                     continue;
                 };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|value| value.to_str()) != Some("app") {
+                        continue;
+                    }
 
-                #[cfg(not(target_os = "windows"))]
-                let (metadata, name) = {
+                    let Some(identity) = FileIdentity::from_path(&path) else {
+                        continue;
+                    };
+
                     let metadata = read_bundle_metadata(&path);
                     let name = metadata
                         .display_name
@@ -109,70 +109,47 @@ impl ApplicationScanner {
                                 .map(str::to_string)
                         })
                         .unwrap_or_else(|| "Unknown App".to_string());
-                    (metadata, name)
-                };
 
-                #[cfg(target_os = "windows")]
-                let (metadata, name) = {
-                    let name = path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("Unknown App")
-                        .to_string();
-                    if name.eq_ignore_ascii_case("WindowsApps")
-                        || name.eq_ignore_ascii_case("Common Files")
-                        || name.eq_ignore_ascii_case("Internet Explorer")
-                    {
-                        continue;
-                    }
-                    (
-                        BundleMetadata {
-                            bundle_id: None,
-                            version: None,
-                            executable: Some(format!("{name}.exe")),
-                        },
+                    let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
+                    let is_system_protected =
+                        is_zenith_identity(&name, metadata.bundle_id.as_deref());
+                    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let is_running = running_paths.iter().any(|exe| exe.starts_with(&canonical));
+                    let id = Uuid::new_v4().to_string();
+                    let app = InstalledApp {
+                        id: id.clone(),
                         name,
-                    )
-                };
-
-                let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
-                let is_system_protected = is_zenith_identity(&name, metadata.bundle_id.as_deref());
-                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                let is_running = running_paths.iter().any(|exe| exe.starts_with(&canonical));
-                let id = Uuid::new_v4().to_string();
-                let app = InstalledApp {
-                    id: id.clone(),
-                    name,
-                    bundle_id: metadata.bundle_id,
-                    version: metadata.version,
-                    display_path: path.to_string_lossy().to_string(),
-                    executable_name: metadata.executable,
-                    logical_size,
-                    allocated_size,
-                    modified_at: fs::metadata(&path)
-                        .ok()
-                        .and_then(|value| value.modified().ok())
-                        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-                        .map(|value| value.as_secs()),
-                    install_source: detect_install_source(&path),
-                    is_running,
-                    is_system_protected,
-                };
-                records.insert(
-                    id,
-                    AppRecord {
-                        app,
-                        path,
-                        identity,
-                    },
-                );
+                        bundle_id: metadata.bundle_id,
+                        version: metadata.version,
+                        display_path: path.to_string_lossy().to_string(),
+                        executable_name: metadata.executable,
+                        logical_size,
+                        allocated_size,
+                        modified_at: fs::metadata(&path)
+                            .ok()
+                            .and_then(|value| value.modified().ok())
+                            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                            .map(|value| value.as_secs()),
+                        install_source: detect_install_source(&path),
+                        is_running,
+                        is_system_protected,
+                    };
+                    records.insert(
+                        id,
+                        AppRecord {
+                            app,
+                            path,
+                            identity,
+                        },
+                    );
+                }
             }
-        }
 
-        AppInventory {
-            inventory_id: Uuid::new_v4().to_string(),
-            records,
-            created_at: unix_timestamp(),
+            AppInventory {
+                inventory_id: Uuid::new_v4().to_string(),
+                records,
+                created_at: unix_timestamp(),
+            }
         }
     }
 
@@ -387,9 +364,9 @@ fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
     (logical_size, allocated_size)
 }
 
+#[cfg(not(target_os = "windows"))]
 #[derive(Default)]
 struct BundleMetadata {
-    #[cfg(not(target_os = "windows"))]
     display_name: Option<String>,
     bundle_id: Option<String>,
     version: Option<String>,
@@ -450,6 +427,7 @@ fn match_candidate(
     None
 }
 
+#[cfg(not(target_os = "windows"))]
 fn detect_install_source(path: &Path) -> AppInstallSource {
     let text = path.to_string_lossy();
     if text.contains("/Caskroom/") {
@@ -469,6 +447,7 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::AppInstallSource;
     use std::io::Write;
 
     #[test]

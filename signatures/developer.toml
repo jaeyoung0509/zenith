@@ -187,6 +187,7 @@ name = "Xcode DerivedData"
 category = "developer"
 risk = "rebuild"
 strategy = "delete_contents"
+platforms = ["macos"]
 paths = [
     "~/Library/Developer/Xcode/DerivedData"
 ]
@@ -201,6 +202,7 @@ name = "Xcode Archives"
 category = "developer"
 risk = "manual"
 strategy = "delete_contents"
+platforms = ["macos"]
 paths = [
     "~/Library/Developer/Xcode/Archives"
 ]
@@ -216,6 +218,7 @@ name = "Xcode System Caches"
 category = "developer"
 risk = "safe"
 strategy = "delete_contents"
+platforms = ["macos"]
 paths = [
     "~/Library/Caches/com.apple.dt.Xcode",
     "~/Library/Developer/CoreSimulator/Caches"

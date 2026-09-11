@@ -8,6 +8,7 @@ const windowsCapabilities: PlatformCapabilities = {
   platform: 'windows',
   system_actions: { status: 'unavailable', reason: 'Not ported' },
   cleanup: { status: 'unavailable', reason: 'Not ported' },
+  intensive_cleanup: { status: 'unavailable', reason: 'Not ported' },
   large_files: { status: 'unavailable', reason: 'Not ported' },
   developer_artifacts: { status: 'unavailable', reason: 'Not ported' },
   installed_apps: { status: 'unavailable', reason: 'Not ported' },
@@ -27,6 +28,7 @@ describe('platform capability contract', () => {
 
     expect(capabilities.platform).toBe('macos');
     expect(capabilities.cleanup.status).toBe('available');
+    expect(capabilities.intensive_cleanup.status).toBe('available');
     expect(capabilities.memory_metrics.status).toBe('available');
     expect(capabilities.process_termination.status).toBe('available');
   });

@@ -278,6 +278,7 @@ export const mockApi = {
       platform: 'macos',
       system_actions: { status: 'available' },
       cleanup: { status: 'available' },
+      intensive_cleanup: { status: 'available' },
       large_files: { status: 'available' },
       developer_artifacts: { status: 'available' },
       installed_apps: { status: 'available' },

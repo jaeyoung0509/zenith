@@ -45,7 +45,7 @@ impl PlatformFeatureCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PlatformKind {
     Macos,
@@ -75,11 +75,71 @@ impl PlatformKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformFeature {
+    SystemActions,
+    Cleanup,
+    IntensiveCleanup,
+    LargeFiles,
+    DeveloperArtifacts,
+    InstalledApps,
+    AppUninstall,
+    MemoryMetrics,
+    ProcessTermination,
+    DevelopmentPorts,
+    KeepAwake,
+    LocalModels,
+    Docker,
+    AiIntegrations,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityAccess {
+    Inspect,
+    Mutate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlatformCapabilityError {
+    ReadOnly(PlatformFeature),
+    Unavailable {
+        feature: PlatformFeature,
+        reason: Option<String>,
+    },
+}
+
+impl std::fmt::Display for PlatformCapabilityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReadOnly(feature) => {
+                write!(
+                    f,
+                    "Feature {feature:?} is read-only on this platform; mutation is not permitted."
+                )
+            }
+            Self::Unavailable { feature, reason } => {
+                if let Some(r) = reason {
+                    write!(
+                        f,
+                        "Feature {feature:?} is unavailable on this platform: {r}"
+                    )
+                } else {
+                    write!(f, "Feature {feature:?} is unavailable on this platform.")
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for PlatformCapabilityError {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct PlatformCapabilities {
     pub platform: PlatformKind,
     pub system_actions: PlatformFeatureCapability,
     pub cleanup: PlatformFeatureCapability,
+    pub intensive_cleanup: PlatformFeatureCapability,
     pub large_files: PlatformFeatureCapability,
     pub developer_artifacts: PlatformFeatureCapability,
     pub installed_apps: PlatformFeatureCapability,
@@ -94,11 +154,49 @@ pub struct PlatformCapabilities {
 }
 
 impl PlatformCapabilities {
+    pub fn feature(&self, feature: PlatformFeature) -> &PlatformFeatureCapability {
+        match feature {
+            PlatformFeature::SystemActions => &self.system_actions,
+            PlatformFeature::Cleanup => &self.cleanup,
+            PlatformFeature::IntensiveCleanup => &self.intensive_cleanup,
+            PlatformFeature::LargeFiles => &self.large_files,
+            PlatformFeature::DeveloperArtifacts => &self.developer_artifacts,
+            PlatformFeature::InstalledApps => &self.installed_apps,
+            PlatformFeature::AppUninstall => &self.app_uninstall,
+            PlatformFeature::MemoryMetrics => &self.memory_metrics,
+            PlatformFeature::ProcessTermination => &self.process_termination,
+            PlatformFeature::DevelopmentPorts => &self.development_ports,
+            PlatformFeature::KeepAwake => &self.keep_awake,
+            PlatformFeature::LocalModels => &self.local_models,
+            PlatformFeature::Docker => &self.docker,
+            PlatformFeature::AiIntegrations => &self.ai_integrations,
+        }
+    }
+
+    pub fn require(
+        &self,
+        feature: PlatformFeature,
+        access: CapabilityAccess,
+    ) -> Result<(), PlatformCapabilityError> {
+        let capability = self.feature(feature);
+        match (capability.status, access) {
+            (PlatformFeatureStatus::Available, _) => Ok(()),
+            (PlatformFeatureStatus::ReadOnly, CapabilityAccess::Inspect) => Ok(()),
+            (PlatformFeatureStatus::ReadOnly, CapabilityAccess::Mutate) => {
+                Err(PlatformCapabilityError::ReadOnly(feature))
+            }
+            (PlatformFeatureStatus::Unavailable, _) => Err(PlatformCapabilityError::Unavailable {
+                feature,
+                reason: capability.reason.clone(),
+            }),
+        }
+    }
     pub fn macos() -> Self {
         Self {
             platform: PlatformKind::Macos,
             system_actions: PlatformFeatureCapability::available(),
             cleanup: PlatformFeatureCapability::available(),
+            intensive_cleanup: PlatformFeatureCapability::available(),
             large_files: PlatformFeatureCapability::available(),
             developer_artifacts: PlatformFeatureCapability::available(),
             installed_apps: PlatformFeatureCapability::available(),
@@ -113,78 +211,20 @@ impl PlatformCapabilities {
         }
     }
 
-    /// Returns the honest baseline before a platform adapter is implemented.
-    ///
-    /// Windows can still build and launch the shell at this stage, but native
-    /// operations are deliberately unavailable until their dedicated issues
-    /// land. Portable memory/disk inspection is read-only and therefore safe
-    /// to expose once the corresponding command is exercised on Windows.
-    pub fn windows_baseline() -> Self {
-        let unavailable = || {
-            PlatformFeatureCapability::unavailable(
-                "Windows adapter is not implemented in this build.",
-            )
-        };
-
-        Self {
-            platform: PlatformKind::Windows,
-            system_actions: unavailable(),
-            cleanup: unavailable(),
-            large_files: unavailable(),
-            developer_artifacts: unavailable(),
-            installed_apps: unavailable(),
-            app_uninstall: unavailable(),
-            memory_metrics: PlatformFeatureCapability::read_only(
-                "Memory metrics are available; process actions are not yet ported.",
-            ),
-            process_termination: unavailable(),
-            development_ports: unavailable(),
-            keep_awake: unavailable(),
-            local_models: unavailable(),
-            docker: PlatformFeatureCapability::read_only(
-                "Docker inspection is not yet ported to Windows.",
-            ),
-            ai_integrations: unavailable(),
-        }
-    }
-
-    /// Returns the active capability snapshot for the Windows platform after Batch 1.
-    pub fn windows_foundation() -> Self {
-        let unavailable = || {
-            PlatformFeatureCapability::unavailable(
-                "Windows domain feature is scheduled for Batch 2.",
-            )
-        };
-
-        Self {
-            platform: PlatformKind::Windows,
-            system_actions: PlatformFeatureCapability::available(),
-            cleanup: unavailable(),
-            large_files: unavailable(),
-            developer_artifacts: unavailable(),
-            installed_apps: unavailable(),
-            app_uninstall: unavailable(),
-            memory_metrics: PlatformFeatureCapability::available(),
-            process_termination: PlatformFeatureCapability::available(),
-            development_ports: unavailable(),
-            keep_awake: PlatformFeatureCapability::available(),
-            local_models: unavailable(),
-            docker: PlatformFeatureCapability::read_only(
-                "Docker inspection is not yet ported to Windows.",
-            ),
-            ai_integrations: unavailable(),
-        }
-    }
-
-    /// Returns the full capability snapshot for the Windows platform after Batch 1 and Batch 2.
+    /// Returns the capability snapshot for the Windows platform.
     pub fn windows() -> Self {
         Self {
             platform: PlatformKind::Windows,
             system_actions: PlatformFeatureCapability::available(),
             cleanup: PlatformFeatureCapability::available(),
+            intensive_cleanup: PlatformFeatureCapability::unavailable(
+                "Intensive cleanup is unavailable on Windows because no Windows-specific intensive signatures are defined.",
+            ),
             large_files: PlatformFeatureCapability::available(),
             developer_artifacts: PlatformFeatureCapability::available(),
-            installed_apps: PlatformFeatureCapability::available(),
+            installed_apps: PlatformFeatureCapability::unavailable(
+                "Windows application inventory is not supported. Use Windows Settings.",
+            ),
             app_uninstall: PlatformFeatureCapability::unavailable(
                 "Windows application uninstallation is not supported. Use Windows Settings or the application's uninstaller.",
             ),
@@ -209,6 +249,7 @@ impl PlatformCapabilities {
             platform: kind,
             system_actions: unavailable(),
             cleanup: unavailable(),
+            intensive_cleanup: unavailable(),
             large_files: unavailable(),
             developer_artifacts: unavailable(),
             installed_apps: unavailable(),
@@ -257,19 +298,26 @@ mod tests {
     use super::{PlatformCapabilities, PlatformFeatureStatus, PlatformKind};
 
     #[test]
-    fn windows_baseline_is_explicitly_limited() {
-        let capabilities = PlatformCapabilities::windows_baseline();
+    fn windows_capabilities_are_honest() {
+        let capabilities = PlatformCapabilities::windows();
 
         assert_eq!(capabilities.platform, PlatformKind::Windows);
         assert_eq!(
             capabilities.cleanup.status,
+            PlatformFeatureStatus::Available
+        );
+        assert_eq!(
+            capabilities.installed_apps.status,
             PlatformFeatureStatus::Unavailable
         );
         assert_eq!(
-            capabilities.memory_metrics.status,
-            PlatformFeatureStatus::ReadOnly
+            capabilities.app_uninstall.status,
+            PlatformFeatureStatus::Unavailable
         );
-        assert!(!capabilities.process_termination.is_available());
+        assert_eq!(
+            capabilities.intensive_cleanup.status,
+            PlatformFeatureStatus::Unavailable
+        );
     }
 
     #[test]
@@ -278,9 +326,13 @@ mod tests {
         assert_eq!(json["system_actions"]["status"], "available");
         assert!(json["system_actions"].get("reason").is_none());
 
-        let windows = serde_json::to_value(PlatformCapabilities::windows_baseline()).unwrap();
-        assert_eq!(windows["cleanup"]["status"], "unavailable");
-        assert!(windows["cleanup"].get("reason").is_some());
+        let windows = serde_json::to_value(PlatformCapabilities::windows()).unwrap();
+        assert_eq!(windows["app_uninstall"]["status"], "unavailable");
+        assert!(windows["app_uninstall"].get("reason").is_some());
+        assert_eq!(windows["installed_apps"]["status"], "unavailable");
+        assert!(windows["installed_apps"].get("reason").is_some());
+        assert_eq!(windows["intensive_cleanup"]["status"], "unavailable");
+        assert!(windows["intensive_cleanup"].get("reason").is_some());
     }
 
     #[test]
@@ -288,6 +340,48 @@ mod tests {
         assert_eq!(
             PlatformCapabilities::default().platform,
             PlatformCapabilities::current().platform
+        );
+    }
+
+    #[test]
+    fn require_enforces_platform_feature_and_access() {
+        use super::{
+            CapabilityAccess, PlatformCapabilityError, PlatformFeature, PlatformFeatureCapability,
+        };
+
+        let windows = PlatformCapabilities::windows();
+
+        // Available feature permits both Inspect and Mutate
+        assert!(windows
+            .require(PlatformFeature::Cleanup, CapabilityAccess::Inspect)
+            .is_ok());
+        assert!(windows
+            .require(PlatformFeature::Cleanup, CapabilityAccess::Mutate)
+            .is_ok());
+
+        // Unavailable feature rejects both Inspect and Mutate
+        assert!(windows
+            .require(PlatformFeature::InstalledApps, CapabilityAccess::Inspect)
+            .is_err());
+        assert!(windows
+            .require(PlatformFeature::InstalledApps, CapabilityAccess::Mutate)
+            .is_err());
+        assert!(windows
+            .require(PlatformFeature::IntensiveCleanup, CapabilityAccess::Inspect)
+            .is_err());
+
+        // ReadOnly capability test
+        let mut readonly_caps = PlatformCapabilities::macos();
+        readonly_caps.cleanup = PlatformFeatureCapability::read_only("Disk is read-only.");
+        assert!(readonly_caps
+            .require(PlatformFeature::Cleanup, CapabilityAccess::Inspect)
+            .is_ok());
+        let err = readonly_caps
+            .require(PlatformFeature::Cleanup, CapabilityAccess::Mutate)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            PlatformCapabilityError::ReadOnly(PlatformFeature::Cleanup)
         );
     }
 }

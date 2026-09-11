@@ -67,11 +67,16 @@ Issue #123 completes the platform adapter boundaries identified during the initi
    - Retained strict fail-closed CWD matching and directory traversal rejection.
    - Verified with Korean usernames and spaces (`D:\Users\홍 길동\.cargo\bin\codex.exe`) as well as lookalike and traversal rejection.
 
-3. **App Uninstaller Boundary:**
+3. **App Uninstaller & Inventory Boundary (#159):**
    - Deleting `Program Files` or trashing Windows directories is prohibited.
-   - `PlatformCapabilities::windows()` explicitly marks `app_uninstall` as `Unavailable` with an explanatory reason, while keeping `installed_apps` available for inventory inspection.
-   - `ApplicationsView.svelte` renders an informational banner explaining that uninstallation is not supported on Windows rather than prompting for a trash review.
-   - Backend `prepare_app_uninstall` and `trash_manager::from_app_inspection` fail closed on Windows.
+   - `PlatformCapabilities::windows()` explicitly marks `installed_apps` and `app_uninstall` as `Unavailable` with an explanatory reason. Zenith does not fabricate or synthesize unverified applications from folder names or assumed `.exe` locations.
+   - Backend commands `get_installed_apps`, `inspect_app_uninstall`, and `prepare_app_uninstall` strictly enforce capability requirements and fail closed on Windows with `PlatformCapabilityError::Unavailable`.
+   - `StorageView.svelte` omits the Applications tab when `installed_apps` is unavailable, and `ApplicationsView.svelte` renders an informational banner explaining that application inventory is not supported on Windows.
+
+4. **Intensive Cleanup Boundary (#159):**
+   - `PlatformCapabilities::windows()` explicitly marks `intensive_cleanup` as `Unavailable` with an explanatory reason (`"Intensive cleanup is unavailable on Windows because no Windows-specific intensive signatures are defined."`).
+   - All intensive signatures (`system.intensive.*`) declare `platforms = ["macos"]` and are excluded from the Windows catalog.
+   - The intensive cleanup switch in Settings is disabled with an "Unavailable" badge on Windows, and backend cleanup scanning rejects intensive requests on Windows.
 
 Microsoft references: [Known Folders](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders),
 [user profiles](https://learn.microsoft.com/en-us/windows/win32/shell/about-user-profiles),

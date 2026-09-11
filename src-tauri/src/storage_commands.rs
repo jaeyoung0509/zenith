@@ -162,6 +162,14 @@ pub async fn start_large_file_scan(
     on_event: Channel<LargeFileScanEvent>,
     state: State<'_, AppState>,
 ) -> Result<LargeFileScanResult, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::LargeFiles,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_worker = cancel.clone();
     let operation_gate = state.storage_operation_gate.clone();
@@ -255,6 +263,14 @@ pub async fn start_developer_artifact_scan(
     on_event: Channel<DeveloperArtifactScanEvent>,
     state: State<'_, AppState>,
 ) -> Result<DeveloperArtifactScanResult, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::DeveloperArtifacts,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_worker = cancel.clone();
     let operation_gate = state.storage_operation_gate.clone();
@@ -322,6 +338,14 @@ pub fn prepare_developer_artifact_cleanup(
     selected_item_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<TrashPlanPreview, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::DeveloperArtifacts,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
     let inventory = state
         .storage_state
         .developer_artifact_inventory
@@ -355,6 +379,14 @@ pub fn prepare_large_file_trash(
     selected_item_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<TrashPlanPreview, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::LargeFiles,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
     let inventory = state
         .storage_state
         .large_file_inventory
@@ -373,6 +405,15 @@ pub fn prepare_large_file_trash(
 #[tauri::command]
 #[specta::specta]
 pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<InstalledApp>, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::InstalledApps,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
+
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let _permit = state.execution_budgets.acquire_storage_read().await?;
@@ -404,6 +445,15 @@ pub async fn inspect_app_uninstall(
     app_id: String,
     state: State<'_, AppState>,
 ) -> Result<AppUninstallInspection, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::AppUninstall,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
+
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
@@ -441,29 +491,30 @@ pub fn prepare_app_uninstall(
     selected_related_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<TrashPlanPreview, String> {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = (inspection_id, selected_related_ids, state);
-        Err("Application uninstallation is not supported on Windows.".to_string())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let inspection = state
-            .storage_state
-            .app_inspection
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
-            .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
-            .filter(|inspection| {
-                is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
-            })
-            .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
-        let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
-        let preview = plan.preview();
-        state.storage_state.store_plan(plan);
-        Ok(preview)
-    }
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::AppUninstall,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let inspection = state
+        .storage_state
+        .app_inspection
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
+        .filter(|inspection| {
+            is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
+        })
+        .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
+    let plan = TrashPlanner::from_app_inspection(&inspection, &selected_related_ids)?;
+    let preview = plan.preview();
+    state.storage_state.store_plan(plan);
+    Ok(preview)
 }
 
 #[tauri::command]

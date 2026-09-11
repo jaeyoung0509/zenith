@@ -45,12 +45,12 @@ mod tests {
 
     #[test]
     fn capability_provider_can_be_injected_with_a_deterministic_mock() {
-        let provider = MockCapabilitiesProvider(PlatformCapabilities::windows_baseline());
+        let provider = MockCapabilitiesProvider(PlatformCapabilities::windows());
         let capabilities = provider.capabilities();
 
         assert_eq!(capabilities.platform, PlatformKind::Windows);
         assert_eq!(
-            capabilities.cleanup.status,
+            capabilities.app_uninstall.status,
             crate::models::PlatformFeatureStatus::Unavailable
         );
     }

@@ -34,6 +34,15 @@ pub async fn terminate_memory_group(
     mode: MemoryTerminationMode,
     state: State<'_, AppState>,
 ) -> Result<MemoryTerminationResult, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::ProcessTermination,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
     let lease_store = state.memory_termination_store.clone();
     run_blocking(
         move || {
@@ -136,6 +145,15 @@ pub async fn prune_docker_target(
     signature_id: String,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::Docker,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
     let _permit = state.execution_budgets.acquire_subprocess().await?;
     let cache_store = state.docker_status_cache.clone();
     let operation_gate = state.storage_operation_gate.clone();
@@ -159,6 +177,15 @@ pub async fn prune_docker_target(
 #[tauri::command]
 #[specta::specta]
 pub async fn get_local_models(state: State<'_, AppState>) -> Result<Vec<LocalModelItem>, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::LocalModels,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
+
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let operation_gate = state.storage_operation_gate.clone();
     run_blocking(
@@ -174,6 +201,15 @@ pub async fn delete_local_model(
     model_id: String,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::LocalModels,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
     let operation_gate = state.storage_operation_gate.clone();
     run_blocking(
         move || {
@@ -419,6 +455,15 @@ pub async fn open_logs_folder() -> Result<(), String> {
 pub async fn list_development_listeners(
     state: State<'_, AppState>,
 ) -> Result<Vec<DevelopmentListener>, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::DevelopmentPorts,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
+
     let store = state.dev_port_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::dev_ports::list_listeners(&store, &crate::dev_ports::RealDevPortSystem::default())
@@ -434,6 +479,15 @@ pub async fn release_development_listener(
     mode: ReleaseMode,
     state: State<'_, AppState>,
 ) -> Result<ReleaseDevelopmentListenerResult, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::DevelopmentPorts,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
     let store = state.dev_port_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::dev_ports::release_listener(

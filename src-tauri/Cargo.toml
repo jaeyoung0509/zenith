@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.3.15"
+version = "0.3.16"
 description = "Zenith - cross-platform AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
@@ -57,7 +57,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",
-    "Win32_System_Registry",
     "Win32_System_Com",
     "Win32_UI_Shell",
 ] }

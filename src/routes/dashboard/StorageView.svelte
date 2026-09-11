@@ -5,6 +5,7 @@
   import type { CategoryResult } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { formatTimeAgo } from '../../lib/utils/format';
   import {
     tauriOpenStorageSettings,
@@ -57,21 +58,32 @@
 
   let activeSecondaryTab = $state<'cleanup' | 'developer-artifacts' | 'large-files' | 'applications' | 'disks'>('cleanup');
 
+  let isApplicationsInspectable = $derived(
+    platformCapabilitiesStore.isInspectable('installed_apps')
+  );
+
   $effect(() => {
-    activeSecondaryTab = initialTab;
+    if (initialTab === 'applications' && !isApplicationsInspectable) {
+      activeSecondaryTab = 'cleanup';
+    } else {
+      activeSecondaryTab = initialTab;
+    }
   });
   let disk = $derived(memoryStore.disk);
   let scan = $derived(scanStore.lastScan);
   let showResultModal = $state(false);
   let review = $state<{ scanId: string; items: import('../../lib/models/types').ScanItem[] } | null>(null);
   const storagePanelId = $props.id();
-  const storageTabs = [
+  const baseStorageTabs = [
     { id: 'cleanup', label: 'Cleanup', icon: Trash2 },
     { id: 'developer-artifacts', label: 'Developer Artifacts', icon: FolderSearch },
     { id: 'large-files', label: 'Large Files', icon: FileSearch },
     { id: 'applications', label: 'Applications', icon: AppWindow },
     { id: 'disks', label: 'Disks', icon: HardDrive },
   ];
+  let storageTabs = $derived(
+    baseStorageTabs.filter((tab) => tab.id !== 'applications' || isApplicationsInspectable)
+  );
   let volumes = $derived(memoryStore.volumes);
 
   let safeSelectedBytes = $derived(scanStore.safeSelectedBytes);
@@ -113,6 +125,9 @@
   }
 
   function handleTabClick(tab: 'cleanup' | 'developer-artifacts' | 'large-files' | 'applications' | 'disks') {
+    if (tab === 'applications' && !isApplicationsInspectable) {
+      return;
+    }
     if (tab === 'developer-artifacts' && onOpenDeveloperArtifacts) {
       onOpenDeveloperArtifacts();
       return;

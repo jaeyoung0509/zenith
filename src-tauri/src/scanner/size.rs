@@ -8,6 +8,53 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+#[cfg(windows)]
+pub fn get_allocated_size(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{GetLastError, NO_ERROR};
+    use windows_sys::Win32::Storage::FileSystem::{GetCompressedFileSizeW, INVALID_FILE_SIZE};
+
+    let path_text = path.to_string_lossy();
+    let wide: Vec<u16> = if path_text.starts_with(r"\\?\") {
+        path.as_os_str().encode_wide().chain([0]).collect()
+    } else if let Some(unc_path) = path_text.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{}", unc_path)
+            .encode_utf16()
+            .chain([0])
+            .collect()
+    } else if path.as_os_str().encode_wide().count() > 240 {
+        format!(r"\\?\{}", path.display())
+            .encode_utf16()
+            .chain([0])
+            .collect()
+    } else {
+        path.as_os_str().encode_wide().chain([0]).collect()
+    };
+
+    let mut high: u32 = 0;
+    let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
+    if low == INVALID_FILE_SIZE {
+        let err = unsafe { GetLastError() };
+        if err != NO_ERROR {
+            return None;
+        }
+    }
+    Some(((high as u64) << 32) | (low as u64))
+}
+
+#[cfg(not(windows))]
+pub fn get_allocated_size(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        fs::symlink_metadata(path).ok().map(|m| m.blocks() * 512)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 pub struct SizeCalculator;
 
 impl SizeCalculator {
@@ -46,7 +93,9 @@ impl SizeCalculator {
             let logical = meta.len();
             #[cfg(unix)]
             let allocated = Some(meta.blocks() * 512);
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            let allocated = get_allocated_size(path);
+            #[cfg(not(any(unix, windows)))]
             let allocated = Some(logical);
 
             return (FileSize::new(logical, allocated), 1);
@@ -134,7 +183,11 @@ impl SizeCalculator {
                         {
                             local_allocated += meta.blocks() * 512;
                         }
-                        #[cfg(not(unix))]
+                        #[cfg(windows)]
+                        {
+                            local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        }
+                        #[cfg(not(any(unix, windows)))]
                         {
                             local_allocated += len;
                         }
@@ -151,7 +204,11 @@ impl SizeCalculator {
                         {
                             local_allocated += meta.blocks() * 512;
                         }
-                        #[cfg(not(unix))]
+                        #[cfg(windows)]
+                        {
+                            local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        }
+                        #[cfg(not(any(unix, windows)))]
                         {
                             local_allocated += len;
                         }
@@ -235,7 +292,11 @@ impl SizeCalculator {
                     {
                         total_allocated += m.blocks() * 512;
                     }
-                    #[cfg(not(unix))]
+                    #[cfg(windows)]
+                    {
+                        total_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                    }
+                    #[cfg(not(any(unix, windows)))]
                     {
                         total_allocated += len;
                     }
@@ -252,7 +313,11 @@ impl SizeCalculator {
                     {
                         total_allocated += meta.blocks() * 512;
                     }
-                    #[cfg(not(unix))]
+                    #[cfg(windows)]
+                    {
+                        total_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                    }
+                    #[cfg(not(any(unix, windows)))]
                     {
                         total_allocated += len;
                     }
