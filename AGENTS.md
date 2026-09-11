@@ -67,6 +67,14 @@ safety conventions below when changing Zenith.
 - Windows native pickers must use static, non-interpolated PowerShell/COM
   scripts, explicitly decode UTF-8 output, and treat user cancellation as an
   empty result rather than an error.
+- Declare a platform capability `available` only when that platform has an
+  implementing adapter and a test on that platform exercises it. A feature
+  without an adapter must report `unavailable` with a reason instead of a
+  successful empty result, and a value that cannot be derived on a platform
+  must never be synthesized from an adjacent one. Do not leave an unreferenced
+  capability snapshot in the tree as a record of intent; either route
+  `current()` through it or delete it. Signatures whose paths resolve under a
+  platform-specific root must declare `platforms`.
 
 ## Svelte conventions
 
@@ -106,6 +114,9 @@ safety conventions below when changing Zenith.
   before publication. Never claim an unsigned build is signed; after SignPath
   approval, follow `CODE_SIGNING_POLICY.md` and verify Authenticode before
   checksum generation or publication.
+- Documentation may not claim platform parity beyond what CI executes. A manual
+  validation matrix must record each run's application version, OS build, and
+  date, or be removed; an unexecuted matrix is a plan, not evidence.
 
 ## Cleanup safety invariants
 
