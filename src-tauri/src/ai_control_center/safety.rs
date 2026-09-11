@@ -722,7 +722,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join(".env"),
-            "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+            format!(
+                "AWS_SECRET_ACCESS_KEY={}\n",
+                concat!("wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY")
+            ),
         )
         .unwrap();
         std::fs::write(
@@ -755,9 +758,11 @@ mod tests {
     fn utf16_encoded_credential_files_are_decoded_and_scanned() {
         let temp = tempfile::tempdir().unwrap();
         let mut bytes = vec![0xFF, 0xFE];
-        for unit in
-            "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n".encode_utf16()
-        {
+        let env_line = format!(
+            "AWS_SECRET_ACCESS_KEY={}\n",
+            concat!("wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY")
+        );
+        for unit in env_line.encode_utf16() {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
         std::fs::write(temp.path().join(".env"), bytes).unwrap();
@@ -784,13 +789,13 @@ mod tests {
     #[test]
     fn every_credential_line_in_a_file_is_reported() {
         let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp.path().join("main.ts"),
-            "const a = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD';\n\
-             const b = 'sk-abcdefghijklmnop1234';\n\
-             const c = 'AIzaSyabcdefghijklmnopqrstuvwxyz0123456';\n",
-        )
-        .unwrap();
+        let content = format!(
+            "const a = '{}';\nconst b = '{}';\nconst c = '{}';\n",
+            concat!("ghp_", "abcdefghijklmnopqrstuvwxyz0123456789ABCD"),
+            concat!("sk-", "abcdefghijklmnop1234"),
+            concat!("AIzaSy", "abcdefghijklmnopqrstuvwxyz0123456"),
+        );
+        std::fs::write(temp.path().join("main.ts"), content).unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
         let result = inspect(&roots, &[], 10);
         assert_eq!(

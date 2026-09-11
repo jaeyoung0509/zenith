@@ -141,6 +141,21 @@ fn write_callback_response(stream: &mut std::net::TcpStream, status: &str, body:
     let _ = stream.write_all(response.as_bytes());
 }
 
+/// Reads one bounded request line with a deadline. The listener is
+/// non-blocking, but an accepted `TcpStream` inherits blocking reads, so a
+/// local process that connects without sending anything must be bounded here.
+fn read_callback_line(
+    stream: &mut std::net::TcpStream,
+    timeout: Duration,
+) -> std::io::Result<String> {
+    stream.set_read_timeout(Some(timeout))?;
+    let mut request_line = String::new();
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut limited = (&mut reader).take(MAX_CALLBACK_BYTES);
+    limited.read_line(&mut request_line)?;
+    Ok(request_line)
+}
+
 pub fn connect_openrouter() -> Result<String, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
     listener
@@ -175,39 +190,36 @@ pub fn connect_openrouter() -> Result<String, String> {
                     );
                     continue;
                 }
-                let mut request_line = String::new();
-                let read_result = match stream.try_clone() {
-                    Ok(clone) => {
-                        let mut reader = BufReader::new(clone);
-                        let mut limited = (&mut reader).take(MAX_CALLBACK_BYTES);
-                        limited.read_line(&mut request_line)
-                    }
-                    Err(error) => Err(error),
-                };
-                if read_result.is_err() {
-                    write_callback_response(
-                        &mut stream,
-                        "400 Bad Request",
-                        "Malformed callback request.",
-                    );
-                    continue;
-                }
-                match parse_callback(&request_line, &state) {
-                    CallbackOutcome::Authorized(code) => {
+                let remaining = OAUTH_TIMEOUT.saturating_sub(started.elapsed());
+                let connection_timeout = remaining.min(Duration::from_secs(5));
+                match read_callback_line(&mut stream, connection_timeout) {
+                    Ok(request_line) => match parse_callback(&request_line, &state) {
+                        CallbackOutcome::Authorized(code) => {
+                            write_callback_response(
+                                &mut stream,
+                                "200 OK",
+                                "OpenRouter connected to Zenith. You can close this tab.",
+                            );
+                            break code;
+                        }
+                        CallbackOutcome::Rejected => {
+                            // An unsolicited or stale request must not abort a
+                            // legitimate flow that is still pending.
+                            write_callback_response(
+                                &mut stream,
+                                "400 Bad Request",
+                                "OpenRouter authorization was not accepted.",
+                            );
+                        }
+                    },
+                    Err(_) => {
+                        // A silent, slow, or malformed connection must not
+                        // block the flow: drop it and keep accepting until the
+                        // overall deadline.
                         write_callback_response(
                             &mut stream,
-                            "200 OK",
-                            "OpenRouter connected to Zenith. You can close this tab.",
-                        );
-                        break code;
-                    }
-                    CallbackOutcome::Rejected => {
-                        // An unsolicited or stale request must not abort a
-                        // legitimate flow that is still pending.
-                        write_callback_response(
-                            &mut stream,
-                            "400 Bad Request",
-                            "OpenRouter authorization was not accepted.",
+                            "408 Request Timeout",
+                            "The callback request timed out.",
                         );
                     }
                 }
@@ -258,26 +270,57 @@ pub fn connect_openrouter() -> Result<String, String> {
 }
 
 fn open_browser(url: &str) -> Result<(), String> {
-    let mut command;
     #[cfg(target_os = "macos")]
     {
-        command = crate::tooling::command("open");
-        command.arg(url);
+        crate::tooling::command("open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Could not open the OAuth page: {error}"))
     }
     #[cfg(target_os = "windows")]
     {
-        command = crate::tooling::command("cmd");
-        command.args(["/C", "start", "", url]);
+        // ShellExecuteW hands the URL to the default browser directly. Going
+        // through `cmd /C start` would re-parse the `&` separators that every
+        // OAuth authorization URL contains.
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target = std::ffi::OsStr::new(url)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result as isize > 32 {
+            Ok(())
+        } else {
+            Err(format!(
+                "Could not open the OAuth page (ShellExecuteW returned {})",
+                result as isize
+            ))
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        command = crate::tooling::command("xdg-open");
-        command.arg(url);
+        crate::tooling::command("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Could not open the OAuth page: {error}"))
     }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open the OAuth page: {error}"))
 }
 
 #[cfg(test)]
@@ -346,5 +389,36 @@ mod tests {
     fn only_loopback_peers_are_accepted() {
         assert!(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST).is_loopback());
         assert!(!std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 10)).is_loopback());
+    }
+
+    #[test]
+    fn a_silent_connection_times_out_and_a_later_callback_is_still_accepted() {
+        use std::io::Write as _;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // A local process connects and sends nothing. The read must return
+        // within the bounded timeout instead of blocking the OAuth flow.
+        let _silent = std::net::TcpStream::connect(addr).unwrap();
+        let (mut accepted, _) = listener.accept().unwrap();
+        let started = std::time::Instant::now();
+        let result = read_callback_line(&mut accepted, Duration::from_millis(100));
+        assert!(result.is_err(), "a silent connection must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the read deadline must bound the wait"
+        );
+
+        // The loop can still accept and parse the real callback afterwards.
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client
+            .write_all(b"GET /callback?code=ok&state=expected HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .unwrap();
+        let (mut accepted, _) = listener.accept().unwrap();
+        let line = read_callback_line(&mut accepted, Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            parse_callback(&line, "expected"),
+            CallbackOutcome::Authorized(code) if code == "ok"
+        ));
     }
 }

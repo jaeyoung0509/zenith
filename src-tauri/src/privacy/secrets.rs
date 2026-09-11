@@ -48,13 +48,13 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         block_pattern!(
             "Private key material",
             r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
-            r"(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+            r"(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?(?:-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|$)",
             "[REDACTED]"
         ),
         block_pattern!(
             "Private key material",
             r"-----BEGIN PGP PRIVATE KEY BLOCK-----",
-            r"(?s)-----BEGIN PGP PRIVATE KEY BLOCK-----.*?-----END PGP PRIVATE KEY BLOCK-----",
+            r"(?s)-----BEGIN PGP PRIVATE KEY BLOCK-----.*?(?:-----END PGP PRIVATE KEY BLOCK-----|$)",
             "[REDACTED]"
         ),
         pattern!(
@@ -149,17 +149,26 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // password containing `!`, `@`, `:`, `%`, or `~` cannot survive.
         pattern!(
             "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*")([^"\r\n]{1,})(")"#,
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*")((?:\\.|[^"\\\r\n]){1,})(")"#,
             "${1}[REDACTED]${3}"
         ),
         pattern!(
             "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*')([^'\r\n]{1,})(')"#,
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*')((?:\\.|[^'\\\r\n]){1,})(')"#,
             "${1}[REDACTED]${3}"
         ),
+        // An opening quote without its closing pair still runs to whitespace.
         pattern!(
             "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["']?)([^\s"',;&?\r\n]{2,})"#,
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["'])([^\s"'\r\n]{2,})"#,
+            "${1}[REDACTED]"
+        ),
+        // The unquoted value runs to the next whitespace or newline. Anything
+        // narrower (`&`, `;`, `?`, `,`) leaves a credential suffix behind; a
+        // sanitizer must over-redact rather than under-redact.
+        pattern!(
+            "Credential assignment",
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*)([^\s"'\r\n]{2,})"#,
             "${1}[REDACTED]"
         ),
     ]
@@ -201,36 +210,70 @@ pub fn match_category(text: &str) -> Option<&'static str> {
 /// Representative credential strings for every provider that stores a secret.
 /// A provider added without a sample fails
 /// `every_registry_credential_format_is_covered`.
-pub fn provider_credential_samples() -> &'static [(crate::models::ProviderId, &'static str)] {
+///
+/// Samples are assembled at runtime so the source tree does not carry
+/// credential-shaped literals that trip secret scanners.
+pub fn provider_credential_samples() -> Vec<(crate::models::ProviderId, String)> {
     use crate::models::ProviderId;
-    &[
+    let jwt =
+        |header: &str, payload: &str, signature: &str| format!("{header}.{payload}.{signature}");
+    vec![
         (
             ProviderId::Codex,
-            "eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+            jwt(
+                "eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9",
+                "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+                "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+            ),
         ),
         (
             ProviderId::OpenRouter,
-            "sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ01",
+            format!(
+                "sk-or-v1-{}",
+                "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ01"
+            ),
         ),
         (
             ProviderId::Antigravity,
-            "eyJhbGciOiJFUzI1NiIsImtpZCI6InRlc3QifQ.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXNlZ21lbnQ",
+            jwt(
+                "eyJhbGciOiJFUzI1NiIsImtpZCI6InRlc3QifQ",
+                "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+                "c2lnbmF0dXJlLXNlZ21lbnQ",
+            ),
         ),
-        (ProviderId::XaiApi, "xai-abcdefghijklmnopqrstuvwx0123456789ABCD"),
+        (
+            ProviderId::XaiApi,
+            format!("xai-{}", "abcdefghijklmnopqrstuvwx0123456789ABCD"),
+        ),
         (
             ProviderId::OpenAiApi,
-            "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH",
+            format!("sk-proj-{}", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"),
         ),
         (
             ProviderId::AnthropicApi,
-            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH",
+            format!(
+                "sk-ant-api03-{}",
+                "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
+            ),
         ),
-        (ProviderId::MetaModelApi, "META_API_KEY=abcdefghijklmnopqrstuvwxyz0123456789ABCD"),
+        (
+            ProviderId::MetaModelApi,
+            format!(
+                "META_API_KEY={}",
+                "abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+            ),
+        ),
         (
             ProviderId::MistralApi,
-            "MISTRAL_API_KEY=abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+            format!(
+                "MISTRAL_API_KEY={}",
+                "abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+            ),
         ),
-        (ProviderId::FireworksApi, "fw_abcdefghijklmnopqrstuvwx0123"),
+        (
+            ProviderId::FireworksApi,
+            format!("fw_{}", "abcdefghijklmnopqrstuvwx0123"),
+        ),
     ]
 }
 
@@ -243,8 +286,16 @@ mod tests {
     fn redacts_arbitrary_password_punctuation_without_leaving_a_suffix() {
         let cases = [
             ("password=p@ssw0rd!very-secret", "password=[REDACTED]"),
+            ("password=abc&SUPERSECRET", "password=[REDACTED]"),
+            ("password=abc;SUPERSECRET", "password=[REDACTED]"),
+            ("password=abc?SUPERSECRET", "password=[REDACTED]"),
+            ("password=abc,SUPERSECRET", "password=[REDACTED]"),
             (
                 r#"client_secret="abc:def!ghi@example""#,
+                r#"client_secret="[REDACTED]""#,
+            ),
+            (
+                r#"client_secret="abc\"defVERYSECRET""#,
                 r#"client_secret="[REDACTED]""#,
             ),
             ("token='abc%123#xyz'", "token='[REDACTED]'"),
@@ -258,16 +309,26 @@ mod tests {
         }
         for input in [
             "password=p@ssw0rd!very-secret",
+            "password=abc&SUPERSECRET",
+            "password=abc;SUPERSECRET",
+            "password=abc?SUPERSECRET",
+            "password=abc,SUPERSECRET",
             r#"client_secret="abc:def!ghi@example""#,
-            "token='abc%123#xyz'",
+            r#"client_secret="abc\"defVERYSECRET""#,
         ] {
             let output = sanitized(input);
-            assert!(!output.contains("p@ssw0rd"), "password survived: {output}");
-            assert!(
-                !output.contains("abc:def!ghi@example") && !output.contains("abc%123#xyz"),
-                "token value survived: {output}"
-            );
-            assert!(!output.contains("very-secret"), "suffix survived: {output}");
+            for fragment in [
+                "p@ssw0rd",
+                "very-secret",
+                "SUPERSECRET",
+                "abc:def!ghi@example",
+                "defVERYSECRET",
+            ] {
+                assert!(
+                    !output.contains(fragment),
+                    "credential fragment `{fragment}` survived: {output}"
+                );
+            }
         }
     }
 
@@ -284,15 +345,37 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_private_key_is_redacted_to_end_of_input() {
+        // stderr is often truncated before sanitization, so an END marker may
+        // never arrive; the body must still not survive.
+        let truncated = "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRET_SECRET_SECRET\nmore-lines-that-must-not-survive";
+        let redacted = sanitized(truncated);
+        assert_eq!(redacted, "[REDACTED]");
+        assert!(!redacted.contains("SECRET_SECRET_SECRET"));
+
+        let with_trailing = "before\n-----BEGIN RSA PRIVATE KEY-----\nBODY_SECRET\nafter-key-line";
+        let redacted = sanitized(with_trailing);
+        assert!(redacted.starts_with("before\n[REDACTED]"));
+        assert!(!redacted.contains("BODY_SECRET"));
+        assert!(!redacted.contains("after-key-line"));
+    }
+
+    #[test]
     fn redacts_full_values_containing_slash_plus_and_equals() {
         let refresh = "refresh_token=1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
         assert_eq!(sanitized(refresh), "refresh_token=[REDACTED]");
 
-        let base64 = "client_secret=YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY=";
-        assert_eq!(sanitized(base64), "client_secret=[REDACTED]");
+        let base64 = format!(
+            "client_secret={}",
+            "YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY="
+        );
+        assert_eq!(sanitized(&base64), "client_secret=[REDACTED]");
 
-        let aws = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-        assert_eq!(sanitized(aws), "AWS_SECRET_ACCESS_KEY=[REDACTED]");
+        let aws = format!(
+            "AWS_SECRET_ACCESS_KEY={}",
+            concat!("wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY")
+        );
+        assert_eq!(sanitized(&aws), "AWS_SECRET_ACCESS_KEY=[REDACTED]");
     }
 
     #[test]
@@ -302,7 +385,7 @@ mod tests {
             "Authorization: Basic [REDACTED]"
         );
         assert_eq!(
-            sanitized("authorization=bearer abcdefghijklmnop"),
+            sanitized(&format!("authorization=bearer {}", "abcdefghijklmnop")),
             "authorization=bearer [REDACTED]"
         );
     }
@@ -310,10 +393,15 @@ mod tests {
     #[test]
     fn recognizes_modern_github_google_jwt_and_url_credentials() {
         let stripe_sample = format!("sk_live_{}", "abcdefghijklmnopqrstuvwx");
+        let google_sample = format!("AIzaSy{}", "abcdefghijklmnopqrstuvwxyz0123456");
+        let jwt_sample = format!(
+            "{}.{}.{}",
+            "eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "abcdefghijklmnop"
+        );
         let cases = [
             "github_pat_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
-            "AIzaSyabcdefghijklmnopqrstuvwxyz0123456",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+            google_sample.as_str(),
+            jwt_sample.as_str(),
             "https://user:password-value@example.com/path",
             stripe_sample.as_str(),
             "xai-abcdefghijklmnopqrstuvwx0123456789ABCD",
@@ -333,10 +421,11 @@ mod tests {
             ) {
                 continue;
             }
-            let sample = provider_credential_samples()
+            let samples = provider_credential_samples();
+            let sample = samples
                 .iter()
                 .find(|(provider, _)| *provider == descriptor.id)
-                .map(|(_, sample)| *sample)
+                .map(|(_, sample)| sample.as_str())
                 .unwrap_or_else(|| {
                     panic!(
                         "credential-bearing provider {} has no pattern sample",
@@ -354,7 +443,7 @@ mod tests {
     #[test]
     fn every_sample_is_redacted_and_never_partially_survives() {
         for (_, sample) in provider_credential_samples() {
-            let redacted = sanitized(sample);
+            let redacted = sanitized(&sample);
             assert!(
                 redacted.contains("[REDACTED]"),
                 "sample was not redacted: {sample}"

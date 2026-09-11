@@ -61,8 +61,9 @@ local inspection surface. Cleanup trust boundaries live in
   name. This is a property of the Windows Credentials API, not of Zenith.
 - **Linux and other platforms have no credential store.** The credential
   store fails closed there: reads and writes return `StorageUnavailable`, and a
-  plaintext file fallback is explicitly not acceptable. The OpenRouter flow
-  retrieves a key and then revokes it if persistence fails.
+  plaintext file fallback is explicitly not acceptable. If the OpenRouter flow
+  receives a key and cannot persist it, it fails with instructions to revoke the
+  key manually in the OpenRouter dashboard; it cannot self-revoke an OAuth key.
 - **Same-user process inspection is cooperative.** Agent activity and memory
   features rely on OS process metadata. They do not provide an isolation
   boundary against code already running as the same user.

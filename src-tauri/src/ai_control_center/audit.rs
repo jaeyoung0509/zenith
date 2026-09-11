@@ -70,6 +70,7 @@ impl AuditStore {
         self.entries.iter().rev().take(100).cloned().collect()
     }
     pub fn save(&self, config: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(config).map_err(|error| error.to_string())?;
         let path = config.join(FILE_NAME);
         let bytes = serde_json::to_vec(&self.entries).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
@@ -133,6 +134,17 @@ mod tests {
             .contains("abcdefghijklmnop1234"));
         store.save(temp.path()).unwrap();
         assert_eq!(AuditStore::load(temp.path()).entries.len(), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn audit_save_creates_a_missing_config_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("not-created/yet");
+        assert!(!config.exists());
+        let mut store = AuditStore::default();
+        store.append(1, "scan", "ok", None, "clean", 30);
+        store.save(&config).unwrap();
+        assert!(config.join(FILE_NAME).exists());
     }
 
     #[cfg(unix)]

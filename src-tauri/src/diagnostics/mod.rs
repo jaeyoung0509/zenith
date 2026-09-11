@@ -235,7 +235,9 @@ mod tests {
             ),
             (
                 "https://foo.com?token=secret123&other=val".to_string(),
-                "https://foo.com?token=[REDACTED]&other=val".to_string(),
+                // The generic assignment rule deliberately over-redacts from
+                // the credential to the next whitespace.
+                "https://foo.com?token=[REDACTED]".to_string(),
             ),
             (
                 format!("api_key:{dummy_sk_basic}"),
@@ -270,6 +272,11 @@ mod tests {
 
     #[test]
     fn secret_sanitizer_redacts_full_credential_values() {
+        let aws = format!(
+            "AWS_SECRET_ACCESS_KEY={}",
+            concat!("wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY")
+        );
+        let google = format!("AIzaSy{}", "abcdefghijklmnopqrstuvwxyz0123456");
         let cases = vec![
             (
                 "refresh_token=1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
@@ -279,10 +286,7 @@ mod tests {
                 "client_secret=YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY=",
                 "client_secret=[REDACTED]",
             ),
-            (
-                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-                "AWS_SECRET_ACCESS_KEY=[REDACTED]",
-            ),
+            (aws.as_str(), "AWS_SECRET_ACCESS_KEY=[REDACTED]"),
             (
                 "Authorization: Basic dXNlcjpwYXNz",
                 "Authorization: Basic [REDACTED]",
@@ -291,7 +295,7 @@ mod tests {
                 "github_pat_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
                 "[REDACTED]",
             ),
-            ("AIzaSyabcdefghijklmnopqrstuvwxyz0123456", "[REDACTED]"),
+            (google.as_str(), "[REDACTED]"),
             (
                 "https://user:password-value@example.com/path",
                 "https://user:[REDACTED]@example.com/path",
