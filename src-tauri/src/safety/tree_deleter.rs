@@ -133,7 +133,6 @@ fn push_windows_io_error(report: &mut TreeDeleteReport, path: &Path, error: &io:
 #[cfg(windows)]
 impl WindowsDeleteHandle {
     fn open(path: &Path) -> io::Result<Self> {
-        use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::Storage::FileSystem::{
             CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, DELETE,
@@ -642,7 +641,7 @@ impl SafeTreeDeleter {
                         report.deleted_files += 1;
                     }
                     Err(e) => {
-                        push_windows_io_error(&mut report, path, &e);
+                        push_windows_io_error(report, path, &e);
                     }
                 }
                 return;

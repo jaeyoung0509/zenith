@@ -423,7 +423,7 @@ fn validate_executable(path: &Path) -> Result<(), String> {
         let norm_root = crate::platform::NativePlatformPaths::normalize_verbatim_path(root);
         #[cfg(windows)]
         {
-            crate::platform::paths::windows_path_starts_with(&canonical, &norm_root)
+            crate::platform::NativePlatformPaths::windows_path_starts_with(&canonical, &norm_root)
         }
         #[cfg(not(windows))]
         {

@@ -372,9 +372,9 @@ fn probe_architectures() -> (Option<String>, String, bool) {
 fn probe_elevation() -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{
-        GetTokenInformation, OpenProcessToken, TokenElevation, TOKEN_ELEVATION,
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token: HANDLE = std::ptr::null_mut();
     let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };

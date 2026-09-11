@@ -2,9 +2,7 @@ use crate::models::ZenithError;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
-use std::ffi::OsString;
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 
 pub struct Blacklist;
 
