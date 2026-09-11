@@ -264,7 +264,9 @@ pub fn enrich_activity_for_project_view(
                 if let Some(dir) = listener.working_directory.as_deref() {
                     if let Some(path) = crate::privacy::paths::expand_display_path(dir) {
                         if let Ok(canon) = path.canonicalize() {
-                            if canon.starts_with(root) && !project.dev_ports.contains(&listener.port) {
+                            if canon.starts_with(root)
+                                && !project.dev_ports.contains(&listener.port)
+                            {
                                 project.dev_ports.push(listener.port);
                             }
                         }

@@ -44,10 +44,7 @@ pub fn display_path_with_home(path: &Path, home: Option<&Path>) -> String {
             }
         }
     }
-    match trimmed_path
-        .rsplit('/')
-        .find(|segment| !segment.is_empty())
-    {
+    match trimmed_path.rsplit('/').find(|segment| !segment.is_empty()) {
         Some(name) => format!(".../{name}"),
         None => "<path>".to_string(),
     }

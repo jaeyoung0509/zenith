@@ -279,10 +279,7 @@ mod tests {
                 "github_pat_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
                 "[REDACTED]",
             ),
-            (
-                "AIzaSyabcdefghijklmnopqrstuvwxyz0123456",
-                "[REDACTED]",
-            ),
+            ("AIzaSyabcdefghijklmnopqrstuvwxyz0123456", "[REDACTED]"),
             (
                 "https://user:password-value@example.com/path",
                 "https://user:[REDACTED]@example.com/path",
@@ -301,7 +298,9 @@ mod tests {
         let message = format!("failed to read {}/.claude/settings.json", home.display());
         let sanitized = sanitize_log(&message);
         assert!(!sanitized.contains(&home.to_string_lossy().to_string()));
-        assert!(sanitized.contains("~/.claude/settings.json") || sanitized.contains("settings.json"));
+        assert!(
+            sanitized.contains("~/.claude/settings.json") || sanitized.contains("settings.json")
+        );
     }
 
     #[cfg(unix)]

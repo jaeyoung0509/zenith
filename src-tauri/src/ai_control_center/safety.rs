@@ -690,7 +690,11 @@ mod tests {
             "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
         )
         .unwrap();
-        std::fs::write(temp.path().join(".env.production"), "API_KEY=abcdef123456\n").unwrap();
+        std::fs::write(
+            temp.path().join(".env.production"),
+            "API_KEY=abcdef123456\n",
+        )
+        .unwrap();
         std::fs::write(
             temp.path().join(".npmrc"),
             "//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwx\n",
@@ -736,11 +740,7 @@ mod tests {
         std::fs::create_dir_all(&heavy).unwrap();
         std::fs::create_dir_all(&secret_root).unwrap();
         for index in 0..2_050 {
-            std::fs::write(
-                heavy.join(format!("img_{index}.png")),
-                b"fake image data",
-            )
-            .unwrap();
+            std::fs::write(heavy.join(format!("img_{index}.png")), b"fake image data").unwrap();
         }
         std::fs::write(
             secret_root.join("main.ts"),

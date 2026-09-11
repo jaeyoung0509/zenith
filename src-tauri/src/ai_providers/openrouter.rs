@@ -262,7 +262,9 @@ pub fn revoke_openrouter(key: &str) -> Result<(), String> {
     if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
         Ok(())
     } else {
-        Err(format!("OpenRouter revocation returned HTTP status {status}"))
+        Err(format!(
+            "OpenRouter revocation returned HTTP status {status}"
+        ))
     }
 }
 

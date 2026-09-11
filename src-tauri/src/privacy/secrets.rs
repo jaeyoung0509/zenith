@@ -39,13 +39,21 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
             "[REDACTED]"
         ),
-        pattern!("GitHub token", r"\bgh[pousr]_[A-Za-z0-9]{20,}\b", "[REDACTED]"),
+        pattern!(
+            "GitHub token",
+            r"\bgh[pousr]_[A-Za-z0-9]{20,}\b",
+            "[REDACTED]"
+        ),
         pattern!(
             "GitLab token",
             r"\bglpat-[A-Za-z0-9_\-]{20,}\b",
             "[REDACTED]"
         ),
-        pattern!("Slack token", r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "[REDACTED]"),
+        pattern!(
+            "Slack token",
+            r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
+            "[REDACTED]"
+        ),
         pattern!(
             "Stripe key",
             r"\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b",
@@ -57,8 +65,16 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             "[REDACTED]"
         ),
         pattern!("xAI API key", r"\bxai-[A-Za-z0-9_\-]{16,}\b", "[REDACTED]"),
-        pattern!("Fireworks API key", r"\bfw_[A-Za-z0-9]{16,}\b", "[REDACTED]"),
-        pattern!("Hugging Face token", r"\bhf_[A-Za-z0-9]{20,}\b", "[REDACTED]"),
+        pattern!(
+            "Fireworks API key",
+            r"\bfw_[A-Za-z0-9]{16,}\b",
+            "[REDACTED]"
+        ),
+        pattern!(
+            "Hugging Face token",
+            r"\bhf_[A-Za-z0-9]{20,}\b",
+            "[REDACTED]"
+        ),
         pattern!("npm token", r"\bnpm_[A-Za-z0-9]{20,}\b", "[REDACTED]"),
         pattern!(
             "SendGrid API key",
@@ -132,7 +148,9 @@ pub fn redact(text: &str) -> String {
 /// Whether the text contains any credential shape. Used by the scanner, which
 /// intentionally never extracts or returns the matched value.
 pub fn contains_secret(text: &str) -> bool {
-    patterns().iter().any(|pattern| pattern.regex.is_match(text))
+    patterns()
+        .iter()
+        .any(|pattern| pattern.regex.is_match(text))
 }
 
 /// Returns the category of the first matching credential shape without

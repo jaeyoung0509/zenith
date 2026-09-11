@@ -10,7 +10,10 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
         return None;
     }
 
-    let git_root = find_git_root(&canonical_cwd, crate::privacy::paths::user_home().as_deref());
+    let git_root = find_git_root(
+        &canonical_cwd,
+        crate::privacy::paths::user_home().as_deref(),
+    );
 
     let root = git_root.unwrap_or_else(|| canonical_cwd.clone());
     let marker = root.join(".git");
@@ -238,10 +241,7 @@ mod tests {
         assert_eq!(find_git_root(&project, Some(&home)), None);
 
         std::fs::create_dir_all(project.join(".git")).unwrap();
-        assert_eq!(
-            find_git_root(&project, Some(&home)),
-            Some(project.clone())
-        );
+        assert_eq!(find_git_root(&project, Some(&home)), Some(project.clone()));
     }
 
     #[test]
