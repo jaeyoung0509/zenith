@@ -594,7 +594,8 @@ mod tests {
         };
         let result = classify_listener(&input);
         assert_eq!(result.project_name.as_deref(), Some("my-app"));
-        assert_eq!(result.working_directory.as_deref(), Some(r"C:\dev\my-app"));
+        // Paths outside the user home are reduced to a basename marker.
+        assert_eq!(result.working_directory.as_deref(), Some(".../my-app"));
 
         // Without a cwd, the absolute Windows script path still identifies the
         // project instead of being skipped by a POSIX prefix test.

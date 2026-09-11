@@ -251,10 +251,16 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         let (_, identity) = resolve_project(&project).unwrap();
         assert!(
-            !identity.display_path.starts_with('/'),
+            !identity.display_path.starts_with('/') && !identity.display_path.contains(":\\"),
             "display path leaked an absolute location: {}",
             identity.display_path
         );
-        assert_eq!(identity.display_path, ".../outside-project");
+        // A temporary directory may live under the home directory (Windows) or
+        // outside it (macOS); both render masked, never absolute.
+        assert!(
+            identity.display_path.starts_with("~/") || identity.display_path.starts_with(".../"),
+            "display path was not masked: {}",
+            identity.display_path
+        );
     }
 }
