@@ -207,6 +207,12 @@
           "markdownDescription": "Enables the create_delete_plan command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_ai_provider_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-ai-provider-credential",
+          "markdownDescription": "Enables the delete_ai_provider_credential command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_local_model command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-local-model",
@@ -489,6 +495,12 @@
           "markdownDescription": "Enables the save_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_ai_provider_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-ai-provider-credential",
+          "markdownDescription": "Enables the set_ai_provider_credential command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_awake_rules command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-awake-rules",
@@ -571,6 +583,12 @@
           "type": "string",
           "const": "deny-create-delete-plan",
           "markdownDescription": "Denies the create_delete_plan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_ai_provider_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-ai-provider-credential",
+          "markdownDescription": "Denies the delete_ai_provider_credential command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_local_model command without any pre-configured scope.",
@@ -853,6 +871,12 @@
           "type": "string",
           "const": "deny-save-settings",
           "markdownDescription": "Denies the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_ai_provider_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-ai-provider-credential",
+          "markdownDescription": "Denies the set_ai_provider_credential command without any pre-configured scope."
         },
         {
           "description": "Denies the set_awake_rules command without any pre-configured scope.",

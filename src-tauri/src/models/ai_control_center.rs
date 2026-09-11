@@ -7,6 +7,7 @@ pub enum ObservationSourceKind {
     LiveAuthoritative,
     LiveQuota,
     LocalEstimate,
+    CredentialValidated,
     Manual,
 }
 

@@ -32,6 +32,7 @@ pub async fn get_ai_usage(
         &state.usage_singleflight,
         &state.usage_generation,
         &state.runtime_metrics,
+        state.ai_collection_service.clone(),
         state.credentials.clone(),
         provider_ids,
         force.unwrap_or(false),
@@ -327,6 +328,7 @@ pub async fn get_ai_control_center(
         &state.usage_singleflight,
         &state.usage_generation,
         &state.runtime_metrics,
+        state.ai_collection_service.clone(),
         state.credentials.clone(),
         provider_ids.clone(),
         false,
@@ -866,7 +868,42 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
         .await
         .map_err(|error| error.to_string())??;
     credentials
-        .set("openrouter", crate::ai_providers::SecretString::new(key))
+        .set(
+            crate::models::ProviderId::OpenRouter,
+            crate::ai_providers::SecretString::new(key),
+        )
+        .map_err(|error| error.to_string())?;
+    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_ai_provider_credential(
+    provider: crate::models::ProviderId,
+    secret: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if secret.trim().is_empty() {
+        return Err("Credential cannot be empty".to_string());
+    }
+    let credentials = state.credentials.clone();
+    credentials
+        .set(provider, crate::ai_providers::SecretString::new(secret))
+        .map_err(|error| error.to_string())?;
+    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_ai_provider_credential(
+    provider: crate::models::ProviderId,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let credentials = state.credentials.clone();
+    credentials
+        .remove(provider)
         .map_err(|error| error.to_string())?;
     crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())

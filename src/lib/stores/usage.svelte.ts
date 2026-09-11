@@ -1,4 +1,4 @@
-import type { AiProviderUsage, AiUsageSnapshot, ProviderDescriptor } from '../models/types';
+import type { AiProviderUsage, AiUsageSnapshot, ProviderDescriptor, ProviderId } from '../models/types';
 import {
   tauriConnectOpenRouter,
   tauriGetAiProviderDescriptors,
@@ -14,7 +14,6 @@ const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('antigravity', 'Antigravity', 'Google OAuth'),
   providerShell('cursor', 'Cursor', 'Cursor account'),
   providerShell('grok-build', 'Grok Build', 'xAI account'),
-  providerShell('grok', 'Grok Build', 'xAI account'),
   providerShell('xai-api', 'xAI API', 'API Key'),
   providerShell('openai-api', 'OpenAI API', 'API Key'),
   providerShell('anthropic-api', 'Anthropic API', 'API Key'),
@@ -24,7 +23,7 @@ const PROVIDER_SHELLS: readonly AiProviderUsage[] = [
   providerShell('fireworks-api', 'Fireworks API', 'API Key'),
 ];
 
-function providerShell(id: string, name: string, authLabel: string): AiProviderUsage {
+function providerShell(id: ProviderId, name: string, authLabel: string): AiProviderUsage {
   return {
     id,
     name,
@@ -51,14 +50,14 @@ function providerShell(id: string, name: string, authLabel: string): AiProviderU
 export function projectProviderSlots(
   providers: readonly AiProviderUsage[],
   isLoading: boolean,
-  providerIds: readonly string[] = PROVIDER_SHELLS.map((provider) => provider.id)
+  providerIds: readonly (ProviderId | string)[] = PROVIDER_SHELLS.map((provider) => provider.id)
 ): AiProviderUsage[] {
   return providerIds
     .map((id) => {
-      const canonicalId = id === 'grok' ? 'grok-build' : id;
-      const provider = providers.find((candidate) => candidate.id === canonicalId || candidate.id === id);
+      const canonicalId: ProviderId = (id as string) === 'grok' ? 'grok-build' : (id as ProviderId);
+      const provider = providers.find((candidate) => candidate.id === canonicalId || (candidate.id as string) === id);
       if (provider || !isLoading) return provider;
-      return PROVIDER_SHELLS.find((shell) => shell.id === canonicalId || shell.id === id);
+      return PROVIDER_SHELLS.find((shell) => shell.id === canonicalId || (shell.id as string) === id);
     })
     .filter((provider): provider is AiProviderUsage => Boolean(provider));
 }
@@ -66,7 +65,7 @@ export function projectProviderSlots(
 export class UsageStore {
   snapshot = $state<AiUsageSnapshot | null>(null);
   descriptors = $state<ProviderDescriptor[]>([]);
-  loadingProviders = $state<string[]>([]);
+  loadingProviders = $state<ProviderId[]>([]);
   isLoading = $state(false);
   error = $state<string | null>(null);
   connectingProvider = $state<string | null>(null);
@@ -110,8 +109,8 @@ export class UsageStore {
     );
   }
 
-  isProviderLoading(id: string): boolean {
-    return this.isLoading && this.loadingProviders.includes(id);
+  isProviderLoading(id: ProviderId | string): boolean {
+    return this.isLoading && this.loadingProviders.includes(id as ProviderId);
   }
 
   async refresh(force = false) {
@@ -168,18 +167,23 @@ export class UsageStore {
     this.loadingProviders = [...settingsStore.settings.ai_accounts_quota_providers];
     try {
       this.snapshot = await tauriGetAiUsage(force, (provider) => {
-        this.loadingProviders = this.loadingProviders.filter((id) => id !== provider.id);
+        const canonicalId: ProviderId = (provider.id as string) === 'grok' ? 'grok-build' : (provider.id as ProviderId);
+        this.loadingProviders = this.loadingProviders.filter((id) => id !== canonicalId);
+        const normalizedProvider: AiProviderUsage = {
+          ...provider,
+          id: canonicalId,
+        };
         if (!this.snapshot) {
           this.snapshot = {
             fetched_at: Math.floor(Date.now() / 1000),
-            providers: [provider],
+            providers: [normalizedProvider],
           };
         } else {
-          const index = this.snapshot.providers.findIndex((p) => p.id === provider.id);
+          const index = this.snapshot.providers.findIndex((p) => p.id === canonicalId);
           if (index >= 0) {
-            this.snapshot.providers[index] = provider;
+            this.snapshot.providers[index] = normalizedProvider;
           } else {
-            this.snapshot.providers.push(provider);
+            this.snapshot.providers.push(normalizedProvider);
           }
         }
       });

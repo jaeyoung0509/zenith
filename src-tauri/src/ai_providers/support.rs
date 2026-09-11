@@ -1,5 +1,5 @@
 use crate::ai_providers::registry::ProviderRegistry;
-use crate::models::{AiProviderUsage, UsageSummary, UsageSupport, UsageWindow};
+use crate::models::{AiProviderUsage, ProviderId, UsageSummary, UsageSupport, UsageWindow};
 use crate::tooling;
 use serde_json::Value;
 use std::time::SystemTime;
@@ -15,7 +15,7 @@ pub fn command_exists(command: &str) -> bool {
     tooling::resolve(command).is_some()
 }
 
-pub fn base_provider(id: &str, name: &str, auth_label: &str) -> AiProviderUsage {
+pub fn base_provider(id: ProviderId, name: &str, auth_label: &str) -> AiProviderUsage {
     let descriptor = ProviderRegistry::find(id);
     let (vendor, model) = if let Some(d) = descriptor {
         (
@@ -26,7 +26,7 @@ pub fn base_provider(id: &str, name: &str, auth_label: &str) -> AiProviderUsage 
         (None, None)
     };
     AiProviderUsage {
-        id: id.into(),
+        id,
         name: name.into(),
         installed: false,
         connected: false,
@@ -41,7 +41,7 @@ pub fn base_provider(id: &str, name: &str, auth_label: &str) -> AiProviderUsage 
     }
 }
 
-pub fn failed_provider(id: &str, name: &str, message: &str) -> AiProviderUsage {
+pub fn failed_provider(id: ProviderId, name: &str, message: &str) -> AiProviderUsage {
     let mut provider = base_provider(id, name, "Unknown");
     provider.support = UsageSupport::Manual;
     provider.status_message = message.into();

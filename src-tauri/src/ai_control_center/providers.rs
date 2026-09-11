@@ -101,7 +101,7 @@ pub fn normalize(
 }
 
 fn from_provider_usage(provider: &AiProviderUsage, observed_at: u64) -> ProviderObservation {
-    let descriptor = crate::ai_providers::ProviderRegistry::find(&provider.id);
+    let descriptor = crate::ai_providers::ProviderRegistry::find(provider.id);
     let (source_kind, scope) = if let Some(d) = descriptor {
         (d.source_kind, d.scope)
     } else {
@@ -189,14 +189,14 @@ fn from_provider_usage(provider: &AiProviderUsage, observed_at: u64) -> Provider
     };
     let has_measurement = !metrics.is_empty();
     let unavailable = match source_kind {
-        ObservationSourceKind::LiveAuthoritative | ObservationSourceKind::LiveQuota => {
-            !provider.connected
-        }
+        ObservationSourceKind::LiveAuthoritative
+        | ObservationSourceKind::LiveQuota
+        | ObservationSourceKind::CredentialValidated => !provider.connected,
         ObservationSourceKind::LocalEstimate => !has_measurement,
         ObservationSourceKind::Manual => true,
     };
     ProviderObservation {
-        provider_id: provider.id.clone(),
+        provider_id: provider.id.to_string(),
         display_name: provider.name.clone(),
         source_kind,
         source_id: format!(
@@ -205,6 +205,7 @@ fn from_provider_usage(provider: &AiProviderUsage, observed_at: u64) -> Provider
             match source_kind {
                 ObservationSourceKind::LiveQuota => "app_server",
                 ObservationSourceKind::LiveAuthoritative => "official_api",
+                ObservationSourceKind::CredentialValidated => "api_key",
                 ObservationSourceKind::LocalEstimate => "official_cli",
                 ObservationSourceKind::Manual => "external",
             }
@@ -316,7 +317,7 @@ mod tests {
         let existing = AiUsageSnapshot {
             fetched_at: 10,
             providers: vec![AiProviderUsage {
-                id: "codex".into(),
+                id: crate::models::ProviderId::Codex,
                 name: "Codex".into(),
                 installed: true,
                 connected: true,
@@ -366,7 +367,7 @@ mod tests {
         let existing = AiUsageSnapshot {
             fetched_at: 10,
             providers: vec![AiProviderUsage {
-                id: "antigravity".into(),
+                id: crate::models::ProviderId::Antigravity,
                 name: "Antigravity".into(),
                 installed: true,
                 connected: false,
@@ -406,7 +407,7 @@ mod tests {
         let existing = AiUsageSnapshot {
             fetched_at: 10,
             providers: vec![AiProviderUsage {
-                id: "claude".into(),
+                id: crate::models::ProviderId::Claude,
                 name: "Claude Code".into(),
                 installed: true,
                 connected: false,

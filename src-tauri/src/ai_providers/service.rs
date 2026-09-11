@@ -1,19 +1,71 @@
 use super::credentials::CredentialStore;
 use super::registry::ProviderRegistry;
-use super::support::{failed_provider, now_secs};
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, AiUsageSnapshot};
+use super::support::{base_provider, failed_provider, now_secs};
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, AiUsageSnapshot, ProviderId, UsageSupport};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const DEFAULT_MAX_CONCURRENCY: usize = 4;
-pub const DEFAULT_PROVIDER_TIMEOUT: Duration = Duration::from_secs(25);
+
+struct SafeClientInner {
+    client: Option<reqwest::blocking::Client>,
+}
+
+impl Drop for SafeClientInner {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            if tokio::runtime::Handle::try_current().is_ok() {
+                let _ = std::thread::spawn(move || drop(client)).join();
+            } else {
+                drop(client);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct HttpClientWrapper(Arc<SafeClientInner>);
+
+impl Default for HttpClientWrapper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpClientWrapper {
+    pub fn new() -> Self {
+        let build = || {
+            reqwest::blocking::Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap_or_default()
+        };
+        let client = if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::spawn(build).join().unwrap_or_default()
+        } else {
+            build()
+        };
+
+        Self(Arc::new(SafeClientInner {
+            client: Some(client),
+        }))
+    }
+
+    pub fn client(&self) -> &reqwest::blocking::Client {
+        self.0
+            .client
+            .as_ref()
+            .expect("HttpClientWrapper inner client must be present")
+    }
+}
 
 pub struct ProviderCollectionService {
-    adapters: HashMap<&'static str, Arc<dyn ProviderAdapter>>,
+    adapters: HashMap<ProviderId, Arc<dyn ProviderAdapter>>,
     max_concurrency: usize,
-    provider_timeout: Duration,
+    http_client: HttpClientWrapper,
 }
 
 impl Default for ProviderCollectionService {
@@ -42,17 +94,12 @@ impl ProviderCollectionService {
         Self {
             adapters: HashMap::new(),
             max_concurrency: DEFAULT_MAX_CONCURRENCY,
-            provider_timeout: DEFAULT_PROVIDER_TIMEOUT,
+            http_client: HttpClientWrapper::new(),
         }
     }
 
     pub fn with_concurrency(mut self, max: usize) -> Self {
         self.max_concurrency = max.max(1);
-        self
-    }
-
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.provider_timeout = timeout;
         self
     }
 
@@ -63,7 +110,7 @@ impl ProviderCollectionService {
     pub fn collect_parallel<F>(
         &self,
         credentials: Arc<dyn CredentialStore>,
-        provider_ids: &[String],
+        provider_ids: &[ProviderId],
         on_provider: F,
     ) -> AiUsageSnapshot
     where
@@ -77,9 +124,9 @@ impl ProviderCollectionService {
         }
 
         let pool_size = self.max_concurrency.min(provider_ids.len()).max(1);
-        let (task_tx, task_rx) = std::sync::mpsc::channel::<(usize, String)>();
+        let (task_tx, task_rx) = std::sync::mpsc::channel::<(usize, ProviderId)>();
         for (index, id) in provider_ids.iter().enumerate() {
-            let _ = task_tx.send((index, id.clone()));
+            let _ = task_tx.send((index, *id));
         }
         drop(task_tx);
 
@@ -87,7 +134,7 @@ impl ProviderCollectionService {
         let on_provider = Arc::new(on_provider);
         let results = Arc::new(Mutex::new(vec![None; provider_ids.len()]));
         let adapters = Arc::new(self.adapters.clone());
-        let provider_timeout = self.provider_timeout;
+        let http_client = self.http_client.clone();
 
         let mut handles = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
@@ -96,6 +143,7 @@ impl ProviderCollectionService {
             let results = results.clone();
             let adapters = adapters.clone();
             let credentials = credentials.clone();
+            let http_client = http_client.clone();
 
             handles.push(std::thread::spawn(move || loop {
                 let task = {
@@ -110,43 +158,31 @@ impl ProviderCollectionService {
                     break;
                 };
 
-                let normalized_id = ProviderRegistry::normalize_provider_id(&id).unwrap_or(&id);
-                let adapter = adapters.get(normalized_id).cloned();
+                let adapter = adapters.get(&id).cloned();
                 let creds = credentials.clone();
-                let provider_name = ProviderRegistry::find(normalized_id)
+                let provider_name = ProviderRegistry::find(id)
                     .map(|d| d.display_name)
-                    .unwrap_or("Unknown provider")
-                    .to_string();
+                    .unwrap_or("Unknown provider");
 
                 let usage = match adapter {
                     Some(adapter) => {
-                        let (done_tx, done_rx) = std::sync::mpsc::channel();
-                        let _worker = std::thread::spawn(move || {
-                            let res =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    adapter.collect(&*creds)
-                                }));
-                            let _ = done_tx.send(res);
-                        });
+                        let ctx = CollectionContext {
+                            credentials: &*creds,
+                            http_client: http_client.client(),
+                        };
+                        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            adapter.collect(&ctx)
+                        }));
 
-                        match done_rx.recv_timeout(provider_timeout) {
+                        match res {
                             Ok(Ok(usage)) => usage,
-                            Ok(Err(_panic)) => {
-                                failed_provider(&id, &provider_name, "Collector panicked.")
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                failed_provider(&id, &provider_name, "Collection timed out.")
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                failed_provider(
-                                    &id,
-                                    &provider_name,
-                                    "Collector disconnected unexpectedly.",
-                                )
+                            Ok(Err(err)) => map_error_to_usage(&adapter.descriptor(), err),
+                            Err(_panic) => {
+                                failed_provider(id, provider_name, "Collector panicked unexpectedly.")
                             }
                         }
                     }
-                    None => failed_provider(&id, &provider_name, "Unknown provider"),
+                    None => failed_provider(id, provider_name, "Unknown provider"),
                 };
 
                 on_provider(usage.clone());
@@ -163,7 +199,9 @@ impl ProviderCollectionService {
         let providers = guard
             .drain(..)
             .map(|item| {
-                item.unwrap_or_else(|| failed_provider("unknown", "Unknown", "Missing result"))
+                item.unwrap_or_else(|| {
+                    failed_provider(ProviderId::Codex, "Unknown", "Missing result")
+                })
             })
             .collect();
 
@@ -172,4 +210,30 @@ impl ProviderCollectionService {
             fetched_at: now_secs(),
         }
     }
+}
+
+fn map_error_to_usage(descriptor: &ProviderDescriptor, err: ProviderError) -> AiProviderUsage {
+    let auth_label = match descriptor.credential_kind {
+        super::registry::CredentialKind::None => "Local Account",
+        super::registry::CredentialKind::ApiKey => "API Key",
+        super::registry::CredentialKind::OAuth => "OAuth",
+        super::registry::CredentialKind::Cli => "CLI",
+    };
+    let mut usage = base_provider(descriptor.id, &descriptor.display_name, auth_label);
+    usage.support = UsageSupport::Manual;
+    usage.connected = false;
+    usage.model_vendor = descriptor.model_vendor.clone();
+    usage.model_identity = descriptor.model_identity.clone();
+    usage.status_message = match err {
+        ProviderError::CredentialMissing => "API key not configured in secure settings.".into(),
+        ProviderError::AuthenticationFailed(msg) => format!("Authentication failed: {msg}"),
+        ProviderError::Network(msg) => format!("Network error: {msg}"),
+        ProviderError::InvalidResponse(msg) => format!("Invalid response: {msg}"),
+        ProviderError::CliNotInstalled(msg) => format!("CLI is not installed: {msg}"),
+        ProviderError::CliFailed(msg) => format!("CLI execution failed: {msg}"),
+        ProviderError::ExecutionFailed(msg) => format!("Execution failed: {msg}"),
+        ProviderError::Timeout => "Collection timed out.".into(),
+        ProviderError::Unsupported(msg) => format!("Unsupported: {msg}"),
+    };
+    usage
 }

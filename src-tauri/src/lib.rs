@@ -134,6 +134,8 @@ pub fn run() {
     let last_scan = Arc::new(Mutex::new(None));
     let credentials: Arc<dyn crate::ai_providers::CredentialStore> =
         Arc::new(crate::ai_providers::OsCredentialStore::default());
+    let ai_collection_service =
+        Arc::new(crate::ai_providers::ProviderCollectionService::default());
     let ai_usage_cache = Arc::new(Mutex::new(None));
     let runtime_metrics = Arc::new(crate::runtime_metrics::RuntimeMetrics::new());
     let usage_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(
@@ -177,6 +179,7 @@ pub fn run() {
         settings: settings.clone(),
         last_scan,
         credentials,
+        ai_collection_service,
         ai_usage_cache,
         usage_singleflight,
         usage_generation,
@@ -333,6 +336,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
             commands::get_ai_provider_descriptors,
+            commands::set_ai_provider_credential,
+            commands::delete_ai_provider_credential,
             commands::get_project_context,
             commands::request_stop_agent_session,
             commands::get_agent_integrations,

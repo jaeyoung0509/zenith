@@ -11,6 +11,8 @@
     "core:window:allow-start-dragging",
     "allow-get-ai-usage",
     "allow-get-ai-provider-descriptors",
+    "allow-set-ai-provider-credential",
+    "allow-delete-ai-provider-credential",
     "allow-get-project-context",
     "allow-request-stop-agent-session",
     "allow-get-agent-integrations",

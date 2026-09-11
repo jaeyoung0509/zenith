@@ -1,7 +1,7 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::{append_rate_windows, base_provider, u64_field};
-use super::ProviderAdapter;
-use crate::models::AiProviderUsage;
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId};
 use crate::tooling;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -13,12 +13,18 @@ use std::time::Duration;
 pub struct CodexAdapter;
 
 impl ProviderAdapter for CodexAdapter {
-    fn id(&self) -> &'static str {
-        "codex"
+    fn id(&self) -> ProviderId {
+        ProviderId::Codex
     }
 
-    fn collect(&self, _credentials: &dyn CredentialStore) -> AiProviderUsage {
-        let mut provider = base_provider("codex", "Codex", "ChatGPT OAuth");
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::Codex)
+            .expect("Codex must exist in registry")
+            .to_descriptor()
+    }
+
+    fn collect(&self, _ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
+        let mut provider = base_provider(ProviderId::Codex, "Codex", "ChatGPT OAuth");
         provider.action_url = Some("https://chatgpt.com/codex/settings/usage".into());
 
         let mut child = match tooling::command("codex")
@@ -30,13 +36,14 @@ impl ProviderAdapter for CodexAdapter {
         {
             Ok(child) => child,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                provider.status_message = "Codex CLI is not installed.".into();
-                return provider;
+                return Err(ProviderError::CliNotInstalled(
+                    "Codex CLI is not installed.".into(),
+                ));
             }
             Err(error) => {
-                provider.installed = true;
-                provider.status_message = format!("Could not start Codex: {error}");
-                return provider;
+                return Err(ProviderError::CliFailed(format!(
+                    "Could not start Codex: {error}"
+                )));
             }
         };
         provider.installed = true;
@@ -122,6 +129,6 @@ impl ProviderAdapter for CodexAdapter {
         }
         let _ = child.kill();
         let _ = child.wait();
-        provider
+        Ok(provider)
     }
 }

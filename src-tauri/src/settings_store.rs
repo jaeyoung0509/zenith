@@ -180,15 +180,15 @@ mod tests {
         count_corrupted_backups, has_corrupted_backup, load, prune_corrupt_backups, save,
         settings_path, MAX_CORRUPT_BACKUPS,
     };
-    use crate::models::{QuickPanelSection, ZenithSettings};
+    use crate::models::{ProviderId, QuickPanelSection, ZenithSettings};
 
     #[test]
     fn settings_round_trip_through_config_directory() {
         let directory = tempfile::tempdir().unwrap();
         let settings = ZenithSettings {
             quick_panel_sections: vec![QuickPanelSection::AgentActivity],
-            quick_panel_ai_providers: vec!["opencode".into()],
-            ai_accounts_quota_providers: vec!["cursor".into(), "grok-build".into()],
+            quick_panel_ai_providers: vec![ProviderId::OpenCode],
+            ai_accounts_quota_providers: vec![ProviderId::Cursor, ProviderId::GrokBuild],
             ..ZenithSettings::default()
         };
 

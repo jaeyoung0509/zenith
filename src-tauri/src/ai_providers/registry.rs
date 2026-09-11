@@ -1,4 +1,4 @@
-use crate::models::{ObservationScope, ObservationSourceKind};
+use crate::models::{ObservationScope, ObservationSourceKind, ProviderId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 pub enum CredentialKind {
     None,
     ApiKey,
+    #[serde(rename = "oauth")]
     OAuth,
     Cli,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ProviderDescriptor {
-    pub id: String,
+    pub id: ProviderId,
     pub display_name: String,
     pub scope: ObservationScope,
     pub credential_kind: CredentialKind,
@@ -25,7 +26,7 @@ pub struct ProviderDescriptor {
 }
 
 pub struct StaticProviderDescriptor {
-    pub id: &'static str,
+    pub id: ProviderId,
     pub display_name: &'static str,
     pub scope: ObservationScope,
     pub credential_kind: CredentialKind,
@@ -40,7 +41,7 @@ pub struct StaticProviderDescriptor {
 impl StaticProviderDescriptor {
     pub fn to_descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor {
-            id: self.id.to_string(),
+            id: self.id,
             display_name: self.display_name.to_string(),
             scope: self.scope,
             credential_kind: self.credential_kind,
@@ -56,7 +57,7 @@ impl StaticProviderDescriptor {
 
 pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
     StaticProviderDescriptor {
-        id: "codex",
+        id: ProviderId::Codex,
         display_name: "Codex",
         scope: ObservationScope::Subscription,
         credential_kind: CredentialKind::OAuth,
@@ -68,7 +69,7 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: true,
     },
     StaticProviderDescriptor {
-        id: "claude",
+        id: ProviderId::Claude,
         display_name: "Claude Code",
         scope: ObservationScope::Subscription,
         credential_kind: CredentialKind::Cli,
@@ -80,7 +81,7 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: true,
     },
     StaticProviderDescriptor {
-        id: "opencode",
+        id: ProviderId::OpenCode,
         display_name: "OpenCode",
         scope: ObservationScope::LocalSessions,
         credential_kind: CredentialKind::Cli,
@@ -92,7 +93,7 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: true,
     },
     StaticProviderDescriptor {
-        id: "openrouter",
+        id: ProviderId::OpenRouter,
         display_name: "OpenRouter",
         scope: ObservationScope::ApiKey,
         credential_kind: CredentialKind::OAuth,
@@ -104,7 +105,7 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: true,
     },
     StaticProviderDescriptor {
-        id: "antigravity",
+        id: ProviderId::Antigravity,
         display_name: "Antigravity",
         scope: ObservationScope::Subscription,
         credential_kind: CredentialKind::OAuth,
@@ -116,7 +117,7 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: true,
     },
     StaticProviderDescriptor {
-        id: "cursor",
+        id: ProviderId::Cursor,
         display_name: "Cursor",
         scope: ObservationScope::Subscription,
         credential_kind: CredentialKind::None,
@@ -128,7 +129,7 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "grok-build",
+        id: ProviderId::GrokBuild,
         display_name: "Grok Build",
         scope: ObservationScope::Subscription,
         credential_kind: CredentialKind::None,
@@ -140,44 +141,43 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "xai-api",
+        id: ProviderId::XaiApi,
         display_name: "xAI API",
         scope: ObservationScope::Organization,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::LiveAuthoritative,
+        source_kind: ObservationSourceKind::CredentialValidated,
         supports_quick_panel: false,
         model_vendor: Some("xAI"),
         model_identity: None,
-        description: "xAI team/organization usage and costs via official management API.",
+        description: "xAI API key validation (models endpoint).",
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "openai-api",
+        id: ProviderId::OpenAiApi,
         display_name: "OpenAI API",
         scope: ObservationScope::Organization,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::LiveAuthoritative,
+        source_kind: ObservationSourceKind::CredentialValidated,
         supports_quick_panel: false,
         model_vendor: Some("OpenAI"),
         model_identity: None,
-        description: "Organization API usage and costs separate from Codex subscription.",
+        description: "OpenAI API key validation (models endpoint).",
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "anthropic-api",
+        id: ProviderId::AnthropicApi,
         display_name: "Anthropic API",
         scope: ObservationScope::Organization,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::LiveAuthoritative,
+        source_kind: ObservationSourceKind::CredentialValidated,
         supports_quick_panel: false,
         model_vendor: Some("Anthropic"),
         model_identity: None,
-        description:
-            "Organization API usage and costs separate from Claude individual subscription.",
+        description: "Anthropic API key validation (models endpoint).",
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "muse-code",
+        id: ProviderId::MuseCode,
         display_name: "Muse Code",
         scope: ObservationScope::Subscription,
         credential_kind: CredentialKind::Cli,
@@ -189,39 +189,39 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "meta-model-api",
+        id: ProviderId::MetaModelApi,
         display_name: "Meta Model API",
         scope: ObservationScope::ApiKey,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::LiveAuthoritative,
+        source_kind: ObservationSourceKind::CredentialValidated,
         supports_quick_panel: false,
         model_vendor: Some("Meta"),
         model_identity: Some("Muse Spark 1.3"),
-        description: "Direct API access to Muse Spark models.",
+        description: "Meta Model API key stored in secure credential store.",
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "mistral-api",
+        id: ProviderId::MistralApi,
         display_name: "Mistral API",
         scope: ObservationScope::Organization,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::LiveAuthoritative,
+        source_kind: ObservationSourceKind::CredentialValidated,
         supports_quick_panel: false,
         model_vendor: Some("Mistral"),
         model_identity: None,
-        description: "Official Mistral workspace usage and billing.",
+        description: "Mistral API key validation (models endpoint).",
         default_quota_provider: false,
     },
     StaticProviderDescriptor {
-        id: "fireworks-api",
+        id: ProviderId::FireworksApi,
         display_name: "Fireworks API",
         scope: ObservationScope::Organization,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::LiveAuthoritative,
+        source_kind: ObservationSourceKind::CredentialValidated,
         supports_quick_panel: false,
         model_vendor: Some("Fireworks"),
         model_identity: None,
-        description: "Official Fireworks AI developer usage and billing.",
+        description: "Fireworks API key validation (models endpoint).",
         default_quota_provider: false,
     },
 ];
@@ -240,45 +240,41 @@ impl ProviderRegistry {
         PROVIDER_REGISTRY
     }
 
-    pub fn find(id: &str) -> Option<&'static StaticProviderDescriptor> {
-        let normalized = Self::normalize_provider_id(id).unwrap_or(id);
-        PROVIDER_REGISTRY.iter().find(|item| item.id == normalized)
+    pub fn find(id: ProviderId) -> Option<&'static StaticProviderDescriptor> {
+        PROVIDER_REGISTRY.iter().find(|item| item.id == id)
     }
 
-    /// Normalizes legacy provider IDs to their canonical current surfaces.
-    /// E.g. "grok" migrates to "grok-build".
-    /// Subscriptions are NOT migrated to API identities.
-    pub fn normalize_provider_id(id: &str) -> Option<&'static str> {
-        match id {
-            "grok" => Some("grok-build"),
-            other => PROVIDER_REGISTRY
-                .iter()
-                .find(|item| item.id == other)
-                .map(|item| item.id),
-        }
+    pub fn find_legacy(id: &str) -> Option<&'static StaticProviderDescriptor> {
+        ProviderId::parse_legacy(id).and_then(Self::find)
     }
 
-    pub fn is_supported(id: &str) -> bool {
-        Self::normalize_provider_id(id).is_some()
+    /// Normalizes legacy provider string IDs to typed ProviderId.
+    /// E.g. "grok" migrates to ProviderId::GrokBuild.
+    pub fn normalize_provider_id(id: &str) -> Option<ProviderId> {
+        ProviderId::parse_legacy(id)
     }
 
-    pub fn supports_quick_panel(id: &str) -> bool {
+    pub fn is_supported(id: ProviderId) -> bool {
+        Self::find(id).is_some()
+    }
+
+    pub fn supports_quick_panel(id: ProviderId) -> bool {
         Self::find(id).is_some_and(|item| item.supports_quick_panel)
     }
 
-    pub fn default_account_providers() -> Vec<String> {
+    pub fn default_account_providers() -> Vec<ProviderId> {
         PROVIDER_REGISTRY
             .iter()
             .filter(|item| item.default_quota_provider)
-            .map(|item| item.id.to_string())
+            .map(|item| item.id)
             .collect()
     }
 
-    pub fn default_quick_panel_providers() -> Vec<String> {
+    pub fn default_quick_panel_providers() -> Vec<ProviderId> {
         PROVIDER_REGISTRY
             .iter()
             .filter(|item| item.supports_quick_panel)
-            .map(|item| item.id.to_string())
+            .map(|item| item.id)
             .collect()
     }
 }
@@ -289,30 +285,19 @@ mod tests {
 
     #[test]
     fn registry_contains_all_canonical_providers() {
-        assert!(ProviderRegistry::find("codex").is_some());
-        assert!(ProviderRegistry::find("claude").is_some());
-        assert!(ProviderRegistry::find("opencode").is_some());
-        assert!(ProviderRegistry::find("openrouter").is_some());
-        assert!(ProviderRegistry::find("antigravity").is_some());
-        assert!(ProviderRegistry::find("cursor").is_some());
-        assert!(ProviderRegistry::find("grok-build").is_some());
-        assert!(ProviderRegistry::find("xai-api").is_some());
-        assert!(ProviderRegistry::find("openai-api").is_some());
-        assert!(ProviderRegistry::find("anthropic-api").is_some());
-        assert!(ProviderRegistry::find("muse-code").is_some());
-        assert!(ProviderRegistry::find("meta-model-api").is_some());
-        assert!(ProviderRegistry::find("mistral-api").is_some());
-        assert!(ProviderRegistry::find("fireworks-api").is_some());
+        for id in ProviderId::ALL {
+            assert!(ProviderRegistry::find(*id).is_some());
+        }
     }
 
     #[test]
     fn grok_migrates_to_grok_build() {
         assert_eq!(
             ProviderRegistry::normalize_provider_id("grok"),
-            Some("grok-build")
+            Some(ProviderId::GrokBuild)
         );
-        let desc = ProviderRegistry::find("grok").unwrap();
-        assert_eq!(desc.id, "grok-build");
+        let desc = ProviderRegistry::find_legacy("grok").unwrap();
+        assert_eq!(desc.id, ProviderId::GrokBuild);
         assert_eq!(desc.display_name, "Grok Build");
     }
 
@@ -321,26 +306,26 @@ mod tests {
         // Must not collapse subscriptions into API scopes
         assert_ne!(
             ProviderRegistry::normalize_provider_id("grok"),
-            Some("xai-api")
+            Some(ProviderId::XaiApi)
         );
         assert_ne!(
             ProviderRegistry::normalize_provider_id("claude"),
-            Some("anthropic-api")
+            Some(ProviderId::AnthropicApi)
         );
         assert_ne!(
             ProviderRegistry::normalize_provider_id("codex"),
-            Some("openai-api")
+            Some(ProviderId::OpenAiApi)
         );
         assert_ne!(
             ProviderRegistry::normalize_provider_id("muse-code"),
-            Some("meta-model-api")
+            Some(ProviderId::MetaModelApi)
         );
     }
 
     #[test]
     fn meta_surfaces_remain_distinct() {
-        let muse = ProviderRegistry::find("muse-code").unwrap();
-        let api = ProviderRegistry::find("meta-model-api").unwrap();
+        let muse = ProviderRegistry::find(ProviderId::MuseCode).unwrap();
+        let api = ProviderRegistry::find(ProviderId::MetaModelApi).unwrap();
 
         assert_eq!(muse.scope, ObservationScope::Subscription);
         assert_eq!(api.scope, ObservationScope::ApiKey);
@@ -353,14 +338,14 @@ mod tests {
 
     #[test]
     fn quick_panel_support_is_bounded() {
-        assert!(ProviderRegistry::supports_quick_panel("codex"));
-        assert!(ProviderRegistry::supports_quick_panel("claude"));
-        assert!(ProviderRegistry::supports_quick_panel("opencode"));
-        assert!(ProviderRegistry::supports_quick_panel("openrouter"));
-        assert!(ProviderRegistry::supports_quick_panel("antigravity"));
-        assert!(!ProviderRegistry::supports_quick_panel("cursor"));
-        assert!(!ProviderRegistry::supports_quick_panel("grok-build"));
-        assert!(!ProviderRegistry::supports_quick_panel("xai-api"));
-        assert!(!ProviderRegistry::supports_quick_panel("openai-api"));
+        assert!(ProviderRegistry::supports_quick_panel(ProviderId::Codex));
+        assert!(ProviderRegistry::supports_quick_panel(ProviderId::Claude));
+        assert!(ProviderRegistry::supports_quick_panel(ProviderId::OpenCode));
+        assert!(ProviderRegistry::supports_quick_panel(ProviderId::OpenRouter));
+        assert!(ProviderRegistry::supports_quick_panel(ProviderId::Antigravity));
+        assert!(!ProviderRegistry::supports_quick_panel(ProviderId::Cursor));
+        assert!(!ProviderRegistry::supports_quick_panel(ProviderId::GrokBuild));
+        assert!(!ProviderRegistry::supports_quick_panel(ProviderId::XaiApi));
+        assert!(!ProviderRegistry::supports_quick_panel(ProviderId::OpenAiApi));
     }
 }

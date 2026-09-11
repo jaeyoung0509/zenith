@@ -15,6 +15,7 @@ pub struct AppState {
     pub settings: Arc<Mutex<ZenithSettings>>,
     pub last_scan: Arc<Mutex<Option<ScanResult>>>,
     pub credentials: Arc<dyn crate::ai_providers::CredentialStore>,
+    pub ai_collection_service: Arc<crate::ai_providers::ProviderCollectionService>,
     pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
     pub usage_singleflight: Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     pub usage_generation: Arc<AtomicU64>,

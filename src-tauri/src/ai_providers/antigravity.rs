@@ -1,39 +1,45 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::{base_provider, command_exists, parse_rfc3339_to_unix_secs};
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, UsageSupport, UsageWindow};
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId, UsageSupport, UsageWindow};
 use crate::tooling;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-pub const ANTIGRAVITY_USAGE_TIMEOUT: Duration = Duration::from_secs(20);
+pub const ANTIGRAVITY_USAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct AntigravityAdapter;
 
 impl ProviderAdapter for AntigravityAdapter {
-    fn id(&self) -> &'static str {
-        "antigravity"
+    fn id(&self) -> ProviderId {
+        ProviderId::Antigravity
     }
 
-    fn collect(&self, _credentials: &dyn CredentialStore) -> AiProviderUsage {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::Antigravity)
+            .expect("Antigravity must exist in registry")
+            .to_descriptor()
+    }
+
+    fn collect(&self, _ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
         let has_cli = command_exists("agy") || command_exists("antigravity");
         let installed = has_cli || Path::new("/Applications/Antigravity.app").exists();
-        let mut provider = base_provider("antigravity", "Antigravity", "Google OAuth");
+        let mut provider = base_provider(ProviderId::Antigravity, "Antigravity", "Google OAuth");
         provider.installed = installed;
         provider.action_url = None;
 
         if !installed {
-            provider.support = UsageSupport::Manual;
-            provider.status_message = "Antigravity is not installed.".into();
-            return provider;
+            return Err(ProviderError::CliNotInstalled(
+                "Antigravity is not installed.".into(),
+            ));
         }
 
         if !has_cli {
-            provider.support = UsageSupport::Manual;
-            provider.status_message = "Antigravity CLI (agy) is not available in PATH.".into();
-            return provider;
+            return Err(ProviderError::CliNotInstalled(
+                "Antigravity CLI (agy) is not available in PATH.".into(),
+            ));
         }
 
         let bin = if command_exists("agy") {
@@ -43,37 +49,28 @@ impl ProviderAdapter for AntigravityAdapter {
         };
         let mut cmd = tooling::command(bin);
         cmd.args(["-p", "/usage", "--output-format", "json"]);
-        let output = match tooling::run_with_timeout(cmd, ANTIGRAVITY_USAGE_TIMEOUT) {
-            Ok(output) => output,
-            Err(error) => {
-                provider.support = UsageSupport::Manual;
-                provider.status_message = format!("Could not inspect Antigravity: {error}");
-                return provider;
-            }
-        };
+        let output = tooling::run_with_timeout(cmd, ANTIGRAVITY_USAGE_TIMEOUT)
+            .map_err(|e| ProviderError::CliFailed(e.to_string()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            provider.support = UsageSupport::Manual;
-            provider.status_message = if stderr.contains("login") || stderr.contains("auth") {
-                "Sign in to Antigravity using `agy`.".into()
+            if stderr.contains("login") || stderr.contains("auth") {
+                return Err(ProviderError::AuthenticationFailed(
+                    "Sign in to Antigravity using `agy`.".into(),
+                ));
             } else {
-                format!("Antigravity /usage exited with status {}", output.status)
-            };
-            return provider;
-        }
-
-        match serde_json::from_slice::<Value>(&output.stdout) {
-            Ok(json_value) => {
-                parse_antigravity_usage_json(&json_value, &mut provider);
-            }
-            Err(error) => {
-                provider.support = UsageSupport::Manual;
-                provider.status_message = format!("Failed to parse Antigravity output: {error}");
+                return Err(ProviderError::CliFailed(format!(
+                    "Antigravity /usage exited with status {}",
+                    output.status
+                )));
             }
         }
 
-        provider
+        let json_value = serde_json::from_slice::<Value>(&output.stdout)
+            .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
+
+        parse_antigravity_usage_json(&json_value, &mut provider);
+        Ok(provider)
     }
 }
 

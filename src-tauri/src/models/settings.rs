@@ -1,4 +1,4 @@
-use crate::models::{AiControlPreferences, AwakeRule};
+use crate::models::{AiControlPreferences, AwakeRule, ProviderId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -110,8 +110,8 @@ pub struct ZenithSettings {
     pub excluded_signatures: Vec<String>,
     pub awake_rules: Vec<AwakeRule>,
     pub quick_panel_sections: Vec<QuickPanelSection>,
-    pub quick_panel_ai_providers: Vec<String>,
-    pub ai_accounts_quota_providers: Vec<String>,
+    pub quick_panel_ai_providers: Vec<ProviderId>,
+    pub ai_accounts_quota_providers: Vec<ProviderId>,
     pub dashboard_tabs: Vec<DashboardTab>,
     #[serde(default = "legacy_dashboard_tabs_revision")]
     pub dashboard_tabs_revision: u8,
@@ -392,34 +392,19 @@ impl ZenithSettings {
             }
         }
 
-        for provider in &mut self.quick_panel_ai_providers {
-            if let Some(normalized) =
-                crate::ai_providers::ProviderRegistry::normalize_provider_id(provider)
-            {
-                *provider = normalized.to_string();
-            }
-        }
-        for provider in &mut self.ai_accounts_quota_providers {
-            if let Some(normalized) =
-                crate::ai_providers::ProviderRegistry::normalize_provider_id(provider)
-            {
-                *provider = normalized.to_string();
-            }
-        }
-
         let mut providers = HashSet::new();
         self.quick_panel_ai_providers.retain(|provider| {
-            crate::ai_providers::ProviderRegistry::supports_quick_panel(provider)
-                && providers.insert(provider.clone())
+            crate::ai_providers::ProviderRegistry::supports_quick_panel(*provider)
+                && providers.insert(*provider)
         });
 
         let mut account_providers = HashSet::new();
         self.ai_accounts_quota_providers.retain(|provider| {
-            crate::ai_providers::ProviderRegistry::is_supported(provider)
-                && account_providers.insert(provider.clone())
+            crate::ai_providers::ProviderRegistry::is_supported(*provider)
+                && account_providers.insert(*provider)
         });
         if self.ai_accounts_quota_providers.is_empty() {
-            self.ai_accounts_quota_providers.push("codex".into());
+            self.ai_accounts_quota_providers.push(ProviderId::Codex);
         }
         self.agent_notifications.inactivity_threshold_minutes = self
             .agent_notifications
@@ -449,7 +434,7 @@ fn legacy_dashboard_tabs_revision() -> u8 {
 mod tests {
     use crate::models::{ApplicationIdentity, AwakeAgentId};
 
-    use super::{DashboardTab, QuickPanelSection, ZenithSettings};
+    use super::{DashboardTab, ProviderId, QuickPanelSection, ZenithSettings};
 
     #[test]
     fn sanitize_keeps_at_least_one_section_and_tab() {
@@ -467,7 +452,7 @@ mod tests {
             vec![QuickPanelSection::Storage]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
-        assert_eq!(sanitized.ai_accounts_quota_providers, vec!["codex"]);
+        assert_eq!(sanitized.ai_accounts_quota_providers, vec![ProviderId::Codex]);
     }
 
     #[test]
@@ -479,12 +464,11 @@ mod tests {
                 QuickPanelSection::Memory,
             ],
             dashboard_tabs: vec![DashboardTab::Usage, DashboardTab::Usage, DashboardTab::Disk],
-            quick_panel_ai_providers: vec!["codex".into(), "unknown".into(), "codex".into()],
+            quick_panel_ai_providers: vec![ProviderId::Codex, ProviderId::Codex],
             ai_accounts_quota_providers: vec![
-                "cursor".into(),
-                "unknown".into(),
-                "grok".into(),
-                "cursor".into(),
+                ProviderId::Cursor,
+                ProviderId::GrokBuild,
+                ProviderId::Cursor,
             ],
             ..ZenithSettings::default()
         };
@@ -495,22 +479,22 @@ mod tests {
             vec![QuickPanelSection::Memory]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
-        assert_eq!(sanitized.quick_panel_ai_providers, vec!["codex"]);
+        assert_eq!(sanitized.quick_panel_ai_providers, vec![ProviderId::Codex]);
         assert_eq!(
             sanitized.ai_accounts_quota_providers,
-            vec!["cursor", "grok-build"]
+            vec![ProviderId::Cursor, ProviderId::GrokBuild]
         );
     }
 
     #[test]
     fn sanitize_migrates_legacy_grok_to_grok_build() {
-        let settings = ZenithSettings {
-            ai_accounts_quota_providers: vec!["grok".into()],
-            quick_panel_ai_providers: vec!["grok".into()],
-            ..ZenithSettings::default()
-        };
-        let sanitized = settings.sanitize();
-        assert_eq!(sanitized.ai_accounts_quota_providers, vec!["grok-build"]);
+        let raw = r#"{
+            "ai_accounts_quota_providers": ["grok"],
+            "quick_panel_ai_providers": ["grok"]
+        }"#;
+        let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
+        let sanitized = parsed.sanitize();
+        assert_eq!(sanitized.ai_accounts_quota_providers, vec![ProviderId::GrokBuild]);
         assert!(sanitized.quick_panel_ai_providers.is_empty());
     }
 
@@ -527,7 +511,13 @@ mod tests {
         assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert_eq!(
             parsed.ai_accounts_quota_providers,
-            vec!["codex", "claude", "opencode", "openrouter", "antigravity"]
+            vec![
+                ProviderId::Codex,
+                ProviderId::Claude,
+                ProviderId::OpenCode,
+                ProviderId::OpenRouter,
+                ProviderId::Antigravity,
+            ]
         );
         assert!(parsed.launch_at_login);
         assert_eq!(parsed.theme, "dark");

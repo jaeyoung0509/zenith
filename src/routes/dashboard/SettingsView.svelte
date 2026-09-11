@@ -7,6 +7,7 @@
     AiProviderId,
     DashboardTab,
     DiagnosticsSnapshot,
+    ProviderId,
     QuickPanelSection,
   } from '../../lib/models/types';
   import { tauriGetDiagnostics, tauriOpenLogsFolder } from '../../lib/utils/tauri';
@@ -52,14 +53,14 @@
     { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
     { id: 'agent_activity', label: 'AI & Agents', description: 'Active AI agent sessions and account token limits.' },
   ];
-  const DEFAULT_QUICK_PANEL_PROVIDER_OPTIONS: { id: string; label: string }[] = [
+  const DEFAULT_QUICK_PANEL_PROVIDER_OPTIONS: { id: ProviderId; label: string }[] = [
     { id: 'codex', label: 'Codex' },
     { id: 'claude', label: 'Claude Code' },
     { id: 'opencode', label: 'OpenCode' },
     { id: 'openrouter', label: 'OpenRouter' },
     { id: 'antigravity', label: 'Antigravity' },
   ];
-  const DEFAULT_ACCOUNT_PROVIDER_OPTIONS: { id: string; label: string; description: string }[] = [
+  const DEFAULT_ACCOUNT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: string }[] = [
     { id: 'codex', label: 'Codex', description: 'Live ChatGPT account limits through the official app server.' },
     { id: 'claude', label: 'Claude Code', description: 'Local availability with quota checked in Claude /usage.' },
     { id: 'opencode', label: 'OpenCode', description: 'Local sessions and cost from connected providers.' },

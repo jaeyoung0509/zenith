@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::agent_activity::AgentActivityRegistry;
 use crate::collection::{activity_request_key, usage_request_key, Admission, SingleFlight};
-use crate::models::{AiProviderUsage, AiUsageSnapshot};
+use crate::models::{AiProviderUsage, AiUsageSnapshot, ProviderId};
 use crate::runtime_metrics::RuntimeMetrics;
 
 const USAGE_CACHE_TTL_SECS: u64 = 60;
@@ -69,7 +69,7 @@ fn unix_timestamp() -> u64 {
 fn usage_cache_hit(
     cache: &Arc<Mutex<Option<AiUsageSnapshot>>>,
     metrics: &Arc<RuntimeMetrics>,
-    providers: &[String],
+    providers: &[ProviderId],
     now: u64,
 ) -> Option<AiUsageSnapshot> {
     let guard = cache
@@ -97,7 +97,7 @@ fn usage_cache_hit(
 /// own progress channel. Late joiners replay buffered observations through
 /// their own callback without starting another collector.
 //
-// Eight explicit shared handles keep the service free of global state and
+// Nine explicit shared handles keep the service free of global state and
 // usable from both commands and the background runtime.
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_usage_snapshot(
@@ -105,13 +105,18 @@ pub async fn fetch_usage_snapshot(
     singleflight: &Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     generation: &Arc<AtomicU64>,
     metrics: &Arc<RuntimeMetrics>,
+    collection_service: Arc<crate::ai_providers::ProviderCollectionService>,
     credentials: Arc<dyn crate::ai_providers::CredentialStore>,
-    providers: Vec<String>,
+    providers: Vec<ProviderId>,
     force: bool,
     on_provider: impl Fn(AiProviderUsage) + Send + Sync + Clone + 'static,
 ) -> Result<AiUsageSnapshot, String> {
     let gen = generation.load(Ordering::SeqCst);
-    let has_openrouter_key = credentials.get("openrouter").ok().flatten().is_some();
+    let has_openrouter_key = credentials
+        .get(ProviderId::OpenRouter)
+        .ok()
+        .flatten()
+        .is_some();
     let key = usage_request_key(&providers, has_openrouter_key);
     let now = unix_timestamp();
 
@@ -150,7 +155,7 @@ pub async fn fetch_usage_snapshot(
             let progress_entry = inflight.clone();
             let creds = credentials.clone();
             let provs = providers.clone();
-            let service = crate::ai_providers::ProviderCollectionService::default();
+            let service = collection_service.clone();
             supervise_collection(
                 cache.clone(),
                 generation.clone(),
@@ -388,7 +393,8 @@ mod tests {
     #[tokio::test]
     async fn concurrent_usage_requests_share_one_collection() {
         let (cache, flight, generation, metrics) = test_state();
-        let providers = vec!["cursor".to_string(), "grok-build".to_string()];
+        let service = Arc::new(crate::ai_providers::ProviderCollectionService::default());
+        let providers = vec![ProviderId::Cursor, ProviderId::GrokBuild];
         let barrier = Arc::new(tokio::sync::Barrier::new(6));
         let mut handles = Vec::new();
         for _ in 0..6 {
@@ -398,6 +404,7 @@ mod tests {
                 generation.clone(),
                 metrics.clone(),
             );
+            let service = service.clone();
             let providers = providers.clone();
             let barrier = barrier.clone();
             handles.push(tokio::spawn(async move {
@@ -407,6 +414,7 @@ mod tests {
                     &flight,
                     &generation,
                     &metrics,
+                    service,
                     Arc::new(crate::ai_providers::InMemoryCredentialStore::new()),
                     providers,
                     false,
@@ -426,9 +434,9 @@ mod tests {
                 snapshot
                     .providers
                     .iter()
-                    .map(|p| p.id.as_str())
+                    .map(|p| p.id)
                     .collect::<Vec<_>>(),
-                vec!["cursor", "grok-build"]
+                vec![ProviderId::Cursor, ProviderId::GrokBuild]
             );
         }
         let counts = metrics.snapshot();
@@ -439,7 +447,8 @@ mod tests {
     #[tokio::test]
     async fn forced_usage_joins_running_collection() {
         let (cache, flight, generation, metrics) = test_state();
-        let providers = vec!["cursor".to_string(), "grok".to_string()];
+        let service = Arc::new(crate::ai_providers::ProviderCollectionService::default());
+        let providers = vec![ProviderId::Cursor, ProviderId::GrokBuild];
         // Barrier-driven: forced and normal refreshes admitted together must
         // join one compatible running collection instead of duplicating it.
         let barrier = Arc::new(tokio::sync::Barrier::new(4));
@@ -451,6 +460,7 @@ mod tests {
                 generation.clone(),
                 metrics.clone(),
             );
+            let service = service.clone();
             let providers = providers.clone();
             let barrier = barrier.clone();
             handles.push(tokio::spawn(async move {
@@ -460,6 +470,7 @@ mod tests {
                     &flight,
                     &generation,
                     &metrics,
+                    service,
                     Arc::new(crate::ai_providers::InMemoryCredentialStore::new()),
                     providers,
                     force,

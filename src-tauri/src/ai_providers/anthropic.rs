@@ -1,78 +1,56 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::base_provider;
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, UsageSupport};
-use std::time::Duration;
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
 
 #[derive(Default)]
 pub struct AnthropicApiAdapter;
 
 impl ProviderAdapter for AnthropicApiAdapter {
-    fn id(&self) -> &'static str {
-        "anthropic-api"
+    fn id(&self) -> ProviderId {
+        ProviderId::AnthropicApi
     }
 
-    fn collect(&self, credentials: &dyn CredentialStore) -> AiProviderUsage {
-        let mut provider = base_provider("anthropic-api", "Anthropic API", "Anthropic API Key");
-        provider.installed = true;
-        provider.connected = false;
-        provider.support = UsageSupport::Live;
-        provider.action_url = Some("https://console.anthropic.com/settings/cost".into());
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::AnthropicApi)
+            .expect("AnthropicApi must exist in registry")
+            .to_descriptor()
+    }
 
-        let key = match credentials.get("anthropic-api") {
-            Ok(Some(secret)) => secret,
-            _ => {
-                provider.status_message =
-                    "No API key configured for Anthropic API in secure store.".into();
-                return provider;
-            }
-        };
+    fn collect(&self, ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
+        let key = ctx
+            .credentials
+            .get(ProviderId::AnthropicApi)
+            .map_err(|e| ProviderError::ExecutionFailed(e.to_string()))?
+            .ok_or(ProviderError::CredentialMissing)?;
 
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(err) => {
-                let msg = format!("Failed to create Anthropic HTTP client: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-                return provider;
-            }
-        };
-
-        // Validate key against models endpoint with required anthropic-version header
-        match client
+        let response = ctx
+            .http_client
             .get("https://api.anthropic.com/v1/models")
             .header("x-api-key", key.expose_secret())
             .header("anthropic-version", "2023-06-01")
             .send()
-        {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    provider.connected = true;
-                    provider.status_message =
-                        "Live authoritative organization connection via official Anthropic API."
-                            .into();
-                } else if status == reqwest::StatusCode::UNAUTHORIZED
-                    || status == reqwest::StatusCode::FORBIDDEN
-                {
-                    provider.connected = false;
-                    provider.status_message =
-                        "Anthropic API authentication failed (invalid API key).".into();
-                } else {
-                    provider.status_message = format!("Anthropic API returned status {status}");
-                }
-            }
-            Err(err) => {
-                let msg = format!("Anthropic API request failed: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-            }
+            .map_err(|err| ProviderError::Network(err.to_string()))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthenticationFailed(
+                "Invalid API key or insufficient permissions.".into(),
+            ));
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Network(format!(
+                "API returned HTTP status {status}"
+            )));
         }
 
-        provider
+        let mut provider = base_provider(ProviderId::AnthropicApi, "Anthropic API", "API Key");
+        provider.installed = true;
+        provider.connected = true;
+        provider.support = UsageSupport::Live;
+        provider.status_message = "Anthropic API key validated via models endpoint.".into();
+        provider.action_url = Some("https://console.anthropic.com/settings/cost".into());
+
+        Ok(provider)
     }
 }

@@ -1,77 +1,55 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::base_provider;
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, UsageSupport};
-use std::time::Duration;
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
 
 #[derive(Default)]
 pub struct OpenAiApiAdapter;
 
 impl ProviderAdapter for OpenAiApiAdapter {
-    fn id(&self) -> &'static str {
-        "openai-api"
+    fn id(&self) -> ProviderId {
+        ProviderId::OpenAiApi
     }
 
-    fn collect(&self, credentials: &dyn CredentialStore) -> AiProviderUsage {
-        let mut provider = base_provider("openai-api", "OpenAI API", "OpenAI API Key");
-        provider.installed = true;
-        provider.connected = false;
-        provider.support = UsageSupport::Live;
-        provider.action_url = Some("https://platform.openai.com/usage".into());
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::OpenAiApi)
+            .expect("OpenAiApi must exist in registry")
+            .to_descriptor()
+    }
 
-        let key = match credentials.get("openai-api") {
-            Ok(Some(secret)) => secret,
-            _ => {
-                provider.status_message =
-                    "No API key configured for OpenAI API in secure store.".into();
-                return provider;
-            }
-        };
+    fn collect(&self, ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
+        let key = ctx
+            .credentials
+            .get(ProviderId::OpenAiApi)
+            .map_err(|e| ProviderError::ExecutionFailed(e.to_string()))?
+            .ok_or(ProviderError::CredentialMissing)?;
 
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(err) => {
-                let msg = format!("Failed to create OpenAI HTTP client: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-                return provider;
-            }
-        };
-
-        // Validate key against models endpoint
-        match client
+        let response = ctx
+            .http_client
             .get("https://api.openai.com/v1/models")
             .bearer_auth(key.expose_secret())
             .send()
-        {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    provider.connected = true;
-                    provider.status_message =
-                        "Live authoritative organization connection via official OpenAI API."
-                            .into();
-                } else if status == reqwest::StatusCode::UNAUTHORIZED
-                    || status == reqwest::StatusCode::FORBIDDEN
-                {
-                    provider.connected = false;
-                    provider.status_message =
-                        "OpenAI API authentication failed (invalid API key).".into();
-                } else {
-                    provider.status_message = format!("OpenAI API returned status {status}");
-                }
-            }
-            Err(err) => {
-                let msg = format!("OpenAI API request failed: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-            }
+            .map_err(|err| ProviderError::Network(err.to_string()))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthenticationFailed(
+                "Invalid API key or insufficient permissions.".into(),
+            ));
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Network(format!(
+                "API returned HTTP status {status}"
+            )));
         }
 
-        provider
+        let mut provider = base_provider(ProviderId::OpenAiApi, "OpenAI API", "API Key");
+        provider.installed = true;
+        provider.connected = true;
+        provider.support = UsageSupport::Live;
+        provider.status_message = "OpenAI API key validated via models endpoint.".into();
+        provider.action_url = Some("https://platform.openai.com/usage".into());
+
+        Ok(provider)
     }
 }

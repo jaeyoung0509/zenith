@@ -1,7 +1,7 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::{base_provider, parse_stat_f64, parse_stat_u64, strip_ansi};
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, UsageSupport};
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
 use crate::tooling;
 use std::time::Duration;
 
@@ -9,12 +9,18 @@ use std::time::Duration;
 pub struct OpenCodeAdapter;
 
 impl ProviderAdapter for OpenCodeAdapter {
-    fn id(&self) -> &'static str {
-        "opencode"
+    fn id(&self) -> ProviderId {
+        ProviderId::OpenCode
     }
 
-    fn collect(&self, _credentials: &dyn CredentialStore) -> AiProviderUsage {
-        let mut provider = base_provider("opencode", "OpenCode", "Provider OAuth");
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::OpenCode)
+            .expect("OpenCode must exist in registry")
+            .to_descriptor()
+    }
+
+    fn collect(&self, _ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
+        let mut provider = base_provider(ProviderId::OpenCode, "OpenCode", "Provider OAuth");
         provider.support = UsageSupport::Local;
         provider.action_url = Some("https://opencode.ai/docs/providers".into());
 
@@ -25,12 +31,14 @@ impl ProviderAdapter for OpenCodeAdapter {
             Err(error) => {
                 let error_str = error.to_string();
                 if error_str.contains("No such file") || error_str.contains("not found") {
-                    provider.status_message = "OpenCode is not installed.".into();
+                    return Err(ProviderError::CliNotInstalled(
+                        "OpenCode CLI is not installed.".into(),
+                    ));
                 } else {
-                    provider.installed = true;
-                    provider.status_message = format!("Could not inspect OpenCode: {error}");
+                    return Err(ProviderError::CliFailed(format!(
+                        "Could not inspect OpenCode: {error}"
+                    )));
                 }
-                return provider;
             }
         };
         provider.installed = true;
@@ -54,6 +62,6 @@ impl ProviderAdapter for OpenCodeAdapter {
             provider.summary.local_sessions = parse_stat_u64(&stats, "Sessions");
             provider.summary.local_cost_usd = parse_stat_f64(&stats, "Total Cost");
         }
-        provider
+        Ok(provider)
     }
 }

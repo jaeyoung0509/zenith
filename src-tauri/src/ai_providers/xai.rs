@@ -1,21 +1,26 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::{base_provider, command_exists};
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, UsageSupport};
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
 use serde_json::Value;
-use std::time::Duration;
 
 #[derive(Default)]
 pub struct GrokBuildAdapter;
 
 impl ProviderAdapter for GrokBuildAdapter {
-    fn id(&self) -> &'static str {
-        "grok-build"
+    fn id(&self) -> ProviderId {
+        ProviderId::GrokBuild
     }
 
-    fn collect(&self, _credentials: &dyn CredentialStore) -> AiProviderUsage {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::GrokBuild)
+            .expect("GrokBuild must exist in registry")
+            .to_descriptor()
+    }
+
+    fn collect(&self, _ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
         let installed = command_exists("grok");
-        let mut provider = base_provider("grok-build", "Grok Build", "xAI account");
+        let mut provider = base_provider(ProviderId::GrokBuild, "Grok Build", "xAI account");
         provider.installed = installed;
         provider.connected = false;
         provider.support = UsageSupport::Manual;
@@ -25,7 +30,7 @@ impl ProviderAdapter for GrokBuildAdapter {
             "Grok Build is not installed.".into()
         };
         provider.action_url = None;
-        provider
+        Ok(provider)
     }
 }
 
@@ -33,74 +38,55 @@ impl ProviderAdapter for GrokBuildAdapter {
 pub struct XaiApiAdapter;
 
 impl ProviderAdapter for XaiApiAdapter {
-    fn id(&self) -> &'static str {
-        "xai-api"
+    fn id(&self) -> ProviderId {
+        ProviderId::XaiApi
     }
 
-    fn collect(&self, credentials: &dyn CredentialStore) -> AiProviderUsage {
-        let mut provider = base_provider("xai-api", "xAI API", "xAI API Key");
-        provider.installed = true;
-        provider.connected = false;
-        provider.support = UsageSupport::Live;
-        provider.action_url = Some("https://console.x.ai/team/billing".into());
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::XaiApi)
+            .expect("XaiApi must exist in registry")
+            .to_descriptor()
+    }
 
-        let key = match credentials.get("xai-api") {
-            Ok(Some(secret)) => secret,
-            _ => {
-                provider.status_message =
-                    "No API key configured for xAI API in secure store.".into();
-                return provider;
-            }
-        };
+    fn collect(&self, ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
+        let key = ctx
+            .credentials
+            .get(ProviderId::XaiApi)
+            .map_err(|e| ProviderError::ExecutionFailed(e.to_string()))?
+            .ok_or(ProviderError::CredentialMissing)?;
 
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(err) => {
-                let msg = format!("Failed to create xAI HTTP client: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-                return provider;
-            }
-        };
-
-        // Official xAI API endpoint: check key validity / management info
-        match client
+        let response = ctx
+            .http_client
             .get("https://api.x.ai/v1/api-key")
             .bearer_auth(key.expose_secret())
             .send()
-        {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    provider.connected = true;
-                    provider.status_message =
-                        "Live authoritative team connection via official xAI API.".into();
-                    if let Ok(data) = response.json::<Value>() {
-                        if let Some(name) = data.get("name").and_then(Value::as_str) {
-                            provider.auth_label = format!("API Key · {name}");
-                        }
-                    }
-                } else if status == reqwest::StatusCode::UNAUTHORIZED
-                    || status == reqwest::StatusCode::FORBIDDEN
-                {
-                    provider.connected = false;
-                    provider.status_message =
-                        "xAI API authentication failed (invalid API key).".into();
-                } else {
-                    provider.status_message = format!("xAI API returned status {status}");
-                }
-            }
-            Err(err) => {
-                let msg = format!("xAI API request failed: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
+            .map_err(|err| ProviderError::Network(err.to_string()))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthenticationFailed(
+                "Invalid API key or insufficient permissions.".into(),
+            ));
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Network(format!(
+                "API returned HTTP status {status}"
+            )));
+        }
+
+        let mut provider = base_provider(ProviderId::XaiApi, "xAI API", "API Key");
+        provider.installed = true;
+        provider.connected = true;
+        provider.support = UsageSupport::Live;
+        provider.status_message = "xAI API key validated via official xAI API.".into();
+        provider.action_url = Some("https://console.x.ai/team/billing".into());
+
+        if let Ok(data) = response.json::<Value>() {
+            if let Some(name) = data.get("name").and_then(Value::as_str) {
+                provider.auth_label = format!("API Key · {name}");
             }
         }
 
-        provider
+        Ok(provider)
     }
 }

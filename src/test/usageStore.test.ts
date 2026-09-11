@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AiProviderUsage, AiUsageSnapshot } from '../lib/models/types';
+import type { AiProviderUsage, AiUsageSnapshot, ProviderId } from '../lib/models/types';
 import { UsageStore, projectProviderSlots } from '../lib/stores/usage.svelte';
 import { tauriGetAiProviderDescriptors, tauriGetAiUsage } from '../lib/utils/tauri';
 
@@ -12,7 +12,7 @@ vi.mock('../lib/utils/tauri', async (importOriginal) => {
   };
 });
 
-function provider(id: string, name: string): AiProviderUsage {
+function provider(id: ProviderId, name: string): AiProviderUsage {
   return {
     id,
     name,
@@ -54,7 +54,7 @@ describe('AI Accounts & Quota provider projection', () => {
   });
 });
 
-const AUTO_REFRESH_IDS = ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'];
+const AUTO_REFRESH_IDS: ProviderId[] = ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'];
 
 function autoSnapshot(fetchedAt: number): AiUsageSnapshot {
   return {
@@ -144,10 +144,10 @@ describe('provider descriptor registry integration', () => {
     const store = new UsageStore();
     const mockDescriptors = [
       {
-        id: 'codex',
+        id: 'codex' as ProviderId,
         display_name: 'Codex',
         scope: 'subscription' as const,
-        credential_kind: 'o_auth' as const,
+        credential_kind: 'oauth' as const,
         source_kind: 'live_quota' as const,
         supports_quick_panel: true,
         model_vendor: 'OpenAI',
@@ -156,7 +156,7 @@ describe('provider descriptor registry integration', () => {
         default_quota_provider: true,
       },
       {
-        id: 'xai-api',
+        id: 'xai-api' as ProviderId,
         display_name: 'xAI API',
         scope: 'organization' as const,
         credential_kind: 'api_key' as const,

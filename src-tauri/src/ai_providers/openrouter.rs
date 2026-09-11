@@ -1,7 +1,7 @@
-use super::credentials::CredentialStore;
+use super::registry::ProviderRegistry;
 use super::support::base_provider;
-use super::ProviderAdapter;
-use crate::models::{AiProviderUsage, UsageSupport};
+use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
+use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
 use crate::tooling;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -17,60 +17,60 @@ use uuid::Uuid;
 pub struct OpenRouterAdapter;
 
 impl ProviderAdapter for OpenRouterAdapter {
-    fn id(&self) -> &'static str {
-        "openrouter"
+    fn id(&self) -> ProviderId {
+        ProviderId::OpenRouter
     }
 
-    fn collect(&self, credentials: &dyn CredentialStore) -> AiProviderUsage {
-        let mut provider = base_provider("openrouter", "OpenRouter", "OAuth PKCE");
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderRegistry::find(ProviderId::OpenRouter)
+            .expect("OpenRouter must exist in registry")
+            .to_descriptor()
+    }
+
+    fn collect(&self, ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
+        let mut provider =
+            base_provider(ProviderId::OpenRouter, "OpenRouter", "OAuth PKCE");
         provider.installed = true;
         provider.connected = false;
         provider.support = UsageSupport::Live;
         provider.status_message = "No Zenith OAuth session is connected yet.".into();
         provider.action_url = Some("https://openrouter.ai/activity".into());
 
-        let key = match credentials.get("openrouter") {
+        let key = match ctx.credentials.get(ProviderId::OpenRouter) {
             Ok(Some(secret)) => secret,
-            _ => return provider,
+            _ => return Ok(provider),
         };
 
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(err) => {
-                let msg = format!("Failed to create OpenRouter HTTP client: {err}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-                return provider;
-            }
-        };
-
-        match client
+        let response = ctx
+            .http_client
             .get("https://openrouter.ai/api/v1/key")
             .bearer_auth(key.expose_secret())
             .send()
-            .and_then(|response| response.error_for_status())
-            .and_then(|response| response.json::<Value>())
-        {
-            Ok(response) => {
-                provider.connected = true;
-                provider.status_message = "Live key usage from OpenRouter OAuth.".into();
-                provider.summary.usage_usd =
-                    response.pointer("/data/usage").and_then(Value::as_f64);
-                provider.summary.limit_remaining_usd = response
-                    .pointer("/data/limit_remaining")
-                    .and_then(Value::as_f64);
-            }
-            Err(error) => {
-                let msg = format!("OpenRouter usage request failed: {error}");
-                crate::diagnostics::log_error("ai_providers", &msg);
-                provider.status_message = msg;
-            }
+            .map_err(|err| ProviderError::Network(err.to_string()))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthenticationFailed(
+                "OpenRouter session expired or invalid.".into(),
+            ));
         }
-        provider
+        if !status.is_success() {
+            return Err(ProviderError::Network(format!(
+                "API returned HTTP status {status}"
+            )));
+        }
+
+        let data = response
+            .json::<Value>()
+            .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
+
+        provider.connected = true;
+        provider.status_message = "Live key usage from OpenRouter OAuth.".into();
+        provider.summary.usage_usd = data.pointer("/data/usage").and_then(Value::as_f64);
+        provider.summary.limit_remaining_usd =
+            data.pointer("/data/limit_remaining").and_then(Value::as_f64);
+
+        Ok(provider)
     }
 }
 
