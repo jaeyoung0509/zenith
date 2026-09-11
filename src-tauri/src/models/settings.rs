@@ -452,7 +452,10 @@ mod tests {
             vec![QuickPanelSection::Storage]
         );
         assert_eq!(sanitized.dashboard_tabs, vec![DashboardTab::Storage]);
-        assert_eq!(sanitized.ai_accounts_quota_providers, vec![ProviderId::Codex]);
+        assert_eq!(
+            sanitized.ai_accounts_quota_providers,
+            vec![ProviderId::Codex]
+        );
     }
 
     #[test]
@@ -494,7 +497,10 @@ mod tests {
         }"#;
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
         let sanitized = parsed.sanitize();
-        assert_eq!(sanitized.ai_accounts_quota_providers, vec![ProviderId::GrokBuild]);
+        assert_eq!(
+            sanitized.ai_accounts_quota_providers,
+            vec![ProviderId::GrokBuild]
+        );
         assert!(sanitized.quick_panel_ai_providers.is_empty());
     }
 

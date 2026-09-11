@@ -39,17 +39,7 @@ pub enum UsageSupport {
     Manual,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    specta::Type,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 pub enum ProviderId {
     #[serde(rename = "codex")]
     Codex,

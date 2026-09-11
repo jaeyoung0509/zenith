@@ -177,9 +177,11 @@ impl ProviderCollectionService {
                         match res {
                             Ok(Ok(usage)) => usage,
                             Ok(Err(err)) => map_error_to_usage(&adapter.descriptor(), err),
-                            Err(_panic) => {
-                                failed_provider(id, provider_name, "Collector panicked unexpectedly.")
-                            }
+                            Err(_panic) => failed_provider(
+                                id,
+                                provider_name,
+                                "Collector panicked unexpectedly.",
+                            ),
                         }
                     }
                     None => failed_provider(id, provider_name, "Unknown provider"),

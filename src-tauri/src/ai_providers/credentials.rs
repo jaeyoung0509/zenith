@@ -213,14 +213,8 @@ impl OsCredentialStore {
         let target_name = Self::target_name(provider);
         let mut cred_ptr: *mut CREDENTIALW = ptr::null_mut();
 
-        let success = unsafe {
-            CredReadW(
-                target_name.as_ptr(),
-                CRED_TYPE_GENERIC,
-                0,
-                &mut cred_ptr,
-            )
-        };
+        let success =
+            unsafe { CredReadW(target_name.as_ptr(), CRED_TYPE_GENERIC, 0, &mut cred_ptr) };
 
         if success == 0 {
             let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };

@@ -58,8 +58,11 @@ impl ProviderAdapter for MetaModelApiAdapter {
             .map_err(|e| ProviderError::ExecutionFailed(e.to_string()))?
             .ok_or(ProviderError::CredentialMissing)?;
 
-        let mut provider =
-            base_provider(ProviderId::MetaModelApi, "Meta Model API", "Meta Model API Key");
+        let mut provider = base_provider(
+            ProviderId::MetaModelApi,
+            "Meta Model API",
+            "Meta Model API Key",
+        );
         provider.installed = true;
         provider.connected = true;
         provider.support = UsageSupport::Local;

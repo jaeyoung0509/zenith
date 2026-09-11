@@ -341,11 +341,19 @@ mod tests {
         assert!(ProviderRegistry::supports_quick_panel(ProviderId::Codex));
         assert!(ProviderRegistry::supports_quick_panel(ProviderId::Claude));
         assert!(ProviderRegistry::supports_quick_panel(ProviderId::OpenCode));
-        assert!(ProviderRegistry::supports_quick_panel(ProviderId::OpenRouter));
-        assert!(ProviderRegistry::supports_quick_panel(ProviderId::Antigravity));
+        assert!(ProviderRegistry::supports_quick_panel(
+            ProviderId::OpenRouter
+        ));
+        assert!(ProviderRegistry::supports_quick_panel(
+            ProviderId::Antigravity
+        ));
         assert!(!ProviderRegistry::supports_quick_panel(ProviderId::Cursor));
-        assert!(!ProviderRegistry::supports_quick_panel(ProviderId::GrokBuild));
+        assert!(!ProviderRegistry::supports_quick_panel(
+            ProviderId::GrokBuild
+        ));
         assert!(!ProviderRegistry::supports_quick_panel(ProviderId::XaiApi));
-        assert!(!ProviderRegistry::supports_quick_panel(ProviderId::OpenAiApi));
+        assert!(!ProviderRegistry::supports_quick_panel(
+            ProviderId::OpenAiApi
+        ));
     }
 }

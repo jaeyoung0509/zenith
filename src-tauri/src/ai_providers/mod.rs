@@ -280,11 +280,7 @@ mod tests {
         let creds = Arc::new(InMemoryCredentialStore::new());
         let snapshot = service.collect_parallel(creds, &requested, |_| {});
 
-        let output_ids = snapshot
-            .providers
-            .iter()
-            .map(|p| p.id)
-            .collect::<Vec<_>>();
+        let output_ids = snapshot.providers.iter().map(|p| p.id).collect::<Vec<_>>();
         assert_eq!(output_ids, requested);
     }
 

@@ -134,8 +134,7 @@ pub fn run() {
     let last_scan = Arc::new(Mutex::new(None));
     let credentials: Arc<dyn crate::ai_providers::CredentialStore> =
         Arc::new(crate::ai_providers::OsCredentialStore::default());
-    let ai_collection_service =
-        Arc::new(crate::ai_providers::ProviderCollectionService::default());
+    let ai_collection_service = Arc::new(crate::ai_providers::ProviderCollectionService::default());
     let ai_usage_cache = Arc::new(Mutex::new(None));
     let runtime_metrics = Arc::new(crate::runtime_metrics::RuntimeMetrics::new());
     let usage_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(

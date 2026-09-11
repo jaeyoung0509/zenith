@@ -28,8 +28,7 @@ impl ProviderAdapter for OpenRouterAdapter {
     }
 
     fn collect(&self, ctx: &CollectionContext<'_>) -> Result<AiProviderUsage, ProviderError> {
-        let mut provider =
-            base_provider(ProviderId::OpenRouter, "OpenRouter", "OAuth PKCE");
+        let mut provider = base_provider(ProviderId::OpenRouter, "OpenRouter", "OAuth PKCE");
         provider.installed = true;
         provider.connected = false;
         provider.support = UsageSupport::Live;
@@ -67,8 +66,9 @@ impl ProviderAdapter for OpenRouterAdapter {
         provider.connected = true;
         provider.status_message = "Live key usage from OpenRouter OAuth.".into();
         provider.summary.usage_usd = data.pointer("/data/usage").and_then(Value::as_f64);
-        provider.summary.limit_remaining_usd =
-            data.pointer("/data/limit_remaining").and_then(Value::as_f64);
+        provider.summary.limit_remaining_usd = data
+            .pointer("/data/limit_remaining")
+            .and_then(Value::as_f64);
 
         Ok(provider)
     }

@@ -431,11 +431,7 @@ mod tests {
         // All callers observe the same ordered providers from one collection.
         for snapshot in &snapshots {
             assert_eq!(
-                snapshot
-                    .providers
-                    .iter()
-                    .map(|p| p.id)
-                    .collect::<Vec<_>>(),
+                snapshot.providers.iter().map(|p| p.id).collect::<Vec<_>>(),
                 vec![ProviderId::Cursor, ProviderId::GrokBuild]
             );
         }
