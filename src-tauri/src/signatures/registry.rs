@@ -175,9 +175,19 @@ mod tests {
         let standard = registry.by_category_for_mode(Category::System, false);
         assert!(standard.iter().all(|signature| !signature.intensive_only));
 
-        let intensive = registry.by_category_for_mode(Category::System, true);
-        assert!(intensive.iter().any(|signature| signature.intensive_only));
-        assert!(intensive.len() > standard.len());
+        #[cfg(target_os = "macos")]
+        {
+            let intensive = registry.by_category_for_mode(Category::System, true);
+            assert!(intensive.iter().any(|signature| signature.intensive_only));
+            assert!(intensive.len() > standard.len());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let intensive = registry.by_category_for_mode(Category::System, true);
+            assert_eq!(intensive.len(), standard.len());
+            assert!(intensive.iter().all(|signature| !signature.intensive_only));
+        }
     }
 
     #[test]
