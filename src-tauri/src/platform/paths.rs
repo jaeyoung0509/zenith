@@ -1,4 +1,4 @@
-use crate::platform::path_algebra::{self, PathFlavor};
+use crate::platform::path_algebra::PathFlavor;
 use std::path::{Path, PathBuf};
 
 /// Platform-owned path resolution interface for user directories and reviewed system roots.

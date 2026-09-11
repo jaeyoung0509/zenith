@@ -351,6 +351,12 @@
           "markdownDescription": "Enables the get_platform_capabilities command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_platform_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-platform-context",
+          "markdownDescription": "Enables the get_platform_context command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_project_context command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-project-context",
@@ -475,6 +481,12 @@
           "type": "string",
           "const": "allow-request-stop-agent-session",
           "markdownDescription": "Enables the request_stop_agent_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_large_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reveal-large-file",
+          "markdownDescription": "Enables the reveal_large_file command without any pre-configured scope."
         },
         {
           "description": "Enables the run_ai_safety_scan command without any pre-configured scope.",
@@ -723,6 +735,12 @@
           "markdownDescription": "Denies the get_platform_capabilities command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_platform_context command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-platform-context",
+          "markdownDescription": "Denies the get_platform_context command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_project_context command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-project-context",
@@ -847,6 +865,12 @@
           "type": "string",
           "const": "deny-request-stop-agent-session",
           "markdownDescription": "Denies the request_stop_agent_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_large_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reveal-large-file",
+          "markdownDescription": "Denies the reveal_large_file command without any pre-configured scope."
         },
         {
           "description": "Denies the run_ai_safety_scan command without any pre-configured scope.",

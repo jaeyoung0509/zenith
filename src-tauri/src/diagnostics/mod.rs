@@ -125,6 +125,13 @@ pub fn normalized_log_path() -> String {
     crate::privacy::paths::display_path(&log_file_path())
 }
 
+/// Display form of the directory holding the current log file, with the
+/// profile masked. The interface shows this instead of a platform-specific
+/// literal such as `~/Library/Logs/Zenith`, which is wrong off macOS.
+pub fn log_directory_display() -> String {
+    crate::privacy::paths::display_path(&log_dir())
+}
+
 pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> DiagnosticsSnapshot {
     let mut features = Vec::new();
 

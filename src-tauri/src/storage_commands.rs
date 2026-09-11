@@ -372,6 +372,47 @@ pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Re
     Ok(())
 }
 
+/// Reveals a scanned large file in the platform file manager.
+///
+/// The interface submits only the item id: the path is resolved from the
+/// backend-owned inventory, so the frontend never has to reassemble a path from
+/// display fields (which on Windows produced mixed separators) and a stale id
+/// cannot point at a path the scan did not review.
+#[tauri::command]
+#[specta::specta]
+pub fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    use crate::platform::SystemActionProvider;
+
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::SystemActions,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let inventory = state
+        .storage_state
+        .large_file_inventory
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .filter(|inventory| is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp()))
+        .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
+
+    let record = inventory
+        .records
+        .get(&item_id)
+        .ok_or_else(|| "That item is no longer part of the current scan.".to_string())?;
+
+    if !crate::large_files::is_allowed_large_file_path(&record.path) {
+        return Err("That path is no longer inside an approved folder.".to_string());
+    }
+
+    crate::platform::NativeSystemActions::new().reveal_path(&record.path)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn prepare_large_file_trash(

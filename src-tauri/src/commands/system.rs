@@ -7,8 +7,8 @@ use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AwakeBehavior, AwakeRule, AwakeState, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
     DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, MemoryTerminationMode,
-    MemoryTerminationResult, PlatformCapabilities, ReleaseDevelopmentListenerResult, ReleaseMode,
-    SelectedApplication, ZenithSettings,
+    MemoryTerminationResult, PlatformCapabilities, PlatformContext,
+    ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::platform::PlatformPathsProvider;
@@ -346,7 +346,15 @@ pub async fn save_settings(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn show_in_file_manager(path: String) -> Result<(), String> {
+pub async fn show_in_file_manager(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::SystemActions,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|error| error.to_string())?;
     run_blocking(
         move || {
             use crate::platform::SystemActionProvider;
@@ -410,6 +418,16 @@ pub fn get_app_version() -> String {
 #[specta::specta]
 pub fn get_platform_capabilities(state: State<'_, AppState>) -> PlatformCapabilities {
     state.platform_capabilities.capabilities()
+}
+
+/// Platform vocabulary and locations the interface renders.
+///
+/// Copy such as "Move to Trash", "menu bar", or a log directory literal is only
+/// true on one platform; the frontend asks for it instead of hardcoding it.
+#[tauri::command]
+#[specta::specta]
+pub fn get_platform_context() -> PlatformContext {
+    PlatformContext::current(crate::diagnostics::log_directory_display())
 }
 
 #[tauri::command]

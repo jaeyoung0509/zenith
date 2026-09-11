@@ -10,6 +10,7 @@ pub mod process;
 pub mod system_actions;
 
 pub use capabilities::NativePlatformCapabilities;
+pub use description::{KnownFolder, PlatformEnvironment, ToolResolution, VolumeIdentity};
 pub use environment::{RuntimeEnvironment, SecurityPolicyState};
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
 pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};

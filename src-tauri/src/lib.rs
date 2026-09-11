@@ -152,6 +152,7 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
 
 pub fn run() {
     crate::platform::environment::set_webview_version(tauri::webview_version().ok());
+    let environment = Arc::new(crate::platform::PlatformEnvironment::native());
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
     awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
@@ -198,6 +199,7 @@ pub fn run() {
         Arc::new(NativePlatformCapabilities::new());
 
     let app_state = AppState {
+        environment: environment.clone(),
         registry,
         awake_manager: awake_manager.clone(),
         settings: settings.clone(),
@@ -406,6 +408,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::open_dashboard_window,
             commands::get_app_version,
             commands::get_platform_capabilities,
+            commands::get_platform_context,
             commands::toggle_quick_panel,
             commands::get_diagnostics,
             commands::open_logs_folder,
@@ -414,6 +417,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             storage_commands::start_large_file_scan,
             storage_commands::cancel_large_file_scan,
             storage_commands::prepare_large_file_trash,
+            storage_commands::reveal_large_file,
             storage_commands::pick_developer_workspace,
             storage_commands::register_developer_home_workspace,
             storage_commands::start_developer_artifact_scan,
