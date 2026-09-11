@@ -466,6 +466,74 @@ mod tests {
         }
     }
 
+    fn record_with_cmd(
+        executable: &str,
+        cmd: Vec<String>,
+        owner: crate::process_owner::ProcessOwner,
+        started_at: u64,
+        cwd: Option<PathBuf>,
+    ) -> ProcessRecord {
+        ProcessRecord {
+            pid: 4242,
+            owner: Some(owner),
+            started_at,
+            executable: Some(PathBuf::from(executable)),
+            cmd,
+            cwd,
+            cpu_percent: 2.5,
+            memory_bytes: 1024,
+        }
+    }
+
+    #[test]
+    fn generic_node_processes_require_a_cli_package_marker_for_sessions_and_leases() {
+        let temp = tempfile::tempdir().unwrap();
+        let owner = crate::process_owner::ProcessOwner::Unix(501);
+        let node = "C:\\Program Files\\nodejs\\node.exe";
+        let mut store = store::AgentActivityStore::new();
+        let registry = registry_from_records(
+            vec![
+                // A plain Node app living in a folder named `claude` must not
+                // become a Claude session and must not mint a stop lease.
+                record_with_cmd(
+                    node,
+                    vec!["node".into(), "C:\\dev\\claude\\server.js".into()],
+                    owner.clone(),
+                    10,
+                    Some(temp.path().into()),
+                ),
+                // The real npm-hosted Claude Code process must be recognized.
+                record_with_cmd(
+                    node,
+                    vec![
+                        "node".into(),
+                        "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js".into(),
+                    ],
+                    owner.clone(),
+                    11,
+                    Some(temp.path().into()),
+                ),
+            ],
+            owner,
+            100,
+            &mut store,
+        );
+
+        let sessions: Vec<_> = registry
+            .snapshot
+            .projects
+            .iter()
+            .flat_map(|project| project.sessions.iter())
+            .chain(registry.snapshot.unassigned_sessions.iter())
+            .collect();
+        assert_eq!(sessions.len(), 1, "only the real CLI must be recognized");
+        assert_eq!(sessions[0].tool_id, "claude");
+        assert_eq!(
+            sessions[0].stop_lease_id.is_some(),
+            cfg!(any(unix, windows))
+        );
+    }
+
     #[test]
     fn rejects_lookalikes_other_users_and_missing_identity() {
         let temp = tempfile::tempdir().unwrap();

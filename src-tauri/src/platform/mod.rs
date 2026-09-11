@@ -2,6 +2,7 @@ use crate::models::PlatformCapabilities;
 
 pub mod capabilities;
 pub mod environment;
+pub mod file_ops;
 pub mod paths;
 pub mod process;
 pub mod system_actions;

@@ -153,7 +153,7 @@ impl ToctouGuard {
 /// Opens a path without following reparse points and returns its stable
 /// volume/file identity with ordered fallback (ReFS FileIdInfo -> BY_HANDLE_FILE_INFORMATION -> weaker verification).
 #[cfg(windows)]
-pub fn windows_identity_from_handle(
+pub(crate) fn windows_identity_from_handle(
     handle: windows_sys::Win32::Foundation::HANDLE,
 ) -> Option<(u64, u64)> {
     use windows_sys::Win32::Storage::FileSystem::{

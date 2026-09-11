@@ -241,8 +241,9 @@ fn read_registry_string(subkey: &str, value: &str, view: u32) -> Option<String> 
         return None;
     }
     let wide: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
+        .chunks(2)
+        .filter_map(|pair| <[u8; 2]>::try_from(pair).ok())
+        .map(u16::from_ne_bytes)
         .collect();
     let end = wide
         .iter()

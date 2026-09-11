@@ -70,33 +70,12 @@ impl AuditStore {
         self.entries.iter().rev().take(100).cloned().collect()
     }
     pub fn save(&self, config: &Path) -> Result<(), String> {
-        std::fs::create_dir_all(config).map_err(|error| error.to_string())?;
         let path = config.join(FILE_NAME);
-        // Unique temporary name so concurrent writers cannot interleave a
-        // truncated file that the next launch treats as corrupt.
-        let temp = config.join(format!("{FILE_NAME}.tmp.{}", Uuid::new_v4()));
         let bytes = serde_json::to_vec(&self.entries).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err("AI Control Center audit cap exceeded".into());
         }
-        std::fs::write(&temp, bytes).map_err(|error| error.to_string())?;
-        let result = match std::fs::rename(&temp, &path) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                // On Windows a rename over the existing file can fail while the
-                // target is open; replace it and retry.
-                if path.exists() {
-                    let _ = std::fs::remove_file(&path);
-                    std::fs::rename(&temp, &path).map_err(|_| error)
-                } else {
-                    Err(error)
-                }
-            }
-        };
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        result.map_err(|error| error.to_string())
+        crate::platform::file_ops::atomic_write(&path, &bytes).map_err(|error| error.to_string())
     }
 }
 fn safe_label(value: &str) -> String {

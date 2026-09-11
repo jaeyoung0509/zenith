@@ -71,23 +71,25 @@ pub const ADAPTERS: &[AgentToolAdapter] = &[
     },
 ];
 
-/// Returns the canonical executable aliases for a known adapter. Keep Awake
-/// typed rules consume this same allowlist instead of maintaining a second
-/// process-signature table. Command markers extend the aliases so a CLI hosted
-/// by a generic runtime is recognized from its command line.
-pub fn executable_aliases(adapter_id: &str) -> Vec<&'static str> {
+/// Returns the canonical executable aliases for a known adapter. These match
+/// the process executable or process name only; they must never be used to
+/// scan command-line arguments, because a project folder named `claude` would
+/// otherwise be mistaken for Claude Code.
+pub fn executable_aliases(adapter_id: &str) -> &'static [&'static str] {
     ADAPTERS
         .iter()
         .find(|adapter| adapter.id == adapter_id)
-        .map(|adapter| {
-            adapter
-                .executables
-                .iter()
-                .chain(adapter.command_markers.iter())
-                .copied()
-                .collect()
-        })
-        .unwrap_or_default()
+        .map_or(&[], |adapter| adapter.executables)
+}
+
+/// Package/path markers for adapters normally hosted by a generic runtime
+/// (for example an npm-installed CLI running under `node.exe`). Only these
+/// markers may be matched against a command line.
+pub fn command_markers(adapter_id: &str) -> &'static [&'static str] {
+    ADAPTERS
+        .iter()
+        .find(|adapter| adapter.id == adapter_id)
+        .map_or(&[], |adapter| adapter.command_markers)
 }
 
 pub fn adapter_for_executable(path: &Path) -> Option<&'static AgentToolAdapter> {
@@ -113,13 +115,11 @@ pub fn adapter_for_process(executable: &Path, cmd: &[String]) -> Option<&'static
             exe_name
         };
     if exe_base.eq_ignore_ascii_case("node") || exe_base.eq_ignore_ascii_case("bun") {
+        // A generic runtime only identifies the hosted CLI through its package
+        // marker; the bare executable alias is deliberately excluded.
         for adapter in ADAPTERS {
-            for tool in adapter
-                .executables
-                .iter()
-                .chain(adapter.command_markers.iter())
-            {
-                if crate::dev_ports::classifier::argv_mentions_tool(cmd, tool) {
+            for marker in adapter.command_markers {
+                if crate::dev_ports::classifier::argv_mentions_tool(cmd, marker) {
                     return Some(adapter);
                 }
             }
@@ -517,6 +517,18 @@ mod tests {
     }
 
     #[test]
+    fn node_hosted_detection_never_matches_a_project_folder_name() {
+        let node = Path::new("C:\\Program Files\\nodejs\\node.exe");
+        for project in ["claude", "gemini", "codex", "opencode"] {
+            let cmd = vec!["node".to_string(), format!("C:\\dev\\{project}\\server.js")];
+            assert!(
+                adapter_for_process(node, &cmd).is_none(),
+                "project folder {project} must not match an agent adapter"
+            );
+        }
+    }
+
+    #[test]
     fn command_line_fallback_keeps_exact_component_matching() {
         assert!(adapter_for_process(
             Path::new("/usr/local/bin/node"),
@@ -526,12 +538,24 @@ mod tests {
             ]
         )
         .is_none());
+        assert!(adapter_for_process(
+            Path::new("/usr/local/bin/node"),
+            &[
+                "node".to_string(),
+                "/opt/homebrew/lib/node_modules/gemini-cli-helper/server.js".to_string(),
+            ]
+        )
+        .is_none());
     }
 
     #[test]
-    fn aliases_include_command_markers_for_hosted_clis() {
-        assert_eq!(executable_aliases("claude"), vec!["claude", "claude-code"]);
-        assert_eq!(executable_aliases("opencode"), vec!["opencode", "omp"]);
+    fn executable_aliases_and_command_markers_stay_separate() {
+        assert_eq!(executable_aliases("claude"), &["claude"]);
+        assert_eq!(command_markers("claude"), &["claude-code"]);
+        assert_eq!(executable_aliases("gemini"), &["gemini"]);
+        assert_eq!(command_markers("gemini"), &["gemini-cli"]);
+        assert_eq!(executable_aliases("opencode"), &["opencode", "omp"]);
+        assert!(command_markers("opencode").is_empty());
     }
 
     #[test]

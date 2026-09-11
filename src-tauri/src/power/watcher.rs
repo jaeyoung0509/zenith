@@ -640,46 +640,73 @@ impl KeepAwakeManager {
     }
 
     fn process_matches_agent(proc: &sysinfo::Process, agent: AwakeAgentId) -> bool {
-        let aliases = crate::agent_activity::adapters::executable_aliases(agent.adapter_id());
-        if aliases.is_empty() {
-            return false;
-        }
-
-        // Process names and executable paths are checked by exact basename.
-        // Command-line arguments are treated as path/name tokens as well, so
-        // `node /.../opencode` is supported without substring matching an
-        // unrelated argument or directory name.
-        if aliases
-            .iter()
-            .any(|alias| Self::matches_executable_alias(&proc.name().to_string_lossy(), alias))
-        {
-            return true;
-        }
-        if proc.exe().is_some_and(|executable| {
-            let value = executable.to_string_lossy();
-            aliases
-                .iter()
-                .any(|alias| Self::matches_executable_alias(&value, alias))
-        }) {
-            return true;
-        }
-        if proc.cmd().iter().any(|argument| {
-            let value = argument.to_string_lossy();
-            aliases
-                .iter()
-                .any(|alias| Self::matches_executable_alias(&value, alias))
-        }) {
-            return true;
-        }
-
-        let cmd_strings: Vec<String> = proc
+        let cmd: Vec<String> = proc
             .cmd()
             .iter()
             .map(|argument| argument.to_string_lossy().to_string())
             .collect();
-        aliases
+        Self::process_identity_matches_agent(
+            &proc.name().to_string_lossy(),
+            proc.exe(),
+            &cmd,
+            agent,
+        )
+    }
+
+    /// Pure matching over the fields that identify a process, so the
+    /// executable-alias and hosted-runtime-marker namespaces can be tested
+    /// without a live `sysinfo` process.
+    fn process_identity_matches_agent(
+        process_name: &str,
+        executable: Option<&Path>,
+        cmd: &[String],
+        agent: AwakeAgentId,
+    ) -> bool {
+        let executables = crate::agent_activity::adapters::executable_aliases(agent.adapter_id());
+        let markers = crate::agent_activity::adapters::command_markers(agent.adapter_id());
+        if executables.is_empty() && markers.is_empty() {
+            return false;
+        }
+
+        // Direct installation: the process itself is the CLI. Only the
+        // executable namespace participates here.
+        if executables
             .iter()
-            .any(|alias| crate::dev_ports::classifier::argv_mentions_tool(&cmd_strings, alias))
+            .any(|alias| Self::matches_executable_alias(process_name, alias))
+        {
+            return true;
+        }
+        if executable.is_some_and(|path| {
+            let value = path.to_string_lossy();
+            executables
+                .iter()
+                .any(|alias| Self::matches_executable_alias(&value, alias))
+        }) {
+            return true;
+        }
+
+        // A CLI hosted by a generic runtime (npm-installed under node/bun) is
+        // recognized only through its package marker, never through the bare
+        // executable alias, so `node C:\dev\claude\server.js` stays unknown.
+        if markers.is_empty() || !Self::is_generic_runtime_host(process_name, executable) {
+            return false;
+        }
+        markers
+            .iter()
+            .any(|marker| crate::dev_ports::classifier::argv_mentions_tool(cmd, marker))
+    }
+
+    fn is_generic_runtime_host(process_name: &str, executable: Option<&Path>) -> bool {
+        if Self::matches_executable_alias(process_name, "node")
+            || Self::matches_executable_alias(process_name, "bun")
+        {
+            return true;
+        }
+        executable.is_some_and(|path| {
+            let value = path.to_string_lossy();
+            Self::matches_executable_alias(&value, "node")
+                || Self::matches_executable_alias(&value, "bun")
+        })
     }
 
     pub(crate) fn application_executable_path_matches(
@@ -1095,7 +1122,7 @@ mod tests {
     #[test]
     fn typed_agent_aliases_are_exact_and_include_omp() {
         let aliases = crate::agent_activity::adapters::executable_aliases("opencode");
-        assert_eq!(aliases, vec!["opencode", "omp"]);
+        assert_eq!(aliases, &["opencode", "omp"]);
         assert!(KeepAwakeManager::matches_executable_alias("omp", "omp"));
         assert!(KeepAwakeManager::matches_executable_alias(
             r"C:\Users\me\bin\ANTIGRAVITY.EXE",
@@ -1108,6 +1135,46 @@ mod tests {
         assert!(!KeepAwakeManager::matches_executable_alias(
             "/Users/me/.opencode/bin/runner",
             "opencode"
+        ));
+    }
+
+    #[test]
+    fn keep_awake_node_markers_do_not_match_plain_project_folders() {
+        let node = Path::new(r"C:\Program Files\nodejs\node.exe");
+        let project_claude = vec!["node".to_string(), r"C:\dev\claude\server.js".to_string()];
+        assert!(!KeepAwakeManager::process_identity_matches_agent(
+            "node",
+            Some(node),
+            &project_claude,
+            AwakeAgentId::Claude,
+        ));
+
+        let hosted_claude = vec![
+            "node".to_string(),
+            r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js"
+                .to_string(),
+        ];
+        assert!(KeepAwakeManager::process_identity_matches_agent(
+            "node",
+            Some(node),
+            &hosted_claude,
+            AwakeAgentId::Claude,
+        ));
+
+        // A direct executable still matches through the executable namespace.
+        assert!(KeepAwakeManager::process_identity_matches_agent(
+            "claude.exe",
+            Some(Path::new(r"C:\tools\claude.exe")),
+            &["claude.exe".to_string()],
+            AwakeAgentId::Claude,
+        ));
+
+        // Markers only apply to node/bun hosts.
+        assert!(!KeepAwakeManager::process_identity_matches_agent(
+            "python",
+            Some(Path::new(r"C:\tools\python.exe")),
+            &hosted_claude,
+            AwakeAgentId::Claude,
         ));
     }
 

@@ -102,6 +102,9 @@ pub trait TerminationSystem: Send + Sync {
     fn get_process_info(&self, pid: u32) -> Option<ProcessCheckInfo>;
     fn is_terminal_or_protected(&self, info: &ProcessCheckInfo) -> bool;
     fn send_sigterm(&self, pid: u32) -> Result<(), String>;
+    /// Force termination, used only after a graceful request did not end the
+    /// process and its identity was re-verified.
+    fn force_terminate(&self, pid: u32) -> Result<(), String>;
 }
 
 pub struct RealTerminationSystem;
@@ -196,9 +199,11 @@ impl TerminationSystem for RealTerminationSystem {
         }
         #[cfg(target_os = "windows")]
         {
-            // Ownership and identity were verified by `execute_graceful_stop`.
-            // Attempt the shared platform graceful mechanisms (WM_CLOSE,
-            // CTRL_BREAK_EVENT) and only then fall back to force termination.
+            // Try the platform graceful mechanisms (WM_CLOSE, CTRL_BREAK).
+            // When no window or console channel exists, the verified stop
+            // action falls back to force immediately; when a request was
+            // delivered, `execute_graceful_stop` waits and re-verifies identity
+            // before forcing a surviving process.
             match crate::platform::terminate_process(
                 pid,
                 crate::platform::TerminationMode::Graceful,
@@ -213,6 +218,18 @@ impl TerminationSystem for RealTerminationSystem {
         {
             let _ = pid;
             Err("Graceful stop is only supported on Unix or Windows systems.".to_string())
+        }
+    }
+
+    fn force_terminate(&self, pid: u32) -> Result<(), String> {
+        #[cfg(any(unix, target_os = "windows"))]
+        {
+            crate::platform::terminate_process(pid, crate::platform::TerminationMode::Force)
+        }
+        #[cfg(not(any(unix, target_os = "windows")))]
+        {
+            let _ = pid;
+            Err("Force stop is only supported on Unix or Windows systems.".to_string())
         }
     }
 }
@@ -266,8 +283,55 @@ pub fn execute_graceful_stop(
         );
     }
 
-    // 9. Send SIGTERM only (never SIGKILL, never process group)
-    system.send_sigterm(lease.pid)
+    // 9. Deliver the stop request. On Unix this is SIGTERM and the caller's
+    // contract is unchanged. On Windows the request may be a WM_CLOSE or
+    // CTRL_BREAK notification the process can ignore, so verify exit with
+    // bounded polling and force only after re-verifying identity.
+    system.send_sigterm(lease.pid)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+        const MAX_ATTEMPTS: usize = 10;
+        for _ in 0..MAX_ATTEMPTS {
+            std::thread::sleep(POLL_INTERVAL);
+            let Some(info) = system.get_process_info(lease.pid) else {
+                return Ok(());
+            };
+            if !same_lease_identity(lease, &info, system) {
+                // A different process now owns this PID; the leased process is
+                // gone and the replacement must never be forced.
+                return Ok(());
+            }
+        }
+        // Still the same process: re-verify immediately before forcing so a
+        // recycle between the last poll and this call is still rejected.
+        let Some(info) = system.get_process_info(lease.pid) else {
+            return Ok(());
+        };
+        if !same_lease_identity(lease, &info, system) {
+            return Ok(());
+        }
+        system.force_terminate(lease.pid)?;
+    }
+
+    Ok(())
+}
+
+/// Identity checks shared by the initial validation and the pre-force recheck.
+#[cfg(target_os = "windows")]
+fn same_lease_identity(
+    lease: &StopLease,
+    info: &ProcessCheckInfo,
+    system: &dyn TerminationSystem,
+) -> bool {
+    info.pid == lease.pid
+        && info.owner == lease.owner
+        && info.owner == system.current_owner()
+        && info.start_time == lease.start_time
+        && info.executable.as_deref().is_some_and(|executable| {
+            crate::platform::NativePlatformPaths::paths_equal(executable, &lease.executable)
+        })
 }
 
 #[cfg(test)]
@@ -280,6 +344,7 @@ mod tests {
         current_pid: u32,
         process: Option<ProcessCheckInfo>,
         signaled: Mutex<Vec<u32>>,
+        forced: Mutex<Vec<u32>>,
     }
 
     impl TerminationSystem for FakeSystem {
@@ -301,6 +366,11 @@ mod tests {
 
         fn send_sigterm(&self, pid: u32) -> Result<(), String> {
             self.signaled.lock().unwrap().push(pid);
+            Ok(())
+        }
+
+        fn force_terminate(&self, pid: u32) -> Result<(), String> {
+            self.forced.lock().unwrap().push(pid);
             Ok(())
         }
     }
@@ -335,6 +405,7 @@ mod tests {
                 name: "claude".into(),
             }),
             signaled: Mutex::new(vec![]),
+            forced: Mutex::new(vec![]),
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
@@ -359,6 +430,7 @@ mod tests {
                 name: "claude".into(),
             }),
             signaled: Mutex::new(vec![]),
+            forced: Mutex::new(vec![]),
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
@@ -384,6 +456,7 @@ mod tests {
                 name: "claude".into(),
             }),
             signaled: Mutex::new(vec![]),
+            forced: Mutex::new(vec![]),
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
@@ -413,6 +486,7 @@ mod tests {
                 name: "Terminal".into(), // Terminal name!
             }),
             signaled: Mutex::new(vec![]),
+            forced: Mutex::new(vec![]),
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
@@ -490,11 +564,40 @@ mod tests {
                 name: "claude".into(),
             }),
             signaled: Mutex::new(vec![]),
+            forced: Mutex::new(vec![]),
         };
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
 
         let error = execute_graceful_stop(&lease, &system).unwrap_err();
         assert!(error.contains("working directory"));
         assert!(system.signaled.lock().unwrap().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_graceful_timeout_forces_only_after_identity_recheck() {
+        let system = FakeSystem {
+            current_owner: ProcessOwner::Unix(501),
+            current_pid: 100,
+            process: Some(ProcessCheckInfo {
+                pid: 42,
+                owner: ProcessOwner::Unix(501),
+                start_time: 200,
+                executable: Some(PathBuf::from("/usr/local/bin/claude")),
+                cmd: Vec::new(),
+                cwd: Some(PathBuf::from("/workspace/repo")),
+                parent_pid: Some(10),
+                name: "claude".into(),
+            }),
+            signaled: Mutex::new(vec![]),
+            forced: Mutex::new(vec![]),
+        };
+        let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
+
+        // The process survives the whole bounded wait, so the same verified
+        // identity is force-terminated.
+        assert!(execute_graceful_stop(&lease, &system).is_ok());
+        assert_eq!(*system.signaled.lock().unwrap(), vec![42]);
+        assert_eq!(*system.forced.lock().unwrap(), vec![42]);
     }
 }

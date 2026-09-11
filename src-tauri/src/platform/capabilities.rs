@@ -19,36 +19,44 @@ impl NativePlatformCapabilities {
     /// feature that this machine cannot perform reports why, distinctly from a
     /// feature Zenith has not implemented.
     pub fn runtime_capabilities(environment: &RuntimeEnvironment) -> PlatformCapabilities {
-        // Only Windows consults machine policy today; other platforms keep the
-        // compile-time contract until an adapter exists.
-        #[allow(unused_mut)]
+        Self::runtime_capabilities_with_container_cli(
+            environment,
+            crate::docker::container_cli_detected(),
+        )
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn runtime_capabilities_with_container_cli(
+        environment: &RuntimeEnvironment,
+        container_cli_detected: bool,
+    ) -> PlatformCapabilities {
         let mut capabilities = PlatformCapabilities::current();
 
-        #[cfg(target_os = "windows")]
-        {
-            if environment.controlled_folder_access == SecurityPolicyState::Enabled {
-                capabilities.large_files = PlatformFeatureCapability::read_only(
-                    "Controlled Folder Access is enabled, so Zenith cannot move reviewed files to the Recycle Bin. Allow Zenith under Windows Security > Virus & threat protection > Ransomware protection, or disable Controlled Folder Access.",
-                );
-            }
-            if environment.application_control_policy == SecurityPolicyState::Enabled {
-                capabilities.system_actions = PlatformFeatureCapability::read_only(
-                    "An application control policy (Smart App Control or WDAC) is enforced, so helper programs launched by Zenith may be blocked. Relax the policy or allow Zenith's helpers before relying on this feature.",
-                );
-            }
-            if crate::tooling::resolve("docker").is_none() {
-                capabilities.docker = PlatformFeatureCapability::unavailable(
-                    "No Docker-compatible CLI was detected in PATH or known tool locations. Install Docker, Podman, or Rancher Desktop to enable container cleanup.",
-                );
-            }
+        if environment.controlled_folder_access == SecurityPolicyState::Enabled {
+            capabilities.large_files = PlatformFeatureCapability::read_only(
+                "Controlled Folder Access is enabled, so Zenith cannot move reviewed files to the Recycle Bin. Allow Zenith under Windows Security > Virus & threat protection > Ransomware protection, or disable Controlled Folder Access.",
+            );
         }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = environment;
+        if environment.application_control_policy == SecurityPolicyState::Enabled {
+            capabilities.system_actions = PlatformFeatureCapability::read_only(
+                "An application control policy (Smart App Control or WDAC) is enforced, so helper programs launched by Zenith may be blocked. Relax the policy or allow Zenith's helpers before relying on this feature.",
+            );
+        }
+        if !container_cli_detected {
+            capabilities.docker = PlatformFeatureCapability::unavailable(
+                "No Docker-compatible CLI (docker or podman) was detected in PATH or known tool locations. Install Docker, Podman, or Rancher Desktop to enable container cleanup.",
+            );
         }
 
         capabilities
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn runtime_capabilities_with_container_cli(
+        _environment: &RuntimeEnvironment,
+        _container_cli_detected: bool,
+    ) -> PlatformCapabilities {
+        PlatformCapabilities::current()
     }
 }
 
@@ -79,6 +87,25 @@ mod tests {
                 .reason
                 .as_deref()
                 .is_some_and(|reason| reason.contains("Zenith")));
+        }
+    }
+
+    #[test]
+    fn podman_only_environments_keep_container_capability_supported() {
+        let environment = RuntimeEnvironment::probe(None);
+        let with_podman =
+            NativePlatformCapabilities::runtime_capabilities_with_container_cli(&environment, true);
+        let without_cli = NativePlatformCapabilities::runtime_capabilities_with_container_cli(
+            &environment,
+            false,
+        );
+
+        if cfg!(target_os = "windows") {
+            assert!(with_podman.docker.is_available());
+            assert!(!without_cli.docker.is_available());
+        } else {
+            assert!(with_podman.docker.is_available());
+            assert!(without_cli.docker.is_available());
         }
     }
 }

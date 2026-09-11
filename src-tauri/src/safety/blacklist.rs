@@ -252,11 +252,6 @@ impl Blacklist {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    fn windows_path_key(path: &Path) -> String {
-        crate::platform::NativePlatformPaths::windows_path_key(path)
-    }
-
     /// Verifies that a target path is completely safe from the blacklist.
     pub fn validate(path: &Path) -> Result<(), ZenithError> {
         // Resolve parent components to catch ../ attacks
