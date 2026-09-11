@@ -392,7 +392,7 @@ fn validate_executable(path: &Path) -> Result<(), String> {
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/opt/homebrew"),
     ];
-    roots.extend(crate::platform::NativePlatformPaths::tool_roots());
+    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots());
     if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
         roots.extend([
             home.join(".local/bin"),
@@ -404,38 +404,37 @@ fn validate_executable(path: &Path) -> Result<(), String> {
         ]);
         roots.extend(node_manager_roots(&home));
     }
-    for variable in ["LOCALAPPDATA", "APPDATA"] {
-        if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
-            roots.extend([
-                root.join("Programs"),
-                root.join("npm"),
-                root.join("pnpm"),
-                root.join("nvm"),
-                root.join("Volta"),
-            ]);
-        }
-    }
-    if let Some(program_files) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
-        roots.push(program_files);
-    }
 
-    let matches = roots.iter().any(|root| {
-        let norm_root = crate::platform::NativePlatformPaths::normalize_verbatim_path(root);
-        #[cfg(windows)]
-        {
-            crate::platform::NativePlatformPaths::windows_path_starts_with(&canonical, &norm_root)
-        }
-        #[cfg(not(windows))]
-        {
-            canonical.starts_with(&norm_root)
-        }
-    });
-
-    if matches {
+    if executable_under_roots(&canonical, &roots) {
         Ok(())
     } else {
         Err("The provider executable is outside trusted install locations".to_string())
     }
+}
+
+/// Pure matcher over an already-canonicalized executable and its trust roots.
+/// Kept separate so the Windows trust boundary can be tested without touching
+/// the real filesystem. Windows-style paths always use the Windows comparison
+/// so the fixtures remain meaningful on Unix hosts.
+fn executable_under_roots(canonical: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| {
+        let norm_root = crate::platform::NativePlatformPaths::normalize_verbatim_path(root);
+        if looks_like_windows_path(canonical) || looks_like_windows_path(&norm_root) {
+            crate::platform::NativePlatformPaths::windows_path_starts_with(canonical, &norm_root)
+        } else {
+            canonical.starts_with(&norm_root)
+        }
+    })
+}
+
+fn looks_like_windows_path(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    text.starts_with("\\\\")
+        || text.starts_with("//")
+        || matches!(
+            text.as_bytes(),
+            [drive, b':', ..] if drive.is_ascii_alphabetic()
+        )
 }
 
 fn paths_match(left: &Path, right: &Path) -> bool {
@@ -519,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_executable_validation_uses_shared_tool_roots() {
+    fn provider_executable_validation_uses_trusted_tool_roots() {
         #[cfg(target_os = "macos")]
         {
             use super::validate_executable;
@@ -529,6 +528,66 @@ mod tests {
             let stray = dir.path().join("npm");
             std::fs::write(&stray, b"#!/bin/sh\n").unwrap();
             assert!(validate_executable(&stray).is_err());
+        }
+    }
+
+    #[test]
+    fn trusted_paths_require_a_documented_tool_root() {
+        use super::executable_under_roots;
+        use std::path::{Path, PathBuf};
+
+        // Windows-style fixtures stay lexically comparable on Unix hosts.
+        let roots: Vec<PathBuf> = vec![
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming\npm"),
+            PathBuf::from(r"C:\Users\tester\AppData\Local\pnpm"),
+            PathBuf::from(r"C:\Program Files\nodejs"),
+        ];
+        assert!(executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Roaming\npm\npm.cmd"),
+            &roots
+        ));
+        assert!(executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Local\pnpm\pnpm.cmd"),
+            &roots
+        ));
+        // A random directory under a user-writable container is not trusted.
+        assert!(!executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Local\random\npm.cmd"),
+            &roots
+        ));
+        assert!(!executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Roaming\random\npm.cmd"),
+            &roots
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn trusted_tool_roots_exclude_bare_user_writable_containers() {
+        use crate::platform::NativePlatformPaths;
+        use std::path::PathBuf;
+
+        let roots = NativePlatformPaths::trusted_tool_roots();
+        for variable in ["LOCALAPPDATA", "APPDATA", "ProgramData"] {
+            let Some(root) = std::env::var_os(variable).map(PathBuf::from) else {
+                continue;
+            };
+            let normalized = NativePlatformPaths::normalize_verbatim_path(&root);
+            assert!(
+                !roots
+                    .iter()
+                    .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &normalized)),
+                "bare {variable} must not be a trusted executable root"
+            );
+        }
+        if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            let npm = app_data.join("npm");
+            assert!(
+                roots
+                    .iter()
+                    .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &npm)),
+                "the documented %APPDATA%\\npm install root must stay trusted"
+            );
         }
     }
 

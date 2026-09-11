@@ -10,7 +10,7 @@ pub mod system_actions;
 pub use capabilities::NativePlatformCapabilities;
 pub use environment::{RuntimeEnvironment, SecurityPolicyState};
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
-pub use process::{terminate_process, TerminationMode};
+pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};
 
 /// Narrow provider boundary for platform capability discovery.

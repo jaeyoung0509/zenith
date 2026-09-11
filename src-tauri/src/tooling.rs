@@ -624,11 +624,10 @@ fn search_candidates() -> Vec<PathBuf> {
         .map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .unwrap_or_default();
 
-    // One shared root set for discovery and provider allowlisting so a tool
-    // that resolves here cannot be rejected afterwards. `tool_roots` reads
+    // One shared root set for discovery. `tool_search_locations` reads
     // ProgramW6432/ProgramFiles(x86), package-manager environment variables,
     // Chocolatey/Scoop shims, WinGet Links, and nvm-windows on Windows.
-    candidates.extend(crate::platform::NativePlatformPaths::tool_roots());
+    candidates.extend(crate::platform::NativePlatformPaths::tool_search_locations());
 
     #[cfg(target_os = "macos")]
     if let Some(home) = crate::platform::NativePlatformPaths::new().home() {

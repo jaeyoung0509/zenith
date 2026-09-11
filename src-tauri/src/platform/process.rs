@@ -16,36 +16,77 @@ pub enum TerminationMode {
     Force,
 }
 
+/// Outcome of a graceful stop request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GracefulStopOutcome {
+    /// A platform graceful mechanism delivered the request.
+    Delivered,
+    /// No window or console control mechanism exists for this target. Callers
+    /// that intend to stop the process must re-verify identity and force.
+    Unavailable,
+}
+
+/// Requests a graceful stop without ever forcing. Callers own the fallback so
+/// force termination can only happen after a fresh identity verification.
 #[cfg(unix)]
-pub fn terminate_process(pid: u32, mode: TerminationMode) -> Result<(), String> {
-    let signal = match mode {
-        TerminationMode::Graceful => libc::SIGTERM,
-        TerminationMode::Force => libc::SIGKILL,
-    };
-    let result = unsafe { libc::kill(pid as i32, signal) };
+pub fn request_graceful_stop(pid: u32) -> Result<GracefulStopOutcome, String> {
+    let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     if result == 0 {
-        return Ok(());
+        return Ok(GracefulStopOutcome::Delivered);
     }
     let error = std::io::Error::last_os_error();
     if error.raw_os_error() == Some(libc::ESRCH) {
         // The process already exited; the desired end state is reached.
-        return Ok(());
+        return Ok(GracefulStopOutcome::Delivered);
     }
     Err(format!("Could not signal process {pid}: {error}"))
 }
 
 #[cfg(target_os = "windows")]
+pub fn request_graceful_stop(pid: u32) -> Result<GracefulStopOutcome, String> {
+    if post_close_to_process(pid) {
+        return Ok(GracefulStopOutcome::Delivered);
+    }
+    if send_console_break(pid) {
+        return Ok(GracefulStopOutcome::Delivered);
+    }
+    Ok(GracefulStopOutcome::Unavailable)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub fn request_graceful_stop(pid: u32) -> Result<GracefulStopOutcome, String> {
+    let _ = pid;
+    Err("Process termination is unavailable on this platform.".to_string())
+}
+
+#[cfg(unix)]
 pub fn terminate_process(pid: u32, mode: TerminationMode) -> Result<(), String> {
     match mode {
-        TerminationMode::Graceful => {
-            if post_close_to_process(pid) {
+        TerminationMode::Graceful => request_graceful_stop(pid).map(|_| ()),
+        TerminationMode::Force => {
+            let result = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            if result == 0 {
                 return Ok(());
             }
-            if send_console_break(pid) {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                // The process already exited; the desired end state is reached.
                 return Ok(());
             }
-            Err("No window or console control mechanism is available for this process.".to_string())
+            Err(format!("Could not signal process {pid}: {error}"))
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn terminate_process(pid: u32, mode: TerminationMode) -> Result<(), String> {
+    match mode {
+        TerminationMode::Graceful => match request_graceful_stop(pid)? {
+            GracefulStopOutcome::Delivered => Ok(()),
+            GracefulStopOutcome::Unavailable => Err(
+                "No window or console control mechanism is available for this process.".to_string(),
+            ),
+        },
         TerminationMode::Force => force_terminate(pid),
     }
 }
@@ -141,7 +182,7 @@ fn force_terminate(pid: u32) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::TerminationMode;
+    use super::{GracefulStopOutcome, TerminationMode};
 
     #[test]
     #[cfg(unix)]
@@ -153,7 +194,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn graceful_request_to_missing_process_is_delivered() {
+        let missing = u32::MAX - 1;
+        assert_eq!(
+            super::request_graceful_stop(missing).unwrap(),
+            GracefulStopOutcome::Delivered
+        );
+    }
+
+    #[test]
     fn termination_modes_are_distinct() {
         assert_ne!(TerminationMode::Graceful, TerminationMode::Force);
+    }
+
+    #[test]
+    fn graceful_outcomes_are_distinct() {
+        assert_ne!(
+            GracefulStopOutcome::Delivered,
+            GracefulStopOutcome::Unavailable
+        );
     }
 }

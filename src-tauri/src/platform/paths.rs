@@ -253,8 +253,9 @@ impl NativePlatformPaths {
         path_str.encode_utf16().chain([0]).collect()
     }
 
-    /// Returns shared toolchain and package manager installation roots.
-    pub fn tool_roots() -> Vec<PathBuf> {
+    /// Returns directories searched for tools. Discovery convenience only:
+    /// this list is not an execution trust boundary.
+    pub fn tool_search_locations() -> Vec<PathBuf> {
         #[cfg(target_os = "windows")]
         {
             let mut roots = Vec::new();
@@ -338,6 +339,88 @@ impl NativePlatformPaths {
             roots.sort();
             roots.dedup();
             roots
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]
+        }
+    }
+
+    /// Returns executable trust roots: only platform install locations Zenith
+    /// is willing to execute. User-writable containers (`%LOCALAPPDATA%`,
+    /// `%APPDATA%`, `%ProgramData%` themselves) are excluded; only their
+    /// documented tool/package-manager children are trusted.
+    pub fn trusted_tool_roots() -> Vec<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut roots = Vec::new();
+            // System install roots: administrator-writable only.
+            for var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+                if let Some(val) = std::env::var_os(var).map(PathBuf::from) {
+                    roots.push(val.clone());
+                    roots.push(val.join("Docker\\Docker\\resources\\bin"));
+                    roots.push(val.join("Git\\cmd"));
+                    roots.push(val.join("Git\\bin"));
+                    roots.push(val.join("nodejs"));
+                }
+            }
+            if let Some(program_data) = std::env::var_os("ProgramData").map(PathBuf::from) {
+                // The ProgramData root itself is intentionally not trusted.
+                roots.push(program_data.join("chocolatey\\bin"));
+                roots.push(program_data.join("scoop\\shims"));
+            }
+            if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+                // The LOCALAPPDATA root itself is intentionally not trusted.
+                roots.extend([
+                    local.join("Programs"),
+                    local.join("Programs\\Ollama"),
+                    local.join("Programs\\Python\\Launcher"),
+                    local.join("Volta\\bin"),
+                    local.join("Microsoft\\WinGet\\Links"),
+                    local.join("npm"),
+                    local.join("pnpm"),
+                    local.join("nvm"),
+                ]);
+            }
+            if let Some(roaming) = std::env::var_os("APPDATA").map(PathBuf::from) {
+                // The APPDATA root itself is intentionally not trusted.
+                roots.extend([
+                    roaming.join("npm"),
+                    roaming.join("pnpm"),
+                    roaming.join("nodejs"),
+                    roaming.join("nvm"),
+                ]);
+            }
+            // Explicitly configured toolchain roots.
+            for env_var in [
+                "PNPM_HOME",
+                "VOLTA_HOME",
+                "FNM_DIR",
+                "NVM_HOME",
+                "NVM_SYMLINK",
+                "CARGO_HOME",
+            ] {
+                if let Some(val) = std::env::var_os(env_var).map(PathBuf::from) {
+                    roots.push(val);
+                }
+            }
+            if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+                roots.push(profile.join(".local\\bin"));
+                roots.push(profile.join(".cargo\\bin"));
+                roots.push(profile.join("AppData\\Roaming\\npm"));
+                roots.push(profile.join("AppData\\Local\\pnpm"));
+                roots.push(profile.join("scoop\\shims"));
+                roots.push(profile.join("scoop\\apps"));
+                roots.push(profile.join(".gemini\\antigravity-cli\\bin"));
+            }
+            roots.retain(|p| p.is_absolute());
+            roots.sort();
+            roots.dedup();
+            roots
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::tool_search_locations()
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
