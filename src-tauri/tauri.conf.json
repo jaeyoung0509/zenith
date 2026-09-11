@@ -62,8 +62,8 @@
     ],
     "windows": {
       "webviewInstallMode": {
-        "type": "downloadBootstrapper",
-        "silent": true
+        "type": "offlineInstaller",
+        "silent": false
       },
       "allowDowngrades": false,
       "nsis": {

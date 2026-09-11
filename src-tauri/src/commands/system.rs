@@ -433,14 +433,7 @@ pub fn get_platform_context() -> PlatformContext {
 #[tauri::command]
 #[specta::specta]
 pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
-    if let Ok(window) = crate::ensure_window(&app_handle, "quick") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
-        } else {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }
+    crate::toggle_quick_panel_from_app(&app_handle);
     Ok(())
 }
 
