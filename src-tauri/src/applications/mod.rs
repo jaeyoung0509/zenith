@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(not(target_os = "windows"))]
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
 
@@ -52,11 +53,11 @@ impl ApplicationScanner {
     pub fn scan() -> AppInventory {
         #[cfg(target_os = "windows")]
         {
-            return AppInventory {
+            AppInventory {
                 inventory_id: Uuid::new_v4().to_string(),
                 records: HashMap::new(),
                 created_at: unix_timestamp(),
-            };
+            }
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -425,6 +426,7 @@ fn match_candidate(
     None
 }
 
+#[cfg(not(target_os = "windows"))]
 fn detect_install_source(path: &Path) -> AppInstallSource {
     let text = path.to_string_lossy();
     if text.contains("/Caskroom/") {
