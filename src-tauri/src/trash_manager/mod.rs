@@ -363,6 +363,9 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
 
     let current = FileIdentity::from_path(&target.path)
         .ok_or_else(|| "Skipped because the item disappeared or became a symlink.".to_string())?;
+    if target.identity.is_zero() || current.is_zero() {
+        return Err("Skipped because the item has an unverifiable zero identity.".to_string());
+    }
     if current != target.identity {
         return Err("Skipped because the filesystem item changed after review.".to_string());
     }
@@ -473,7 +476,7 @@ fn same_directory_identity(path: &Path, expected: &FileIdentity) -> bool {
     let Some(current) = FileIdentity::from_path(path) else {
         return false;
     };
-    current.device == expected.device && current.inode == expected.inode && path.is_dir()
+    current.same_entity(expected) && path.is_dir()
 }
 
 fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) -> bool {
@@ -945,12 +948,7 @@ mod tests {
     #[test]
     fn app_related_items_are_skipped_when_the_app_bundle_cannot_move() {
         let missing = PathBuf::from("/Applications/Missing Example.app");
-        let identity = FileIdentity {
-            device: 0,
-            inode: 0,
-            size: 0,
-            modified: None,
-        };
+        let identity = FileIdentity::for_test(1, 1, 0, None);
         let plan = TrashPlan {
             id: Uuid::new_v4(),
             created_at: unix_timestamp(),
@@ -983,6 +981,44 @@ mod tests {
         assert_eq!(move_attempts, 0);
         assert_eq!(result.skipped_count, 2);
         assert!(result.items[1].message.contains("app bundle was not moved"));
+    }
+
+    #[test]
+    fn zero_identity_fails_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let project = workspace.join("project");
+        let target = project.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let marker = project.join("Cargo.toml");
+        std::fs::write(&marker, "[package]\nname='demo'\n").unwrap();
+
+        let workspace_identity = FileIdentity::from_path(&workspace).unwrap();
+        let project_identity = FileIdentity::from_path(&project).unwrap();
+        let marker_identity = FileIdentity::from_path(&marker).unwrap();
+
+        let target_item = TrashTarget {
+            item_id: "artifact".to_string(),
+            path: target,
+            identity: FileIdentity::for_test(0, 0, 7, None),
+            logical_size: 7,
+            allocated_size: 7,
+            scope: TrashScope::DeveloperArtifact {
+                workspace_root: workspace,
+                workspace_identity,
+                project_root: project,
+                project_identity,
+                artifact_relative: PathBuf::from("target"),
+                marker_identities: vec![(marker, marker_identity)],
+                kind: DeveloperArtifactKind::CargoTarget,
+            },
+        };
+        let err = validate_target(&target_item).unwrap_err();
+        assert!(
+            err.contains("zero identity"),
+            "Expected zero identity rejection, got: {}",
+            err
+        );
     }
 
     #[test]

@@ -35,13 +35,66 @@ pub struct LargeFileInventory {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIdentity {
-    pub device: u64,
-    pub inode: u64,
-    pub size: u64,
-    pub modified: Option<u64>,
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: Option<u64>,
 }
 
 impl FileIdentity {
+    pub fn is_zero(&self) -> bool {
+        self.device == 0 && self.inode == 0
+    }
+
+    pub fn same_entity(&self, other: &Self) -> bool {
+        !self.is_zero()
+            && !other.is_zero()
+            && self.device == other.device
+            && self.inode == other.inode
+    }
+
+    pub fn device(&self) -> u64 {
+        self.device
+    }
+
+    pub fn inode(&self) -> u64 {
+        self.inode
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn modified(&self) -> Option<u64> {
+        self.modified
+    }
+
+    #[cfg(test)]
+    pub fn for_test(device: u64, inode: u64, size: u64, modified: Option<u64>) -> Self {
+        Self {
+            device,
+            inode,
+            size,
+            modified,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_size(&self, size: u64) -> Self {
+        Self {
+            size,
+            ..self.clone()
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_modified(&self, modified: Option<u64>) -> Self {
+        Self {
+            modified,
+            ..self.clone()
+        }
+    }
+
     pub fn from_path(path: &Path) -> Option<Self> {
         let meta = fs::symlink_metadata(path).ok()?;
         if crate::safety::SymlinkGuard::is_symlink(path) {
@@ -51,34 +104,63 @@ impl FileIdentity {
         let (device, inode) = (meta.dev(), meta.ino());
         #[cfg(windows)]
         let (device, inode) = {
-            use std::os::windows::fs::OpenOptionsExt;
-            use std::os::windows::io::AsRawHandle;
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
             use windows_sys::Win32::Storage::FileSystem::{
-                GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
-                FILE_FLAG_OPEN_REPARSE_POINT,
+                CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+                FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                OPEN_EXISTING,
             };
-            // Directories need BACKUP_SEMANTICS. Failed identity reads must not
-            // collapse every inaccessible directory to the same (0, 0) identity.
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-                .open(path)
-                .ok()?;
+
+            let path_text = path.to_string_lossy();
+            let wide: Vec<u16> = if path_text.starts_with(r"\\?\") {
+                path.as_os_str().encode_wide().chain([0]).collect()
+            } else if let Some(unc_path) = path_text.strip_prefix(r"\\") {
+                format!(r"\\?\UNC\{}", unc_path)
+                    .encode_utf16()
+                    .chain([0])
+                    .collect()
+            } else if path.as_os_str().encode_wide().count() > 240 {
+                format!(r"\\?\{}", path.display())
+                    .encode_utf16()
+                    .chain([0])
+                    .collect()
+            } else {
+                path.as_os_str().encode_wide().chain([0]).collect()
+            };
+
             unsafe {
-                let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
-                if GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) != 0
-                    && info.dwFileAttributes & 0x400 == 0
-                {
-                    let dev = info.dwVolumeSerialNumber as u64;
-                    let ino = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
-                    (dev, ino)
-                } else {
+                let handle = CreateFileW(
+                    wide.as_ptr(),
+                    0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                    std::ptr::null_mut(),
+                );
+                if handle == INVALID_HANDLE_VALUE || handle.is_null() {
                     return None;
                 }
+                let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+                let ok = GetFileInformationByHandle(handle, &mut info);
+                CloseHandle(handle);
+                if ok == 0 || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0) {
+                    return None;
+                }
+                let dev = info.dwVolumeSerialNumber as u64;
+                let ino = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+                (dev, ino)
             }
         };
         #[cfg(not(any(unix, windows)))]
         let (device, inode) = (0, 0);
+
+        if device == 0 && inode == 0 {
+            return None;
+        }
+
         Some(Self {
             device,
             inode,
@@ -271,17 +353,9 @@ impl LargeFileScanner {
                         kind: classify(extension.as_deref()),
                         extension,
                     };
-                    let identity = FileIdentity {
-                        #[cfg(unix)]
-                        device: meta.dev(),
-                        #[cfg(not(unix))]
-                        device: 0,
-                        #[cfg(unix)]
-                        inode: meta.ino(),
-                        #[cfg(not(unix))]
-                        inode: 0,
-                        size: meta.len(),
-                        modified: modified_secs(&meta),
+                    let Some(identity) = FileIdentity::from_path(&path) else {
+                        skipped_entries = skipped_entries.saturating_add(1);
+                        continue;
                     };
                     matches_found = matches_found.saturating_add(1);
                     let rank = (allocated_size, meta.len(), id);
@@ -502,9 +576,10 @@ mod tests {
         let first_id = super::FileIdentity::from_path(&first).unwrap();
         let second_id = super::FileIdentity::from_path(&second).unwrap();
         assert_ne!(
-            (first_id.device, first_id.inode),
-            (second_id.device, second_id.inode)
+            (first_id.device(), first_id.inode()),
+            (second_id.device(), second_id.inode())
         );
+        assert!(!first_id.same_entity(&second_id));
         assert!(super::FileIdentity::from_path(&dir.path().join("없는 폴더")).is_none());
     }
 
@@ -626,12 +701,7 @@ mod tests {
                     extension: Some("bin".to_string()),
                 },
                 path: PathBuf::from(format!("/tmp/{id}.bin")),
-                identity: FileIdentity {
-                    device: 1,
-                    inode: allocated_size,
-                    size: allocated_size,
-                    modified: None,
-                },
+                identity: FileIdentity::for_test(1, allocated_size, allocated_size, None),
             }
         }
 
@@ -660,5 +730,25 @@ mod tests {
             .map(|candidate| candidate.item.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["medium", "large"]);
+    }
+
+    #[test]
+    fn file_identity_from_path_roundtrips_and_is_never_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test_file.bin");
+        std::fs::write(&file, b"test content").unwrap();
+
+        let id = FileIdentity::from_path(&file)
+            .expect("FileIdentity::from_path must succeed for existing file");
+        assert!(!id.is_zero(), "Identity must not be zero");
+        assert_eq!(id.size(), 12);
+        assert_eq!(FileIdentity::from_path(&file), Some(id.clone()));
+        assert!(id.same_entity(&id));
+
+        // Zero identity must not be considered same entity or valid
+        let zero = FileIdentity::for_test(0, 0, 12, None);
+        assert!(zero.is_zero());
+        assert!(!id.same_entity(&zero));
+        assert!(!zero.same_entity(&zero));
     }
 }

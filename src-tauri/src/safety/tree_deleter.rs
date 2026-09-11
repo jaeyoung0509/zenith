@@ -53,6 +53,8 @@ struct WindowsDeleteHandle {
     inode: u64,
     is_dir: bool,
     is_reparse_point: bool,
+    attributes: u32,
+    was_readonly: bool,
 }
 
 #[cfg(windows)]
@@ -69,15 +71,62 @@ impl Drop for WindowsDeleteHandle {
 }
 
 #[cfg(windows)]
+fn retry_on_sharing_violation<T, F>(mut f: F) -> io::Result<T>
+where
+    F: FnMut() -> io::Result<T>,
+{
+    const MAX_RETRIES: usize = 4;
+    const INITIAL_BACKOFF_MS: u64 = 10;
+
+    let mut attempt = 0;
+    loop {
+        match f() {
+            Ok(val) => return Ok(val),
+            Err(err) => {
+                let is_sharing = err.raw_os_error()
+                    == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32);
+                if is_sharing && attempt < MAX_RETRIES {
+                    let delay =
+                        std::time::Duration::from_millis(INITIAL_BACKOFF_MS * (1 << attempt));
+                    std::thread::sleep(delay);
+                    attempt += 1;
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn format_io_error(path: &Path, err: &io::Error) -> String {
+    if err.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32) {
+        return format!(
+            "{}: Sharing violation (file in use by another process): {}",
+            path.display(),
+            err
+        );
+    }
+    if err.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) {
+        return format!(
+            "{}: Access denied (permission denied): {}",
+            path.display(),
+            err
+        );
+    }
+    format!("{}: {}", path.display(), err)
+}
+
+#[cfg(windows)]
 impl WindowsDeleteHandle {
     fn open(path: &Path) -> io::Result<Self> {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::Storage::FileSystem::{
             CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, DELETE,
-            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-            OPEN_EXISTING,
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
         };
 
         let path_text = path.to_string_lossy();
@@ -97,22 +146,24 @@ impl WindowsDeleteHandle {
             path.as_os_str().encode_wide().chain([0]).collect()
         };
 
-        let handle = unsafe {
-            CreateFileW(
-                wide.as_ptr(),
-                DELETE | FILE_READ_ATTRIBUTES,
-                // Deliberately omit FILE_SHARE_DELETE. While this handle is
-                // retained, the verified entry cannot be renamed or replaced.
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-                std::ptr::null_mut(),
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
+        let handle = retry_on_sharing_violation(|| {
+            let h = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                    std::ptr::null_mut(),
+                )
+            };
+            if h == INVALID_HANDLE_VALUE || h.is_null() {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(h)
+            }
+        })?;
 
         let mut result = Self {
             handle,
@@ -120,6 +171,8 @@ impl WindowsDeleteHandle {
             inode: 0,
             is_dir: false,
             is_reparse_point: false,
+            attributes: 0,
+            was_readonly: false,
         };
         let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
         if unsafe { GetFileInformationByHandle(result.handle, &mut info) } == 0 {
@@ -135,28 +188,112 @@ impl WindowsDeleteHandle {
         }
         result.is_dir = info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
         result.is_reparse_point = info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        result.attributes = info.dwFileAttributes;
+        result.was_readonly = info.dwFileAttributes & FILE_ATTRIBUTE_READONLY != 0;
         Ok(result)
     }
 
-    fn delete(self) -> io::Result<()> {
+    fn clear_readonly(&mut self) -> io::Result<()> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileBasicInfo, SetFileInformationByHandle, FILE_ATTRIBUTE_NORMAL,
+            FILE_ATTRIBUTE_READONLY, FILE_BASIC_INFO,
+        };
+
+        if self.attributes & FILE_ATTRIBUTE_READONLY == 0 {
+            return Ok(());
+        }
+
+        let new_attrs = self.attributes & !FILE_ATTRIBUTE_READONLY;
+        let mut basic_info: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+        basic_info.FileAttributes = if new_attrs == 0 {
+            FILE_ATTRIBUTE_NORMAL
+        } else {
+            new_attrs
+        };
+
+        retry_on_sharing_violation(|| {
+            let ok = unsafe {
+                SetFileInformationByHandle(
+                    self.handle,
+                    FileBasicInfo,
+                    &basic_info as *const FILE_BASIC_INFO as *const std::ffi::c_void,
+                    std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+                )
+            };
+            if ok == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })?;
+
+        self.attributes = new_attrs;
+        Ok(())
+    }
+
+    fn restore_readonly(&self) -> io::Result<()> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileBasicInfo, SetFileInformationByHandle, FILE_ATTRIBUTE_READONLY, FILE_BASIC_INFO,
+        };
+
+        let mut basic_info: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+        basic_info.FileAttributes = self.attributes | FILE_ATTRIBUTE_READONLY;
+
+        retry_on_sharing_violation(|| {
+            let ok = unsafe {
+                SetFileInformationByHandle(
+                    self.handle,
+                    FileBasicInfo,
+                    &basic_info as *const FILE_BASIC_INFO as *const std::ffi::c_void,
+                    std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+                )
+            };
+            if ok == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn delete(mut self) -> io::Result<()> {
+        self.clear_readonly()?;
+
+        let result = self.mark_for_deletion();
+
+        if result.is_err() && self.was_readonly {
+            if let Err(restore_error) = self.restore_readonly() {
+                eprintln!(
+                    "Failed to restore readonly attribute after deletion failure: {}",
+                    restore_error
+                );
+            }
+        }
+
+        result
+    }
+
+    fn mark_for_deletion(&self) -> io::Result<()> {
         use windows_sys::Win32::Storage::FileSystem::{
             FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
         };
 
         let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
-        let ok = unsafe {
-            SetFileInformationByHandle(
-                self.handle,
-                FileDispositionInfo,
-                &disposition as *const FILE_DISPOSITION_INFO as *const std::ffi::c_void,
-                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-            )
-        };
-        if ok == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        retry_on_sharing_violation(|| {
+            let ok = unsafe {
+                SetFileInformationByHandle(
+                    self.handle,
+                    FileDispositionInfo,
+                    &disposition as *const FILE_DISPOSITION_INFO as *const std::ffi::c_void,
+                    std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            };
+            if ok == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 
@@ -506,7 +643,7 @@ impl SafeTreeDeleter {
                         report.deleted_files += 1;
                     }
                     Err(e) => {
-                        report.errors.push(format!("{}: {}", path.display(), e));
+                        report.errors.push(format_io_error(path, &e));
                     }
                 }
                 return;
@@ -608,7 +745,7 @@ impl SafeTreeDeleter {
                     Self::restore_directory_permissions(path, permissions, report);
                 }
                 Err(error) => {
-                    report.errors.push(format!("{}: {}", path.display(), error));
+                    report.errors.push(format_io_error(path, &error));
                     Self::restore_directory_permissions(path, permissions, report);
                 }
             }
@@ -797,13 +934,8 @@ impl SafeTreeDeleter {
                         path.display()
                     )
                 })?;
-                let directory = WindowsDeleteHandle::open(path).map_err(|error| {
-                    format!(
-                        "Could not retain cleanup directory handle {}: {}",
-                        path.display(),
-                        error
-                    )
-                })?;
+                let mut directory = WindowsDeleteHandle::open(path)
+                    .map_err(|error| format_io_error(path, &error))?;
                 if directory.device != expected_identity.device
                     || directory.inode != expected_identity.inode
                     || !directory.is_dir
@@ -814,6 +946,9 @@ impl SafeTreeDeleter {
                         "Directory changed during cleanup: {}",
                         path.display()
                     ));
+                }
+                if let Err(error) = directory.clear_readonly() {
+                    return Err(format_io_error(path, &error));
                 }
                 Ok(PermissionSnapshot {
                     directory: Some(directory),
@@ -858,7 +993,22 @@ impl SafeTreeDeleter {
             }
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            if let Some(ref directory) = snapshot.directory {
+                if directory.was_readonly {
+                    if let Err(error) = directory.restore_readonly() {
+                        report.errors.push(format!(
+                            "Could not restore read-only attribute on directory ({}): {}",
+                            path.display(),
+                            error
+                        ));
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (path, snapshot, report);
         }
@@ -1155,5 +1305,164 @@ mod tests {
         let missing = dir.path().join("does-not-exist-link");
         assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
         assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing).is_err());
+    }
+
+    #[test]
+    fn deletes_readonly_files_and_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ro_root");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let file1 = root.join("file1.txt");
+        let file2 = sub.join("file2.txt");
+        std::fs::write(&file1, b"file 1").unwrap();
+        std::fs::write(&file2, b"file 2").unwrap();
+
+        let mut perms = std::fs::metadata(&file1).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&file1, perms).unwrap();
+
+        let report = SafeTreeDeleter::delete_path(&root, &[]);
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert!(!root.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_deletes_readonly_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("readonly.bin");
+        std::fs::write(&target, b"readonly payload").unwrap();
+
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms).unwrap();
+        assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
+
+        let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert!(!target.exists(), "readonly file must be deleted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_deletes_readonly_directory_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("readonly_root");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let file1 = root.join("file1.txt");
+        let file2 = sub.join("file2.txt");
+        std::fs::write(&file1, b"file 1").unwrap();
+        std::fs::write(&file2, b"file 2").unwrap();
+
+        for f in [&file1, &file2] {
+            let mut p = std::fs::metadata(f).unwrap().permissions();
+            p.set_readonly(true);
+            std::fs::set_permissions(f, p).unwrap();
+            assert!(std::fs::metadata(f).unwrap().permissions().readonly());
+        }
+
+        let mut sub_p = std::fs::metadata(&sub).unwrap().permissions();
+        sub_p.set_readonly(true);
+        std::fs::set_permissions(&sub, sub_p).unwrap();
+
+        let mut root_p = std::fs::metadata(&root).unwrap().permissions();
+        root_p.set_readonly(true);
+        std::fs::set_permissions(&root, root_p).unwrap();
+
+        let report = SafeTreeDeleter::delete_path(&root, &[]);
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert!(!root.exists(), "readonly directory tree must be deleted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sharing_violation_retry_and_reporting() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("locked.bin");
+        std::fs::write(&target, b"locked payload").unwrap();
+
+        // Hold an exclusive lock with share_mode(0)
+        let lock_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&target)
+            .unwrap();
+
+        let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        assert!(
+            !report.is_success(),
+            "deletion must fail while file is exclusively locked"
+        );
+        assert_eq!(report.errors.len(), 1);
+        let error_msg = &report.errors[0];
+        assert!(
+            error_msg.contains("Sharing violation")
+                || error_msg.contains("used by another process")
+                || error_msg.contains("os error 32"),
+            "Error must report Win32 sharing violation distinctly, got: {}",
+            error_msg
+        );
+
+        drop(lock_handle);
+
+        let report2 = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        assert!(report2.is_success(), "errors: {:?}", report2.errors);
+        assert!(!target.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sharing_violation_retries_transient_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("transient.bin");
+        std::fs::write(&target, b"transient payload").unwrap();
+
+        let lock_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&target)
+            .unwrap();
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(lock_handle);
+        });
+
+        let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        handle.join().unwrap();
+
+        assert!(
+            report.is_success(),
+            "transient lock must succeed after retry, got errors: {:?}",
+            report.errors
+        );
+        assert!(!target.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_readonly_rollback_on_deletion_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("readonly_fail.bin");
+        std::fs::write(&target, b"content").unwrap();
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms).unwrap();
+        assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
+
+        let mut handle = WindowsDeleteHandle::open(&target).unwrap();
+        assert!(handle.was_readonly);
+        handle.clear_readonly().unwrap();
+        assert!(!std::fs::metadata(&target).unwrap().permissions().readonly());
+
+        // Restore readonly on failure
+        handle.restore_readonly().unwrap();
+        assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
     }
 }

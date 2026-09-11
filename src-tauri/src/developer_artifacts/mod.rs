@@ -420,7 +420,7 @@ pub fn workspace_snapshot(
 }
 
 fn same_workspace_directory_identity(current: &FileIdentity, expected: &FileIdentity) -> bool {
-    current.device == expected.device && current.inode == expected.inode
+    current.same_entity(expected)
 }
 
 pub fn pick_workspace(
@@ -1284,7 +1284,7 @@ fn measure_candidate(
     }
     let stats = measure_tree(
         &candidate.path,
-        candidate.workspace.identity.device,
+        candidate.workspace.identity.device(),
         cancel,
         0,
     );
@@ -1803,7 +1803,7 @@ mod tests {
         let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
         let stats = measure_tree(
             &candidate.path,
-            workspace.identity.device,
+            workspace.identity.device(),
             &AtomicBool::new(false),
             0,
         );
@@ -1816,7 +1816,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("a.bin");
         fs::write(&file, [1u8, 2, 3, 4]).unwrap();
-        let device = FileIdentity::from_path(temp.path()).unwrap().device;
+        let device = FileIdentity::from_path(temp.path()).unwrap().device();
         let stats = measure_tree(temp.path(), device, &AtomicBool::new(false), 0);
         assert!(stats.complete);
         assert_eq!(stats.file_count, 1);
@@ -1835,7 +1835,7 @@ mod tests {
         let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
         let mut stats = measure_tree(
             &candidate.path,
-            workspace.identity.device,
+            workspace.identity.device(),
             &AtomicBool::new(false),
             0,
         );
@@ -1904,9 +1904,10 @@ mod tests {
     #[test]
     fn workspace_identity_ignores_normal_directory_metadata_changes() {
         let temp = tempfile::tempdir().unwrap();
-        let mut registered = FileIdentity::from_path(temp.path()).unwrap();
-        registered.size = registered.size.saturating_add(1);
-        registered.modified = registered.modified.map(|value| value.saturating_sub(1));
+        let original = FileIdentity::from_path(temp.path()).unwrap();
+        let registered = original
+            .with_size(original.size().saturating_add(1))
+            .with_modified(original.modified().map(|value| value.saturating_sub(1)));
 
         let current = FileIdentity::from_path(temp.path()).unwrap();
         assert!(same_workspace_directory_identity(&current, &registered));
@@ -1946,7 +1947,7 @@ mod tests {
         let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
         let stats = measure_tree(
             &candidate.path,
-            workspace.identity.device,
+            workspace.identity.device(),
             &AtomicBool::new(false),
             0,
         );
@@ -1966,7 +1967,7 @@ mod tests {
     #[test]
     fn filesystem_boundary_is_typed_as_safety_blocked() {
         let temp = tempfile::tempdir().unwrap();
-        let actual_device = FileIdentity::from_path(temp.path()).unwrap().device;
+        let actual_device = FileIdentity::from_path(temp.path()).unwrap().device();
         let stats = measure_tree(
             temp.path(),
             actual_device.wrapping_add(1),
@@ -1975,5 +1976,41 @@ mod tests {
         );
         assert!(!stats.complete);
         assert!(stats.safety_blocked);
+    }
+
+    #[test]
+    fn developer_artifact_identity_roundtrips_and_is_never_zero() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("my_project");
+        let target = project.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname='my_project'\n").unwrap();
+
+        let workspace = workspace_record(temp.path());
+        assert!(!workspace.identity.is_zero());
+        assert_eq!(
+            FileIdentity::from_path(temp.path()),
+            Some(workspace.identity.clone())
+        );
+
+        fs::write(target.join("output.bin"), [1u8]).unwrap();
+
+        let candidate = recognize_artifact(&workspace, &project, "target").unwrap();
+        let stats = measure_tree(
+            &candidate.path,
+            workspace.identity.device(),
+            &AtomicBool::new(false),
+            0,
+        );
+        let record = record_from_measurement(candidate, stats).unwrap();
+        assert!(!record.identity.is_zero());
+        assert_eq!(
+            FileIdentity::from_path(&record.path),
+            Some(record.identity.clone())
+        );
+        assert!(same_workspace_directory_identity(
+            &record.identity,
+            &FileIdentity::from_path(&record.path).unwrap()
+        ));
     }
 }

@@ -332,6 +332,15 @@ impl CleanExecutor {
             }
         } else if report.reclaimed_bytes > 0 {
             // Partial success: accurately record partial status and reclaimed bytes
+            let error_msg = if report.errors.is_empty() {
+                "Some file(s) could not be removed (e.g. locked or permission denied)".to_string()
+            } else {
+                format!(
+                    "{} file(s) could not be removed: {}",
+                    report.errors.len(),
+                    report.errors.join("; ")
+                )
+            };
             CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -340,22 +349,11 @@ impl CleanExecutor {
                 success: true,
                 bytes_reclaimed: report.reclaimed_bytes,
                 failure_reason: None,
-                error_message: Some(format!(
-                    "{} file(s) could not be removed (e.g. locked or permission denied)",
-                    report.errors.len()
-                )),
+                error_message: Some(error_msg),
             }
         } else {
             let error_str = report.errors.join("; ");
-            let failure_reason = if error_str.contains("Permission denied") {
-                CleanFailureReason::PermissionDenied
-            } else if error_str.contains("changed during cleanup") {
-                CleanFailureReason::ChangedSinceScan
-            } else if error_str.contains("No such file") {
-                CleanFailureReason::NotFound
-            } else {
-                CleanFailureReason::Unknown
-            };
+            let failure_reason = classify_cleanup_failure(&error_str);
             CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -367,5 +365,94 @@ impl CleanExecutor {
                 error_message: Some(error_str),
             }
         }
+    }
+}
+
+pub fn classify_cleanup_failure(error_str: &str) -> CleanFailureReason {
+    if error_str.contains("Sharing violation")
+        || error_str.contains("used by another process")
+        || error_str.contains("(os error 32)")
+        || error_str.contains("os error 32:")
+        || error_str.contains("is in use")
+    {
+        CleanFailureReason::InUse
+    } else if error_str.contains("Permission denied")
+        || error_str.contains("Access denied")
+        || error_str.contains("Access is denied")
+        || error_str.contains("(os error 5)")
+        || error_str.contains("os error 5:")
+    {
+        CleanFailureReason::PermissionDenied
+    } else if error_str.contains("changed during cleanup") {
+        CleanFailureReason::ChangedSinceScan
+    } else if error_str.contains("No such file") {
+        CleanFailureReason::NotFound
+    } else {
+        CleanFailureReason::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_sharing_violation_as_in_use() {
+        assert_eq!(
+            classify_cleanup_failure(
+                "C:\\file.bin: Sharing violation (file in use by another process): os error 32"
+            ),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure("Sharing violation (os error 32): file is locked"),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure("file is used by another process"),
+            CleanFailureReason::InUse
+        );
+    }
+
+    #[test]
+    fn classifies_access_denied_as_permission_denied() {
+        assert_eq!(
+            classify_cleanup_failure(
+                "C:\\file.bin: Access denied (permission denied): (os error 5)"
+            ),
+            CleanFailureReason::PermissionDenied
+        );
+        assert_eq!(
+            classify_cleanup_failure("Permission denied: /var/log/syslog"),
+            CleanFailureReason::PermissionDenied
+        );
+        assert_eq!(
+            classify_cleanup_failure("Access is denied (os error 5)"),
+            CleanFailureReason::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn does_not_misclassify_os_error_50_as_permission_denied() {
+        assert_eq!(
+            classify_cleanup_failure("The network request is not supported (os error 50)"),
+            CleanFailureReason::Unknown
+        );
+    }
+
+    #[test]
+    fn classifies_changed_since_scan_and_not_found() {
+        assert_eq!(
+            classify_cleanup_failure("Directory changed during cleanup: /tmp/app"),
+            CleanFailureReason::ChangedSinceScan
+        );
+        assert_eq!(
+            classify_cleanup_failure("No such file or directory: /tmp/missing"),
+            CleanFailureReason::NotFound
+        );
+        assert_eq!(
+            classify_cleanup_failure("unknown disk failure"),
+            CleanFailureReason::Unknown
+        );
     }
 }
