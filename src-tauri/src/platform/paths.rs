@@ -1,3 +1,4 @@
+use crate::platform::path_algebra::{self, PathFlavor};
 use std::path::{Path, PathBuf};
 
 /// Platform-owned path resolution interface for user directories and reviewed system roots.
@@ -9,6 +10,23 @@ pub trait PlatformPathsProvider: Send + Sync {
     fn program_files(&self) -> Option<PathBuf>;
     fn program_data(&self) -> Option<PathBuf>;
 
+    /// Resolves a user-content folder token.
+    ///
+    /// The literal profile path is only a fallback: Known Folder Move,
+    /// administrator redirection, and UNC profiles all move the real folder
+    /// without leaving a trace in `$HOME`. Platform implementations that can
+    /// ask the operating system must do so.
+    fn content_dir(&self, token: &str) -> Option<PathBuf> {
+        let name = match token {
+            "downloads" => "Downloads",
+            "desktop" => "Desktop",
+            "documents" => "Documents",
+            "movies" => "Movies",
+            _ => return None,
+        };
+        self.user_home().map(|home| home.join(name))
+    }
+
     /// Expands allowlisted placeholders:
     /// - `${USER_HOME}` or `~`
     /// - `${LOCAL_APP_DATA}`
@@ -18,6 +36,10 @@ pub trait PlatformPathsProvider: Send + Sync {
     /// - `${PROGRAM_DATA}`
     ///
     /// Rejects arbitrary environment variables, empty roots, and broad filesystem roots.
+    ///
+    /// The result is normalized with the environment's own [`PathFlavor`] and
+    /// not with the host's `Path` rules, so a simulated Windows environment
+    /// produces Windows-shaped absolute paths on any runner.
     fn expand_placeholder(&self, pattern: &str) -> Option<PathBuf> {
         let pattern = pattern.trim();
         if pattern.is_empty() {
@@ -76,20 +98,40 @@ pub trait PlatformPathsProvider: Send + Sync {
             PathBuf::from(pattern)
         };
 
-        // Normalize path without following symlinks
-        let normalized = crate::safety::Blacklist::normalize_path(&raw_path);
+        let flavor = self.flavor();
+        // Normalize without following symlinks. POSIX keeps the byte-exact
+        // `Path` form; Windows uses the flavor-parameterized algebra, which is
+        // also what a simulated Windows environment is checked against.
+        let normalized = if flavor.is_windows() {
+            PathBuf::from(crate::platform::path_algebra::normalize(
+                &raw_path.to_string_lossy(),
+                flavor,
+            ))
+        } else {
+            crate::safety::Blacklist::normalize_path(&raw_path)
+        };
 
-        // Safety: Path must be absolute and not a broad root
-        if !normalized.is_absolute() {
-            return None;
-        }
-
-        // Root protection: Reject drive roots like "C:\" or "/"
-        if is_broad_root(&normalized) {
+        // Safety: the path must be absolute under its own flavor's rules and
+        // must not be a broad root such as `C:\` or `/`.
+        if flavor.is_windows() {
+            let text = normalized.to_string_lossy();
+            if !crate::platform::path_algebra::is_absolute(&text, flavor) {
+                return None;
+            }
+            if crate::platform::path_algebra::is_root(&text, flavor) {
+                return None;
+            }
+        } else if !normalized.is_absolute() || is_broad_root(&normalized) {
             return None;
         }
 
         Some(normalized)
+    }
+
+    /// Path flavor of the described environment. Implementations that simulate
+    /// another platform override this; the default is the compiled target.
+    fn flavor(&self) -> crate::platform::path_algebra::PathFlavor {
+        crate::platform::path_algebra::PathFlavor::current()
     }
 }
 
@@ -119,33 +161,6 @@ impl NativePlatformPaths {
 
     pub fn home(&self) -> Option<PathBuf> {
         self.user_home()
-    }
-
-    /// Only fixed user-content tokens may cross the IPC boundary.
-    pub fn content_dir(&self, token: &str) -> Option<PathBuf> {
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::UI::Shell::*;
-            let id = match token {
-                "downloads" => FOLDERID_Downloads,
-                "desktop" => FOLDERID_Desktop,
-                "documents" => FOLDERID_Documents,
-                "movies" => FOLDERID_Videos,
-                _ => return None,
-            };
-            windows_known_folder(&id)
-        }
-        #[cfg(not(windows))]
-        {
-            let name = match token {
-                "downloads" => "Downloads",
-                "desktop" => "Desktop",
-                "documents" => "Documents",
-                "movies" => "Movies",
-                _ => return None,
-            };
-            Some(self.home()?.join(name))
-        }
     }
 
     #[cfg(windows)]
@@ -573,6 +588,35 @@ impl PlatformPathsProvider for NativePlatformPaths {
         std::env::temp_dir()
     }
 
+    /// Only fixed user-content tokens may cross the IPC boundary. On Windows
+    /// the shell's known-folder API is authoritative because Known Folder Move
+    /// and redirection change the real location.
+    fn content_dir(&self, token: &str) -> Option<PathBuf> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::Shell::*;
+            let id = match token {
+                "downloads" => FOLDERID_Downloads,
+                "desktop" => FOLDERID_Desktop,
+                "documents" => FOLDERID_Documents,
+                "movies" => FOLDERID_Videos,
+                _ => return None,
+            };
+            windows_known_folder(&id)
+        }
+        #[cfg(not(windows))]
+        {
+            let name = match token {
+                "downloads" => "Downloads",
+                "desktop" => "Desktop",
+                "documents" => "Documents",
+                "movies" => "Movies",
+                _ => return None,
+            };
+            Some(self.user_home()?.join(name))
+        }
+    }
+
     fn program_files(&self) -> Option<PathBuf> {
         #[cfg(target_os = "windows")]
         {
@@ -621,38 +665,109 @@ fn resolve_user_home(
         .filter(|path| path.is_absolute() && !is_broad_root(path))
 }
 
-#[cfg(test)]
-pub struct MockPlatformPaths {
-    pub home: PathBuf,
-    pub local_appdata: PathBuf,
-    pub roaming_appdata: PathBuf,
-    pub temp: PathBuf,
+/// A [`PlatformPathsProvider`] whose roots the caller states.
+///
+/// Tests and the `--doctor` self-check use this to present an environment that
+/// is not the host's — a non-`C:` system drive, a UNC profile, a redirected
+/// app-data root — without reading the process environment. Nothing here
+/// consults `std::env`, so a simulated environment cannot silently inherit a
+/// fact the caller did not state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimulatedPaths {
+    flavor: PathFlavor,
+    home: Option<PathBuf>,
+    local_app_data: Option<PathBuf>,
+    roaming_app_data: Option<PathBuf>,
+    temp_dir: Option<PathBuf>,
+    program_files: Option<PathBuf>,
+    program_data: Option<PathBuf>,
 }
 
-#[cfg(test)]
-impl PlatformPathsProvider for MockPlatformPaths {
+impl Default for SimulatedPaths {
+    fn default() -> Self {
+        Self {
+            flavor: PathFlavor::current(),
+            home: None,
+            local_app_data: None,
+            roaming_app_data: None,
+            temp_dir: None,
+            program_files: None,
+            program_data: None,
+        }
+    }
+}
+
+impl SimulatedPaths {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// States which platform's path rules the described roots follow.
+    pub fn with_flavor(mut self, flavor: PathFlavor) -> Self {
+        self.flavor = flavor;
+        self
+    }
+
+    pub fn with_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.home = Some(path.into());
+        self
+    }
+
+    pub fn with_local_app_data(mut self, path: impl Into<PathBuf>) -> Self {
+        self.local_app_data = Some(path.into());
+        self
+    }
+
+    pub fn with_roaming_app_data(mut self, path: impl Into<PathBuf>) -> Self {
+        self.roaming_app_data = Some(path.into());
+        self
+    }
+
+    pub fn with_temp_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(path.into());
+        self
+    }
+
+    pub fn with_program_files(mut self, path: impl Into<PathBuf>) -> Self {
+        self.program_files = Some(path.into());
+        self
+    }
+
+    pub fn with_program_data(mut self, path: impl Into<PathBuf>) -> Self {
+        self.program_data = Some(path.into());
+        self
+    }
+}
+
+impl PlatformPathsProvider for SimulatedPaths {
     fn user_home(&self) -> Option<PathBuf> {
-        Some(self.home.clone())
+        self.home.clone()
     }
 
     fn local_app_data(&self) -> Option<PathBuf> {
-        Some(self.local_appdata.clone())
+        self.local_app_data.clone()
     }
 
     fn roaming_app_data(&self) -> Option<PathBuf> {
-        Some(self.roaming_appdata.clone())
+        self.roaming_app_data.clone()
     }
 
     fn temp_dir(&self) -> PathBuf {
-        self.temp.clone()
+        self.temp_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
     }
 
     fn program_files(&self) -> Option<PathBuf> {
-        Some(self.home.join("ProgramFiles"))
+        self.program_files.clone()
     }
 
     fn program_data(&self) -> Option<PathBuf> {
-        Some(self.home.join("ProgramData"))
+        self.program_data.clone()
+    }
+
+    fn flavor(&self) -> PathFlavor {
+        self.flavor
     }
 }
 
@@ -702,27 +817,67 @@ mod tests {
     }
 
     #[test]
-    fn mock_platform_paths_expands_allowlisted_placeholders() {
+    fn simulated_environment_expands_allowlisted_placeholders() {
         let dir = tempdir().unwrap();
-        let mock = MockPlatformPaths {
-            home: dir.path().join("home"),
-            local_appdata: dir.path().join("home/AppData/Local"),
-            roaming_appdata: dir.path().join("home/AppData/Roaming"),
-            temp: dir.path().join("temp"),
-        };
+        let environment = SimulatedPaths::new()
+            .with_home(dir.path().join("home"))
+            .with_local_app_data(dir.path().join("home/AppData/Local"))
+            .with_roaming_app_data(dir.path().join("home/AppData/Roaming"))
+            .with_temp_dir(dir.path().join("temp"));
 
         assert_eq!(
-            mock.expand_placeholder("${USER_HOME}/.cargo/registry"),
+            environment.expand_placeholder("${USER_HOME}/.cargo/registry"),
             Some(dir.path().join("home/.cargo/registry"))
         );
         assert_eq!(
-            mock.expand_placeholder("${LOCAL_APP_DATA}/Zenith/Cache"),
+            environment.expand_placeholder("${LOCAL_APP_DATA}/Zenith/Cache"),
             Some(dir.path().join("home/AppData/Local/Zenith/Cache"))
         );
         assert_eq!(
-            mock.expand_placeholder("${TEMP}/codex-session"),
+            environment.expand_placeholder("${TEMP}/codex-session"),
             Some(dir.path().join("temp/codex-session"))
         );
+    }
+
+    #[test]
+    fn a_redirected_windows_profile_resolves_placeholders_without_the_host() {
+        // The same pure expansion logic must serve a machine whose system
+        // drive is not `C:` — the fact is stated, not read from the host.
+        let environment = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Windows)
+            .with_home(r"D:\Users\홍 길동")
+            .with_local_app_data(r"D:\Users\홍 길동\AppData\Local")
+            .with_temp_dir(r"D:\Users\홍 길동\AppData\Local\Temp");
+
+        assert_eq!(
+            environment.expand_placeholder("${USER_HOME}/.cursor/extensions"),
+            Some(PathBuf::from(r"D:\Users\홍 길동\.cursor\extensions"))
+        );
+        assert_eq!(
+            environment.expand_placeholder("${LOCAL_APP_DATA}\\npm-cache"),
+            Some(PathBuf::from(r"D:\Users\홍 길동\AppData\Local\npm-cache"))
+        );
+        assert_eq!(
+            environment.expand_placeholder("${TEMP}"),
+            Some(PathBuf::from(r"D:\Users\홍 길동\AppData\Local\Temp"))
+        );
+    }
+
+    #[test]
+    fn an_unstated_root_is_absent_rather_than_invented() {
+        let environment = SimulatedPaths::new().with_home(r"D:\Users\me");
+
+        assert_eq!(environment.program_files(), None);
+        assert_eq!(environment.program_data(), None);
+        assert_eq!(environment.expand_placeholder("${PROGRAM_FILES}/Git"), None);
+        assert_eq!(
+            environment.expand_placeholder("${PROGRAM_DATA}/scoop"),
+            None
+        );
+        // An unstated home is also absent, so expansion fails closed.
+        let empty = SimulatedPaths::new();
+        assert_eq!(empty.user_home(), None);
+        assert_eq!(empty.expand_placeholder("~/Downloads"), None);
     }
 
     #[test]
@@ -769,19 +924,16 @@ mod tests {
     #[test]
     fn expands_legacy_tilde_and_tmpdir() {
         let dir = tempdir().unwrap();
-        let mock = MockPlatformPaths {
-            home: dir.path().join("home"),
-            local_appdata: dir.path().join("local"),
-            roaming_appdata: dir.path().join("roaming"),
-            temp: dir.path().join("temp"),
-        };
+        let environment = SimulatedPaths::new()
+            .with_home(dir.path().join("home"))
+            .with_temp_dir(dir.path().join("temp"));
 
         assert_eq!(
-            mock.expand_placeholder("~/.npm"),
+            environment.expand_placeholder("~/.npm"),
             Some(dir.path().join("home/.npm"))
         );
         assert_eq!(
-            mock.expand_placeholder("$TMPDIR"),
+            environment.expand_placeholder("$TMPDIR"),
             Some(dir.path().join("temp"))
         );
     }
@@ -789,16 +941,16 @@ mod tests {
     #[test]
     fn rejects_unauthorized_and_arbitrary_placeholders() {
         let dir = tempdir().unwrap();
-        let mock = MockPlatformPaths {
-            home: dir.path().join("home"),
-            local_appdata: dir.path().join("local"),
-            roaming_appdata: dir.path().join("roaming"),
-            temp: dir.path().join("temp"),
-        };
+        let environment = SimulatedPaths::new()
+            .with_home(dir.path().join("home"))
+            .with_temp_dir(dir.path().join("temp"));
 
-        assert_eq!(mock.expand_placeholder("${SECRET_KEY}"), None);
-        assert_eq!(mock.expand_placeholder("${AWS_CREDENTIALS}"), None);
-        assert_eq!(mock.expand_placeholder(""), None);
-        assert_eq!(mock.expand_placeholder("relative/path/not/allowed"), None);
+        assert_eq!(environment.expand_placeholder("${SECRET_KEY}"), None);
+        assert_eq!(environment.expand_placeholder("${AWS_CREDENTIALS}"), None);
+        assert_eq!(environment.expand_placeholder(""), None);
+        assert_eq!(
+            environment.expand_placeholder("relative/path/not/allowed"),
+            None
+        );
     }
 }

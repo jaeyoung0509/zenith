@@ -1,4 +1,5 @@
 use crate::models::ZenithError;
+use crate::platform::PlatformPathsProvider;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]

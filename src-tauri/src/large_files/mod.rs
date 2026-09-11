@@ -1,6 +1,7 @@
 use crate::models::{
     LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
 };
+use crate::platform::PlatformPathsProvider;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
