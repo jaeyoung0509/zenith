@@ -31,12 +31,10 @@ fn decode_scannable_text(bytes: &[u8]) -> Option<String> {
 }
 
 fn decode_utf16(bytes: &[u8], to_unit: fn([u8; 2]) -> u16) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|pair| to_unit([pair[0], pair[1]]));
+    let units = bytes.as_chunks::<2>().0.iter().map(|pair| to_unit(*pair));
     char::decode_utf16(units)
         .collect::<Result<String, _>>()
         .ok()
