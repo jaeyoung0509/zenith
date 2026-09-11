@@ -86,7 +86,8 @@ where
                 let is_sharing = err.raw_os_error()
                     == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32);
                 if is_sharing && attempt < MAX_RETRIES {
-                    let delay = std::time::Duration::from_millis(INITIAL_BACKOFF_MS * (1 << attempt));
+                    let delay =
+                        std::time::Duration::from_millis(INITIAL_BACKOFF_MS * (1 << attempt));
                     std::thread::sleep(delay);
                     attempt += 1;
                     continue;
@@ -110,9 +111,7 @@ fn format_io_error(path: &Path, err: &io::Error) -> String {
                 err
             );
         }
-        if err.raw_os_error()
-            == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
-        {
+        if err.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) {
             return format!(
                 "{}: Access denied (permission denied): {}",
                 path.display(),
@@ -926,9 +925,8 @@ impl SafeTreeDeleter {
                         path.display()
                     )
                 })?;
-                let mut directory = WindowsDeleteHandle::open(path).map_err(|error| {
-                    format_io_error(path, &error)
-                })?;
+                let mut directory = WindowsDeleteHandle::open(path)
+                    .map_err(|error| format_io_error(path, &error))?;
                 if directory.device != expected_identity.device
                     || directory.inode != expected_identity.inode
                     || !directory.is_dir
@@ -1386,7 +1384,10 @@ mod tests {
             .unwrap();
 
         let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
-        assert!(!report.is_success(), "deletion must fail while file is exclusively locked");
+        assert!(
+            !report.is_success(),
+            "deletion must fail while file is exclusively locked"
+        );
         assert_eq!(report.errors.len(), 1);
         let error_msg = &report.errors[0];
         assert!(

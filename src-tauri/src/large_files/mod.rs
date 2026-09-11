@@ -109,8 +109,8 @@ impl FileIdentity {
             use windows_sys::Win32::Storage::FileSystem::{
                 CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
                 FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
-                FILE_SHARE_WRITE, OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                OPEN_EXISTING,
             };
 
             let path_text = path.to_string_lossy();
