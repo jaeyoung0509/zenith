@@ -517,48 +517,84 @@ fn store_workspace(
 }
 
 pub fn validate_workspace_root(path: &Path, home: &Path) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| {
-        "Choose an existing workspace directory inside your home folder.".to_string()
-    })?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "Choose an existing workspace directory.".to_string())?;
     if !metadata.is_dir() || SymlinkGuard::is_symlink(path) {
         return Err("The selected workspace must be a real directory.".to_string());
     }
-    let canonical_home = fs::canonicalize(home)
-        .map_err(|_| "Could not resolve the user home directory".to_string())?;
-    SymlinkGuard::validate_no_symlink_ancestors(path, &canonical_home)
-        .map_err(|_| "The selected workspace contains a symbolic-link component.".to_string())?;
     let canonical = fs::canonicalize(path)
         .map_err(|_| "Could not resolve the selected workspace".to_string())?;
-    if canonical == canonical_home || !canonical.starts_with(&canonical_home) {
-        return Err("Workspace roots must be a child of your home directory.".to_string());
+    let norm_canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
+
+    // Reject drive roots or filesystem root
+    if norm_canonical.parent().is_none() || norm_canonical == Path::new("/") {
+        return Err("Drive root or filesystem root cannot be used as a workspace.".to_string());
     }
-    let protected_workspace_prefixes = [
-        "Library",
-        ".ssh",
-        ".gnupg",
-        ".aws",
-        ".azure",
-        ".kube",
-        ".config",
-        "Desktop",
-        "Documents",
-        "Pictures",
-        "Movies",
-        "Music",
-    ];
-    if Blacklist::is_blacklisted(&canonical)
-        || protected_workspace_prefixes.iter().any(|prefix| {
-            let protected = canonical_home.join(prefix);
-            canonical == protected || canonical.starts_with(&protected)
-        })
+    #[cfg(windows)]
     {
+        if let Some(s) = norm_canonical.to_str() {
+            let trimmed = s.trim_end_matches(['\\', '/']);
+            if trimmed.len() == 2 && trimmed.ends_with(':') {
+                return Err("Drive root cannot be used as a workspace.".to_string());
+            }
+        }
+    }
+
+    if let Ok(canonical_home) = fs::canonicalize(home) {
+        let norm_home =
+            crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical_home);
+        if norm_canonical == norm_home {
+            return Err(
+                "Your entire home directory cannot be used as a workspace root.".to_string(),
+            );
+        }
+        if norm_canonical.starts_with(&norm_home) {
+            SymlinkGuard::validate_no_symlink_ancestors(path, &canonical_home).map_err(|_| {
+                "The selected workspace contains a symbolic-link component.".to_string()
+            })?;
+
+            let protected_workspace_prefixes = [
+                "Library",
+                ".ssh",
+                ".gnupg",
+                ".aws",
+                ".azure",
+                ".kube",
+                ".config",
+                "Desktop",
+                "Documents",
+                "Pictures",
+                "Movies",
+                "Music",
+            ];
+            if protected_workspace_prefixes.iter().any(|prefix| {
+                let protected = norm_home.join(prefix);
+                norm_canonical == protected || norm_canonical.starts_with(&protected)
+            }) {
+                return Err(
+                    "That location is protected and cannot be used as a workspace.".to_string(),
+                );
+            }
+        } else {
+            SymlinkGuard::validate_anchored_path(&norm_canonical).map_err(|_| {
+                "The selected workspace contains a symbolic-link component.".to_string()
+            })?;
+        }
+    } else {
+        SymlinkGuard::validate_anchored_path(&norm_canonical).map_err(|_| {
+            "The selected workspace contains a symbolic-link component.".to_string()
+        })?;
+    }
+
+    if Blacklist::is_blacklisted(&norm_canonical) {
         return Err("That location is protected and cannot be used as a workspace.".to_string());
     }
+
     #[cfg(unix)]
     if metadata.uid() != unsafe { libc::geteuid() } {
         return Err("Workspace roots must be owned by the current user.".to_string());
     }
-    Ok(canonical)
+    Ok(norm_canonical)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1477,17 +1513,6 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
-const WINDOWS_WORKSPACE_PICKER_SCRIPT: &str = r#"
-    $ErrorActionPreference = 'Stop'
-    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $shell = New-Object -ComObject Shell.Application
-    $folder = $shell.BrowseForFolder(0, 'Choose a developer workspace', 0, 0)
-    if ($null -ne $folder) {
-        [Console]::Write($folder.Self.Path)
-    }
-"#;
-
 fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -1514,29 +1539,12 @@ fn native_pick_workspace_path() -> Result<Option<PathBuf>, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let output = crate::tooling::command("powershell.exe")
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-STA",
-                "-Command",
-                WINDOWS_WORKSPACE_PICKER_SCRIPT,
-            ])
-            .output()
-            .map_err(|error| format!("Could not open the workspace picker: {error}"))?;
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(if detail.is_empty() {
-                "Could not open the workspace picker".to_string()
-            } else {
-                detail
-            });
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(PathBuf::from(path)))
+        // The native folder dialog does not depend on PowerShell language
+        // mode, so Constrained Language Mode cannot block workspace selection.
+        let selected = rfd::FileDialog::new()
+            .set_title("Choose a developer workspace")
+            .pick_folder();
+        Ok(selected)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -1558,13 +1566,6 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use std::fs;
-
-    #[test]
-    fn windows_workspace_picker_script_is_static_and_utf8_safe() {
-        assert!(WINDOWS_WORKSPACE_PICKER_SCRIPT.contains("BrowseForFolder"));
-        assert!(WINDOWS_WORKSPACE_PICKER_SCRIPT.contains("UTF8Encoding"));
-        assert!(!WINDOWS_WORKSPACE_PICKER_SCRIPT.contains("Invoke-Expression"));
-    }
 
     fn workspace_record(root: &Path) -> DeveloperWorkspaceRecord {
         let identity = FileIdentity::from_path(root).unwrap();
@@ -1852,7 +1853,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn workspace_validation_requires_a_real_child_of_the_selected_home() {
+    fn workspace_validation_accepts_profile_children_and_rejects_home_itself() {
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
         let temp = tempfile::tempdir_in(&home).unwrap();
         let workspace = temp.path().join("src");
@@ -1870,6 +1871,22 @@ mod tests {
             symlink(&workspace, &linked).unwrap();
             assert!(validate_workspace_root(&linked, &home).is_err());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_validation_accepts_roots_outside_the_profile() {
+        // The common D:\dev-style layout must register under the remaining
+        // safety validation instead of being refused for being outside home.
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("dev");
+        fs::create_dir_all(&workspace).unwrap();
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/nonexistent-home"));
+
+        assert!(validate_workspace_root(&workspace, &home).is_ok());
+        assert!(validate_workspace_root(temp.path(), &home).is_ok());
     }
 
     #[cfg(unix)]

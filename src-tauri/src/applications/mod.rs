@@ -114,7 +114,22 @@ impl ApplicationScanner {
                     let is_system_protected =
                         is_zenith_identity(&name, metadata.bundle_id.as_deref());
                     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    let is_running = running_paths.iter().any(|exe| exe.starts_with(&canonical));
+                    #[cfg(target_os = "windows")]
+                    let norm_canonical =
+                        crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
+                    let is_running = running_paths.iter().any(|exe| {
+                        #[cfg(target_os = "windows")]
+                        {
+                            crate::platform::NativePlatformPaths::windows_path_starts_with(
+                                exe,
+                                &norm_canonical,
+                            )
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            exe.starts_with(&canonical)
+                        }
+                    });
                     let id = Uuid::new_v4().to_string();
                     let app = InstalledApp {
                         id: id.clone(),
@@ -348,7 +363,13 @@ fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
                 allocated_size =
                     allocated_size.saturating_add(metadata.blocks().saturating_mul(512));
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                let file_allocated =
+                    crate::scanner::get_allocated_size(&current).unwrap_or(metadata.len());
+                allocated_size = allocated_size.saturating_add(file_allocated);
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 allocated_size = allocated_size.saturating_add(metadata.len());
             }

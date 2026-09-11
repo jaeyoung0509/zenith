@@ -4,29 +4,123 @@ use crate::models::{
 };
 use crate::tooling;
 
+/// A Docker-compatible container CLI. `docker` is preferred; `podman` is a
+/// real fallback, so a machine with a stopped Docker daemon but a running
+/// Podman machine stays supported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContainerCli {
+    Docker,
+    Podman,
+}
+
+impl ContainerCli {
+    const ALL: [Self; 2] = [Self::Docker, Self::Podman];
+
+    fn executable(self) -> &'static str {
+        match self {
+            Self::Docker => "docker",
+            Self::Podman => "podman",
+        }
+    }
+}
+
+/// True when a Docker-compatible CLI is installed. Capability reporting uses
+/// this same source of truth so a Podman-only machine is not reported as
+/// unsupported while the adapter can drive Podman.
+pub fn container_cli_detected() -> bool {
+    container_cli_detected_with(|name| tooling::resolve(name).is_some())
+}
+
+fn container_cli_detected_with(resolve: impl Fn(&str) -> bool) -> bool {
+    ContainerCli::ALL
+        .iter()
+        .any(|cli| resolve(cli.executable()))
+}
+
+/// Selects the first installed CLI that can actually reach a daemon.
+fn select_running_cli(
+    installed: &[ContainerCli],
+    reaches_daemon: impl Fn(ContainerCli) -> bool,
+) -> Option<ContainerCli> {
+    installed.iter().copied().find(|cli| reaches_daemon(*cli))
+}
+
 pub struct DockerAdapter;
 
 impl DockerAdapter {
-    /// Checks if the Docker CLI is installed and the daemon is currently running.
-    pub fn get_status() -> DockerStatus {
-        let mut cli_cmd = tooling::command("docker");
-        cli_cmd.arg("--version");
-        let cli_check = tooling::run_with_timeout(cli_cmd, std::time::Duration::from_secs(3));
+    fn installed_clis() -> Vec<ContainerCli> {
+        ContainerCli::ALL
+            .iter()
+            .copied()
+            .filter(|cli| tooling::resolve(cli.executable()).is_some())
+            .collect()
+    }
 
-        let (is_available, version) = match cli_check {
-            Ok(output) if output.status.success() => {
-                let ver_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                (true, Some(ver_str))
+    fn cli_reaches_daemon(cli: ContainerCli) -> bool {
+        let mut cmd = tooling::command(cli.executable());
+        cmd.args(["info", "--format", "{{.ServerVersion}}"]);
+        matches!(
+            tooling::run_with_timeout(cmd, std::time::Duration::from_secs(4)),
+            Ok(output) if output.status.success()
+        )
+    }
+
+    fn active_cli() -> Option<ContainerCli> {
+        select_running_cli(&Self::installed_clis(), Self::cli_reaches_daemon)
+    }
+
+    /// The CLI used by operations that were already authorized by a status
+    /// check: the running runtime when one exists, otherwise the first
+    /// installed CLI so error reporting still names a real executable.
+    fn preferred_cli() -> ContainerCli {
+        Self::active_cli()
+            .or_else(|| Self::installed_clis().first().copied())
+            .unwrap_or(ContainerCli::Docker)
+    }
+
+    fn cli_version(cli: ContainerCli) -> Option<String> {
+        let mut cmd = tooling::command(cli.executable());
+        cmd.arg("--version");
+        tooling::run_with_timeout(cmd, std::time::Duration::from_secs(3))
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|version| !version.is_empty())
+    }
+
+    fn missing_cli_message() -> String {
+        match std::env::var_os("DOCKER_HOST") {
+            Some(host) => format!(
+                "DOCKER_HOST={} is set but no docker or podman CLI was detected in PATH or known tool locations.",
+                host.to_string_lossy()
+            ),
+            None => {
+                "No docker or podman CLI was detected in PATH or known tool locations.".to_string()
             }
-            _ => (false, None),
-        };
+        }
+    }
 
-        if !is_available {
+    fn daemon_unreachable_message() -> String {
+        match std::env::var_os("DOCKER_HOST") {
+            Some(host) => format!(
+                "No container daemon responded at DOCKER_HOST={}. Start the runtime or clear DOCKER_HOST to use the active context.",
+                host.to_string_lossy()
+            ),
+            None => {
+                "No container daemon responded for the active context. Start Docker, Podman, or Rancher Desktop.".to_string()
+            }
+        }
+    }
+
+    /// Checks installed CLIs and reports the first one whose daemon answers.
+    pub fn get_status() -> DockerStatus {
+        let installed = Self::installed_clis();
+        if installed.is_empty() {
             return DockerStatus {
                 is_available: false,
                 is_running: false,
                 version: None,
-                error_message: Some("Docker CLI is not installed or not in PATH".to_string()),
+                error_message: Some(Self::missing_cli_message()),
                 overview: None,
                 images: Vec::new(),
                 containers: Vec::new(),
@@ -34,30 +128,27 @@ impl DockerAdapter {
             };
         }
 
-        // Check if Docker daemon is running
-        let mut ping_cmd = tooling::command("docker");
-        ping_cmd.args(["info", "--format", "{{.ServerVersion}}"]);
-        let ping = tooling::run_with_timeout(ping_cmd, std::time::Duration::from_secs(4));
-
-        let is_running = matches!(ping, Ok(output) if output.status.success());
-
-        if !is_running {
+        // Report the version of the runtime that actually answers, so a dead
+        // Docker daemon with a live Podman machine shows the Podman version.
+        let active = Self::active_cli();
+        let version = Self::cli_version(active.unwrap_or(installed[0]));
+        let Some(cli) = active else {
             return DockerStatus {
                 is_available: true,
                 is_running: false,
                 version,
-                error_message: Some("Docker daemon is not running".to_string()),
+                error_message: Some(Self::daemon_unreachable_message()),
                 overview: None,
                 images: Vec::new(),
                 containers: Vec::new(),
                 volumes: Vec::new(),
             };
-        }
+        };
 
-        let overview = Self::get_overview();
-        let containers = Self::get_containers();
-        let images = Self::get_images_from_containers(&containers);
-        let volumes = Self::get_volumes();
+        let overview = Self::get_overview_with(cli);
+        let containers = Self::get_containers_with(cli);
+        let images = Self::get_images_from_containers_with(cli, &containers);
+        let volumes = Self::get_volumes_with(cli);
 
         DockerStatus {
             is_available: true,
@@ -195,38 +286,107 @@ impl DockerAdapter {
         items
     }
 
-    /// Queries `docker system df` and parses image, container, volume, and build cache usage.
+    /// Queries `docker system df` / `podman system df` and parses image,
+    /// container, volume, and build cache usage.
     pub fn get_overview() -> DockerOverview {
-        let mut cmd = tooling::command("docker");
-        cmd.args(["system", "df", "--format", "{{json .}}"]);
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
-
-        let stdout = match output {
-            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
-            _ => return DockerOverview::default(),
-        };
-
-        Self::parse_overview(&stdout)
+        Self::get_overview_with(Self::preferred_cli())
     }
 
+    fn get_overview_with(cli: ContainerCli) -> DockerOverview {
+        let args: &[&str] = match cli {
+            ContainerCli::Docker => &["system", "df", "--format", "{{json .}}"],
+            // Podman emits a single JSON array for `--format json`.
+            ContainerCli::Podman => &["system", "df", "--format", "json"],
+        };
+        let records = Self::run_json_records(cli, args, 5);
+        Self::parse_overview_records(&records)
+    }
+
+    /// Runs a JSON-emitting command and accepts Docker's JSON-lines output,
+    /// Podman's single JSON array, or a single JSON object.
+    fn run_json_records(
+        cli: ContainerCli,
+        args: &[&str],
+        timeout_secs: u64,
+    ) -> Vec<serde_json::Value> {
+        let mut cmd = tooling::command(cli.executable());
+        cmd.args(args);
+        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(timeout_secs));
+        match output {
+            Ok(out) if out.status.success() => {
+                Self::parse_json_records(&String::from_utf8_lossy(&out.stdout))
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn parse_json_records(stdout: &str) -> Vec<serde_json::Value> {
+        let trimmed = stdout.trim();
+        if trimmed.starts_with('[') {
+            if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(trimmed) {
+                return items;
+            }
+        }
+        if trimmed.starts_with('{') {
+            if let Ok(value @ serde_json::Value::Object(_)) = serde_json::from_str(trimmed) {
+                return vec![value];
+            }
+        }
+        trimmed
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
+
+    /// Case-insensitive field lookup. Docker emits PascalCase, Podman mixes
+    /// PascalCase (`Type`) with lowercase (`id`, `names`, `size`) across
+    /// commands and versions, so a single lookup must accept both.
+    fn json_value<'a>(
+        value: &'a serde_json::Value,
+        keys: &[&str],
+    ) -> Option<&'a serde_json::Value> {
+        let object = value.as_object()?;
+        for key in keys {
+            if let Some(found) = object.get(*key) {
+                return Some(found);
+            }
+        }
+        object
+            .iter()
+            .find(|(name, _)| keys.iter().any(|key| name.eq_ignore_ascii_case(key)))
+            .map(|(_, found)| found)
+    }
+
+    fn json_size(value: Option<&serde_json::Value>) -> u64 {
+        match value {
+            Some(serde_json::Value::String(text)) => Self::parse_docker_size(text),
+            Some(serde_json::Value::Number(number)) => number.as_u64().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn json_reclaimable(value: Option<&serde_json::Value>) -> u64 {
+        match value {
+            Some(serde_json::Value::String(text)) => Self::parse_docker_reclaimable(text),
+            Some(serde_json::Value::Number(number)) => number.as_u64().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    #[cfg(test)]
     fn parse_overview(stdout: &str) -> DockerOverview {
+        Self::parse_overview_records(&Self::parse_json_records(stdout))
+    }
+
+    fn parse_overview_records(records: &[serde_json::Value]) -> DockerOverview {
         let mut overview = DockerOverview::default();
 
-        for line in stdout.lines() {
-            let val: serde_json::Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            let item_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("");
-            let size_str = val.get("Size").and_then(|v| v.as_str()).unwrap_or("0B");
-            let reclaim_str = val
-                .get("Reclaimable")
+        for val in records {
+            let item_type = Self::json_value(val, &["Type"])
                 .and_then(|v| v.as_str())
-                .unwrap_or("0B");
-
-            let size = Self::parse_docker_size(size_str);
-            let reclaim = Self::parse_docker_reclaimable(reclaim_str);
+                .unwrap_or("");
+            let size = Self::json_size(Self::json_value(val, &["Size"]));
+            let reclaim = Self::json_reclaimable(Self::json_value(val, &["Reclaimable"]));
 
             match item_type {
                 "Images" => {
@@ -295,150 +455,183 @@ impl DockerAdapter {
     }
 
     pub fn get_images() -> Vec<DockerImageItem> {
-        let containers = Self::get_containers();
-        Self::get_images_from_containers(&containers)
+        let cli = Self::preferred_cli();
+        let containers = Self::get_containers_with(cli);
+        Self::get_images_from_containers_with(cli, &containers)
     }
 
     pub fn get_images_from_containers(containers: &[DockerContainerItem]) -> Vec<DockerImageItem> {
+        Self::get_images_from_containers_with(Self::preferred_cli(), containers)
+    }
+
+    fn get_images_from_containers_with(
+        cli: ContainerCli,
+        containers: &[DockerContainerItem],
+    ) -> Vec<DockerImageItem> {
         let used_images: std::collections::HashSet<String> =
             containers.iter().map(|c| c.image.clone()).collect();
 
-        let mut cmd = tooling::command("docker");
-        cmd.args(["images", "--format", "{{json .}}"]);
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
-
-        if let Ok(out) = output {
-            if out.status.success() {
-                return Self::parse_images(&String::from_utf8_lossy(&out.stdout), &used_images);
-            }
-        }
-        Vec::new()
+        let args: &[&str] = match cli {
+            ContainerCli::Docker => &["images", "--format", "{{json .}}"],
+            ContainerCli::Podman => &["images", "--format", "json"],
+        };
+        let records = Self::run_json_records(cli, args, 5);
+        Self::parse_images_records(&records, &used_images)
     }
 
     pub fn parse_images(
         stdout: &str,
         used_images: &std::collections::HashSet<String>,
     ) -> Vec<DockerImageItem> {
+        Self::parse_images_records(&Self::parse_json_records(stdout), used_images)
+    }
+
+    fn parse_images_records(
+        records: &[serde_json::Value],
+        used_images: &std::collections::HashSet<String>,
+    ) -> Vec<DockerImageItem> {
         let mut images = Vec::new();
-        for line in stdout.lines() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                let id = v
-                    .get("ID")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let repo = v
-                    .get("Repository")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let tag = v
-                    .get("Tag")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let size_str = v.get("Size").and_then(|s| s.as_str()).unwrap_or("0B");
-                let size_bytes = Self::parse_docker_size(size_str);
-                let is_dangling = repo == "<none>" || tag == "<none>";
+        for v in records {
+            // Docker exposes ID/Repository/Tag; Podman exposes lowercase
+            // id/names, and older Podman used Id/Names.
+            let id = Self::json_value(v, &["ID", "Id"])
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            let (repo, tag) = Self::image_repo_and_tag(v);
+            let size_bytes = Self::json_size(Self::json_value(v, &["Size"]));
+            // An untagged image has `<none>` names, and Podman can report an
+            // empty name list for a dangling layer.
+            let is_dangling = repo.is_empty() || repo == "<none>" || tag == "<none>";
 
-                let full_name = format!("{repo}:{tag}");
-                let is_in_use = !is_dangling
-                    && (used_images.contains(&id)
-                        || used_images.contains(&repo)
-                        || used_images.contains(&full_name));
+            let full_name = format!("{repo}:{tag}");
+            let is_in_use = !is_dangling
+                && (used_images.contains(&id)
+                    || used_images.contains(&repo)
+                    || used_images.contains(&full_name));
 
-                images.push(DockerImageItem {
-                    id,
-                    repository: repo,
-                    tag,
-                    size_bytes,
-                    is_dangling,
-                    is_in_use,
-                });
-            }
+            images.push(DockerImageItem {
+                id,
+                repository: repo,
+                tag,
+                size_bytes,
+                is_dangling,
+                is_in_use,
+            });
         }
         images
     }
 
+    fn image_repo_and_tag(value: &serde_json::Value) -> (String, String) {
+        let repo = Self::json_value(value, &["Repository"])
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let tag = Self::json_value(value, &["Tag"])
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        if !repo.is_empty() || !tag.is_empty() {
+            return (repo.to_string(), tag.to_string());
+        }
+        // Podman: `names` is an array such as ["docker.io/library/redis:alpine"].
+        let full = Self::json_value(value, &["Names"])
+            .and_then(|names| match names {
+                serde_json::Value::Array(items) => items.first(),
+                serde_json::Value::String(_) => Some(names),
+                _ => None,
+            })
+            .and_then(|name| name.as_str())
+            .unwrap_or("");
+        match full.rsplit_once(':') {
+            Some((repo, tag)) if !tag.contains('/') => (repo.to_string(), tag.to_string()),
+            _ => (full.to_string(), String::new()),
+        }
+    }
+
     pub fn get_containers() -> Vec<DockerContainerItem> {
-        let mut cmd = tooling::command("docker");
-        cmd.args(["ps", "-a", "--format", "{{json .}}"]);
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
+        Self::get_containers_with(Self::preferred_cli())
+    }
 
+    fn get_containers_with(cli: ContainerCli) -> Vec<DockerContainerItem> {
+        let args: &[&str] = match cli {
+            ContainerCli::Docker => &["ps", "-a", "--format", "{{json .}}"],
+            ContainerCli::Podman => &["ps", "-a", "--format", "json"],
+        };
+        let records = Self::run_json_records(cli, args, 5);
+        Self::parse_containers_records(&records)
+    }
+
+    fn parse_containers_records(records: &[serde_json::Value]) -> Vec<DockerContainerItem> {
         let mut containers = Vec::new();
-        if let Ok(out) = output {
-            if out.status.success() {
-                for line in String::from_utf8_lossy(&out.stdout).lines() {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                        let id = v
-                            .get("ID")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let name = v
-                            .get("Names")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let image = v
-                            .get("Image")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let state = v
-                            .get("State")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let size_str = v.get("Size").and_then(|s| s.as_str()).unwrap_or("0B");
-                        let size_bytes = Self::parse_docker_size(size_str);
-                        let is_running = state.eq_ignore_ascii_case("running");
+        for v in records {
+            let id = Self::json_value(v, &["ID", "Id"])
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            // Docker emits a string; Podman emits an array of names.
+            let name = match Self::json_value(v, &["Names"]) {
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                Some(serde_json::Value::String(text)) => text.clone(),
+                _ => String::new(),
+            };
+            let image = Self::json_value(v, &["Image"])
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            let state = Self::json_value(v, &["State"])
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            // Podman reports null unless `ps --size` is passed.
+            let size_bytes = Self::json_size(Self::json_value(v, &["Size"]));
+            let is_running = state.eq_ignore_ascii_case("running");
 
-                        containers.push(DockerContainerItem {
-                            id,
-                            name,
-                            image,
-                            state,
-                            size_bytes,
-                            is_running,
-                        });
-                    }
-                }
-            }
+            containers.push(DockerContainerItem {
+                id,
+                name,
+                image,
+                state,
+                size_bytes,
+                is_running,
+            });
         }
         containers
     }
 
     pub fn get_volumes() -> Vec<DockerVolumeItem> {
-        let mut cmd = tooling::command("docker");
-        cmd.args(["volume", "ls", "--format", "{{json .}}"]);
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(5));
+        Self::get_volumes_with(Self::preferred_cli())
+    }
 
+    fn get_volumes_with(cli: ContainerCli) -> Vec<DockerVolumeItem> {
+        let args: &[&str] = match cli {
+            ContainerCli::Docker => &["volume", "ls", "--format", "{{json .}}"],
+            ContainerCli::Podman => &["volume", "ls", "--format", "json"],
+        };
+        let records = Self::run_json_records(cli, args, 5);
+        Self::parse_volumes_records(&records)
+    }
+
+    fn parse_volumes_records(records: &[serde_json::Value]) -> Vec<DockerVolumeItem> {
         let mut volumes = Vec::new();
-        if let Ok(out) = output {
-            if out.status.success() {
-                for line in String::from_utf8_lossy(&out.stdout).lines() {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                        let name = v
-                            .get("Name")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let driver = v
-                            .get("Driver")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or("local")
-                            .to_string();
+        for v in records {
+            let name = Self::json_value(v, &["Name"])
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            let driver = Self::json_value(v, &["Driver"])
+                .and_then(|s| s.as_str())
+                .unwrap_or("local")
+                .to_string();
 
-                        volumes.push(DockerVolumeItem {
-                            name,
-                            driver,
-                            size_bytes: 0,
-                            is_in_use: true,
-                        });
-                    }
-                }
-            }
+            volumes.push(DockerVolumeItem {
+                name,
+                driver,
+                size_bytes: 0,
+                is_in_use: true,
+            });
         }
         volumes
     }
@@ -455,10 +648,11 @@ impl DockerAdapter {
         }
 
         let prune_timeout = std::time::Duration::from_secs(30);
+        let cli = Self::preferred_cli().executable();
 
         let (res, delta_kind) = match signature_id {
             "container.docker.dangling_images" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(cli);
                 cmd.args(["image", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -466,7 +660,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_images" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(cli);
                 cmd.args(["image", "prune", "-a", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -474,7 +668,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.builder" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(cli);
                 cmd.args(["builder", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -482,7 +676,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.stopped_containers" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(cli);
                 cmd.args(["container", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -490,7 +684,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_volumes" => {
-                let mut cmd = tooling::command("docker");
+                let mut cmd = tooling::command(cli);
                 cmd.args(["volume", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -586,5 +780,157 @@ mod tests {
         // img3 is dangling
         assert!(!images[2].is_in_use);
         assert!(images[2].is_dangling);
+    }
+
+    #[test]
+    fn selects_the_first_installed_cli_that_reaches_a_daemon() {
+        use super::{select_running_cli, ContainerCli};
+
+        let both = [ContainerCli::Docker, ContainerCli::Podman];
+        assert_eq!(
+            select_running_cli(&both, |_| true),
+            Some(ContainerCli::Docker)
+        );
+        assert_eq!(
+            select_running_cli(&both, |cli| cli == ContainerCli::Podman),
+            Some(ContainerCli::Podman)
+        );
+        assert_eq!(select_running_cli(&both, |_| false), None);
+        assert_eq!(
+            select_running_cli(&[ContainerCli::Podman], |_| true),
+            Some(ContainerCli::Podman)
+        );
+        assert_eq!(select_running_cli(&[], |_| true), None);
+    }
+
+    #[test]
+    fn container_cli_detection_accepts_podman_only() {
+        use super::container_cli_detected_with;
+
+        assert!(!container_cli_detected_with(|_| false));
+        assert!(container_cli_detected_with(|name| name == "docker"));
+        assert!(container_cli_detected_with(|name| name == "podman"));
+    }
+
+    #[test]
+    fn podman_system_df_json_uses_human_readable_sizes() {
+        // Official `podman system df --format json` shape: a JSON array with
+        // PascalCase keys and human-readable Size/Reclaimable strings.
+        let podman_overview = r#"[
+            {"Type":"Images","Total":12,"Active":3,"RawSize":13491151377,"RawReclaimable":922956674,"TotalCount":12,"Size":"13.49GB","Reclaimable":"923MB (7%)"},
+            {"Type":"Containers","Total":4,"Active":0,"RawSize":209266,"RawReclaimable":209266,"TotalCount":4,"Size":"209.3kB","Reclaimable":"209.3kB (100%)"},
+            {"Type":"Local Volumes","Total":6,"Active":1,"RawSize":796638905,"RawReclaimable":47800633,"TotalCount":6,"Size":"796.6MB","Reclaimable":"47.8MB (6%)"}
+        ]"#;
+        let overview = DockerAdapter::parse_overview(podman_overview);
+        assert_eq!(
+            overview.images.total_bytes,
+            DockerAdapter::parse_docker_size("13.49GB")
+        );
+        assert_eq!(
+            overview.images.reclaimable_bytes,
+            DockerAdapter::parse_docker_size("923MB")
+        );
+        assert_eq!(
+            overview.containers.reclaimable_bytes,
+            DockerAdapter::parse_docker_size("209.3kB")
+        );
+        assert_eq!(
+            overview.volumes.reclaimable_bytes,
+            DockerAdapter::parse_docker_size("47.8MB")
+        );
+        assert_eq!(overview.build_cache.total_bytes, 0);
+    }
+
+    #[test]
+    fn podman_images_lowercase_json_is_parsed() {
+        use std::collections::HashSet;
+
+        // Official `podman images --format json` shape: lowercase id/names/size
+        // and numbers for bytes. The second entry is a dangling image.
+        let output = r#"[
+            {
+                "id": "e3d42bcaf643097dd1bb0385658ae8cbe100a80f773555c44690d22c25d16b27",
+                "names": ["docker.io/kubernetes/pause:latest"],
+                "digest": "sha256:0aecf73ff86844324847883f2e916d3f6984c5fae3c2f23e91d66f549fe7d423",
+                "created": "2014-07-19T07:02:32.267701596Z",
+                "size": 250665
+            },
+            {
+                "id": "ebb91b73692bd27890685846412ae338d13552165eacf7fcd5f139bfa9c2d6d9",
+                "names": ["\u003cnone\u003e"],
+                "digest": "sha256:ba7e4091d27e8114a205003ca6a768905c3395d961624a2c78873d9526461032",
+                "created": "2017-10-26T03:07:22.796184288Z",
+                "size": 27170520
+            }
+        ]"#;
+        let images = DockerAdapter::parse_images(output, &HashSet::new());
+        assert_eq!(images.len(), 2);
+        assert_eq!(
+            images[0].id,
+            "e3d42bcaf643097dd1bb0385658ae8cbe100a80f773555c44690d22c25d16b27"
+        );
+        assert_eq!(images[0].repository, "docker.io/kubernetes/pause");
+        assert_eq!(images[0].tag, "latest");
+        assert_eq!(images[0].size_bytes, 250_665);
+        assert!(!images[0].is_dangling);
+        assert!(images[1].is_dangling);
+        assert_eq!(images[1].size_bytes, 27_170_520);
+    }
+
+    #[test]
+    fn podman_images_with_empty_names_are_dangling() {
+        use std::collections::HashSet;
+
+        let output = r#"[{"id":"layer1","names":[],"size":100}]"#;
+        let images = DockerAdapter::parse_images(output, &HashSet::new());
+        assert_eq!(images.len(), 1);
+        assert!(images[0].is_dangling);
+    }
+
+    #[test]
+    fn podman_ps_json_is_parsed() {
+        // Real `podman ps --format json` shape: Id/Names[]/Image/State and a
+        // null Size unless `--size` is passed.
+        let output = r#"[
+            {
+                "Command": ["bash"],
+                "Created": 1594776657,
+                "CreatedAt": "2 hours ago",
+                "Exited": false,
+                "ExitCode": 0,
+                "Id": "19dcc8d7b60eb6e629e0fb8c335ab9ff7aef81ee1a2ae7105d92f5a2cf6fb4b5",
+                "Image": "localhost/fedora:latest",
+                "ImageID": "ed63f8d268e45ea766d2886fa7b7c5cadc395372843446778f8e45b5f00cb799",
+                "Names": ["dazzling_shockley"],
+                "State": "running",
+                "Size": null
+            }
+        ]"#;
+        let containers =
+            DockerAdapter::parse_containers_records(&DockerAdapter::parse_json_records(output));
+        assert_eq!(containers.len(), 1);
+        assert_eq!(
+            containers[0].id,
+            "19dcc8d7b60eb6e629e0fb8c335ab9ff7aef81ee1a2ae7105d92f5a2cf6fb4b5"
+        );
+        assert_eq!(containers[0].name, "dazzling_shockley");
+        assert_eq!(containers[0].image, "localhost/fedora:latest");
+        assert_eq!(containers[0].state, "running");
+        assert!(containers[0].is_running);
+        assert_eq!(containers[0].size_bytes, 0);
+    }
+
+    #[test]
+    fn podman_volume_json_is_parsed() {
+        let output = r#"[
+            {"Name":"data","Driver":"local","Mountpoint":"/home/user/.local/share/containers/storage/volumes/data/_data","Scope":"local"},
+            {"Name":"cache","Driver":"local","Mountpoint":"/srv/cache","Scope":"local"}
+        ]"#;
+        let volumes =
+            DockerAdapter::parse_volumes_records(&DockerAdapter::parse_json_records(output));
+        assert_eq!(volumes.len(), 2);
+        assert_eq!(volumes[0].name, "data");
+        assert_eq!(volumes[0].driver, "local");
+        assert_eq!(volumes[1].name, "cache");
     }
 }

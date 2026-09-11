@@ -1,3 +1,3 @@
 pub mod adapter;
 
-pub use adapter::DockerAdapter;
+pub use adapter::{container_cli_detected, DockerAdapter};

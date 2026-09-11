@@ -28,7 +28,7 @@ impl ProviderAdapter for CursorAdapter {
         provider.status_message = if installed {
             "Cursor does not expose account quota to Zenith; check usage in Cursor settings.".into()
         } else {
-            "Cursor is not installed.".into()
+            "Cursor was not detected in PATH or known tool locations.".into()
         };
         provider.action_url = None;
         Ok(provider)

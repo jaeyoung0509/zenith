@@ -243,7 +243,11 @@ impl DirectoryScanner {
             {
                 stats.allocated = meta.blocks() * 512;
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                stats.allocated = crate::scanner::get_allocated_size(path).unwrap_or(len);
+            }
+            #[cfg(not(any(unix, windows)))]
             {
                 stats.allocated = len;
             }

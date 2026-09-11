@@ -2,9 +2,7 @@ use crate::models::ZenithError;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
-use std::ffi::OsString;
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 
 pub struct Blacklist;
 
@@ -122,6 +120,19 @@ impl Blacklist {
             }
         }
 
+        // 3b. Dynamically resolved known folders (e.g. OneDrive Known Folder Move, redirected Documents/Desktop)
+        let platform_paths = crate::platform::NativePlatformPaths::new();
+        for folder_token in ["downloads", "desktop", "documents", "movies"] {
+            if let Some(known_dir) = platform_paths.content_dir(folder_token) {
+                let norm_known =
+                    crate::platform::NativePlatformPaths::normalize_verbatim_path(&known_dir);
+                if Self::paths_equal(path, &norm_known) || Self::path_starts_with(path, &norm_known)
+                {
+                    return true;
+                }
+            }
+        }
+
         // 4. Allow safe temp directories (/tmp, /private/tmp, /var/folders, /private/var/folders)
         let path_str = path.to_string_lossy();
         if path_str.starts_with("/var/folders")
@@ -148,6 +159,49 @@ impl Blacklist {
             return true;
         }
 
+        // Drive-agnostic protection for Windows system roots on any drive
+        // letter. Only the `X:\Users` root itself is protected; its
+        // descendants (temp directories, projects, caches) must remain
+        // scannable and cleanable.
+        let path_normalized_str = normalized_path_str.trim_end_matches('/');
+        if path_normalized_str.len() >= 2 && path_normalized_str.as_bytes()[1] == b':' {
+            let tail = &path_normalized_str[2..];
+            if tail.eq_ignore_ascii_case("/Users") {
+                return true;
+            }
+            for denied in [
+                "/Windows",
+                "/Program Files",
+                "/Program Files (x86)",
+                "/ProgramData",
+            ] {
+                if tail.eq_ignore_ascii_case(denied)
+                    || tail
+                        .to_ascii_lowercase()
+                        .starts_with(&format!("{}/", denied.to_ascii_lowercase()))
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Environment-derived system roots
+        for env_var in [
+            "SystemRoot",
+            "windir",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "ProgramData",
+        ] {
+            if let Some(val) = std::env::var_os(env_var).map(PathBuf::from) {
+                let norm_sys = crate::platform::NativePlatformPaths::normalize_verbatim_path(&val);
+                if Self::paths_equal(path, &norm_sys) || Self::path_starts_with(path, &norm_sys) {
+                    return true;
+                }
+            }
+        }
+
         // 6. System critical prefixes outside user home and temp
         let system_prefixes = [
             "/System",
@@ -163,10 +217,6 @@ impl Blacklist {
             "/dev",
             "/cores",
             "/opt",
-            "C:/Windows",
-            "C:/Program Files",
-            "C:/Program Files (x86)",
-            "C:/ProgramData",
         ];
 
         for sys in &system_prefixes {
@@ -188,7 +238,7 @@ impl Blacklist {
     fn paths_equal(left: &Path, right: &Path) -> bool {
         #[cfg(target_os = "windows")]
         {
-            Self::windows_path_key(left) == Self::windows_path_key(right)
+            crate::platform::NativePlatformPaths::windows_path_eq(left, right)
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -199,25 +249,12 @@ impl Blacklist {
     fn path_starts_with(path: &Path, base: &Path) -> bool {
         #[cfg(target_os = "windows")]
         {
-            let path_key = Self::windows_path_key(path);
-            let base_key = Self::windows_path_key(base);
-            path_key
-                .strip_prefix(&base_key)
-                .is_some_and(|suffix| suffix.starts_with('/'))
+            crate::platform::NativePlatformPaths::windows_path_starts_with(path, base)
         }
         #[cfg(not(target_os = "windows"))]
         {
             path.starts_with(base)
         }
-    }
-
-    #[cfg(target_os = "windows")]
-    fn windows_path_key(path: &Path) -> String {
-        Self::normalize_path(path)
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_ascii_lowercase()
     }
 
     /// Verifies that a target path is completely safe from the blacklist.
@@ -237,7 +274,7 @@ impl Blacklist {
     /// Normalizes path without following symlinks (prevents path traversal `..`)
     pub fn normalize_path(path: &Path) -> PathBuf {
         #[cfg(target_os = "windows")]
-        let platform_path = Self::strip_windows_verbatim_prefix(path);
+        let platform_path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
         #[cfg(target_os = "windows")]
         let path = platform_path.as_path();
 
@@ -261,51 +298,6 @@ impl Blacklist {
             }
         }
         components.into_iter().collect()
-    }
-
-    #[cfg(target_os = "windows")]
-    fn strip_windows_verbatim_prefix(path: &Path) -> PathBuf {
-        let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
-        let slash = b'\\' as u16;
-        let question = b'?' as u16;
-        let verbatim_prefix = [slash, slash, question, slash];
-        if !wide.starts_with(&verbatim_prefix) {
-            return path.to_path_buf();
-        }
-
-        // `\\?\UNC\server\share` is the verbatim equivalent of
-        // `\\server\share`; drive paths only need the four-byte prefix removed.
-        let unc_prefix = [
-            slash,
-            slash,
-            question,
-            slash,
-            b'U' as u16,
-            b'N' as u16,
-            b'C' as u16,
-            slash,
-        ];
-        if wide.len() >= unc_prefix.len()
-            && wide[..unc_prefix.len()]
-                .iter()
-                .zip(unc_prefix)
-                .all(|(actual, expected)| Self::windows_ascii_eq(*actual, expected))
-        {
-            let mut normalized = vec![slash, slash];
-            normalized.extend_from_slice(&wide[unc_prefix.len()..]);
-            return PathBuf::from(OsString::from_wide(&normalized));
-        }
-
-        let remainder = &wide[verbatim_prefix.len()..];
-        if remainder.len() >= 3
-            && Self::is_windows_drive_letter(remainder[0])
-            && remainder[1] == b':' as u16
-            && matches!(remainder[2], value if value == b'\\' as u16 || value == b'/' as u16)
-        {
-            return PathBuf::from(OsString::from_wide(remainder));
-        }
-
-        path.to_path_buf()
     }
 
     #[cfg(target_os = "windows")]

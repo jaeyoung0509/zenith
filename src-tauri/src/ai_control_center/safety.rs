@@ -353,14 +353,7 @@ fn is_eligible_safety_root(root: &Path) -> bool {
     if canonical.parent().is_none() {
         return false;
     }
-    #[cfg(target_os = "windows")]
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from);
-    #[cfg(not(target_os = "windows"))]
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
+    let home = crate::platform::NativePlatformPaths::new().home();
     if let Some(home) = home {
         let normalized_home = home
             .canonicalize()
@@ -614,14 +607,7 @@ mod tests {
             assert!(!is_eligible_safety_root(Path::new("/Users")));
             assert!(!is_eligible_safety_root(Path::new("/System")));
         }
-        #[cfg(target_os = "windows")]
-        let home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from);
-        #[cfg(not(target_os = "windows"))]
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from);
+        let home = crate::platform::NativePlatformPaths::new().home();
         if let Some(home) = home {
             assert!(!is_eligible_safety_root(&home));
 

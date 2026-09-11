@@ -76,49 +76,72 @@ pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn tray_anchor(window: &WebviewWindow, rect: Rect) -> PhysicalPosition<f64> {
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let position: PhysicalPosition<f64> = rect.position.to_physical(scale);
-    let size: tauri::PhysicalSize<f64> = rect.size.to_physical(scale);
+fn tray_anchor(rect: &Rect, scale_factor: f64) -> PhysicalPosition<f64> {
+    let position: PhysicalPosition<f64> = rect.position.to_physical(scale_factor);
+    let size: tauri::PhysicalSize<f64> = rect.size.to_physical(scale_factor);
     PhysicalPosition::new(position.x + size.width, position.y + size.height)
+}
+
+fn monitor_containing_point(
+    monitors: &[tauri::Monitor],
+    point: PhysicalPosition<f64>,
+) -> Option<&tauri::Monitor> {
+    monitors.iter().find(|monitor| {
+        let origin = monitor.position();
+        let bounds = monitor.size();
+        point.x >= f64::from(origin.x)
+            && point.x < f64::from(origin.x + bounds.width as i32)
+            && point.y >= f64::from(origin.y)
+            && point.y < f64::from(origin.y + bounds.height as i32)
+    })
 }
 
 fn quick_panel_position(
     anchor: PhysicalPosition<f64>,
     panel_size: PhysicalSize<u32>,
-    monitor_origin: PhysicalPosition<i32>,
-    monitor_size: PhysicalSize<u32>,
+    work_area_origin: PhysicalPosition<i32>,
+    work_area_size: PhysicalSize<u32>,
 ) -> PhysicalPosition<i32> {
-    let max_x = monitor_origin.x + monitor_size.width as i32 - panel_size.width as i32;
-    let max_y = monitor_origin.y + monitor_size.height as i32 - panel_size.height as i32;
+    let max_x = work_area_origin.x + work_area_size.width as i32 - panel_size.width as i32;
+    let max_y = work_area_origin.y + work_area_size.height as i32 - panel_size.height as i32;
+    let work_area_bottom = work_area_origin.y + work_area_size.height as i32;
+    let below = anchor.y.round() as i32 + 6;
+    // Open away from the taskbar edge: below the anchor only when the panel
+    // fits inside the work area, otherwise above it.
+    let y = if below + panel_size.height as i32 <= work_area_bottom {
+        below
+    } else {
+        anchor.y.round() as i32 - panel_size.height as i32 - 6
+    };
     PhysicalPosition::new(
         (anchor.x.round() as i32 - panel_size.width as i32)
-            .clamp(monitor_origin.x, max_x.max(monitor_origin.x)),
-        (anchor.y.round() as i32 + 6).clamp(monitor_origin.y, max_y.max(monitor_origin.y)),
+            .clamp(work_area_origin.x, max_x.max(work_area_origin.x)),
+        y.clamp(work_area_origin.y, max_y.max(work_area_origin.y)),
     )
 }
 
-fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosition<f64>>) {
-    if let Some(position) = click_position {
+fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
+    if let Some(rect) = tray_rect {
         if let Ok(size) = window.outer_size() {
-            let mut target = PhysicalPosition::new(
-                position.x.round() as i32 - size.width as i32,
-                position.y.round() as i32 + 6,
-            );
-
-            if let Ok(monitors) = window.available_monitors() {
-                if let Some(monitor) = monitors.iter().find(|monitor| {
-                    let origin = monitor.position();
-                    let bounds = monitor.size();
-                    position.x >= f64::from(origin.x)
-                        && position.x < f64::from(origin.x + bounds.width as i32)
-                        && position.y >= f64::from(origin.y)
-                        && position.y < f64::from(origin.y + bounds.height as i32)
-                }) {
-                    target =
-                        quick_panel_position(position, size, *monitor.position(), *monitor.size());
-                }
-            }
+            // Logical tray rectangles need a scale factor before the monitor
+            // can be selected. Use the window's factor provisionally, then
+            // recompute with the tray monitor's own factor, which differs in
+            // mixed-DPI setups.
+            let provisional_scale = window.scale_factor().unwrap_or(1.0);
+            let provisional_anchor = tray_anchor(&rect, provisional_scale);
+            let monitors = window.available_monitors().unwrap_or_default();
+            let target = monitor_containing_point(&monitors, provisional_anchor)
+                .map(|monitor| {
+                    let anchor = tray_anchor(&rect, monitor.scale_factor());
+                    let work_area = monitor.work_area();
+                    quick_panel_position(anchor, size, work_area.position, work_area.size)
+                })
+                .unwrap_or_else(|| {
+                    PhysicalPosition::new(
+                        provisional_anchor.x.round() as i32 - size.width as i32,
+                        provisional_anchor.y.round() as i32 + 6,
+                    )
+                });
             let _ = window.set_position(target);
         }
     }
@@ -127,6 +150,7 @@ fn show_quick_panel(window: &WebviewWindow, click_position: Option<PhysicalPosit
 }
 
 pub fn run() {
+    crate::platform::environment::set_webview_version(tauri::webview_version().ok());
     let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
     awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
@@ -201,6 +225,11 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // A second launch focuses the existing instance instead of
+            // starting a competing process that could corrupt settings.
+            let _ = show_main_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .on_window_event(|window, event| {
@@ -262,11 +291,10 @@ pub fn run() {
                             if window.is_visible().unwrap_or(false) {
                                 let _ = window.hide();
                             } else {
-                                let position = app
+                                let tray_rect = app
                                     .tray_by_id("main-tray")
-                                    .and_then(|tray| tray.rect().ok().flatten())
-                                    .map(|rect| tray_anchor(&window, rect));
-                                show_quick_panel(&window, position);
+                                    .and_then(|tray| tray.rect().ok().flatten());
+                                show_quick_panel(&window, tray_rect);
                             }
                         }
                     }
@@ -287,8 +315,7 @@ pub fn run() {
                             if is_vis {
                                 let _ = quick_win.hide();
                             } else {
-                                let position = tray_anchor(&quick_win, rect);
-                                show_quick_panel(&quick_win, Some(position));
+                                show_quick_panel(&quick_win, Some(rect));
                             }
                         }
                     }
@@ -417,14 +444,27 @@ mod tests {
     }
 
     #[test]
-    fn quick_panel_is_clamped_inside_active_display() {
+    fn quick_panel_opens_above_the_anchor_when_the_work_area_ends() {
+        // The work area excludes a bottom taskbar, so an anchor near the
+        // taskbar must place the panel above it instead of under the cursor.
         let position = quick_panel_position(
             PhysicalPosition::new(100.0, 1_900.0),
             PhysicalSize::new(720, 1_040),
             PhysicalPosition::new(0, 0),
             PhysicalSize::new(3_456, 2_234),
         );
-        assert_eq!(position, PhysicalPosition::new(0, 1_194));
+        assert_eq!(position, PhysicalPosition::new(0, 854));
+    }
+
+    #[test]
+    fn quick_panel_respects_a_work_area_origin_on_a_secondary_display() {
+        let position = quick_panel_position(
+            PhysicalPosition::new(-100.0, 60.0),
+            PhysicalSize::new(720, 600),
+            PhysicalPosition::new(-1_920, 25),
+            PhysicalSize::new(1_920, 1_015),
+        );
+        assert_eq!(position, PhysicalPosition::new(-820, 66));
     }
 
     #[test]

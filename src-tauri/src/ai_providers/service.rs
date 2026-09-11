@@ -237,7 +237,7 @@ fn map_error_to_usage(descriptor: &ProviderDescriptor, err: ProviderError) -> Ai
         ProviderError::AuthenticationFailed(msg) => format!("Authentication failed: {msg}"),
         ProviderError::Network(msg) => format!("Network error: {msg}"),
         ProviderError::InvalidResponse(msg) => format!("Invalid response: {msg}"),
-        ProviderError::CliNotInstalled(msg) => format!("CLI is not installed: {msg}"),
+        ProviderError::CliNotInstalled(msg) => format!("CLI not detected: {msg}"),
         ProviderError::CliFailed(msg) => format!("CLI execution failed: {msg}"),
         ProviderError::ExecutionFailed(msg) => format!("Execution failed: {msg}"),
         ProviderError::Timeout => "Collection timed out.".into(),

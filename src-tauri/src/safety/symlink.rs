@@ -6,6 +6,7 @@ pub struct SymlinkGuard;
 
 impl SymlinkGuard {
     /// Checks whether the path is a symbolic link or reparse point (junction, mount point) without following it.
+    /// Cloud placeholders (OneDrive), deduplication, and WOF compression are treated as regular entries.
     pub fn is_symlink(path: &Path) -> bool {
         match fs::symlink_metadata(path) {
             Ok(meta) => {
@@ -16,7 +17,10 @@ impl SymlinkGuard {
                 {
                     use std::os::windows::fs::MetadataExt;
                     if meta.file_attributes() & 0x400 != 0 {
-                        return true;
+                        // This API cannot return an error; if the reparse tag
+                        // cannot be classified, treat it as a potential escape
+                        // rather than as an ordinary entry.
+                        return classify_name_surrogate_reparse_point(path).unwrap_or(true);
                     }
                 }
                 false
@@ -198,11 +202,77 @@ impl SymlinkGuard {
         {
             use std::os::windows::fs::MetadataExt;
             if meta.file_attributes() & 0x400 != 0 {
-                return Ok(true);
+                // A reparse point whose tag cannot be read is unknown, not
+                // safe: mutation paths must fail closed.
+                return classify_name_surrogate_reparse_point(path).map_err(|error| {
+                    ZenithError::ChangedSinceScan(format!(
+                        "Could not classify reparse point {}: {}",
+                        path.display(),
+                        error
+                    ))
+                });
             }
         }
         Ok(false)
     }
+}
+
+/// `IsReparseTagNameSurrogate(tag)` from winnt.h. Name surrogates are the
+/// reparse points that act as path indirections (symbolic links and mount
+/// points/junctions). Other reparse points — cloud placeholders, WOF
+/// compression, deduplication — are ordinary entries for traversal purposes.
+#[cfg(any(windows, test))]
+fn is_reparse_tag_name_surrogate(tag: u32) -> bool {
+    tag & 0x2000_0000 != 0
+}
+
+/// Opens the reparse point without following it and classifies its tag.
+/// Every failure is an error so callers cannot mistake "unknown" for "safe".
+#[cfg(windows)]
+fn classify_name_surrogate_reparse_point(path: &Path) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_TAG_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut tag_info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+    let queried = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileAttributeTagInfo,
+            &mut tag_info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    };
+    // Capture the error before closing the handle so it cannot be overwritten.
+    let query_error = if queried == 0 {
+        Some(std::io::Error::last_os_error())
+    } else {
+        None
+    };
+    unsafe { CloseHandle(handle) };
+    if let Some(error) = query_error {
+        return Err(error);
+    }
+    Ok(is_reparse_tag_name_surrogate(tag_info.ReparseTag))
 }
 
 #[cfg(test)]
@@ -216,9 +286,30 @@ mod tests {
         assert!(SymlinkGuard::validate_components_between(&path, dir.path()).is_err());
     }
 
+    #[test]
+    fn reparse_tags_classify_name_surrogates_separately() {
+        // winnt.h: IO_REPARSE_TAG_SYMLINK and IO_REPARSE_TAG_MOUNT_POINT.
+        assert!(is_reparse_tag_name_surrogate(0xA000_000C));
+        assert!(is_reparse_tag_name_surrogate(0xA000_0003));
+        // Cloud placeholder, WOF compression, and dedup are not surrogates:
+        // they are ordinary entries for traversal purposes.
+        assert!(!is_reparse_tag_name_surrogate(0x9000_001A));
+        assert!(!is_reparse_tag_name_surrogate(0x8000_0017));
+        assert!(!is_reparse_tag_name_surrogate(0x8000_0007));
+        assert!(!is_reparse_tag_name_surrogate(0));
+    }
+
     #[cfg(windows)]
     #[test]
-    fn selected_plain_path_matches_canonical_profile_without_crossing_accounts() {
+    fn reparse_classification_returns_error_for_unopenable_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-reparse-target");
+        assert!(classify_name_surrogate_reparse_point(&missing).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn selected_plain_path_matches_canonical_profile_and_outside_roots_are_allowed() {
         let dir = tempfile::tempdir().unwrap();
         let profile = dir.path().join("사용자 하나");
         let workspace = profile.join("프로젝트");
@@ -235,7 +326,10 @@ mod tests {
         assert!(
             crate::developer_artifacts::validate_workspace_root(&plain_workspace, &profile).is_ok()
         );
-        assert!(crate::developer_artifacts::validate_workspace_root(&other, &profile).is_err());
+        // A relocated workspace outside the selected profile (D:\dev-style)
+        // is accepted under anchored symlink validation; the cross-account
+        // traversal check above still rejects reading through another profile.
+        assert!(crate::developer_artifacts::validate_workspace_root(&other, &profile).is_ok());
     }
 
     #[cfg(windows)]

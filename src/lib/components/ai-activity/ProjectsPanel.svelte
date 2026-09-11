@@ -2,12 +2,14 @@
   import { Bot, HardDrive, Server, Square } from 'lucide-svelte';
   import type { AgentActivityStatus, AgentEvidence, AgentSession, AttentionReason } from '../../models/types';
   import { agentActivityStore } from '../../stores/agentActivity.svelte';
+  import { platformCapabilitiesStore } from '../../stores/platformCapabilities.svelte';
   import { formatBytes } from '../../utils/format';
   import Badge from '../Badge.svelte';
   import Button from '../Button.svelte';
   import Card from '../Card.svelte';
 
   let snapshot = $derived(agentActivityStore.snapshot);
+  let isWindows = $derived(platformCapabilitiesStore.capabilities?.platform === 'windows');
   let stoppingSessionIds = $state<Set<string>>(new Set());
   let actionFeedback = $state<string | null>(null);
 
@@ -73,7 +75,9 @@
     stoppingSessionIds = new Set(stoppingSessionIds);
     try {
       await agentActivityStore.stopSession(session.id, session.stop_lease_id);
-      actionFeedback = `Sent graceful stop (SIGTERM) to ${session.tool_name}.`;
+      actionFeedback = isWindows
+        ? `Requested forced stop for ${session.tool_name}. Windows termination cannot be guaranteed graceful.`
+        : `Sent graceful stop (SIGTERM) to ${session.tool_name}.`;
     } catch (err) {
       actionFeedback = `Stop failed: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
@@ -257,7 +261,7 @@
                   size="sm"
                   disabled={stoppingSessionIds.has(session.id)}
                   onclick={() => handleStopSession(session)}
-                  title="Send graceful SIGTERM to agent process"
+                  title={isWindows ? 'Request forced stop of agent process (Windows)' : 'Send graceful SIGTERM to agent process'}
                 >
                   <Square size={10} class="fill-current" />
                   {stoppingSessionIds.has(session.id) ? 'Stopping...' : 'Stop'}

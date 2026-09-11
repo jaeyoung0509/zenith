@@ -32,7 +32,7 @@ impl ProviderAdapter for OpenCodeAdapter {
                 let error_str = error.to_string();
                 if error_str.contains("No such file") || error_str.contains("not found") {
                     return Err(ProviderError::CliNotInstalled(
-                        "OpenCode CLI is not installed.".into(),
+                        "OpenCode CLI was not detected in PATH or known tool locations.".into(),
                     ));
                 } else {
                     return Err(ProviderError::CliFailed(format!(

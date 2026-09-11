@@ -218,15 +218,15 @@ impl PlatformCapabilities {
             system_actions: PlatformFeatureCapability::available(),
             cleanup: PlatformFeatureCapability::available(),
             intensive_cleanup: PlatformFeatureCapability::unavailable(
-                "Intensive cleanup is unavailable on Windows because no Windows-specific intensive signatures are defined.",
+                "Zenith does not implement intensive cleanup on Windows yet; no Windows-specific intensive signatures are defined.",
             ),
             large_files: PlatformFeatureCapability::available(),
             developer_artifacts: PlatformFeatureCapability::available(),
             installed_apps: PlatformFeatureCapability::unavailable(
-                "Windows application inventory is not supported. Use Windows Settings.",
+                "Zenith does not implement Windows application inventory yet; registry uninstall keys exist but are not read.",
             ),
             app_uninstall: PlatformFeatureCapability::unavailable(
-                "Windows application uninstallation is not supported. Use Windows Settings or the application's uninstaller.",
+                "Zenith does not implement Windows application uninstallation yet; the registry UninstallString exists but is not executed.",
             ),
             memory_metrics: PlatformFeatureCapability::available(),
             process_termination: PlatformFeatureCapability::available(),

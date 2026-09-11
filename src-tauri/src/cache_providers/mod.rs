@@ -88,16 +88,34 @@ impl CacheProviderRegistry {
             || {
                 [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
                     .into_par_iter()
-                    .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
+                    .filter_map(|provider| Self::scan_provider_logged(provider, registry))
                     .collect()
             },
             || {
                 [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
                     .into_iter()
-                    .filter_map(|provider| Self::scan_provider(provider, registry).ok().flatten())
+                    .filter_map(|provider| Self::scan_provider_logged(provider, registry))
                     .collect()
             },
         )
+    }
+
+    fn scan_provider_logged(
+        provider: ProviderKind,
+        registry: &SignatureRegistry,
+    ) -> Option<ScanItem> {
+        match Self::scan_provider(provider, registry) {
+            Ok(item) => item,
+            Err(error) => {
+                // A rejected provider must be visible in diagnostics instead of
+                // silently disappearing from the scan results.
+                crate::diagnostics::log_error(
+                    "cache_providers",
+                    &format!("{} scan skipped: {error}", provider.executable()),
+                );
+                None
+            }
+        }
     }
 
     fn scan_provider(
@@ -212,8 +230,12 @@ pub fn mutation_blocked_by_active_runtime(signature_id: &str) -> bool {
 }
 
 fn run_provider(provider: ProviderKind, args: &[&str]) -> Result<std::process::Output, String> {
-    let executable = tooling::resolve(provider.executable())
-        .ok_or_else(|| format!("{} is not installed", provider.executable()))?;
+    let executable = tooling::resolve(provider.executable()).ok_or_else(|| {
+        format!(
+            "{} was not detected in PATH or known tool locations",
+            provider.executable()
+        )
+    })?;
     validate_executable(&executable)?;
     let mut command = Command::new(executable);
     command.args(args);
@@ -261,33 +283,70 @@ fn validate_cache_path(path: PathBuf) -> Result<PathBuf, String> {
     }
     let home = crate::platform::paths::NativePlatformPaths::new()
         .home()
-        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
         .ok_or_else(|| "Could not resolve the current user profile".to_string())?;
     let canonical_home = std::fs::canonicalize(home)
         .map_err(|_| "Could not validate the current user profile".to_string())?;
     let canonical = std::fs::canonicalize(&path)
         .map_err(|_| "Could not canonicalize the discovered cache".to_string())?;
-    if canonical == canonical_home || !canonical.starts_with(&canonical_home) {
-        return Err("The discovered cache is outside the current user profile".to_string());
+
+    let in_profile = path_is_within(&canonical, &canonical_home);
+    let mut approved = in_profile && cache_location_approved(&canonical, &canonical_home);
+    // Relocated caches (PNPM_HOME, UV_CACHE_DIR, a configured npm cache) stay
+    // supported under the same blacklist and symlink validation as in-profile
+    // locations instead of being refused for being outside the profile.
+    for root in relocated_cache_roots() {
+        approved |= path_is_same(&canonical, &root) || path_is_within(&canonical, &root);
     }
-    let mut approved = cache_location_approved(&canonical, &canonical_home);
-    for variable in ["LOCALAPPDATA", "APPDATA"] {
-        if let Some(root) = std::env::var_os(variable)
-            .map(PathBuf::from)
-            .and_then(|root| std::fs::canonicalize(root).ok())
-        {
-            approved |= canonical != root && canonical.starts_with(root);
-        }
-    }
+
     if !approved {
         return Err(
             "The provider cache override is outside approved user cache locations".to_string(),
         );
     }
     Blacklist::validate(&canonical).map_err(|error| error.to_string())?;
-    SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home)
-        .map_err(|error| error.to_string())?;
+    if in_profile {
+        SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home)
+            .map_err(|error| error.to_string())?;
+    } else {
+        SymlinkGuard::validate_anchored_path(&canonical).map_err(|error| error.to_string())?;
+    }
     Ok(canonical)
+}
+
+fn relocated_cache_roots() -> Vec<PathBuf> {
+    [
+        "LOCALAPPDATA",
+        "APPDATA",
+        "UV_CACHE_DIR",
+        "PNPM_HOME",
+        "NPM_CONFIG_CACHE",
+    ]
+    .into_iter()
+    .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from))
+    .filter_map(|root| std::fs::canonicalize(root).ok())
+    .map(|root| crate::platform::NativePlatformPaths::normalize_verbatim_path(&root))
+    .collect()
+}
+
+#[cfg(windows)]
+fn path_is_same(left: &Path, right: &Path) -> bool {
+    crate::platform::NativePlatformPaths::windows_path_eq(left, right)
+}
+
+#[cfg(not(windows))]
+fn path_is_same(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn path_is_within(path: &Path, base: &Path) -> bool {
+    !path_is_same(path, base)
+        && crate::platform::NativePlatformPaths::windows_path_starts_with(path, base)
+}
+
+#[cfg(not(windows))]
+fn path_is_within(path: &Path, base: &Path) -> bool {
+    path != base && path.starts_with(base)
 }
 
 /// Pure approval check over already-canonicalized paths (no filesystem access),
@@ -327,11 +386,13 @@ fn node_manager_roots(home: &Path) -> Vec<PathBuf> {
 fn validate_executable(path: &Path) -> Result<(), String> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|_| "Could not validate the provider executable".to_string())?;
+    let canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
     let mut roots = vec![
         PathBuf::from("/usr/bin"),
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/opt/homebrew"),
     ];
+    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots());
     if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
         roots.extend([
             home.join(".local/bin"),
@@ -343,25 +404,37 @@ fn validate_executable(path: &Path) -> Result<(), String> {
         ]);
         roots.extend(node_manager_roots(&home));
     }
-    for variable in ["LOCALAPPDATA", "APPDATA"] {
-        if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
-            roots.extend([
-                root.join("Programs"),
-                root.join("npm"),
-                root.join("pnpm"),
-                root.join("nvm"),
-                root.join("Volta"),
-            ]);
-        }
-    }
-    if let Some(program_files) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
-        roots.push(program_files);
-    }
-    if roots.iter().any(|root| canonical.starts_with(root)) {
+
+    if executable_under_roots(&canonical, &roots) {
         Ok(())
     } else {
         Err("The provider executable is outside trusted install locations".to_string())
     }
+}
+
+/// Pure matcher over an already-canonicalized executable and its trust roots.
+/// Kept separate so the Windows trust boundary can be tested without touching
+/// the real filesystem. Windows-style paths always use the Windows comparison
+/// so the fixtures remain meaningful on Unix hosts.
+fn executable_under_roots(canonical: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| {
+        let norm_root = crate::platform::NativePlatformPaths::normalize_verbatim_path(root);
+        if looks_like_windows_path(canonical) || looks_like_windows_path(&norm_root) {
+            crate::platform::NativePlatformPaths::windows_path_starts_with(canonical, &norm_root)
+        } else {
+            canonical.starts_with(&norm_root)
+        }
+    })
+}
+
+fn looks_like_windows_path(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    text.starts_with("\\\\")
+        || text.starts_with("//")
+        || matches!(
+            text.as_bytes(),
+            [drive, b':', ..] if drive.is_ascii_alphabetic()
+        )
 }
 
 fn paths_match(left: &Path, right: &Path) -> bool {
@@ -442,6 +515,80 @@ mod tests {
             &home
         ));
         assert!(!cache_location_approved(&home, &home));
+    }
+
+    #[test]
+    fn provider_executable_validation_uses_trusted_tool_roots() {
+        #[cfg(target_os = "macos")]
+        {
+            use super::validate_executable;
+            use std::path::Path;
+            assert!(validate_executable(Path::new("/usr/bin/env")).is_ok());
+            let dir = tempfile::tempdir().unwrap();
+            let stray = dir.path().join("npm");
+            std::fs::write(&stray, b"#!/bin/sh\n").unwrap();
+            assert!(validate_executable(&stray).is_err());
+        }
+    }
+
+    #[test]
+    fn trusted_paths_require_a_documented_tool_root() {
+        use super::executable_under_roots;
+        use std::path::{Path, PathBuf};
+
+        // Windows-style fixtures stay lexically comparable on Unix hosts.
+        let roots: Vec<PathBuf> = vec![
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming\npm"),
+            PathBuf::from(r"C:\Users\tester\AppData\Local\pnpm"),
+            PathBuf::from(r"C:\Program Files\nodejs"),
+        ];
+        assert!(executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Roaming\npm\npm.cmd"),
+            &roots
+        ));
+        assert!(executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Local\pnpm\pnpm.cmd"),
+            &roots
+        ));
+        // A random directory under a user-writable container is not trusted.
+        assert!(!executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Local\random\npm.cmd"),
+            &roots
+        ));
+        assert!(!executable_under_roots(
+            Path::new(r"C:\Users\tester\AppData\Roaming\random\npm.cmd"),
+            &roots
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn trusted_tool_roots_exclude_bare_user_writable_containers() {
+        use crate::platform::NativePlatformPaths;
+        use std::path::PathBuf;
+
+        let roots = NativePlatformPaths::trusted_tool_roots();
+        for variable in ["LOCALAPPDATA", "APPDATA", "ProgramData"] {
+            let Some(root) = std::env::var_os(variable).map(PathBuf::from) else {
+                continue;
+            };
+            let normalized = NativePlatformPaths::normalize_verbatim_path(&root);
+            assert!(
+                !roots
+                    .iter()
+                    .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &normalized)),
+                "bare {variable} must not be a trusted executable root"
+            );
+        }
+        if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            let npm = app_data.join("npm");
+            assert!(
+                roots
+                    .iter()
+                    .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &npm)),
+                "the documented %APPDATA%\\npm install root must stay trusted"
+            );
+        }
     }
 
     #[test]

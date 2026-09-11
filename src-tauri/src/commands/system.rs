@@ -11,9 +11,10 @@ use crate::models::{
     SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
+use crate::platform::PlatformPathsProvider;
 use crate::power::ApplicationPicker;
 use crate::settings_store;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -372,18 +373,24 @@ pub async fn open_in_terminal(path: String) -> Result<(), String> {
 }
 
 fn expand_display_path(path: &str) -> Result<PathBuf, String> {
-    let expanded = if let Some(relative) = path.strip_prefix("~/") {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
+    let path_obj = Path::new(path);
+    let normalized = crate::platform::NativePlatformPaths::normalize_verbatim_path(path_obj);
+    let path_str = normalized.to_string_lossy();
+    let expanded = if let Some(relative) = path_str
+        .strip_prefix("~/")
+        .or_else(|| path_str.strip_prefix("~\\"))
+    {
+        let home = crate::platform::NativePlatformPaths::new()
+            .user_home()
             .ok_or_else(|| "Home environment variable is not set.".to_string())?;
         home.join(relative)
     } else {
-        PathBuf::from(path)
+        normalized
     };
-    expanded
+    let canonical = expanded
         .canonicalize()
-        .map_err(|error| format!("Path is no longer available: {error}"))
+        .map_err(|error| format!("Path is no longer available: {error}"))?;
+    Ok(crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical))
 }
 
 #[tauri::command]

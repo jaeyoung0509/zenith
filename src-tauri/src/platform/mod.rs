@@ -1,11 +1,16 @@
 use crate::models::PlatformCapabilities;
 
 pub mod capabilities;
+pub mod environment;
+pub mod file_ops;
 pub mod paths;
+pub mod process;
 pub mod system_actions;
 
 pub use capabilities::NativePlatformCapabilities;
+pub use environment::{RuntimeEnvironment, SecurityPolicyState};
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
+pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};
 
 /// Narrow provider boundary for platform capability discovery.

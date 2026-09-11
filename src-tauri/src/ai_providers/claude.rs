@@ -26,7 +26,7 @@ impl ProviderAdapter for ClaudeAdapter {
         provider.status_message = if installed {
             "Claude exposes subscription limits inside `/usage`; no external OAuth usage API is public.".into()
         } else {
-            "Claude Code is not installed.".into()
+            "Claude Code was not detected in PATH or known tool locations.".into()
         };
         provider.action_url = Some("https://claude.ai/settings/usage".into());
         Ok(provider)

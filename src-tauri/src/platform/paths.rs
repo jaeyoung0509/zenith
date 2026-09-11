@@ -162,6 +162,322 @@ impl NativePlatformPaths {
         roots.dedup();
         roots
     }
+
+    /// Strips Windows verbatim prefix (`\\?\` or `\\?\UNC\server\share` -> `\\server\share`).
+    #[cfg(target_os = "windows")]
+    pub fn normalize_verbatim_path(path: &Path) -> PathBuf {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        let slash = b'\\' as u16;
+        let question = b'?' as u16;
+        let verbatim_prefix = [slash, slash, question, slash];
+        if !wide.starts_with(&verbatim_prefix) {
+            return path.to_path_buf();
+        }
+
+        let unc_prefix = [
+            slash,
+            slash,
+            question,
+            slash,
+            b'U' as u16,
+            b'N' as u16,
+            b'C' as u16,
+            slash,
+        ];
+        if wide.len() >= unc_prefix.len()
+            && wide[..unc_prefix.len()]
+                .iter()
+                .zip(unc_prefix)
+                .all(|(actual, expected)| windows_ascii_eq(*actual, expected))
+        {
+            let mut normalized = vec![slash, slash];
+            normalized.extend_from_slice(&wide[unc_prefix.len()..]);
+            return PathBuf::from(OsString::from_wide(&normalized));
+        }
+
+        let remainder = &wide[verbatim_prefix.len()..];
+        if remainder.len() >= 3
+            && is_windows_drive_letter(remainder[0])
+            && remainder[1] == b':' as u16
+            && matches!(remainder[2], value if value == b'\\' as u16 || value == b'/' as u16)
+        {
+            return PathBuf::from(OsString::from_wide(remainder));
+        }
+
+        path.to_path_buf()
+    }
+
+    /// Strips Windows verbatim prefix when running on non-Windows (e.g. unit tests).
+    #[cfg(not(target_os = "windows"))]
+    pub fn normalize_verbatim_path(path: &Path) -> PathBuf {
+        let path_str = path.to_string_lossy();
+        if let Some(rest) = path_str.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{}", rest));
+        }
+        if let Some(rest) = path_str.strip_prefix(r"\\?\") {
+            if rest.len() >= 2 && rest.as_bytes()[1] == b':' {
+                return PathBuf::from(rest);
+            }
+        }
+        path.to_path_buf()
+    }
+
+    /// Prepares a UTF-16 wide representation of a path with verbatim prefix if needed.
+    #[cfg(target_os = "windows")]
+    pub fn to_verbatim_wide(path: &Path) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        let path_text = path.to_string_lossy();
+        if path_text.starts_with(r"\\?\") {
+            path.as_os_str().encode_wide().chain([0]).collect()
+        } else if let Some(unc_path) = path_text.strip_prefix(r"\\") {
+            format!(r"\\?\UNC\{}", unc_path)
+                .encode_utf16()
+                .chain([0])
+                .collect()
+        } else if path.as_os_str().encode_wide().count() > 240 {
+            format!(r"\\?\{}", path.display())
+                .encode_utf16()
+                .chain([0])
+                .collect()
+        } else {
+            path.as_os_str().encode_wide().chain([0]).collect()
+        }
+    }
+
+    /// Prepares a UTF-16 wide representation of a path (stub for non-Windows).
+    #[cfg(not(target_os = "windows"))]
+    pub fn to_verbatim_wide(path: &Path) -> Vec<u16> {
+        let path_str = path.to_string_lossy();
+        path_str.encode_utf16().chain([0]).collect()
+    }
+
+    /// Returns directories searched for tools. Discovery convenience only:
+    /// this list is not an execution trust boundary.
+    pub fn tool_search_locations() -> Vec<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut roots = Vec::new();
+            for var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+                if let Some(val) = std::env::var_os(var).map(PathBuf::from) {
+                    roots.push(val.clone());
+                    roots.push(val.join("Docker\\Docker\\resources\\bin"));
+                    roots.push(val.join("Git\\cmd"));
+                    roots.push(val.join("Git\\bin"));
+                    roots.push(val.join("nodejs"));
+                }
+            }
+            if let Some(program_data) = std::env::var_os("ProgramData").map(PathBuf::from) {
+                roots.push(program_data.clone());
+                roots.push(program_data.join("chocolatey\\bin"));
+                roots.push(program_data.join("scoop\\shims"));
+            }
+            if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+                roots.push(local.clone());
+                roots.push(local.join("Programs"));
+                roots.push(local.join("Programs\\Ollama"));
+                roots.push(local.join("Programs\\Python\\Launcher"));
+                roots.push(local.join("Volta\\bin"));
+                roots.push(local.join("Microsoft\\WinGet\\Links"));
+                roots.push(local.join("npm"));
+                roots.push(local.join("pnpm"));
+            }
+            if let Some(roaming) = std::env::var_os("APPDATA").map(PathBuf::from) {
+                roots.push(roaming.clone());
+                roots.push(roaming.join("npm"));
+                roots.push(roaming.join("pnpm"));
+                roots.push(roaming.join("nodejs"));
+                roots.push(roaming.join("nvm"));
+            }
+            for env_var in [
+                "PNPM_HOME",
+                "VOLTA_HOME",
+                "FNM_DIR",
+                "NVM_HOME",
+                "NVM_SYMLINK",
+                "CARGO_HOME",
+            ] {
+                if let Some(val) = std::env::var_os(env_var).map(PathBuf::from) {
+                    roots.push(val);
+                }
+            }
+            if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+                roots.push(profile.join(".cargo\\bin"));
+                roots.push(profile.join("AppData\\Roaming\\npm"));
+                roots.push(profile.join("AppData\\Local\\pnpm"));
+                roots.push(profile.join("scoop\\shims"));
+                roots.push(profile.join("scoop\\apps"));
+                roots.push(profile.join(".gemini\\antigravity-cli\\bin"));
+            }
+            roots.retain(|p| p.is_absolute());
+            roots.sort();
+            roots.dedup();
+            roots
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut roots = vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/Applications"),
+                PathBuf::from("/Applications/Docker.app/Contents/Resources/bin"),
+                PathBuf::from("/Applications/Ollama.app/Contents/Resources"),
+            ];
+            if let Some(home) = NativePlatformPaths::new().home() {
+                roots.extend([
+                    home.join(".local/bin"),
+                    home.join(".cargo/bin"),
+                    home.join(".npm-global/bin"),
+                    home.join(".volta/bin"),
+                    home.join(".asdf/shims"),
+                    home.join("Library/pnpm"),
+                ]);
+            }
+            roots.retain(|p| p.is_absolute());
+            roots.sort();
+            roots.dedup();
+            roots
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]
+        }
+    }
+
+    /// Returns executable trust roots: only platform install locations Zenith
+    /// is willing to execute. User-writable containers (`%LOCALAPPDATA%`,
+    /// `%APPDATA%`, `%ProgramData%` themselves) are excluded; only their
+    /// documented tool/package-manager children are trusted.
+    pub fn trusted_tool_roots() -> Vec<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut roots = Vec::new();
+            // System install roots: administrator-writable only.
+            for var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+                if let Some(val) = std::env::var_os(var).map(PathBuf::from) {
+                    roots.push(val.clone());
+                    roots.push(val.join("Docker\\Docker\\resources\\bin"));
+                    roots.push(val.join("Git\\cmd"));
+                    roots.push(val.join("Git\\bin"));
+                    roots.push(val.join("nodejs"));
+                }
+            }
+            if let Some(program_data) = std::env::var_os("ProgramData").map(PathBuf::from) {
+                // The ProgramData root itself is intentionally not trusted.
+                roots.push(program_data.join("chocolatey\\bin"));
+                roots.push(program_data.join("scoop\\shims"));
+            }
+            if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+                // The LOCALAPPDATA root itself is intentionally not trusted.
+                roots.extend([
+                    local.join("Programs"),
+                    local.join("Programs\\Ollama"),
+                    local.join("Programs\\Python\\Launcher"),
+                    local.join("Volta\\bin"),
+                    local.join("Microsoft\\WinGet\\Links"),
+                    local.join("npm"),
+                    local.join("pnpm"),
+                    local.join("nvm"),
+                ]);
+            }
+            if let Some(roaming) = std::env::var_os("APPDATA").map(PathBuf::from) {
+                // The APPDATA root itself is intentionally not trusted.
+                roots.extend([
+                    roaming.join("npm"),
+                    roaming.join("pnpm"),
+                    roaming.join("nodejs"),
+                    roaming.join("nvm"),
+                ]);
+            }
+            // Explicitly configured toolchain roots.
+            for env_var in [
+                "PNPM_HOME",
+                "VOLTA_HOME",
+                "FNM_DIR",
+                "NVM_HOME",
+                "NVM_SYMLINK",
+                "CARGO_HOME",
+            ] {
+                if let Some(val) = std::env::var_os(env_var).map(PathBuf::from) {
+                    roots.push(val);
+                }
+            }
+            if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+                roots.push(profile.join(".local\\bin"));
+                roots.push(profile.join(".cargo\\bin"));
+                roots.push(profile.join("AppData\\Roaming\\npm"));
+                roots.push(profile.join("AppData\\Local\\pnpm"));
+                roots.push(profile.join("scoop\\shims"));
+                roots.push(profile.join("scoop\\apps"));
+                roots.push(profile.join(".gemini\\antigravity-cli\\bin"));
+            }
+            roots.retain(|p| p.is_absolute());
+            roots.sort();
+            roots.dedup();
+            roots
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::tool_search_locations()
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            vec![PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]
+        }
+    }
+
+    /// Case-folds a Windows path into a canonical key.
+    pub fn windows_path_key(path: &Path) -> String {
+        Self::normalize_verbatim_path(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_uppercase()
+    }
+
+    /// Compares two Windows paths case-insensitively.
+    pub fn windows_path_eq(left: &Path, right: &Path) -> bool {
+        Self::windows_path_key(left) == Self::windows_path_key(right)
+    }
+
+    /// Compares two paths with the platform's case rules.
+    pub fn paths_equal(left: &Path, right: &Path) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            Self::windows_path_eq(left, right)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            left == right
+        }
+    }
+
+    /// Checks if a candidate path starts with a base path case-insensitively.
+    pub fn windows_path_starts_with(path: &Path, base: &Path) -> bool {
+        let path_key = Self::windows_path_key(path);
+        let base_key = Self::windows_path_key(base);
+        if path_key == base_key {
+            return true;
+        }
+        path_key
+            .strip_prefix(&base_key)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_drive_letter(value: u16) -> bool {
+    (value >= b'A' as u16 && value <= b'Z' as u16) || (value >= b'a' as u16 && value <= b'z' as u16)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_ascii_eq(actual: u16, expected_uppercase: u16) -> bool {
+    actual == expected_uppercase
+        || (expected_uppercase >= b'A' as u16
+            && expected_uppercase <= b'Z' as u16
+            && actual == expected_uppercase + (b'a' - b'A') as u16)
 }
 
 #[cfg(windows)]
@@ -407,6 +723,47 @@ mod tests {
             mock.expand_placeholder("${TEMP}/codex-session"),
             Some(dir.path().join("temp/codex-session"))
         );
+    }
+
+    #[test]
+    fn normalizes_verbatim_drive_and_unc_paths() {
+        assert_eq!(
+            NativePlatformPaths::normalize_verbatim_path(Path::new(
+                r"\\?\C:\Users\tester\file.txt"
+            )),
+            PathBuf::from(r"C:\Users\tester\file.txt")
+        );
+        assert_eq!(
+            NativePlatformPaths::normalize_verbatim_path(Path::new(
+                r"\\?\UNC\server\share\file.txt"
+            )),
+            PathBuf::from(r"\\server\share\file.txt")
+        );
+        assert_eq!(
+            NativePlatformPaths::normalize_verbatim_path(Path::new(r"C:\Users\tester")),
+            PathBuf::from(r"C:\Users\tester")
+        );
+    }
+
+    #[test]
+    fn windows_path_comparison_folds_case_and_verbatim_prefix() {
+        let verbatim = Path::new(r"\\?\C:\Users\홍 길동\AppData\Local\npm-cache");
+        let plain = Path::new(r"c:\users\홍 길동\appdata\local\NPM-CACHE");
+        assert!(NativePlatformPaths::windows_path_eq(verbatim, plain));
+        assert!(NativePlatformPaths::windows_path_starts_with(
+            plain,
+            Path::new(r"C:\Users\홍 길동\AppData\Local")
+        ));
+        assert!(!NativePlatformPaths::windows_path_starts_with(
+            Path::new(r"C:\Users\tester\AppData\LocalBackup"),
+            Path::new(r"C:\Users\tester\AppData\Local")
+        ));
+        // Non-ASCII case folding uses the Unicode uppercase mapping rather
+        // than ASCII-only folding.
+        assert!(NativePlatformPaths::windows_path_eq(
+            Path::new(r"C:\Пользователи\Х"),
+            Path::new(r"c:\пользователи\х")
+        ));
     }
 
     #[test]
