@@ -353,25 +353,7 @@ impl CleanExecutor {
             }
         } else {
             let error_str = report.errors.join("; ");
-            let failure_reason = if error_str.contains("Sharing violation")
-                || error_str.contains("used by another process")
-                || error_str.contains("os error 32")
-                || error_str.contains("is in use")
-            {
-                CleanFailureReason::InUse
-            } else if error_str.contains("Permission denied")
-                || error_str.contains("Access denied")
-                || error_str.contains("Access is denied")
-                || error_str.contains("os error 5")
-            {
-                CleanFailureReason::PermissionDenied
-            } else if error_str.contains("changed during cleanup") {
-                CleanFailureReason::ChangedSinceScan
-            } else if error_str.contains("No such file") {
-                CleanFailureReason::NotFound
-            } else {
-                CleanFailureReason::Unknown
-            };
+            let failure_reason = classify_cleanup_failure(&error_str);
             CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -386,25 +368,91 @@ impl CleanExecutor {
     }
 }
 
+pub fn classify_cleanup_failure(error_str: &str) -> CleanFailureReason {
+    if error_str.contains("Sharing violation")
+        || error_str.contains("used by another process")
+        || error_str.contains("(os error 32)")
+        || error_str.contains("os error 32:")
+        || error_str.contains("is in use")
+    {
+        CleanFailureReason::InUse
+    } else if error_str.contains("Permission denied")
+        || error_str.contains("Access denied")
+        || error_str.contains("Access is denied")
+        || error_str.contains("(os error 5)")
+        || error_str.contains("os error 5:")
+    {
+        CleanFailureReason::PermissionDenied
+    } else if error_str.contains("changed during cleanup") {
+        CleanFailureReason::ChangedSinceScan
+    } else if error_str.contains("No such file") {
+        CleanFailureReason::NotFound
+    } else {
+        CleanFailureReason::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn executor_maps_sharing_violation_to_in_use() {
-        let error_str = "Sharing violation (os error 32): file is locked";
-        let is_in_use = error_str.contains("Sharing violation")
-            || error_str.contains("used by another process")
-            || error_str.contains("os error 32")
-            || error_str.contains("is in use");
-        assert!(is_in_use);
+    fn classifies_sharing_violation_as_in_use() {
+        assert_eq!(
+            classify_cleanup_failure(
+                "C:\\file.bin: Sharing violation (file in use by another process): os error 32"
+            ),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure("Sharing violation (os error 32): file is locked"),
+            CleanFailureReason::InUse
+        );
+        assert_eq!(
+            classify_cleanup_failure("file is used by another process"),
+            CleanFailureReason::InUse
+        );
     }
 
     #[test]
-    fn executor_maps_access_denied_to_permission_denied() {
-        let error_str = "Access denied (os error 5)";
-        let is_perm_denied = error_str.contains("Permission denied")
-            || error_str.contains("Access denied")
-            || error_str.contains("Access is denied")
-            || error_str.contains("os error 5");
-        assert!(is_perm_denied);
+    fn classifies_access_denied_as_permission_denied() {
+        assert_eq!(
+            classify_cleanup_failure(
+                "C:\\file.bin: Access denied (permission denied): (os error 5)"
+            ),
+            CleanFailureReason::PermissionDenied
+        );
+        assert_eq!(
+            classify_cleanup_failure("Permission denied: /var/log/syslog"),
+            CleanFailureReason::PermissionDenied
+        );
+        assert_eq!(
+            classify_cleanup_failure("Access is denied (os error 5)"),
+            CleanFailureReason::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn does_not_misclassify_os_error_50_as_permission_denied() {
+        assert_eq!(
+            classify_cleanup_failure("The network request is not supported (os error 50)"),
+            CleanFailureReason::Unknown
+        );
+    }
+
+    #[test]
+    fn classifies_changed_since_scan_and_not_found() {
+        assert_eq!(
+            classify_cleanup_failure("Directory changed during cleanup: /tmp/app"),
+            CleanFailureReason::ChangedSinceScan
+        );
+        assert_eq!(
+            classify_cleanup_failure("No such file or directory: /tmp/missing"),
+            CleanFailureReason::NotFound
+        );
+        assert_eq!(
+            classify_cleanup_failure("unknown disk failure"),
+            CleanFailureReason::Unknown
+        );
     }
 }

@@ -100,24 +100,19 @@ where
 
 #[cfg(windows)]
 fn format_io_error(path: &Path, err: &io::Error) -> String {
-    #[cfg(windows)]
-    {
-        if err.raw_os_error()
-            == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32)
-        {
-            return format!(
-                "{}: Sharing violation (file in use by another process): {}",
-                path.display(),
-                err
-            );
-        }
-        if err.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) {
-            return format!(
-                "{}: Access denied (permission denied): {}",
-                path.display(),
-                err
-            );
-        }
+    if err.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32) {
+        return format!(
+            "{}: Sharing violation (file in use by another process): {}",
+            path.display(),
+            err
+        );
+    }
+    if err.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) {
+        return format!(
+            "{}: Access denied (permission denied): {}",
+            path.display(),
+            err
+        );
     }
     format!("{}: {}", path.display(), err)
 }
@@ -131,8 +126,7 @@ impl WindowsDeleteHandle {
             CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, DELETE,
             FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
-            OPEN_EXISTING,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
         };
 
         let path_text = path.to_string_lossy();
@@ -157,7 +151,7 @@ impl WindowsDeleteHandle {
                 CreateFileW(
                     wide.as_ptr(),
                     DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
                     std::ptr::null(),
                     OPEN_EXISTING,
                     FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
@@ -263,13 +257,28 @@ impl WindowsDeleteHandle {
     }
 
     fn delete(mut self) -> io::Result<()> {
+        self.clear_readonly()?;
+
+        let result = self.mark_for_deletion();
+
+        if result.is_err() && self.was_readonly {
+            if let Err(restore_error) = self.restore_readonly() {
+                eprintln!(
+                    "Failed to restore readonly attribute after deletion failure: {}",
+                    restore_error
+                );
+            }
+        }
+
+        result
+    }
+
+    fn mark_for_deletion(&self) -> io::Result<()> {
         use windows_sys::Win32::Storage::FileSystem::{
             FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
         };
 
-        self.clear_readonly()?;
-
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
         retry_on_sharing_violation(|| {
             let ok = unsafe {
                 SetFileInformationByHandle(
@@ -1434,5 +1443,26 @@ mod tests {
             report.errors
         );
         assert!(!target.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_readonly_rollback_on_deletion_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("readonly_fail.bin");
+        std::fs::write(&target, b"content").unwrap();
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms).unwrap();
+        assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
+
+        let mut handle = WindowsDeleteHandle::open(&target).unwrap();
+        assert!(handle.was_readonly);
+        handle.clear_readonly().unwrap();
+        assert!(!std::fs::metadata(&target).unwrap().permissions().readonly());
+
+        // Restore readonly on failure
+        handle.restore_readonly().unwrap();
+        assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
     }
 }

@@ -354,6 +354,7 @@ impl LargeFileScanner {
                         extension,
                     };
                     let Some(identity) = FileIdentity::from_path(&path) else {
+                        skipped_entries = skipped_entries.saturating_add(1);
                         continue;
                     };
                     matches_found = matches_found.saturating_add(1);
