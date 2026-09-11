@@ -34,6 +34,7 @@ import type {
   PlanPreview,
   PlatformCapabilities,
   ProviderDescriptor,
+  ProviderId,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -130,6 +131,10 @@ export function tauriGetAiControlGitDiff(projectId: string): Promise<string> {
 
 export function tauriConnectOpenRouter(): Promise<void> {
   return api.connectOpenRouter();
+}
+
+export function tauriDisconnectAiProvider(provider: ProviderId): Promise<void> {
+  return api.deleteAiProviderCredential(provider);
 }
 
 export function tauriScan(

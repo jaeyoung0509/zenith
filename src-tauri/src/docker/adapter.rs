@@ -725,12 +725,16 @@ impl DockerAdapter {
             Ok(output) => {
                 let err_str = String::from_utf8_lossy(&output.stderr).to_string();
                 crate::diagnostics::log_error("docker", &err_str);
-                Err(ZenithError::ExternalCommandFailed(err_str))
+                Err(ZenithError::ExternalCommandFailed(
+                    crate::diagnostics::sanitize_log(&err_str),
+                ))
             }
             Err(e) => {
                 let err_str = e.to_string();
                 crate::diagnostics::log_error("docker", &err_str);
-                Err(ZenithError::ExternalCommandFailed(err_str))
+                Err(ZenithError::ExternalCommandFailed(
+                    crate::diagnostics::sanitize_log(&err_str),
+                ))
             }
         }
     }

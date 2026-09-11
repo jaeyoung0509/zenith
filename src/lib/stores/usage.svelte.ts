@@ -1,6 +1,7 @@
 import type { AiProviderUsage, AiUsageSnapshot, ProviderDescriptor, ProviderId } from '../models/types';
 import {
   tauriConnectOpenRouter,
+  tauriDisconnectAiProvider,
   tauriGetAiProviderDescriptors,
   tauriGetAiUsage,
 } from '../utils/tauri';
@@ -213,6 +214,22 @@ export class UsageStore {
       await this.refresh(true);
     } catch (error: any) {
       this.error = error?.toString() || 'OpenRouter sign-in failed';
+    } finally {
+      this.connectingProvider = null;
+    }
+  }
+
+  async disconnectOpenRouter() {
+    this.connectingProvider = 'openrouter';
+    this.error = null;
+    try {
+      await tauriDisconnectAiProvider('openrouter');
+      await this.refresh(true);
+    } catch (error: any) {
+      // The credential is removed locally even when provider revocation fails;
+      // surface the message and refresh so the UI shows the disconnected state.
+      this.error = error?.toString() || 'OpenRouter disconnect failed';
+      await this.refresh(true);
     } finally {
       this.connectingProvider = null;
     }

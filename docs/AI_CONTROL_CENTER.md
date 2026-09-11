@@ -51,13 +51,20 @@ mutation.
 
 ## Safety and privacy boundaries
 
-Safety inspection is user initiated and limited per run to registered canonical
-project roots, 2,000 files, 1 MiB per file, and depth 8. It does not follow
-symlinks or cross filesystems, and it prunes generated/vendor directories. Only
-recognized MCP and tool configuration shapes are normalized. Results can
-contain a category, relative path, line number, server name, transport,
-permission/sandbox label, command basename, or domain. They never contain
-secret bytes, raw arguments, headers, environment values, full commands, email
+Safety inspection is user initiated. Roots are the projects Zenith infers from the
+working directories of currently running agent sessions; they are not separately
+registered by the user, and the view names every root that was inspected and every
+root that was not reached. Each root has its own 2,000-entry budget, so one large
+repository cannot exhaust the scan for the others, and root order is deterministic.
+Files are limited to 1 MiB each and depth 8. The walker does not follow symlinks or
+cross filesystems, and it prunes generated/vendor directories. Credential-bearing
+dotfiles such as `.env`, `.env.*`, `.npmrc`, `.netrc`, `credentials`, `id_rsa`, and
+PEM/key files are selected by name as well as extension; a skipped credential file
+is reported as a partial result, so completion is never claimed while one was
+skipped. Only recognized MCP and tool configuration shapes are normalized. Results
+can contain a category, relative path, line number, server name, transport,
+permission/sandbox label, command basename, or domain. They never contain secret
+bytes, raw arguments, headers, environment values, full commands, email
 addresses, tokens, or credentials. Configuration is never executed or rewritten.
 
 Git state records a baseline on first observation and reports only metadata for
@@ -67,7 +74,9 @@ is fetched only after an explicit click, is size bounded, and is not persisted.
 Zenith introduces no Control Center credential persistence. Existing OAuth
 material remains in memory and credential files are never exposed. Any future
 managed organization adapter must use the macOS Keychain and must fail closed;
-plaintext fallback is forbidden.
+plaintext fallback is forbidden. See [THREAT_MODEL.md](THREAT_MODEL.md) for the
+provider authorization flow, revocation guarantees, and the same-user
+readability and code-signing ceilings of the platform keystores.
 
 The local audit file is bounded to 1,024 entries and 512 KiB, sanitized before
 write, retained for 1–365 days, and uses opaque project references. Corrupt or

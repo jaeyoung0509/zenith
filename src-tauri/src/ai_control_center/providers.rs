@@ -187,6 +187,9 @@ fn from_provider_usage(provider: &AiProviderUsage, observed_at: u64) -> Provider
         "claude" => "Manual/external subscription usage. Use Claude Code /usage; Zenith does not scrape the TUI or credentials.".into(),
         _ => provider.status_message.clone(),
     };
+    // Provider and subprocess errors can echo URLs or tool output; never let an
+    // unredacted string cross IPC on one exit while the log exit is redacted.
+    let status_message = crate::diagnostics::sanitize_log(&status_message);
     let has_measurement = !metrics.is_empty();
     let unavailable = match source_kind {
         ObservationSourceKind::LiveAuthoritative

@@ -34,59 +34,20 @@ pub fn log_file_path() -> PathBuf {
     log_dir().join("zenith.log")
 }
 
-use regex::Regex;
-use std::sync::LazyLock;
-
-static SECRET_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        // 0. sk-... (OpenAI, Anthropic, OpenRouter API keys)
-        Regex::new(r"sk-[a-zA-Z0-9_\-]{8,}").unwrap(),
-        // 1. GitHub personal access tokens
-        Regex::new(r"ghp_[a-zA-Z0-9]{20,}").unwrap(),
-        // 2. GitLab personal access tokens
-        Regex::new(r"glpat-[a-zA-Z0-9_\-]{20,}").unwrap(),
-        // 3. Slack tokens
-        Regex::new(r"xox[baprs]-[a-zA-Z0-9_\-]{10,}").unwrap(),
-        // 4. Authorization headers (Bearer, Token, or raw)
-        Regex::new(r#"(?i)((?:authorization\s*[:=]\s*(?:bearer\s+|token\s+)?|auth\s*[:=]\s*["']?))[a-zA-Z0-9_\.\-]+"#).unwrap(),
-        // 5. Standalone Bearer <token>
-        Regex::new(r"(?i)(bearer\s+)[a-zA-Z0-9_\.\-]+").unwrap(),
-        // 6. Key-value pairs (e.g. token=..., api_key: "...", "api_key": "...", OPENAI_API_KEY=..., password=...)
-        Regex::new(r#"(?i)(["']?(?:api[_-]?key|token|secret|password)[a-zA-Z0-9_\-]*["']?\s*[:=]\s*["']?)[a-zA-Z0-9_\.\-]+"#).unwrap(),
-        // 7. URL query parameters (e.g. ?token=..., &key=..., &api_key=...)
-        Regex::new(r"(?i)([?&](?:token|key|api_key|secret|password)=)[^&\s]+").unwrap(),
-    ]
-});
-
-/// Redacts known secret patterns (API keys, bearer tokens, passwords, query params) from log messages.
+/// Redacts known credential shapes and masks absolute paths from log messages.
 pub fn sanitize_log(msg: &str) -> String {
-    let mut sanitized = msg.to_string();
-
-    // 1. Exact token formats (sk-..., ghp_..., glpat-..., xox-...)
-    for idx in 0..4 {
-        sanitized = SECRET_PATTERNS[idx]
-            .replace_all(&sanitized, "[REDACTED]")
-            .to_string();
-    }
-    // 2. Authorization header tokens
-    sanitized = SECRET_PATTERNS[4]
-        .replace_all(&sanitized, "${1}[REDACTED]")
-        .to_string();
-    // 3. Standalone Bearer tokens
-    sanitized = SECRET_PATTERNS[5]
-        .replace_all(&sanitized, "${1}[REDACTED]")
-        .to_string();
-    // 4. Key-value pairs (token=..., api_key: ..., password: ..., etc.)
-    sanitized = SECRET_PATTERNS[6]
-        .replace_all(&sanitized, "${1}[REDACTED]")
-        .to_string();
-    // 5. URL query parameters
-    sanitized = SECRET_PATTERNS[7]
-        .replace_all(&sanitized, "${1}[REDACTED]")
-        .to_string();
-
-    sanitized
+    let redacted = crate::privacy::secrets::redact(msg);
+    crate::privacy::paths::mask_paths_in_text(&redacted)
 }
+
+#[cfg(unix)]
+fn restrict_permissions(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &Path, _mode: u32) {}
 
 pub fn log_error(category: &str, message: &str) {
     let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -94,6 +55,7 @@ pub fn log_error(category: &str, message: &str) {
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
+    restrict_permissions(&dir, 0o700);
 
     let file_path = log_file_path();
 
@@ -118,6 +80,7 @@ pub fn log_error(category: &str, message: &str) {
         .append(true)
         .open(&file_path)
     {
+        restrict_permissions(&file_path, 0o600);
         let _ = file.write_all(line.as_bytes());
     }
 }
@@ -133,7 +96,9 @@ pub fn get_recent_errors(limit: usize) -> Vec<String> {
     let mut lines = Vec::new();
     for line in reader.lines().map_while(Result::ok) {
         if !line.trim().is_empty() {
-            lines.push(line);
+            // Re-sanitize on read as well as write: entries written by an older
+            // build must not reach the clipboard export unmasked.
+            lines.push(sanitize_log(&line));
         }
     }
 
@@ -145,13 +110,7 @@ pub fn get_recent_errors(limit: usize) -> Vec<String> {
 }
 
 pub fn normalized_log_path() -> String {
-    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
-        let full = log_file_path();
-        if let Ok(rel) = full.strip_prefix(&home) {
-            return format!("~/{}", rel.display());
-        }
-    }
-    log_file_path().to_string_lossy().to_string()
+    crate::privacy::paths::display_path(&log_file_path())
 }
 
 pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> DiagnosticsSnapshot {
@@ -295,5 +254,65 @@ mod tests {
                 snapshot.log_path
             );
         }
+    }
+
+    #[test]
+    fn secret_sanitizer_redacts_full_credential_values() {
+        let cases = vec![
+            (
+                "refresh_token=1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                "refresh_token=[REDACTED]",
+            ),
+            (
+                "client_secret=YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY=",
+                "client_secret=[REDACTED]",
+            ),
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "AWS_SECRET_ACCESS_KEY=[REDACTED]",
+            ),
+            (
+                "Authorization: Basic dXNlcjpwYXNz",
+                "Authorization: Basic [REDACTED]",
+            ),
+            (
+                "github_pat_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+                "[REDACTED]",
+            ),
+            (
+                "AIzaSyabcdefghijklmnopqrstuvwxyz0123456",
+                "[REDACTED]",
+            ),
+            (
+                "https://user:password-value@example.com/path",
+                "https://user:[REDACTED]@example.com/path",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(sanitize_log(input), expected, "Failed on input: {input}");
+        }
+    }
+
+    #[test]
+    fn sanitizer_masks_paths_before_they_reach_diagnostics() {
+        let Some(home) = crate::privacy::paths::user_home() else {
+            return;
+        };
+        let message = format!("failed to read {}/.claude/settings.json", home.display());
+        let sanitized = sanitize_log(&message);
+        assert!(!sanitized.contains(&home.to_string_lossy().to_string()));
+        assert!(sanitized.contains("~/.claude/settings.json") || sanitized.contains("settings.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_only_permissions_are_applied() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zenith.log");
+        std::fs::write(&path, b"line").unwrap();
+        restrict_permissions(&path, 0o600);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

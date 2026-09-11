@@ -11,6 +11,7 @@
     isProviderLoading?: (id: string) => boolean;
     connectingProvider?: string | null;
     onConnectOpenRouter?: () => void | Promise<void>;
+    onDisconnectOpenRouter?: () => void | Promise<void>;
   }
 
   let {
@@ -18,6 +19,7 @@
     isProviderLoading = () => false,
     connectingProvider = null,
     onConnectOpenRouter,
+    onDisconnectOpenRouter,
   }: Props = $props();
 
   const compactNumber = new Intl.NumberFormat('en', {
@@ -142,6 +144,16 @@
           onclick={onConnectOpenRouter}
         >
           {connectingProvider === 'openrouter' ? 'Waiting for browser…' : 'Connect with OpenRouter'}
+        </Button>
+      {:else if !loading && provider.id === 'openrouter' && provider.connected && onDisconnectOpenRouter}
+        <Button
+          variant="outline"
+          size="sm"
+          class="mt-auto w-full gap-1.5"
+          disabled={connectingProvider === 'openrouter'}
+          onclick={onDisconnectOpenRouter}
+        >
+          {connectingProvider === 'openrouter' ? 'Revoking key…' : 'Disconnect OpenRouter'}
         </Button>
       {/if}
 

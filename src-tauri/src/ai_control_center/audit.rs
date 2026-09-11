@@ -75,7 +75,15 @@ impl AuditStore {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err("AI Control Center audit cap exceeded".into());
         }
-        crate::platform::file_ops::atomic_write(&path, &bytes).map_err(|error| error.to_string())
+        crate::platform::file_ops::atomic_write(&path, &bytes)
+            .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // The audit log can quote project content; keep it owner-only.
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 }
 fn safe_label(value: &str) -> String {
@@ -108,6 +116,37 @@ mod tests {
             .contains("abcdefghijklmnop1234"));
         store.save(temp.path()).unwrap();
         assert_eq!(AuditStore::load(temp.path()).entries.len(), MAX_ENTRIES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = AuditStore::default();
+        store.append(1, "scan", "ok", None, "clean", 30);
+        store.save(temp.path()).unwrap();
+        let mode = std::fs::metadata(temp.path().join(FILE_NAME))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn audit_messages_mask_home_paths_and_credentials() {
+        let mut store = AuditStore::default();
+        store.append(
+            1,
+            "scan",
+            "ok",
+            None,
+            "token=abcdef123456 at /Users/example/secret-project",
+            30,
+        );
+        let serialized = serde_json::to_string(&store.entries()).unwrap();
+        assert!(!serialized.contains("abcdef123456"));
+        assert!(!serialized.contains("/Users/example"));
     }
 
     #[test]

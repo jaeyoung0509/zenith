@@ -82,11 +82,44 @@ impl ProviderAdapter for XaiApiAdapter {
         provider.action_url = Some("https://console.x.ai/team/billing".into());
 
         if let Ok(data) = response.json::<Value>() {
-            if let Some(name) = data.get("name").and_then(Value::as_str) {
+            if let Some(name) = sanitize_key_nickname(data.get("name").and_then(Value::as_str)) {
                 provider.auth_label = format!("API Key · {name}");
             }
         }
 
         Ok(provider)
+    }
+}
+
+/// A provider-assigned key nickname can contain a person, team, or machine
+/// name. Keep only a short, opaque-safe label or drop it entirely.
+fn sanitize_key_nickname(name: Option<&str>) -> Option<String> {
+    let filtered = name?
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.')
+        })
+        .take(40)
+        .collect::<String>();
+    let trimmed = filtered.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_key_nickname;
+
+    #[test]
+    fn key_nicknames_are_filtered_or_dropped() {
+        assert_eq!(
+            sanitize_key_nickname(Some("prod-team")),
+            Some("prod-team".to_string())
+        );
+        let redacted = sanitize_key_nickname(Some("alice@example.com")).unwrap();
+        assert!(!redacted.contains('@'));
+        assert_eq!(sanitize_key_nickname(Some("이름")), None);
+        assert_eq!(sanitize_key_nickname(None), None);
+        let long = "a".repeat(120);
+        assert_eq!(sanitize_key_nickname(Some(&long)).unwrap().len(), 40);
     }
 }

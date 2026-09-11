@@ -262,9 +262,11 @@ pub fn enrich_activity_for_project_view(
             project.artifact_size_bytes = artifact_sizes.get(root).copied();
             for listener in &listeners {
                 if let Some(dir) = listener.working_directory.as_deref() {
-                    if let Ok(canon) = std::path::Path::new(dir).canonicalize() {
-                        if canon.starts_with(root) && !project.dev_ports.contains(&listener.port) {
-                            project.dev_ports.push(listener.port);
+                    if let Some(path) = crate::privacy::paths::expand_display_path(dir) {
+                        if let Ok(canon) = path.canonicalize() {
+                            if canon.starts_with(root) && !project.dev_ports.contains(&listener.port) {
+                                project.dev_ports.push(listener.port);
+                            }
                         }
                     }
                 }

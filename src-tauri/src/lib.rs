@@ -22,6 +22,7 @@ pub mod operation_gate;
 pub mod orbstack;
 pub mod platform;
 pub mod power;
+pub mod privacy;
 pub mod process_owner;
 pub mod process_protection;
 pub mod runtime_metrics;
@@ -362,7 +363,6 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             commands::get_ai_usage,
             commands::get_ai_provider_descriptors,
-            commands::set_ai_provider_credential,
             commands::delete_ai_provider_credential,
             commands::get_project_context,
             commands::request_stop_agent_session,

@@ -43,6 +43,7 @@
       isProviderLoading={(id) => usageStore.isProviderLoading(id)}
       connectingProvider={usageStore.connectingProvider}
       onConnectOpenRouter={() => usageStore.connectOpenRouter()}
+      onDisconnectOpenRouter={() => usageStore.disconnectOpenRouter()}
     />
   {:else if usageStore.isLoading}
     <div role="status" aria-label="Loading usage metadata">

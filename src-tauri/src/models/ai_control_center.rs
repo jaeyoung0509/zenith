@@ -324,6 +324,8 @@ pub struct SafetySnapshot {
     pub findings: Vec<SafetyFinding>,
     pub scanned_files: u32,
     pub skipped_files: u32,
+    pub inspected_roots: Vec<String>,
+    pub unreached_roots: Vec<String>,
     pub status_message: String,
 }
 

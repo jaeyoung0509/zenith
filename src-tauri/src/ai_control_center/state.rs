@@ -29,9 +29,10 @@ impl Default for AiControlCenterState {
                 findings: vec![],
                 scanned_files: 0,
                 skipped_files: 0,
+                inspected_roots: vec![],
+                unreached_roots: vec![],
                 status_message:
-                    "Run a bounded local safety scan to inspect registered active project roots."
-                        .into(),
+                    "Run a bounded local safety scan to inspect the projects Zenith inferred from running agent sessions.".into(),
             },
             recommendations: vec![],
             audit: AuditStore::default(),

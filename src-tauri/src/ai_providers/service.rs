@@ -243,5 +243,8 @@ fn map_error_to_usage(descriptor: &ProviderDescriptor, err: ProviderError) -> Ai
         ProviderError::Timeout => "Collection timed out.".into(),
         ProviderError::Unsupported(msg) => format!("Unsupported: {msg}"),
     };
+    // Provider errors can echo a request URL or subprocess output. Redact before
+    // the text crosses IPC, even though current providers keep keys in headers.
+    usage.status_message = crate::diagnostics::sanitize_log(&usage.status_message);
     usage
 }

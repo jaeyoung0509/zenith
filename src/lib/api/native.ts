@@ -29,6 +29,7 @@ import type {
   PlanPreview,
   PlatformCapabilities,
   ProviderDescriptor,
+  ProviderId_Deserialize,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
@@ -133,6 +134,10 @@ export const nativeApi = {
 
   async connectOpenRouter(): Promise<void> {
     await unwrap(commands.connectOpenrouterOauth());
+  },
+
+  async deleteAiProviderCredential(provider: ProviderId_Deserialize): Promise<void> {
+    await unwrap(commands.deleteAiProviderCredential(provider));
   },
 
   async startScan(

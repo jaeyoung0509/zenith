@@ -23,7 +23,9 @@ impl ApplicationPicker {
             .map_err(|error| format!("Could not open the application picker: {error}"))?;
 
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            return Err(crate::diagnostics::sanitize_log(
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
         }
         let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
         if path.as_os_str().is_empty() {

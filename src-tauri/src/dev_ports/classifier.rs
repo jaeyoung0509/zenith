@@ -1,4 +1,3 @@
-use crate::platform::PlatformPathsProvider;
 use crate::process_owner::ProcessOwner;
 use std::path::Path;
 
@@ -469,8 +468,6 @@ fn sanitize_project_context(
     cwd: Option<&Path>,
     argv: &[String],
 ) -> (Option<String>, Option<String>) {
-    let home = crate::platform::NativePlatformPaths::new().user_home();
-
     // Try cwd first
     if let Some(dir) = cwd {
         let norm_dir = crate::platform::NativePlatformPaths::normalize_verbatim_path(dir);
@@ -480,20 +477,10 @@ fn sanitize_project_context(
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .filter(|n| !n.is_empty() && n != ".");
-
-            let working_dir = if let Some(ref home_path) = home {
-                let norm_home =
-                    crate::platform::NativePlatformPaths::normalize_verbatim_path(home_path);
-                if let Ok(rel) = norm_dir.strip_prefix(&norm_home) {
-                    Some(format!("~/{}", rel.to_string_lossy().replace('\\', "/")))
-                } else {
-                    Some(dir_str.to_string())
-                }
-            } else {
-                Some(dir_str.to_string())
-            };
-
-            return (project_name, working_dir);
+            return (
+                project_name,
+                Some(crate::privacy::paths::display_path(&norm_dir)),
+            );
         }
     }
 
@@ -507,18 +494,10 @@ fn sanitize_project_context(
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .filter(|n| !n.is_empty());
-                let working_dir = if let Some(ref home_path) = home {
-                    let norm_home =
-                        crate::platform::NativePlatformPaths::normalize_verbatim_path(home_path);
-                    if let Ok(rel) = parent.strip_prefix(&norm_home) {
-                        Some(format!("~/{}", rel.to_string_lossy().replace('\\', "/")))
-                    } else {
-                        Some(parent.to_string_lossy().to_string())
-                    }
-                } else {
-                    Some(parent.to_string_lossy().to_string())
-                };
-                return (project_name, working_dir);
+                return (
+                    project_name,
+                    Some(crate::privacy::paths::display_path(parent)),
+                );
             }
         }
     }

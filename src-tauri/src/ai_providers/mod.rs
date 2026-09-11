@@ -18,7 +18,7 @@ pub mod xai;
 pub use credentials::{
     CredentialError, CredentialStore, InMemoryCredentialStore, OsCredentialStore, SecretString,
 };
-pub use openrouter::connect_openrouter;
+pub use openrouter::{connect_openrouter, revoke_openrouter};
 pub use registry::{CredentialKind, ProviderDescriptor, ProviderRegistry, PROVIDER_REGISTRY};
 pub use service::ProviderCollectionService;
 

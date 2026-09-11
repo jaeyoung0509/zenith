@@ -867,30 +867,19 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
     let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
         .await
         .map_err(|error| error.to_string())??;
-    credentials
-        .set(
-            crate::models::ProviderId::OpenRouter,
-            crate::ai_providers::SecretString::new(key),
-        )
-        .map_err(|error| error.to_string())?;
-    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_ai_provider_credential(
-    provider: crate::models::ProviderId,
-    secret: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    if secret.trim().is_empty() {
-        return Err("Credential cannot be empty".to_string());
+    let secret = crate::ai_providers::SecretString::new(key.clone());
+    if let Err(error) = credentials.set(crate::models::ProviderId::OpenRouter, secret) {
+        // The provider already issued a live key. If it cannot be persisted,
+        // revoke it instead of leaving an orphaned credential behind.
+        return Err(match crate::ai_providers::revoke_openrouter(&key) {
+            Ok(()) => format!(
+                "Could not persist the OpenRouter credential; the issued key was revoked. {error}"
+            ),
+            Err(revoke_error) => format!(
+                "Could not persist the OpenRouter credential: {error}. Provider revocation also failed: {revoke_error}"
+            ),
+        });
     }
-    let credentials = state.credentials.clone();
-    credentials
-        .set(provider, crate::ai_providers::SecretString::new(secret))
-        .map_err(|error| error.to_string())?;
     crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())
 }
@@ -902,11 +891,34 @@ pub async fn delete_ai_provider_credential(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let credentials = state.credentials.clone();
-    credentials
-        .remove(provider)
-        .map_err(|error| error.to_string())?;
-    crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
-    Ok(())
+    let usage_cache = state.ai_usage_cache.clone();
+    let usage_generation = state.usage_generation.clone();
+    run_blocking(
+        move || {
+            let existing = credentials.get(provider).map_err(|error| error.to_string())?;
+            credentials
+                .remove(provider)
+                .map_err(|error| error.to_string())?;
+            crate::ai_snapshots::invalidate_snapshot(&usage_cache, &usage_generation);
+            if provider == crate::models::ProviderId::OpenRouter {
+                if let Some(secret) = existing {
+                    // Disconnecting must revoke a non-expiring OAuth key at the
+                    // provider; the local removal still succeeds either way so
+                    // the user is not trapped with a credential they cannot drop.
+                    if let Err(error) =
+                        crate::ai_providers::revoke_openrouter(secret.expose_secret())
+                    {
+                        return Err(format!(
+                            "OpenRouter credential removed locally, but provider revocation failed: {error}"
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        },
+        "Provider disconnect worker panicked",
+    )
+    .await
 }
 
 #[tauri::command]

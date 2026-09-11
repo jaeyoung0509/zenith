@@ -10,10 +10,7 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
         return None;
     }
 
-    let git_root = canonical_cwd
-        .ancestors()
-        .find(|candidate| candidate.join(".git").exists())
-        .map(Path::to_path_buf);
+    let git_root = find_git_root(&canonical_cwd, crate::privacy::paths::user_home().as_deref());
 
     let root = git_root.unwrap_or_else(|| canonical_cwd.clone());
     let marker = root.join(".git");
@@ -29,7 +26,7 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
         .map(|parent| format!("{parent}/{display_name}"))
         .unwrap_or_else(|| display_name.clone());
 
-    let display_path = format_display_path(&root);
+    let display_path = crate::privacy::paths::display_path(&root);
 
     let id = opaque_id("project", &root);
     let worktree_id = if is_worktree {
@@ -72,13 +69,15 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
     ))
 }
 
-fn format_display_path(path: &Path) -> String {
-    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
-        if let Ok(rel) = path.strip_prefix(&home) {
-            return format!("~/{}", rel.display());
-        }
-    }
-    path.display().to_string()
+/// Finds the nearest repository root, ignoring a dotfiles repository that
+/// lives directly in the user home so it cannot absorb unrelated projects.
+fn find_git_root(start: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|candidate| {
+            candidate.join(".git").exists() && home.is_none_or(|home| *candidate != home)
+        })
+        .map(Path::to_path_buf)
 }
 
 fn check_git_dirty(root: &Path) -> bool {
@@ -226,5 +225,36 @@ mod tests {
         let (_, b) = resolve_project(&second).unwrap();
         assert_ne!(a.id, b.id);
         assert_ne!(a.location_hint, b.location_hint);
+    }
+
+    #[test]
+    fn a_home_directory_dotfiles_repository_does_not_absorb_child_projects() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let project = home.join("projects/app");
+        std::fs::create_dir_all(home.join(".git")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+
+        assert_eq!(find_git_root(&project, Some(&home)), None);
+
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        assert_eq!(
+            find_git_root(&project, Some(&home)),
+            Some(project.clone())
+        );
+    }
+
+    #[test]
+    fn out_of_home_projects_never_expose_an_absolute_display_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("outside-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let (_, identity) = resolve_project(&project).unwrap();
+        assert!(
+            !identity.display_path.starts_with('/'),
+            "display path leaked an absolute location: {}",
+            identity.display_path
+        );
+        assert_eq!(identity.display_path, ".../outside-project");
     }
 }

@@ -1,69 +1,24 @@
 use crate::models::{AgentIntegrationInfo, AgentIntegrationResult};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const ZENITH_HOOK_ID: &str = "zenith-agent-activity";
 
 pub fn get_integration_info(tool_id: &str, home_dir: &Path) -> AgentIntegrationInfo {
-    let (display_name, supported, config_rel_path, description) = match tool_id {
-        "antigravity" => (
-            "Antigravity",
-            true,
-            ".gemini/antigravity/hooks.json",
-            "Process-only observation. A verified Zenith event bridge is not available yet.",
-        ),
-        "claude" => (
-            "Claude Code",
-            true,
-            ".claude/settings.json",
-            "Process-only observation. A verified Zenith event bridge is not available yet.",
-        ),
-        "cursor" => (
-            "Cursor Agent CLI",
-            true,
-            ".cursor/hooks.json",
-            "Process-only observation. A verified Zenith event bridge is not available yet.",
-        ),
-        "grok" => (
-            "Grok Build",
-            true,
-            ".grok/hooks.json",
-            "Process-only observation. A verified Zenith event bridge is not available yet.",
-        ),
-        "copilot" => (
-            "GitHub Copilot CLI",
-            true,
-            ".copilot/hooks.json",
-            "Process-only observation. A verified Zenith event bridge is not available yet.",
-        ),
-        "gemini" => (
-            "Gemini CLI (legacy / enterprise)",
-            false,
-            "",
-            "Process-only observation. Individual accounts transitioned to Antigravity CLI.",
-        ),
-        "codex" => (
-            "Codex CLI",
-            false,
-            "",
-            "Process-only observation for unmanaged TUI.",
-        ),
-        "opencode" => ("OpenCode", false, "", "Process-only observation."),
-        _ => ("Unknown tool", false, "", "Unsupported tool."),
-    };
+    let tool = tool_integration(tool_id);
 
-    if !supported {
+    if !tool.supported {
         return AgentIntegrationInfo {
             tool_id: tool_id.to_string(),
-            display_name: display_name.to_string(),
+            display_name: tool.display_name.to_string(),
             supported: false,
             installed: false,
             integration_active: false,
             config_path: None,
-            description: description.to_string(),
+            description: tool.description.to_string(),
         };
     }
 
-    let config_path = home_dir.join(config_rel_path);
+    let config_path = home_dir.join(tool.config_rel_path);
     let installed = config_path.exists();
     let integration_active = if installed {
         is_hook_present(&config_path)
@@ -73,12 +28,85 @@ pub fn get_integration_info(tool_id: &str, home_dir: &Path) -> AgentIntegrationI
 
     AgentIntegrationInfo {
         tool_id: tool_id.to_string(),
-        display_name: display_name.to_string(),
+        display_name: tool.display_name.to_string(),
         supported: true,
         installed,
         integration_active,
-        config_path: Some(config_path.display().to_string()),
-        description: description.to_string(),
+        // Display paths must never leak the absolute home location across IPC.
+        config_path: Some(crate::privacy::paths::display_path(&config_path)),
+        description: tool.description.to_string(),
+    }
+}
+
+struct ToolIntegration {
+    display_name: &'static str,
+    supported: bool,
+    config_rel_path: &'static str,
+    description: &'static str,
+}
+
+fn tool_integration(tool_id: &str) -> ToolIntegration {
+    match tool_id {
+        "antigravity" => ToolIntegration {
+            display_name: "Antigravity",
+            supported: true,
+            config_rel_path: ".gemini/antigravity/hooks.json",
+            description:
+                "Process-only observation. A verified Zenith event bridge is not available yet.",
+        },
+        "claude" => ToolIntegration {
+            display_name: "Claude Code",
+            supported: true,
+            config_rel_path: ".claude/settings.json",
+            description:
+                "Process-only observation. A verified Zenith event bridge is not available yet.",
+        },
+        "cursor" => ToolIntegration {
+            display_name: "Cursor Agent CLI",
+            supported: true,
+            config_rel_path: ".cursor/hooks.json",
+            description:
+                "Process-only observation. A verified Zenith event bridge is not available yet.",
+        },
+        "grok" => ToolIntegration {
+            display_name: "Grok Build",
+            supported: true,
+            config_rel_path: ".grok/hooks.json",
+            description:
+                "Process-only observation. A verified Zenith event bridge is not available yet.",
+        },
+        "copilot" => ToolIntegration {
+            display_name: "GitHub Copilot CLI",
+            supported: true,
+            config_rel_path: ".copilot/hooks.json",
+            description:
+                "Process-only observation. A verified Zenith event bridge is not available yet.",
+        },
+        "gemini" => ToolIntegration {
+            display_name: "Gemini CLI (legacy / enterprise)",
+            supported: false,
+            config_rel_path: "",
+            description:
+                "Process-only observation. Individual accounts transitioned to Antigravity CLI.",
+        },
+        "codex" => ToolIntegration {
+            display_name: "Codex CLI",
+            supported: false,
+            config_rel_path: "",
+            description: "Process-only observation for unmanaged TUI.",
+        },
+        "opencode" => ToolIntegration {
+            display_name: "OpenCode",
+            supported: false,
+            config_rel_path: "",
+            description: "Process-only observation.",
+        },
+        _ => ToolIntegration {
+            display_name: "Unknown tool",
+            supported: false,
+            config_rel_path: "",
+            description: "Unsupported tool.",
+        },
     }
 }
 
@@ -102,11 +130,13 @@ pub fn uninstall_integration(
     tool_id: &str,
     home_dir: &Path,
 ) -> Result<AgentIntegrationResult, String> {
-    let info = get_integration_info(tool_id, home_dir);
-    let Some(config_str) = info.config_path else {
+    let tool = tool_integration(tool_id);
+    if !tool.supported || tool.config_rel_path.is_empty() {
         return Err("Configuration path not determined.".to_string());
-    };
-    let config_path = PathBuf::from(config_str);
+    }
+    // Rebuild the real path from the tool definition; `get_integration_info`
+    // returns a masked display path that must never be used for file access.
+    let config_path = home_dir.join(tool.config_rel_path);
 
     if !config_path.exists() {
         return Ok(AgentIntegrationResult {
@@ -145,7 +175,7 @@ pub fn uninstall_integration(
     Ok(AgentIntegrationResult {
         tool_id: tool_id.to_string(),
         success: true,
-        message: format!("Local integration for {} removed.", info.display_name),
+        message: format!("Local integration for {} removed.", tool.display_name),
     })
 }
 
@@ -172,11 +202,21 @@ fn is_hook_present(path: &Path) -> bool {
 fn atomic_write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     let serialized = serde_json::to_string_pretty(value)
         .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
+    // A third-party settings file may hold credentials, so the rewritten copy
+    // must keep the original owner-only mode instead of inheriting the umask.
+    let original_permissions = std::fs::metadata(path).ok().map(|meta| meta.permissions());
     let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-    std::fs::write(&temp_path, serialized)
-        .map_err(|e| format!("Failed to write temporary config: {e}"))?;
-    std::fs::rename(&temp_path, path)
-        .map_err(|e| format!("Failed to atomically replace config file: {e}"))?;
+    if let Err(error) = std::fs::write(&temp_path, serialized) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("Failed to write temporary config: {error}"));
+    }
+    if let Some(permissions) = original_permissions {
+        let _ = std::fs::set_permissions(&temp_path, permissions);
+    }
+    if let Err(error) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("Failed to atomically replace config file: {error}"));
+    }
     Ok(())
 }
 
@@ -219,5 +259,33 @@ mod tests {
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(value["custom_setting"], "preserve_me");
         assert!(value["hooks"].get("user-hook").is_some());
+    }
+
+    #[test]
+    fn integration_config_path_is_masked_before_ipc() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let info = get_integration_info("claude", &home);
+        let display = info.config_path.expect("supported tool has a display path");
+        assert!(!display.starts_with('/'), "absolute path leaked: {display}");
+        assert!(display.ends_with("settings.json"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewriting_a_third_party_config_preserves_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let path = home.join(".claude/settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"hooks":{}}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        uninstall_integration("claude", home).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }
