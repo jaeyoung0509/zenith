@@ -1,7 +1,8 @@
 use crate::large_files::FileIdentity;
+#[cfg(not(target_os = "windows"))]
+use crate::models::AppInstallSource;
 use crate::models::{
-    AppInstallSource, AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection,
-    InstalledApp,
+    AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
 };
 use crate::safety::Blacklist;
 #[cfg(not(target_os = "windows"))]
