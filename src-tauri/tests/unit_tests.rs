@@ -384,7 +384,14 @@ fn test_windows_platform_capabilities_batch2() {
         caps.developer_artifacts.status,
         PlatformFeatureStatus::Available
     );
-    assert_eq!(caps.installed_apps.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.installed_apps.status,
+        PlatformFeatureStatus::Unavailable
+    );
+    assert_eq!(
+        caps.intensive_cleanup.status,
+        PlatformFeatureStatus::Unavailable
+    );
     assert_eq!(
         caps.app_uninstall.status,
         PlatformFeatureStatus::Unavailable

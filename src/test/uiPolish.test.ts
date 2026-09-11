@@ -7,6 +7,8 @@ import QuickPanel from '../routes/quick/QuickPanel.svelte';
 import SettingsView from '../routes/dashboard/SettingsView.svelte';
 import Card from '../lib/components/Card.svelte';
 import Button from '../lib/components/Button.svelte';
+import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { mockApi } from '../lib/api/mock';
 import ReorderControls from '../lib/components/ReorderControls.svelte';
 
 describe('theme surface contract', () => {
@@ -137,5 +139,33 @@ describe('cleanup result feedback', () => {
     expect(failed.body).toContain('No storage was reclaimed');
     expect(failed.body).not.toContain('Clean Complete');
     expect(failed.body).not.toContain('Free space delta');
+  });
+
+  it('reflects intensive cleanup capability availability honestly in Settings', async () => {
+    try {
+      platformCapabilitiesStore.capabilities = {
+        ...(await mockApi.getPlatformCapabilities()),
+        platform: 'windows',
+        intensive_cleanup: {
+          status: 'unavailable',
+          reason: 'Intensive cleanup is unavailable on Windows because no Windows-specific intensive signatures are defined.',
+        },
+      };
+
+      const unavailable = render(SettingsView);
+      expect(unavailable.body).toContain('Unavailable');
+      expect(unavailable.body).toContain('Intensive cleanup is unavailable on Windows because no Windows-specific intensive signatures are defined.');
+
+      platformCapabilitiesStore.capabilities = {
+        ...(await mockApi.getPlatformCapabilities()),
+        platform: 'macos',
+        intensive_cleanup: { status: 'available' },
+      };
+
+      const available = render(SettingsView);
+      expect(available.body).toContain('Opt-in');
+    } finally {
+      platformCapabilitiesStore.reset();
+    }
   });
 });

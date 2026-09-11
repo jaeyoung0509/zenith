@@ -5,9 +5,12 @@ import StorageView from '../routes/dashboard/StorageView.svelte';
 import CategoryDetailView from '../routes/dashboard/CategoryDetailView.svelte';
 import CleanResultModal from '../lib/components/CleanResultModal.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
+import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { mockApi } from '../lib/api/mock';
 import type { CategoryResult, CleanResult } from '../lib/models/types';
 
 afterEach(() => {
+  platformCapabilitiesStore.reset();
   scanStore.lastScan = null;
   scanStore.selectedMap = {};
   scanStore.isScanning = false;
@@ -355,5 +358,40 @@ describe('detected versus reclaimable storage copy', () => {
     expect(rendered.body).toContain('Zenith reports their storage without deleting it');
     expect(scanStore.selectedMap['container.orbstack.storage']).toBe(false);
     expect(scanStore.reclaimableBytes).toBe(0);
+  });
+
+  it('hides the Applications tab when installed_apps is unavailable', async () => {
+    platformCapabilitiesStore.capabilities = {
+      ...(await mockApi.getPlatformCapabilities()),
+      platform: 'windows',
+      installed_apps: {
+        status: 'unavailable',
+        reason: 'Windows application inventory is not supported. Use Windows Settings.',
+      },
+    };
+
+    const rendered = render(StorageView, {
+      props: { onSelectCategory: vi.fn() },
+    });
+
+    expect(rendered.body).not.toContain('Applications');
+    expect(rendered.body).toContain('Cleanup');
+    expect(rendered.body).toContain('Large Files');
+    expect(rendered.body).toContain('Developer Artifacts');
+    expect(rendered.body).toContain('Disks');
+  });
+
+  it('shows the Applications tab when installed_apps is available', async () => {
+    platformCapabilitiesStore.capabilities = {
+      ...(await mockApi.getPlatformCapabilities()),
+      platform: 'macos',
+      installed_apps: { status: 'available' },
+    };
+
+    const rendered = render(StorageView, {
+      props: { onSelectCategory: vi.fn() },
+    });
+
+    expect(rendered.body).toContain('Applications');
   });
 });

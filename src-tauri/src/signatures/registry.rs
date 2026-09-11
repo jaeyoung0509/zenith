@@ -242,4 +242,76 @@ mod tests {
             crate::models::CleanStrategy::ExternalCommand
         );
     }
+
+    #[test]
+    fn every_signature_resolving_to_platform_specific_root_declares_platforms() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        for signature in registry.all() {
+            let has_macos_root = signature.paths.iter().any(|p| {
+                p.starts_with("~/Library")
+                    || p.starts_with("/Applications")
+                    || p.starts_with("/Library")
+                    || p.starts_with("/System")
+            });
+            let has_windows_root = signature.paths.iter().any(|p| {
+                p.contains("${LOCAL_APP_DATA}")
+                    || p.contains("${ROAMING_APP_DATA}")
+                    || p.contains("${PROGRAM_DATA}")
+                    || p.contains("${PROGRAM_FILES}")
+            });
+
+            // If a signature contains a macOS-specific root but no Windows path alternative, it must declare platforms
+            if has_macos_root && !has_windows_root {
+                assert!(
+                    !signature.platforms.is_empty(),
+                    "Signature {} has macOS-specific root but does not declare `platforms`",
+                    signature.id
+                );
+                assert!(
+                    signature
+                        .platforms
+                        .contains(&crate::models::PlatformKind::Macos),
+                    "Signature {} must include Macos in `platforms`",
+                    signature.id
+                );
+            }
+
+            // If a signature contains a Windows-specific root but no macOS/Unix path alternative, it must declare platforms
+            let has_unix_path = signature.paths.iter().any(|p| {
+                p.starts_with("~/Library")
+                    || p.starts_with("~/.cache")
+                    || p.starts_with("/tmp")
+                    || p.contains("$TMPDIR")
+            });
+            if has_windows_root && !has_unix_path {
+                assert!(
+                    !signature.platforms.is_empty(),
+                    "Signature {} has Windows-specific root but does not declare `platforms`",
+                    signature.id
+                );
+                assert!(
+                    signature
+                        .platforms
+                        .contains(&crate::models::PlatformKind::Windows),
+                    "Signature {} must include Windows in `platforms`",
+                    signature.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn intensive_signatures_are_unavailable_on_windows() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let intensive_sigs: Vec<_> = registry.all().into_iter().filter(|s| s.intensive_only).collect();
+        assert!(!intensive_sigs.is_empty(), "Expected at least one intensive signature");
+        for sig in intensive_sigs {
+            assert!(
+                sig.platforms.contains(&crate::models::PlatformKind::Macos)
+                    && !sig.platforms.contains(&crate::models::PlatformKind::Windows),
+                "Intensive signature {} must not target Windows",
+                sig.id
+            );
+        }
+    }
 }

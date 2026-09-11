@@ -18,17 +18,38 @@ pub async fn start_scan(
     categories: Option<Vec<Category>>,
     state: State<'_, AppState>,
 ) -> Result<ScanResult, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::Cleanup,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|e| e.to_string())?;
+
     let execution_budgets = state.execution_budgets.clone();
     let registry = state.registry.clone();
     let last_scan_store = state.last_scan.clone();
     let operation_gate = state.storage_operation_gate.clone();
-    let (excluded_signatures, intensive_cleanup) = {
+    let (excluded_signatures, mut intensive_cleanup) = {
         let settings = lock_or_state_error(&state.settings, "Settings")?;
         (
             settings.excluded_signatures.clone(),
             settings.intensive_cleanup,
         )
     };
+    if intensive_cleanup
+        && state
+            .platform_capabilities
+            .capabilities()
+            .require(
+                crate::models::PlatformFeature::IntensiveCleanup,
+                crate::models::CapabilityAccess::Inspect,
+            )
+            .is_err()
+    {
+        intensive_cleanup = false;
+    }
     let _permit = execution_budgets.acquire_storage_read().await?;
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -66,6 +87,15 @@ pub async fn create_delete_plan(
     selected_item_ids: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<PlanPreview, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::Cleanup,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
     const PLAN_TTL_SECS: u64 = 300;
     let last_scan = state.last_scan.clone();
     let registry = state.registry.clone();
@@ -118,6 +148,15 @@ pub async fn execute_clean(
     on_event: Channel<CleanEvent>,
     state: State<'_, AppState>,
 ) -> Result<CleanResult, String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::Cleanup,
+            crate::models::CapabilityAccess::Mutate,
+        )
+        .map_err(|e| e.to_string())?;
+
     const PLAN_TTL_SECS: u64 = 300;
     let operation_gate = state.storage_operation_gate.clone();
     let plans = state.delete_plans.clone();

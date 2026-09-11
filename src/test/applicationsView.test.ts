@@ -18,6 +18,18 @@ describe('ApplicationsView responsive layout contract', () => {
     expect(body).not.toContain('Moves to Trash, never permanently deletes');
     expect(body).not.toContain('/Applications and ~/Applications');
   });
+
+  it('explains installed applications inventory is unavailable on Windows', async () => {
+    platformCapabilitiesStore.capabilities = {
+      ...await mockApi.getPlatformCapabilities(),
+      platform: 'windows',
+      installed_apps: { status: 'unavailable', reason: 'Windows application inventory is not supported. Use Windows Settings.' },
+      app_uninstall: { status: 'unavailable', reason: 'Use Windows Settings to uninstall applications.' },
+    };
+    const { body } = render(ApplicationsView, { props: { onBack: vi.fn() } });
+    expect(body).toContain('Applications unavailable');
+    expect(body).toContain('Windows application inventory is not supported. Use Windows Settings.');
+  });
   it('bounds the inventory and reserves a desktop detail pane at the 960px baseline', () => {
     const rendered = render(ApplicationsView, {
       props: {

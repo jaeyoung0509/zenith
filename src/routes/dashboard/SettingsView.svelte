@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import type {
     AgentNotificationPreferences,
@@ -93,6 +94,13 @@
   );
 
   let settings = $derived(settingsStore.settings);
+
+  let isIntensiveAvailable = $derived(
+    platformCapabilitiesStore.isAvailable('intensive_cleanup')
+  );
+  let intensiveReason = $derived(
+    platformCapabilitiesStore.feature('intensive_cleanup')?.reason
+  );
 
   let draggedTab = $state<DashboardTab | null>(null);
   let dragOverTab = $state<DashboardTab | null>(null);
@@ -536,15 +544,20 @@
           <div class="flex items-center gap-2 font-medium text-foreground">
             <AlertTriangle size={14} class="text-warning" />
             Intensive cleanup
-            <Badge variant="outline">Opt-in</Badge>
+            <Badge variant="outline">{isIntensiveAvailable ? 'Opt-in' : 'Unavailable'}</Badge>
           </div>
           <div class="text-meta text-muted-foreground mt-1 leading-relaxed">
-            Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
-            Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
+            {#if !isIntensiveAvailable && intensiveReason}
+              {intensiveReason}
+            {:else}
+              Include stale third-party application caches and logs. Apps may rebuild or re-download cached data.
+              Personal files, settings, credentials, Apple system caches, and recent temporary data remain protected.
+            {/if}
           </div>
         </div>
         <Switch
-          checked={settings.intensive_cleanup}
+          checked={isIntensiveAvailable && settings.intensive_cleanup}
+          disabled={!isIntensiveAvailable}
           onchange={() => handleToggle('intensive_cleanup')}
           ariaLabel="Intensive cleanup"
         />
