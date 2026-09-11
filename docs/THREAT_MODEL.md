@@ -22,20 +22,25 @@ local inspection surface. Cleanup trust boundaries live in
   stored secret. Secrets are never passed on a command line or through a child
   environment.
 - **Provider authorization is bound to one attempt.** The OpenRouter loopback
-  callback requires a high-entropy `state` value, verifies the peer is
-  loopback, and bounds the bytes it reads. An unsolicited request cannot abort a
-  pending legitimate flow.
-- **Issued credentials are either persisted or revoked.** If the credential
-  store cannot persist a freshly issued OpenRouter key, Zenith revokes the key
-  at the provider. Disconnecting attempts provider revocation and reports when
-  it could not.
+  callback requires a high-entropy `state` value carried in the callback URL
+  (the shape OpenRouter echoes back), verifies the peer is loopback, and bounds
+  the bytes it reads. An unsolicited request cannot abort a pending legitimate
+  flow.
+- **Disconnect is local and honest.** OpenRouter OAuth returns a non-expiring
+  key, and OpenRouter's documented key-deletion API requires a management key
+  that Zenith never holds, so an OAuth key cannot self-revoke. Disconnecting
+  removes the key from the OS credential store, and the UI directs the user to
+  delete it in the OpenRouter dashboard. If persistence fails after the
+  provider issues a key, the flow fails with the same manual-revocation
+  guidance instead of pretending the key was invalidated.
 - **Third-party files keep their permissions.** Rewriting an agent settings
   file preserves the original owner-only mode, and a failed rename removes the
   temporary copy.
 - **Diagnostics are redacted on every exit.** One shared pattern table backs
   both the log sanitizer and the AI Control Center secret scanner. Log and audit
-  files are created owner-only, and subprocess or provider error text is
-  sanitized before it is returned across IPC.
+  files are created owner-only on Unix; on Windows they inherit the user-profile
+  ACL. Subprocess or provider error text is sanitized before it is returned
+  across IPC.
 - **Display paths are masked.** Identity paths render as `~/…` or
   `.../basename`; the diagnostics clipboard export cannot carry the home
   directory or user name. Storage and cleanup views that exist to show a

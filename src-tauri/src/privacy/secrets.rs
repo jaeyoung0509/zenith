@@ -8,12 +8,16 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-/// A credential pattern. `replacement` keeps any capture groups that must
-/// survive redaction (for example the assignment prefix or an authorization
-/// scheme) and replaces everything else with `[REDACTED]`.
+/// A credential pattern. Detection and redaction are separate regexes because
+/// their correct semantics differ: a private-key header is enough to detect a
+/// secret but redaction must remove the whole key block. `replacement` keeps
+/// any capture groups that must survive redaction (for example the assignment
+/// prefix or an authorization scheme) and replaces everything else with
+/// `[REDACTED]`.
 pub struct SecretPattern {
     pub category: &'static str,
-    pub regex: Regex,
+    pub detector: Regex,
+    pub redactor: Regex,
     pub replacement: &'static str,
 }
 
@@ -21,7 +25,19 @@ macro_rules! pattern {
     ($category:expr, $regex:expr, $replacement:expr) => {
         SecretPattern {
             category: $category,
-            regex: Regex::new($regex).expect("valid secret pattern"),
+            detector: Regex::new($regex).expect("valid secret detector"),
+            redactor: Regex::new($regex).expect("valid secret redactor"),
+            replacement: $replacement,
+        }
+    };
+}
+
+macro_rules! block_pattern {
+    ($category:expr, $detector:expr, $redactor:expr, $replacement:expr) => {
+        SecretPattern {
+            category: $category,
+            detector: Regex::new($detector).expect("valid secret detector"),
+            redactor: Regex::new($redactor).expect("valid secret redactor"),
             replacement: $replacement,
         }
     };
@@ -29,9 +45,16 @@ macro_rules! pattern {
 
 static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
-        pattern!(
+        block_pattern!(
             "Private key material",
-            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----",
+            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+            r"(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+            "[REDACTED]"
+        ),
+        block_pattern!(
+            "Private key material",
+            r"-----BEGIN PGP PRIVATE KEY BLOCK-----",
+            r"(?s)-----BEGIN PGP PRIVATE KEY BLOCK-----.*?-----END PGP PRIVATE KEY BLOCK-----",
             "[REDACTED]"
         ),
         pattern!(
@@ -121,10 +144,23 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             r"(?i)(://[^/\s:@]{1,256}:)[^@/\s]{1,256}@",
             "${1}[REDACTED]@"
         ),
+        // A credential value is arbitrary text. Match the whole quoted or
+        // whitespace-bounded value instead of a whitelist of characters, so a
+        // password containing `!`, `@`, `:`, `%`, or `~` cannot survive.
         pattern!(
             "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-\.=+/]{6,})("?)"#,
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*")([^"\r\n]{1,})(")"#,
             "${1}[REDACTED]${3}"
+        ),
+        pattern!(
+            "Credential assignment",
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*')([^'\r\n]{1,})(')"#,
+            "${1}[REDACTED]${3}"
+        ),
+        pattern!(
+            "Credential assignment",
+            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["']?)([^\s"',;&?\r\n]{2,})"#,
+            "${1}[REDACTED]"
         ),
     ]
 });
@@ -138,7 +174,7 @@ pub fn redact(text: &str) -> String {
     let mut result = text.to_string();
     for pattern in patterns() {
         result = pattern
-            .regex
+            .redactor
             .replace_all(&result, pattern.replacement)
             .into_owned();
     }
@@ -150,7 +186,7 @@ pub fn redact(text: &str) -> String {
 pub fn contains_secret(text: &str) -> bool {
     patterns()
         .iter()
-        .any(|pattern| pattern.regex.is_match(text))
+        .any(|pattern| pattern.detector.is_match(text))
 }
 
 /// Returns the category of the first matching credential shape without
@@ -158,7 +194,7 @@ pub fn contains_secret(text: &str) -> bool {
 pub fn match_category(text: &str) -> Option<&'static str> {
     patterns()
         .iter()
-        .find(|pattern| pattern.regex.is_match(text))
+        .find(|pattern| pattern.detector.is_match(text))
         .map(|pattern| pattern.category)
 }
 
@@ -202,6 +238,50 @@ pub fn provider_credential_samples() -> &'static [(crate::models::ProviderId, &'
 mod tests {
     use super::*;
     use crate::ai_providers::registry::{CredentialKind, ProviderRegistry};
+
+    #[test]
+    fn redacts_arbitrary_password_punctuation_without_leaving_a_suffix() {
+        let cases = [
+            ("password=p@ssw0rd!very-secret", "password=[REDACTED]"),
+            (
+                r#"client_secret="abc:def!ghi@example""#,
+                r#"client_secret="[REDACTED]""#,
+            ),
+            ("token='abc%123#xyz'", "token='[REDACTED]'"),
+            (
+                "password=p@ssw0rd!very-secret\nnext=line",
+                "password=[REDACTED]\nnext=line",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(sanitized(input), expected, "Failed on input: {input}");
+        }
+        for input in [
+            "password=p@ssw0rd!very-secret",
+            r#"client_secret="abc:def!ghi@example""#,
+            "token='abc%123#xyz'",
+        ] {
+            let output = sanitized(input);
+            assert!(!output.contains("p@ssw0rd"), "password survived: {output}");
+            assert!(
+                !output.contains("abc:def!ghi@example") && !output.contains("abc%123#xyz"),
+                "token value survived: {output}"
+            );
+            assert!(!output.contains("very-secret"), "suffix survived: {output}");
+        }
+    }
+
+    #[test]
+    fn private_key_material_is_redacted_as_a_whole_block() {
+        let block = "-----BEGIN OPENSSH PRIVATE KEY-----\nSUPER_SECRET_BASE64_MATERIAL_LINE_ONE\nSUPER_SECRET_BASE64_MATERIAL_LINE_TWO\n-----END OPENSSH PRIVATE KEY-----";
+        let redacted = sanitized(block);
+        assert_eq!(redacted, "[REDACTED]");
+        assert!(!redacted.contains("SUPER_SECRET_BASE64_MATERIAL"));
+        assert!(contains_secret(block));
+
+        let pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nSeCrEtBlOb\n-----END PGP PRIVATE KEY BLOCK-----";
+        assert_eq!(sanitized(pgp), "[REDACTED]");
+    }
 
     #[test]
     fn redacts_full_values_containing_slash_plus_and_equals() {

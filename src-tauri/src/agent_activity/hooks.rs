@@ -202,18 +202,24 @@ fn is_hook_present(path: &Path) -> bool {
 fn atomic_write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     let serialized = serde_json::to_string_pretty(value)
         .map_err(|e| format!("Failed to serialize JSON: {e}"))?;
-    // A third-party settings file may hold credentials, so the rewritten copy
-    // must keep the original owner-only mode instead of inheriting the umask.
-    let original_permissions = std::fs::metadata(path).ok().map(|meta| meta.permissions());
+    // A third-party settings file may hold credentials, so refuse to rewrite
+    // when its current permissions cannot be read and preserved instead of
+    // replacing it with a wider mode.
+    let permissions = std::fs::metadata(path)
+        .map_err(|e| format!("Failed to read config permissions: {e}"))?
+        .permissions();
     let temp_path = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     if let Err(error) = std::fs::write(&temp_path, serialized) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(format!("Failed to write temporary config: {error}"));
     }
-    if let Some(permissions) = original_permissions {
-        let _ = std::fs::set_permissions(&temp_path, permissions);
+    if let Err(error) = std::fs::set_permissions(&temp_path, permissions) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("Failed to preserve config permissions: {error}"));
     }
-    if let Err(error) = std::fs::rename(&temp_path, path) {
+    // `atomic_replace` uses ReplaceFileW on Windows, which keeps the replaced
+    // file's ACL, and a plain rename on Unix where the temp mode is already set.
+    if let Err(error) = crate::platform::file_ops::atomic_replace(&temp_path, path) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(format!("Failed to atomically replace config file: {error}"));
     }

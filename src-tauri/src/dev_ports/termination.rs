@@ -340,18 +340,37 @@ fn discover_windows_tcp_listeners() -> Result<Vec<RawListenerRecord>, String> {
     Ok(crate::dev_ports::discovery::deduplicate_listeners(records))
 }
 
+/// A classified listener with its raw working directory kept for internal
+/// correlation. The IPC model inside `listener` carries only a masked path.
+#[derive(Debug, Clone)]
+pub struct ClassifiedListener {
+    pub listener: DevelopmentListener,
+    pub working_directory: Option<PathBuf>,
+}
+
 /// Lists all current TCP listeners, classifies each process, and stores short-lived leases.
 pub fn list_listeners(
     store: &Mutex<DevelopmentPortStore>,
     system: &dyn DevPortSystem,
 ) -> Result<Vec<DevelopmentListener>, String> {
+    Ok(list_listeners_with_context(store, system)?
+        .into_iter()
+        .map(|entry| entry.listener)
+        .collect())
+}
+
+/// Lists all current TCP listeners with their raw working directories. Internal
+/// consumers use this; only [`list_listeners`] returns the IPC-shaped list.
+pub fn list_listeners_with_context(
+    store: &Mutex<DevelopmentPortStore>,
+    system: &dyn DevPortSystem,
+) -> Result<Vec<ClassifiedListener>, String> {
     let raw_records = system.discover_listeners()?;
     let now = system.now();
     let current_owner = system.current_owner();
     let own_pid = system.own_pid();
 
     let mut listeners = Vec::new();
-
     for record in raw_records {
         let proc_info = system.get_process_info(record.pid);
         // Unix discovery carries the lsof UID; Windows discovery leaves the
@@ -457,27 +476,33 @@ pub fn list_listeners(
                 now,
             });
 
-        listeners.push(DevelopmentListener {
-            id: lease_id,
-            port: record.port,
-            protocol: record.protocol,
-            bind_address: record.bind_address,
-            exposure: record.exposure,
-            pid: record.pid,
-            server_name,
-            project_name,
+        listeners.push(ClassifiedListener {
+            listener: DevelopmentListener {
+                id: lease_id,
+                port: record.port,
+                protocol: record.protocol,
+                bind_address: record.bind_address,
+                exposure: record.exposure,
+                pid: record.pid,
+                server_name,
+                project_name,
+                working_directory: working_directory
+                    .as_ref()
+                    .map(|path| crate::privacy::paths::display_path(path)),
+                started_at,
+                can_release,
+                blocked_reason,
+            },
             working_directory,
-            started_at,
-            can_release,
-            blocked_reason,
         });
     }
 
     // Sort order: releasable first, then ascending port
     listeners.sort_by(|a, b| {
-        b.can_release
-            .cmp(&a.can_release)
-            .then_with(|| a.port.cmp(&b.port))
+        b.listener
+            .can_release
+            .cmp(&a.listener.can_release)
+            .then_with(|| a.listener.port.cmp(&b.listener.port))
     });
 
     Ok(listeners)
@@ -709,7 +734,10 @@ pub fn release_listener(
                     pid: lease.pid,
                     server_name: lease.server_name,
                     project_name: reclassification.project_name,
-                    working_directory: reclassification.working_directory,
+                    working_directory: reclassification
+                        .working_directory
+                        .as_ref()
+                        .map(|path| crate::privacy::paths::display_path(path)),
                     started_at: lease.started_at,
                     can_release: true,
                     blocked_reason: None,

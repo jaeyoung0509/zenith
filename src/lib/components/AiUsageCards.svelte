@@ -146,15 +146,20 @@
           {connectingProvider === 'openrouter' ? 'Waiting for browser…' : 'Connect with OpenRouter'}
         </Button>
       {:else if !loading && provider.id === 'openrouter' && provider.connected && onDisconnectOpenRouter}
-        <Button
-          variant="outline"
-          size="sm"
-          class="mt-auto w-full gap-1.5"
-          disabled={connectingProvider === 'openrouter'}
-          onclick={onDisconnectOpenRouter}
-        >
-          {connectingProvider === 'openrouter' ? 'Revoking key…' : 'Disconnect OpenRouter'}
-        </Button>
+        <div class="mt-auto space-y-1.5">
+          <p class="text-micro text-muted-foreground">
+            Disconnecting removes the key from Zenith. Revoke it in the OpenRouter dashboard to invalidate it everywhere.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            class="w-full gap-1.5"
+            disabled={connectingProvider === 'openrouter'}
+            onclick={onDisconnectOpenRouter}
+          >
+            {connectingProvider === 'openrouter' ? 'Disconnecting…' : 'Disconnect OpenRouter'}
+          </Button>
+        </div>
       {/if}
 
       {#if !loading && provider.id === 'codex' && provider.summary.lifetime_tokens != null}

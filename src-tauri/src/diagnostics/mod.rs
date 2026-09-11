@@ -41,13 +41,16 @@ pub fn sanitize_log(msg: &str) -> String {
 }
 
 #[cfg(unix)]
-fn restrict_permissions(path: &Path, mode: u32) {
+fn restrict_permissions(path: &Path, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path, _mode: u32) {}
+fn restrict_permissions(_path: &Path, _mode: u32) -> std::io::Result<()> {
+    // Windows files inherit the user-profile ACL; there is no portable mode.
+    Ok(())
+}
 
 pub fn log_error(category: &str, message: &str) {
     let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -55,7 +58,8 @@ pub fn log_error(category: &str, message: &str) {
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
-    restrict_permissions(&dir, 0o700);
+    // Best effort for the directory; the file below is fail-closed.
+    let _ = restrict_permissions(&dir, 0o700);
 
     let file_path = log_file_path();
 
@@ -75,12 +79,20 @@ pub fn log_error(category: &str, message: &str) {
     let sanitized = sanitize_log(message);
     let line = format!("[{timestamp}] [{category}] {sanitized}\n");
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
     {
-        restrict_permissions(&file_path, 0o600);
+        use std::os::unix::fs::OpenOptionsExt;
+        // Create owner-only from the first byte instead of chmod-after-write.
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(&file_path) {
+        // A pre-existing wider mode must be repaired before anything is
+        // written; if it cannot be, drop the line rather than leak it.
+        if restrict_permissions(&file_path, 0o600).is_err() {
+            return;
+        }
         let _ = file.write_all(line.as_bytes());
     }
 }
@@ -310,7 +322,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("zenith.log");
         std::fs::write(&path, b"line").unwrap();
-        restrict_permissions(&path, 0o600);
+        restrict_permissions(&path, 0o600).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }

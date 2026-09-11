@@ -75,16 +75,33 @@ impl AuditStore {
         if bytes.len() as u64 > MAX_FILE_BYTES {
             return Err("AI Control Center audit cap exceeded".into());
         }
-        crate::platform::file_ops::atomic_write(&path, &bytes)
-            .map_err(|error| error.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // The audit log can quote project content; keep it owner-only.
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        let temp = config.join(format!("{FILE_NAME}.tmp.{}", uuid::Uuid::new_v4()));
+        if let Err(error) = write_owner_only(&temp, &bytes) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.to_string());
+        }
+        if let Err(error) = crate::platform::file_ops::atomic_replace(&temp, &path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.to_string());
         }
         Ok(())
     }
+}
+
+/// Creates the file owner-only from the first byte; the audit log can quote
+/// project content and must never be world-readable, even briefly.
+fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 fn safe_label(value: &str) -> String {
     value

@@ -383,7 +383,7 @@ pub async fn get_ai_control_center(
         // Blocking-safe observations outside the Control Center lock.
         let memory = memory_sampler.sample();
         let awake_state = awake.get_state();
-        let listeners = crate::dev_ports::list_listeners(
+        let listeners = crate::dev_ports::list_listeners_with_context(
             &dev_store,
             &crate::dev_ports::RealDevPortSystem::default(),
         )
@@ -867,18 +867,14 @@ pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), 
     let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
         .await
         .map_err(|error| error.to_string())??;
-    let secret = crate::ai_providers::SecretString::new(key.clone());
+    let secret = crate::ai_providers::SecretString::new(key);
     if let Err(error) = credentials.set(crate::models::ProviderId::OpenRouter, secret) {
-        // The provider already issued a live key. If it cannot be persisted,
-        // revoke it instead of leaving an orphaned credential behind.
-        return Err(match crate::ai_providers::revoke_openrouter(&key) {
-            Ok(()) => format!(
-                "Could not persist the OpenRouter credential; the issued key was revoked. {error}"
-            ),
-            Err(revoke_error) => format!(
-                "Could not persist the OpenRouter credential: {error}. Provider revocation also failed: {revoke_error}"
-            ),
-        });
+        // OpenRouter's documented key-deletion API requires a management key,
+        // so an OAuth key cannot self-revoke. Say so instead of pretending the
+        // issued key was invalidated.
+        return Err(format!(
+            "Could not persist the OpenRouter credential ({error}). OpenRouter issued a key that could not be stored; revoke it manually in the OpenRouter dashboard."
+        ));
     }
     crate::ai_snapshots::invalidate_snapshot(&state.ai_usage_cache, &state.usage_generation);
     Ok(())
@@ -895,25 +891,14 @@ pub async fn delete_ai_provider_credential(
     let usage_generation = state.usage_generation.clone();
     run_blocking(
         move || {
-            let existing = credentials.get(provider).map_err(|error| error.to_string())?;
+            // Local disconnect only: the provider key is removed from Zenith.
+            // OpenRouter manages this key with a management credential that
+            // Zenith never holds, so the UI links to the dashboard for manual
+            // deletion rather than claiming a remote revocation.
             credentials
                 .remove(provider)
                 .map_err(|error| error.to_string())?;
             crate::ai_snapshots::invalidate_snapshot(&usage_cache, &usage_generation);
-            if provider == crate::models::ProviderId::OpenRouter {
-                if let Some(secret) = existing {
-                    // Disconnecting must revoke a non-expiring OAuth key at the
-                    // provider; the local removal still succeeds either way so
-                    // the user is not trapped with a credential they cannot drop.
-                    if let Err(error) =
-                        crate::ai_providers::revoke_openrouter(secret.expose_secret())
-                    {
-                        return Err(format!(
-                            "OpenRouter credential removed locally, but provider revocation failed: {error}"
-                        ));
-                    }
-                }
-            }
             Ok(())
         },
         "Provider disconnect worker panicked",

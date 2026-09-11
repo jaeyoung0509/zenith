@@ -75,11 +75,31 @@ impl ProviderAdapter for OpenRouterAdapter {
 
 const OAUTH_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_CALLBACK_BYTES: u64 = 8 * 1024;
-const OPENROUTER_REVOKE_URL: &str = "https://openrouter.ai/api/v1/auth/keys";
 
 enum CallbackOutcome {
     Authorized(String),
     Rejected,
+}
+
+/// The callback URL passed to OpenRouter. The CSRF `state` travels as a query
+/// parameter of the callback URL, which is the shape OpenRouter echoes back on
+/// redirect; it is not a top-level parameter of the authorization URL.
+fn callback_url(port: u16, state: &str) -> Result<Url, String> {
+    let mut callback =
+        Url::parse(&format!("http://127.0.0.1:{port}/callback")).map_err(|e| e.to_string())?;
+    callback.query_pairs_mut().append_pair("state", state);
+    Ok(callback)
+}
+
+fn authorization_url(callback: &Url, challenge: &str) -> Result<Url, String> {
+    let mut auth_url =
+        Url::parse("https://openrouter.ai/auth").map_err(|error| error.to_string())?;
+    auth_url
+        .query_pairs_mut()
+        .append_pair("callback_url", callback.as_str())
+        .append_pair("code_challenge", challenge)
+        .append_pair("code_challenge_method", "S256");
+    Ok(auth_url)
 }
 
 /// Validates the loopback callback without touching the network. The `state`
@@ -93,7 +113,7 @@ fn parse_callback(request_line: &str, expected_state: &str) -> CallbackOutcome {
             None => return CallbackOutcome::Rejected,
         }
     };
-    let Ok(url) = Url::parse(&format!("http://localhost{target}")) else {
+    let Ok(url) = Url::parse(&format!("http://127.0.0.1{target}")) else {
         return CallbackOutcome::Rejected;
     };
     let mut code = None;
@@ -130,21 +150,13 @@ pub fn connect_openrouter() -> Result<String, String> {
         .local_addr()
         .map_err(|error| error.to_string())?
         .port();
-    let callback = format!("http://localhost:{port}/callback");
     let verifier = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     // High-entropy CSRF state: two UUIDv4 values keep the callback bound to this
     // specific authorization attempt.
     let state = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-
-    let mut auth_url =
-        Url::parse("https://openrouter.ai/auth").map_err(|error| error.to_string())?;
-    auth_url
-        .query_pairs_mut()
-        .append_pair("callback_url", &callback)
-        .append_pair("code_challenge", &challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("state", &state);
+    let callback = callback_url(port, &state)?;
+    let auth_url = authorization_url(&callback, &challenge)?;
 
     open_browser(auth_url.as_str())?;
 
@@ -245,29 +257,6 @@ pub fn connect_openrouter() -> Result<String, String> {
         .ok_or_else(|| "OpenRouter did not return an OAuth key.".into())
 }
 
-/// Revokes an issued OpenRouter OAuth key at the provider. Called on disconnect
-/// and whenever persistence fails after the provider issued a live key.
-pub fn revoke_openrouter(key: &str) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|error| format!("Failed to create OpenRouter HTTP client: {error}"))?;
-    let response = client
-        .delete(OPENROUTER_REVOKE_URL)
-        .bearer_auth(key)
-        .send()
-        .map_err(|error| format!("OpenRouter revocation request failed: {error}"))?;
-    let status = response.status();
-    if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
-        Ok(())
-    } else {
-        Err(format!(
-            "OpenRouter revocation returned HTTP status {status}"
-        ))
-    }
-}
-
 fn open_browser(url: &str) -> Result<(), String> {
     let mut command;
     #[cfg(target_os = "macos")]
@@ -317,6 +306,40 @@ mod tests {
             parse_callback("GET /callback", "expected"),
             CallbackOutcome::Rejected
         ));
+    }
+
+    #[test]
+    fn callback_url_carries_state_and_the_auth_url_does_not() {
+        let callback = callback_url(12345, "state-value").unwrap();
+        let callback_pairs = callback
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            callback_pairs.get("state").map(String::as_str),
+            Some("state-value")
+        );
+
+        let auth = authorization_url(&callback, "challenge-value").unwrap();
+        let auth_pairs = auth
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(
+            !auth_pairs.contains_key("state"),
+            "state must travel inside callback_url, not as a top-level auth parameter"
+        );
+        let forwarded = auth_pairs.get("callback_url").unwrap();
+        assert!(forwarded.contains("state=state-value"));
+        assert!(forwarded.starts_with("http://127.0.0.1:12345/callback"));
+        assert_eq!(
+            auth_pairs.get("code_challenge").map(String::as_str),
+            Some("challenge-value")
+        );
+        assert_eq!(
+            auth_pairs.get("code_challenge_method").map(String::as_str),
+            Some("S256")
+        );
     }
 
     #[test]

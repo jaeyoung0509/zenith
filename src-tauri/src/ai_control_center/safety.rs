@@ -9,6 +9,38 @@ use walkdir::{DirEntry, WalkDir};
 const MAX_ENTRIES_PER_ROOT: usize = 2_000;
 const MAX_FILE_BYTES: u64 = 1_048_576;
 const MAX_DEPTH: usize = 8;
+const MAX_FINDINGS_PER_FILE: usize = 10;
+
+/// Decodes a selected file, accepting an explicit UTF-8/UTF-16 BOM. A file
+/// that cannot be decoded returns `None` so the caller can mark the result
+/// partial instead of reporting a clean inspection.
+fn decode_scannable_text(bytes: &[u8]) -> Option<String> {
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return std::str::from_utf8(rest).ok().map(str::to_owned);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, u16::from_le_bytes);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, u16::from_be_bytes);
+    }
+    if bytes.contains(&0) {
+        return None;
+    }
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn decode_utf16(bytes: &[u8], to_unit: fn([u8; 2]) -> u16) -> Option<String> {
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| to_unit([pair[0], pair[1]]));
+    char::decode_utf16(units)
+        .collect::<Result<String, _>>()
+        .ok()
+}
 
 pub fn inspect(
     projects: &std::collections::HashMap<String, PathBuf>,
@@ -29,7 +61,7 @@ pub fn inspect(
     let mut unreached_roots = Vec::new();
     let mut boundary_reasons = Vec::new();
 
-    for (index, (project_id, root)) in ordered.iter().enumerate() {
+    for (project_id, root) in ordered.iter() {
         if !is_eligible_safety_root(root) {
             partial = true;
             unreached_roots.push(root_label(root));
@@ -51,14 +83,14 @@ pub fn inspect(
         for entry in walker {
             visited_entries += 1;
             if visited_entries > MAX_ENTRIES_PER_ROOT {
+                // The budget is per root: stop walking this repository and
+                // continue with the next one so one large tree cannot hide
+                // findings in the remaining projects.
                 partial = true;
                 boundary_reasons.push(format!(
                     "the {MAX_ENTRIES_PER_ROOT}-entry budget was exhausted in {}",
                     root_label(root)
                 ));
-                for (_, remaining_root) in ordered.iter().skip(index + 1) {
-                    unreached_roots.push(root_label(remaining_root));
-                }
                 break;
             }
             let Ok(entry) = entry else {
@@ -103,29 +135,34 @@ pub fn inspect(
             let Ok(bytes) = std::fs::read(entry.path()) else {
                 skipped += 1;
                 partial = true;
+                boundary_reasons.push(format!("{relative} could not be read"));
                 continue;
             };
-            if bytes.contains(&0) {
+            let Some(text) = decode_scannable_text(&bytes) else {
+                // A selected credential file that cannot be decoded is a real
+                // boundary: reporting Fresh would repeat the false-confidence
+                // failure this scan exists to remove.
                 skipped += 1;
-                continue;
-            }
-            let Ok(text) = String::from_utf8(bytes) else {
-                skipped += 1;
+                partial = true;
+                boundary_reasons.push(format!("{relative} could not be decoded for inspection"));
                 continue;
             };
             scanned += 1;
+            // Report every credential shape in the file, bounded per file so a
+            // generated file cannot flood the result.
+            let mut file_findings = 0usize;
             for (line_index, line) in text.lines().enumerate() {
                 if let Some(category) = secrets::match_category(line) {
                     push_finding(&mut findings, project_id, SafetyFindingKind::SecretsExposure, FindingSeverity::Critical, category, "local_secret_detector", Some(relative.clone()), Some(line_index as u32 + 1), now, "Remove the exposed value, rotate it with the provider, and keep secrets outside the repository.", None, &dismissed);
-                    break;
+                    file_findings += 1;
+                    if file_findings >= MAX_FINDINGS_PER_FILE {
+                        break;
+                    }
                 }
             }
             if is_recognized_config(&relative) {
                 inspect_config(project_id, &relative, &text, now, &dismissed, &mut findings);
             }
-        }
-        if visited_entries > MAX_ENTRIES_PER_ROOT {
-            break;
         }
     }
     findings.sort_by(|a, b| {
@@ -717,6 +754,55 @@ mod tests {
     }
 
     #[test]
+    fn utf16_encoded_credential_files_are_decoded_and_scanned() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in
+            "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n".encode_utf16()
+        {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(temp.path().join(".env"), bytes).unwrap();
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&roots, &[], 10);
+        assert!(!result.findings.is_empty(), "UTF-16 .env was not inspected");
+        assert_eq!(result.quality, ObservationQuality::Fresh);
+    }
+
+    #[test]
+    fn undecodable_credential_file_marks_the_result_partial() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(".env"),
+            b"AWS_SECRET_ACCESS_KEY=\xFF\x00\x00binary",
+        )
+        .unwrap();
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&roots, &[], 10);
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result.status_message.contains("could not be decoded"));
+    }
+
+    #[test]
+    fn every_credential_line_in_a_file_is_reported() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("main.ts"),
+            "const a = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789ABCD';\n\
+             const b = 'sk-abcdefghijklmnop1234';\n\
+             const c = 'AIzaSyabcdefghijklmnopqrstuvwxyz0123456';\n",
+        )
+        .unwrap();
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&roots, &[], 10);
+        assert_eq!(
+            result.findings.len(),
+            3,
+            "every distinct credential line must be reported"
+        );
+    }
+
+    #[test]
     fn credential_bearing_names_are_recognized_for_the_partial_gate() {
         for name in [
             ".env",
@@ -755,8 +841,18 @@ mod tests {
         let result = inspect(&roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
         assert!(result.status_message.contains("budget"));
-        assert!(result.status_message.contains("z-secret"));
-        assert!(result.unreached_roots.iter().any(|root| root == "z-secret"));
+        // The heavy root is truncated, but the later root is still scanned: a
+        // per-root budget must not let one repository hide another's findings.
+        assert!(result.inspected_roots.iter().any(|root| root == "a-heavy"));
+        assert!(result.inspected_roots.iter().any(|root| root == "z-secret"));
+        assert!(
+            !result.unreached_roots.iter().any(|root| root == "z-secret"),
+            "a later root must not be reported unreached for another root's budget"
+        );
+        assert!(result
+            .findings
+            .iter()
+            .any(|finding| finding.project_id == "secret"));
     }
 
     #[test]

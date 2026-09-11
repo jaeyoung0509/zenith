@@ -2,7 +2,6 @@ use super::registry::ProviderRegistry;
 use super::support::{base_provider, command_exists};
 use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
 use crate::models::{AiProviderUsage, ProviderId, UsageSupport};
-use serde_json::Value;
 
 #[derive(Default)]
 pub struct GrokBuildAdapter;
@@ -80,46 +79,30 @@ impl ProviderAdapter for XaiApiAdapter {
         provider.support = UsageSupport::Live;
         provider.status_message = "xAI API key validated via official xAI API.".into();
         provider.action_url = Some("https://console.x.ai/team/billing".into());
-
-        if let Ok(data) = response.json::<Value>() {
-            if let Some(name) = sanitize_key_nickname(data.get("name").and_then(Value::as_str)) {
-                provider.auth_label = format!("API Key · {name}");
-            }
-        }
-
+        // The provider-assigned key nickname can contain a person, team, or
+        // machine name, so it is deliberately never read or surfaced.
         Ok(provider)
     }
 }
 
-/// A provider-assigned key nickname can contain a person, team, or machine
-/// name. Keep only a short, opaque-safe label or drop it entirely.
-fn sanitize_key_nickname(name: Option<&str>) -> Option<String> {
-    let filtered = name?
-        .chars()
-        .filter(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.')
-        })
-        .take(40)
-        .collect::<String>();
-    let trimmed = filtered.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::sanitize_key_nickname;
+    use super::*;
 
     #[test]
-    fn key_nicknames_are_filtered_or_dropped() {
-        assert_eq!(
-            sanitize_key_nickname(Some("prod-team")),
-            Some("prod-team".to_string())
+    fn provider_supplied_key_nicknames_are_never_surfaced() {
+        // The adapter must not copy `name` from the upstream response.
+        let source = include_str!("xai.rs");
+        let body = source
+            .split("impl ProviderAdapter for XaiApiAdapter")
+            .nth(1)
+            .and_then(|rest| rest.split("#[cfg(test)]").next())
+            .expect("adapter is defined");
+        assert!(
+            !body.contains(r#"data.get("name")"#),
+            "xAI key nickname must not be read into auth_label"
         );
-        let redacted = sanitize_key_nickname(Some("alice@example.com")).unwrap();
-        assert!(!redacted.contains('@'));
-        assert_eq!(sanitize_key_nickname(Some("이름")), None);
-        assert_eq!(sanitize_key_nickname(None), None);
-        let long = "a".repeat(120);
-        assert_eq!(sanitize_key_nickname(Some(&long)).unwrap().len(), 40);
+        let provider = base_provider(ProviderId::XaiApi, "xAI API", "API Key");
+        assert_eq!(provider.auth_label, "API Key");
     }
 }

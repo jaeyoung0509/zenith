@@ -54,20 +54,6 @@ pub fn normalize_separators(value: &str) -> String {
     value.replace('\\', "/")
 }
 
-/// Reconstructs a filesystem path from a masked display value when possible.
-/// `~/...` expands against the user home and absolute paths pass through; a
-/// basename-only marker such as `.../name` cannot be reconstructed.
-pub fn expand_display_path(value: &str) -> Option<PathBuf> {
-    if value == "~" {
-        return user_home();
-    }
-    if let Some(rest) = value.strip_prefix("~/") {
-        return user_home().map(|home| home.join(rest));
-    }
-    let path = PathBuf::from(value);
-    path.is_absolute().then_some(path)
-}
-
 /// Masks absolute paths embedded in free-form text such as log lines.
 pub fn mask_paths_in_text(text: &str) -> String {
     let home = user_home();
@@ -80,7 +66,7 @@ pub fn mask_paths_with_home(text: &str, home: Option<&Path>) -> String {
         Some(home) => mask_home_prefix(text, home),
         None => text.to_string(),
     };
-    mask_absolute_paths(&without_home)
+    mask_absolute_paths(&without_home, home)
 }
 
 fn mask_home_prefix(text: &str, home: &Path) -> String {
@@ -88,8 +74,10 @@ fn mask_home_prefix(text: &str, home: &Path) -> String {
     if home_str.is_empty() {
         return text.to_string();
     }
+    // Absorb an optional Windows verbatim prefix so `\\?\C:\Users\x\...` is
+    // masked to `~/...` instead of leaving the prefix behind.
     let Ok(pattern) = Regex::new(&format!(
-        r#"(?:{})[\\/][^\s"'`,;:)\]]*"#,
+        r#"(?:\\\\\?\\)?(?:{})[\\/][^\s"'`,;:)\]]*"#,
         regex::escape(&home_str)
     )) else {
         return text.to_string();
@@ -98,7 +86,8 @@ fn mask_home_prefix(text: &str, home: &Path) -> String {
         .replace_all(text, |captures: &regex::Captures<'_>| {
             let matched = captures.get(0).map(|value| value.as_str()).unwrap_or("");
             let relative = matched
-                .get(home_str.len()..)
+                .find(home_str.as_ref())
+                .and_then(|index| matched.get(index + home_str.len()..))
                 .unwrap_or("")
                 .trim_start_matches(['\\', '/']);
             if relative.is_empty() {
@@ -110,9 +99,11 @@ fn mask_home_prefix(text: &str, home: &Path) -> String {
         .into_owned()
 }
 
-fn mask_absolute_paths(text: &str) -> String {
+fn mask_absolute_paths(text: &str, home: Option<&Path>) -> String {
     static ABSOLUTE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(^|[\s("'=,\[])((?:[A-Za-z]:\\|/)[^\s"'`,;:)\]]*[\\/][^\s"'`,;:)\]]+)"#)
+        // Covers POSIX (`/x`), Windows drive with either separator (`C:\x`,
+        // `C:/x`), UNC (`\\server\share`), and verbatim (`\\?\...`) forms.
+        Regex::new(r#"(^|[\s("'=,\[])((?:[A-Za-z]:[\\/]|\\\\|/)[^\s"'`,;)\]]*[\\/][^\s"'`,;)\]]+)"#)
             .expect("valid absolute path pattern")
     });
     ABSOLUTE_PATH
@@ -121,7 +112,7 @@ fn mask_absolute_paths(text: &str) -> String {
             let path = captures.get(2).map(|value| value.as_str()).unwrap_or("");
             format!(
                 "{delimiter}{}",
-                display_path_with_home(Path::new(path), user_home().as_deref())
+                display_path_with_home(Path::new(path), home)
             )
         })
         .into_owned()
@@ -197,5 +188,34 @@ mod tests {
         );
         assert!(!masked.contains(r"D:\Work\private"));
         assert!(masked.contains("settings.json"));
+    }
+
+    #[test]
+    fn windows_forward_slash_unc_and_verbatim_paths_are_masked() {
+        let home = Path::new(r"C:\Users\alice");
+        let cases = [
+            (r"C:\Users\alice\secret-project\file.txt", true),
+            ("C:/Users/alice/secret-project/file.txt", true),
+            (r"\\server\share\secret-project\file.txt", false),
+            (r"\\?\C:\Users\alice\secret-project\file.txt", true),
+            (r"\\?\UNC\server\share\secret-project\file.txt", false),
+        ];
+        for (input, under_home) in cases {
+            let masked = mask_paths_with_home(input, Some(home));
+            assert!(masked.ends_with("file.txt"), "not reduced: {masked}");
+            if under_home {
+                assert!(!masked.contains("alice"), "user name leaked: {masked}");
+                assert!(masked.starts_with("~/"), "expected home-relative: {masked}");
+            } else {
+                assert!(
+                    !masked.contains("secret-project"),
+                    "directory leaked: {masked}"
+                );
+                assert!(
+                    masked.starts_with(".../"),
+                    "expected out-of-home marker: {masked}"
+                );
+            }
+        }
     }
 }
