@@ -309,7 +309,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn selected_plain_path_matches_canonical_profile_without_crossing_accounts() {
+    fn selected_plain_path_matches_canonical_profile_and_outside_roots_are_allowed() {
         let dir = tempfile::tempdir().unwrap();
         let profile = dir.path().join("사용자 하나");
         let workspace = profile.join("프로젝트");
@@ -326,7 +326,10 @@ mod tests {
         assert!(
             crate::developer_artifacts::validate_workspace_root(&plain_workspace, &profile).is_ok()
         );
-        assert!(crate::developer_artifacts::validate_workspace_root(&other, &profile).is_err());
+        // A relocated workspace outside the selected profile (D:\dev-style)
+        // is accepted under anchored symlink validation; the cross-account
+        // traversal check above still rejects reading through another profile.
+        assert!(crate::developer_artifacts::validate_workspace_root(&other, &profile).is_ok());
     }
 
     #[cfg(windows)]

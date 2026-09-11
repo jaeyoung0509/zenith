@@ -159,12 +159,17 @@ impl Blacklist {
             return true;
         }
 
-        // Drive-agnostic protection for Windows system and users directories on any drive letter
+        // Drive-agnostic protection for Windows system roots on any drive
+        // letter. Only the `X:\Users` root itself is protected; its
+        // descendants (temp directories, projects, caches) must remain
+        // scannable and cleanable.
         let path_normalized_str = normalized_path_str.trim_end_matches('/');
         if path_normalized_str.len() >= 2 && path_normalized_str.as_bytes()[1] == b':' {
             let tail = &path_normalized_str[2..];
+            if tail.eq_ignore_ascii_case("/Users") {
+                return true;
+            }
             for denied in [
-                "/Users",
                 "/Windows",
                 "/Program Files",
                 "/Program Files (x86)",

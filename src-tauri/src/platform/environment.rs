@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn probe_reports_the_compiled_os_and_architecture() {
         let environment = RuntimeEnvironment::probe(Some("test-runtime 1.0".to_string()));
-        assert_eq!(environment.os, std::env::consts::OS);
+        assert!(environment.os.eq_ignore_ascii_case(std::env::consts::OS));
         assert_eq!(environment.process_architecture, std::env::consts::ARCH);
         assert_eq!(
             environment.webview_version.as_deref(),

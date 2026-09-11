@@ -323,6 +323,21 @@ fn test_windows_blacklist_and_path_defense() {
     )));
     assert!(Blacklist::is_blacklisted(Path::new("C:\\Users")));
 
+    // The X:\Users root itself is protected on any drive, but its descendants
+    // (temp directories, projects, caches) must remain scannable and cleanable.
+    assert!(!Blacklist::is_blacklisted(Path::new(
+        "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\zenith-test"
+    )));
+    assert!(!Blacklist::is_blacklisted(Path::new(
+        "D:\\Users\\tester\\dev\\repo"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("D:\\Users")));
+    // A system installed to a non-C: drive is protected identically.
+    assert!(Blacklist::is_blacklisted(Path::new(
+        "D:\\Windows\\System32"
+    )));
+    assert!(Blacklist::is_blacklisted(Path::new("D:\\ProgramData\\App")));
+
     // Alternate Data Streams and trailing aliases
     assert!(Blacklist::is_blacklisted(Path::new(
         "C:\\safe\\file.txt:stream"
