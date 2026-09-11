@@ -193,11 +193,11 @@ pub static PROVIDER_REGISTRY: &[StaticProviderDescriptor] = &[
         display_name: "Meta Model API",
         scope: ObservationScope::ApiKey,
         credential_kind: CredentialKind::ApiKey,
-        source_kind: ObservationSourceKind::CredentialValidated,
+        source_kind: ObservationSourceKind::LocalEstimate,
         supports_quick_panel: false,
         model_vendor: Some("Meta"),
         model_identity: Some("Muse Spark 1.3"),
-        description: "Meta Model API key stored in secure credential store.",
+        description: "Meta Model API key stored in secure credential store (unvalidated).",
         default_quota_provider: false,
     },
     StaticProviderDescriptor {

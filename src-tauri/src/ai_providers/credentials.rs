@@ -115,36 +115,25 @@ impl OsCredentialStore {
     #[cfg(target_os = "macos")]
     fn get_os(&self, provider: ProviderId) -> Result<Option<SecretString>, CredentialError> {
         let service = Self::service_name(provider);
-        let mut cmd = std::process::Command::new("/usr/bin/security");
-        cmd.args([
-            "find-generic-password",
-            "-a",
-            "zenith",
-            "-s",
-            &service,
-            "-w",
-        ]);
-        let output = cmd.output().map_err(|err| {
-            CredentialError::StorageUnavailable(format!("Could not run security tool: {err}"))
-        })?;
-
-        if output.status.success() {
-            let secret = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if secret.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(SecretString::new(secret)))
+        match security_framework::passwords::get_generic_password(&service, "zenith") {
+            Ok(bytes) => {
+                let secret = String::from_utf8_lossy(&bytes).trim().to_string();
+                if secret.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(SecretString::new(secret)))
+                }
             }
-        } else {
-            // Exit code 44 indicates item not found in keychain
-            let code = output.status.code().unwrap_or(-1);
-            if code == 44 {
-                Ok(None)
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                Err(CredentialError::StorageUnavailable(format!(
-                    "security tool exited with {code}: {stderr}"
-                )))
+            Err(err) => {
+                let code = err.code();
+                // errSecItemNotFound = -25300
+                if code == -25300 {
+                    Ok(None)
+                } else {
+                    Err(CredentialError::StorageUnavailable(format!(
+                        "macOS Keychain error ({code}): {err}"
+                    )))
+                }
             }
         }
     }
@@ -152,48 +141,32 @@ impl OsCredentialStore {
     #[cfg(target_os = "macos")]
     fn set_os(&self, provider: ProviderId, secret: &SecretString) -> Result<(), CredentialError> {
         let service = Self::service_name(provider);
-        let mut cmd = std::process::Command::new("/usr/bin/security");
-        cmd.args([
-            "add-generic-password",
-            "-U",
-            "-a",
-            "zenith",
-            "-s",
+        security_framework::passwords::set_generic_password(
             &service,
-            "-w",
-            secret.expose_secret(),
-        ]);
-        let output = cmd.output().map_err(|err| {
-            CredentialError::StorageUnavailable(format!("Could not run security tool: {err}"))
-        })?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            Err(CredentialError::OperationFailed(format!(
-                "Failed to save credential to macOS Keychain: {stderr}"
-            )))
-        }
+            "zenith",
+            secret.expose_secret().as_bytes(),
+        )
+        .map_err(|err| {
+            CredentialError::OperationFailed(format!("Failed to save to macOS Keychain: {err}"))
+        })
     }
 
     #[cfg(target_os = "macos")]
     fn remove_os(&self, provider: ProviderId) -> Result<(), CredentialError> {
         let service = Self::service_name(provider);
-        let mut cmd = std::process::Command::new("/usr/bin/security");
-        cmd.args(["delete-generic-password", "-a", "zenith", "-s", &service]);
-        let output = cmd.output().map_err(|err| {
-            CredentialError::StorageUnavailable(format!("Could not run security tool: {err}"))
-        })?;
-
-        let code = output.status.code().unwrap_or(-1);
-        if output.status.success() || code == 44 {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            Err(CredentialError::OperationFailed(format!(
-                "Failed to remove credential from macOS Keychain: {stderr}"
-            )))
+        match security_framework::passwords::delete_generic_password(&service, "zenith") {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let code = err.code();
+                // errSecItemNotFound = -25300
+                if code == -25300 {
+                    Ok(())
+                } else {
+                    Err(CredentialError::OperationFailed(format!(
+                        "Failed to remove credential from macOS Keychain ({code}): {err}"
+                    )))
+                }
+            }
         }
     }
 

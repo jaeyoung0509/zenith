@@ -53,39 +53,43 @@
     { id: 'categories', label: 'Storage Categories', description: 'AI, developer, container, model, and system totals.' },
     { id: 'agent_activity', label: 'AI & Agents', description: 'Active AI agent sessions and account token limits.' },
   ];
-  const DEFAULT_QUICK_PANEL_PROVIDER_OPTIONS: { id: ProviderId; label: string }[] = [
+  const FALLBACK_QUICK_PANEL_OPTIONS: { id: ProviderId; label: string }[] = [
     { id: 'codex', label: 'Codex' },
     { id: 'claude', label: 'Claude Code' },
     { id: 'opencode', label: 'OpenCode' },
     { id: 'openrouter', label: 'OpenRouter' },
     { id: 'antigravity', label: 'Antigravity' },
   ];
-  const DEFAULT_ACCOUNT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: string }[] = [
-    { id: 'codex', label: 'Codex', description: 'Live ChatGPT account limits through the official app server.' },
-    { id: 'claude', label: 'Claude Code', description: 'Local availability with quota checked in Claude /usage.' },
-    { id: 'opencode', label: 'OpenCode', description: 'Local sessions and cost from connected providers.' },
-    { id: 'openrouter', label: 'OpenRouter', description: 'Live key usage through Zenith OAuth.' },
-    { id: 'antigravity', label: 'Antigravity', description: 'Live Gemini and Claude/GPT limits from agy.' },
-    { id: 'cursor', label: 'Cursor', description: 'Local availability; quota stays in Cursor settings.' },
-    { id: 'grok-build', label: 'Grok Build', description: 'Local availability; quota stays in the provider client.' },
-    { id: 'xai-api', label: 'xAI API', description: 'xAI team/organization usage and costs via official management API.' },
-    { id: 'openai-api', label: 'OpenAI API', description: 'Official OpenAI organization usage and costs.' },
-    { id: 'anthropic-api', label: 'Anthropic API', description: 'Organization API usage and costs separate from Claude individual subscription.' },
-    { id: 'muse-code', label: 'Muse Code', description: 'Meta terminal coding agent powered by Muse Spark.' },
-    { id: 'meta-model-api', label: 'Meta Model API', description: 'Direct API access to Muse Spark models.' },
-    { id: 'mistral-api', label: 'Mistral API', description: 'Official Mistral workspace usage and billing.' },
-    { id: 'fireworks-api', label: 'Fireworks API', description: 'Official Fireworks AI developer usage and billing.' },
+  const FALLBACK_ACCOUNT_PROVIDER_IDS: readonly ProviderId[] = [
+    'codex',
+    'claude',
+    'opencode',
+    'openrouter',
+    'antigravity',
+    'cursor',
+    'grok-build',
+    'xai-api',
+    'openai-api',
+    'anthropic-api',
+    'muse-code',
+    'meta-model-api',
+    'mistral-api',
+    'fireworks-api',
   ];
 
   let quickPanelProviderOptions = $derived(
     usageStore.quickPanelProviderOptions.length > 0
       ? usageStore.quickPanelProviderOptions
-      : DEFAULT_QUICK_PANEL_PROVIDER_OPTIONS
+      : FALLBACK_QUICK_PANEL_OPTIONS
   );
   let accountProviderOptions = $derived(
     usageStore.accountProviderOptions.length > 0
       ? usageStore.accountProviderOptions
-      : DEFAULT_ACCOUNT_PROVIDER_OPTIONS
+      : FALLBACK_ACCOUNT_PROVIDER_IDS.map((id) => ({
+          id,
+          label: id === 'grok-build' ? 'Grok Build' : id.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' '),
+          description: '',
+        }))
   );
 
   let settings = $derived(settingsStore.settings);

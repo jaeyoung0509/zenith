@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-pub const ANTIGRAVITY_USAGE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const ANTIGRAVITY_USAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 pub struct AntigravityAdapter;
@@ -49,8 +49,11 @@ impl ProviderAdapter for AntigravityAdapter {
         };
         let mut cmd = tooling::command(bin);
         cmd.args(["-p", "/usage", "--output-format", "json"]);
-        let output = tooling::run_with_timeout(cmd, ANTIGRAVITY_USAGE_TIMEOUT)
-            .map_err(|e| ProviderError::CliFailed(e.to_string()))?;
+        let output =
+            tooling::run_with_timeout(cmd, ANTIGRAVITY_USAGE_TIMEOUT).map_err(|err| match err {
+                tooling::SubprocessError::Timeout(..) => ProviderError::Timeout,
+                other => ProviderError::CliFailed(other.to_string()),
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

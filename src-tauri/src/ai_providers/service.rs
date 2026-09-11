@@ -187,9 +187,11 @@ impl ProviderCollectionService {
                     None => failed_provider(id, provider_name, "Unknown provider"),
                 };
 
-                on_provider(usage.clone());
-                let mut res_guard = results.lock().unwrap_or_else(|p| p.into_inner());
-                res_guard[index] = Some(usage);
+                {
+                    let mut res_guard = results.lock().unwrap_or_else(|p| p.into_inner());
+                    res_guard[index] = Some(usage.clone());
+                }
+                on_provider(usage);
             }));
         }
 
@@ -200,9 +202,13 @@ impl ProviderCollectionService {
         let mut guard = results.lock().unwrap_or_else(|p| p.into_inner());
         let providers = guard
             .drain(..)
-            .map(|item| {
+            .zip(provider_ids.iter().copied())
+            .map(|(item, id)| {
                 item.unwrap_or_else(|| {
-                    failed_provider(ProviderId::Codex, "Unknown", "Missing result")
+                    let name = ProviderRegistry::find(id)
+                        .map(|d| d.display_name)
+                        .unwrap_or("Unknown");
+                    failed_provider(id, name, "Missing result")
                 })
             })
             .collect();

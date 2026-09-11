@@ -64,12 +64,12 @@ impl ProviderAdapter for MetaModelApiAdapter {
             "Meta Model API Key",
         );
         provider.installed = true;
-        provider.connected = true;
+        provider.connected = false;
         provider.support = UsageSupport::Local;
         provider.action_url =
             Some("https://ai.meta.com/blog/introducing-muse-spark-meta-model-api/".into());
         provider.status_message =
-            "Meta Model API key stored in secure credential store (local session tracking).".into();
+            "Meta Model API credential is configured but has not been validated.".into();
 
         Ok(provider)
     }

@@ -177,11 +177,11 @@ const MOCK_PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
     display_name: 'Meta Model API',
     scope: 'api_key',
     credential_kind: 'api_key',
-    source_kind: 'live_authoritative',
+    source_kind: 'local_estimate',
     supports_quick_panel: false,
     model_vendor: 'Meta',
     model_identity: 'Muse Spark 1.3',
-    description: 'Direct API access to Muse Spark models.',
+    description: 'Meta Model API key stored in secure credential store (unvalidated).',
     default_quota_provider: false,
   },
   {

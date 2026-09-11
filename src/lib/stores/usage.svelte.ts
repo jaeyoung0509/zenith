@@ -50,13 +50,22 @@ function providerShell(id: ProviderId, name: string, authLabel: string): AiProvi
 export function projectProviderSlots(
   providers: readonly AiProviderUsage[],
   isLoading: boolean,
-  providerIds: readonly (ProviderId | string)[] = PROVIDER_SHELLS.map((provider) => provider.id)
+  providerIds: readonly (ProviderId | string)[] = PROVIDER_SHELLS.map((provider) => provider.id),
+  descriptors: readonly ProviderDescriptor[] = []
 ): AiProviderUsage[] {
   return providerIds
     .map((id) => {
       const canonicalId: ProviderId = (id as string) === 'grok' ? 'grok-build' : (id as ProviderId);
       const provider = providers.find((candidate) => candidate.id === canonicalId || (candidate.id as string) === id);
       if (provider || !isLoading) return provider;
+      const desc = descriptors.find((d) => d.id === canonicalId);
+      if (desc) {
+        return providerShell(
+          desc.id,
+          desc.display_name,
+          desc.credential_kind === 'api_key' ? 'API Key' : 'Account'
+        );
+      }
       return PROVIDER_SHELLS.find((shell) => shell.id === canonicalId || (shell.id as string) === id);
     })
     .filter((provider): provider is AiProviderUsage => Boolean(provider));
@@ -105,7 +114,8 @@ export class UsageStore {
     return projectProviderSlots(
       this.snapshot?.providers ?? [],
       this.isLoading,
-      settingsStore.settings.ai_accounts_quota_providers
+      settingsStore.settings.ai_accounts_quota_providers,
+      this.descriptors
     );
   }
 

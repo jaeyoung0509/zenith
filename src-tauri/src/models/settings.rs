@@ -96,6 +96,25 @@ impl DashboardTab {
     ];
 }
 
+fn default_quick_panel_ai_providers() -> Vec<ProviderId> {
+    crate::ai_providers::ProviderRegistry::default_quick_panel_providers()
+}
+
+fn default_ai_accounts_quota_providers() -> Vec<ProviderId> {
+    crate::ai_providers::ProviderRegistry::default_account_providers()
+}
+
+fn deserialize_tolerant_provider_ids<'de, D>(deserializer: D) -> Result<Vec<ProviderId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<String>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|id| ProviderId::parse_legacy(&id))
+        .collect())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(default)]
 pub struct ZenithSettings {
@@ -110,7 +129,17 @@ pub struct ZenithSettings {
     pub excluded_signatures: Vec<String>,
     pub awake_rules: Vec<AwakeRule>,
     pub quick_panel_sections: Vec<QuickPanelSection>,
+    #[serde(
+        default = "default_quick_panel_ai_providers",
+        deserialize_with = "deserialize_tolerant_provider_ids"
+    )]
+    #[specta(type = Vec<ProviderId>)]
     pub quick_panel_ai_providers: Vec<ProviderId>,
+    #[serde(
+        default = "default_ai_accounts_quota_providers",
+        deserialize_with = "deserialize_tolerant_provider_ids"
+    )]
+    #[specta(type = Vec<ProviderId>)]
     pub ai_accounts_quota_providers: Vec<ProviderId>,
     pub dashboard_tabs: Vec<DashboardTab>,
     #[serde(default = "legacy_dashboard_tabs_revision")]
@@ -502,6 +531,21 @@ mod tests {
             vec![ProviderId::GrokBuild]
         );
         assert!(sanitized.quick_panel_ai_providers.is_empty());
+    }
+
+    #[test]
+    fn settings_deserializes_tolerantly_with_unknown_providers() {
+        let raw = r#"{
+            "ai_accounts_quota_providers": ["codex", "future-ai-superprovider", "claude"],
+            "quick_panel_ai_providers": ["unknown-ai", "cursor"]
+        }"#;
+        let parsed: ZenithSettings =
+            serde_json::from_str(raw).expect("unknown providers should be safely skipped");
+        assert_eq!(
+            parsed.ai_accounts_quota_providers,
+            vec![ProviderId::Codex, ProviderId::Claude]
+        );
+        assert_eq!(parsed.quick_panel_ai_providers, vec![ProviderId::Cursor]);
     }
 
     #[test]
