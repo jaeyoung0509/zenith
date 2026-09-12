@@ -24,7 +24,7 @@
     size_semantics: 'physical_reclaimable' as const,
     last_used_confidence: 'unknown' as const,
   });
-  let isUnavailable = $derived(item.quality === 'unavailable');
+  let isUnavailable = $derived(item.quality !== 'fresh' && item.quality !== 'partial');
   let isManual = $derived(item.risk === 'manual' || cacheMetadata.management_mode === 'advisory');
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual && !isUnavailable);
   let revealError = $state<string | null>(null);
@@ -79,7 +79,7 @@
           <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.incomplete_reason ?? 'Partial scan'}>
             Partial
           </span>
-        {:else if item.quality === 'unavailable'}
+        {:else if isUnavailable}
           <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={item.incomplete_reason ?? 'Inaccessible item'}>
             Inaccessible
           </span>

@@ -81,12 +81,13 @@ export class ScanStore {
     };
   }
 
-  get freshness(): 'empty' | 'fresh' | 'partial' | 'stale' | 'refreshing' | 'failed' {
+  get freshness(): 'empty' | 'fresh' | 'partial' | 'unavailable' | 'stale' | 'refreshing' | 'failed' {
     if (this.isScanning) return 'refreshing';
     if (this.invalidated && this.error) return 'failed';
     if (!this.lastScan) return 'empty';
     if (this.invalidated || !this.freshAt(this.clock)) return 'stale';
-    return this.lastScan.quality === 'partial' ? 'partial' : 'fresh';
+    if (this.lastScan.quality === 'partial') return 'partial';
+    return this.lastScan.quality === 'fresh' ? 'fresh' : 'unavailable';
   }
 
   get canClean(): boolean {
@@ -262,12 +263,14 @@ export class ScanStore {
 
   syncSelectionFromScan(scan: ScanResult) {
     const newMap: Record<string, boolean> = {};
+    const scanAllowsSelection = scan.quality === 'fresh' || scan.quality === 'partial';
     for (const cat of scan.categories) {
       for (const item of cat.items) {
         // Auto-select only safe items with non-zero size (never manual), and only if fresh/complete
-        newMap[item.id] = item.risk === 'safe'
+        newMap[item.id] = scanAllowsSelection
+          && item.risk === 'safe'
           && (item.size.allocated ?? item.size.logical) > 0
-          && (item.quality ?? 'fresh') === 'fresh';
+          && item.quality === 'fresh';
       }
     }
     this.selectedMap = newMap;
@@ -284,23 +287,26 @@ export class ScanStore {
 
   toggleItem(id: string) {
     const item = this.findItem(id);
-    if (!item || item.risk === 'manual' || item.quality === 'unavailable') return;
+    if (!this.canClean || !item || item.risk === 'manual'
+      || (item.quality !== 'fresh' && item.quality !== 'partial')) return;
     this.selectedMap[id] = !this.selectedMap[id];
   }
 
   setItemSelected(id: string, selected: boolean) {
     const item = this.findItem(id);
-    if (!item || item.risk === 'manual' || (selected && item.quality === 'unavailable')) return;
+    if (!this.canClean || !item || item.risk === 'manual'
+      || (selected && item.quality !== 'fresh' && item.quality !== 'partial')) return;
     this.selectedMap[id] = selected;
   }
 
   toggleCategory(category: Category, select: boolean) {
-    if (!this.lastScan) return;
+    if (!this.lastScan || !this.canClean) return;
     const cat = this.lastScan.categories.find((c) => c.category === category);
     if (!cat) return;
 
     for (const item of cat.items) {
-      if (item.risk !== 'manual' && (!select || item.quality !== 'unavailable')) {
+      if (item.risk !== 'manual'
+        && (!select || item.quality === 'fresh' || item.quality === 'partial')) {
         this.selectedMap[item.id] = select;
       }
     }
@@ -327,12 +333,12 @@ export class ScanStore {
     const bytes = item.size.allocated ?? item.size.logical;
     return item.risk === 'safe'
       && bytes > 0
-      && (item.quality ?? 'fresh') === 'fresh'
+      && item.quality === 'fresh'
       && this.quickCleanCategoryEnabled(category, settings);
   }
 
   quickCleanableBytes(settings: ZenithSettings): number {
-    if (!this.lastScan) return 0;
+    if (!this.lastScan || this.lastScan.quality === 'unavailable') return 0;
     let total = 0;
     for (const category of this.lastScan.categories) {
       for (const item of category.items) {
@@ -345,18 +351,18 @@ export class ScanStore {
   }
 
   selectAllSafe() {
-    if (!this.lastScan) return;
+    if (!this.lastScan || !this.canClean) return;
     for (const cat of this.lastScan.categories) {
       for (const item of cat.items) {
         this.selectedMap[item.id] = item.risk === 'safe'
           && (item.size.allocated ?? item.size.logical) > 0
-          && (item.quality ?? 'fresh') === 'fresh';
+          && item.quality === 'fresh';
       }
     }
   }
 
   selectQuickCleanDefaults(settings: ZenithSettings) {
-    if (!this.lastScan) return;
+    if (!this.lastScan || this.lastScan.quality === 'unavailable') return;
     const next: Record<string, boolean> = {};
     for (const category of this.lastScan.categories) {
       for (const item of category.items) {

@@ -31,7 +31,10 @@
 
   let Icon = $derived(icons[categoryResult.category] || Boxes);
 
-  let cleanableItems = $derived(categoryResult.items.filter((i) => i.risk !== 'manual'));
+  let cleanableItems = $derived(
+    categoryResult.items.filter((i) => i.risk !== 'manual'
+      && (i.quality === 'fresh' || i.quality === 'partial'))
+  );
 
   let allSelected = $derived.by(() => {
     if (cleanableItems.length === 0) return false;

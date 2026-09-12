@@ -12,11 +12,13 @@ function fixture(id = 'scan', finished = 1000): ScanResult {
   return {
     scan_id: id, valid_for_seconds: 300, started_at: finished - 1, finished_at: finished,
     total_bytes: 10, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0,
+    quality: 'fresh', incomplete_reasons: [],
     categories: [{ category: 'developer', display_name: 'Developer', total_bytes: 10,
-      safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0, items: [{
+      safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0, quality: 'fresh', items: [{
         id: `${id}-item`, signature_id: 'fixture', name: 'Fixture', category: 'developer',
         risk: 'safe', path: '/fixture', size: { logical: 10, allocated: 10 },
         file_count: 1, description: 'Test only', is_selected: false, last_modified: null, exists: true,
+        quality: 'fresh', incomplete_reason: null,
       }] }],
   };
 }
@@ -42,6 +44,22 @@ async function loaded() {
 }
 
 describe('cleanup freshness and recovery', () => {
+  it('treats an unavailable scan as non-cleanable and leaves every item unselected', async () => {
+    const unavailable = fixture();
+    unavailable.quality = 'unavailable';
+    unavailable.incomplete_reasons = ['Configured locations could not be inspected'];
+    vi.mocked(tauriGetLastScan).mockResolvedValue(unavailable);
+    const store = new ScanStore();
+
+    await store.init();
+
+    expect(store.freshness).toBe('unavailable');
+    expect(store.canClean).toBe(false);
+    expect(store.selectedCount).toBe(0);
+    store.setItemSelected('scan-item', true);
+    expect(store.selectedCount).toBe(0);
+  });
+
   it('expires exactly at the backend lifetime and clears executable selections', async () => {
     const store = await loaded();
     vi.setSystemTime(1299_000);

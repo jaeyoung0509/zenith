@@ -1,6 +1,10 @@
 use crate::models::{Category, ObservationQuality, RiskTier};
 use serde::{Deserialize, Serialize};
 
+fn unavailable_observation_quality() -> ObservationQuality {
+    ObservationQuality::Unavailable
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheManagementMode {
@@ -94,7 +98,7 @@ pub struct ScanItem {
     #[specta(type = Option<u64>)]
     pub last_modified: Option<u64>,
     pub exists: bool,
-    #[serde(default)]
+    #[serde(default = "unavailable_observation_quality")]
     pub quality: ObservationQuality,
     #[serde(default)]
     pub incomplete_reason: Option<String>,
@@ -102,7 +106,10 @@ pub struct ScanItem {
 
 impl ScanItem {
     pub fn allows_cleanup(&self) -> bool {
-        self.quality != ObservationQuality::Unavailable
+        matches!(
+            self.quality,
+            ObservationQuality::Fresh | ObservationQuality::Partial
+        )
     }
 }
 
@@ -123,7 +130,7 @@ pub struct CategoryResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub manual_bytes: u64,
-    #[serde(default)]
+    #[serde(default = "unavailable_observation_quality")]
     pub quality: ObservationQuality,
 }
 
@@ -151,7 +158,7 @@ pub struct ScanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub manual_bytes: u64,
-    #[serde(default)]
+    #[serde(default = "unavailable_observation_quality")]
     pub quality: ObservationQuality,
     #[serde(default)]
     pub incomplete_reasons: Vec<String>,
@@ -162,7 +169,8 @@ impl ScanResult {
 
     pub fn is_fresh_at(&self, now: u64) -> bool {
         self.quality == ObservationQuality::Fresh
-            && now.checked_sub(self.finished_at)
+            && now
+                .checked_sub(self.finished_at)
                 .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS))
     }
 
@@ -185,7 +193,10 @@ impl ScanResult {
                 "Scan expired. Scan again and review the new results before cleaning.".into(),
             ));
         }
-        if self.quality == ObservationQuality::Unavailable {
+        if !matches!(
+            self.quality,
+            ObservationQuality::Fresh | ObservationQuality::Partial
+        ) {
             return Err(ZenithError::InvalidPlan(
                 "The scan failed or is unavailable. Scan again before cleaning.".into(),
             ));
@@ -307,12 +318,17 @@ mod tests {
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
         };
-        let json = serde_json::to_value(&item).unwrap();
+        let mut json = serde_json::to_value(&item).unwrap();
         assert_eq!(json["size"]["logical"], MAX_SAFE);
         assert_eq!(json["size"]["allocated"], MAX_SAFE - 1);
         assert_eq!(json["last_modified"], MAX_SAFE - 2);
         assert_eq!(json["quality"], "fresh");
         assert_eq!(json["cache_metadata"]["management_mode"], "tool_managed");
         assert_eq!(json["cache_metadata"]["artifact_kind"], "package_store");
+
+        json.as_object_mut().unwrap().remove("quality");
+        let legacy_item: ScanItem = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy_item.quality, ObservationQuality::Unavailable);
+        assert!(!legacy_item.allows_cleanup());
     }
 }

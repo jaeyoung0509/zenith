@@ -1272,11 +1272,8 @@ fn test_permission_denied_or_inaccessible_measurement_is_captured_with_reason() 
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
     }
 
-    let measurement = SizeCalculator::measure_path_full(
-        dir.path(),
-        &[],
-        &PlatformEnvironment::native(),
-    );
+    let measurement =
+        SizeCalculator::measure_path_full(dir.path(), &[], &PlatformEnvironment::native());
 
     #[cfg(unix)]
     {
@@ -1349,7 +1346,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
     assert!(!unavailable_item.allows_cleanup());
 
     let registry = SignatureRegistry::load_embedded().unwrap();
-    let unavailable_plan_res = SafetyPlanner::create_plan(&[unavailable_item.clone()], &registry);
+    let unavailable_plan_res =
+        SafetyPlanner::create_plan(std::slice::from_ref(&unavailable_item), &registry);
     assert!(
         matches!(unavailable_plan_res, Err(ZenithError::InvalidPlan(_))),
         "SafetyPlanner must reject unavailable items"
@@ -1394,7 +1392,9 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         quality: ObservationQuality::Unavailable,
         ..scan
     };
-    assert!(unavailable_scan.validate_for_cleanup("partial-scan-test", 1010).is_err()); // Unavailable scan fails closed
+    assert!(unavailable_scan
+        .validate_for_cleanup("partial-scan-test", 1010)
+        .is_err()); // Unavailable scan fails closed
 }
 
 #[cfg(unix)]

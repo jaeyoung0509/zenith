@@ -39,8 +39,6 @@ impl DirectoryScanner {
                 None => continue,
             };
 
-            let exists = path_buf.exists() || crate::safety::SymlinkGuard::is_symlink(&path_buf);
-
             if let Some(min_age_days) = signature.min_age_days {
                 items.extend(Self::scan_aged_children(
                     environment,
@@ -52,22 +50,42 @@ impl DirectoryScanner {
                 continue;
             }
 
-            let measurement = if exists {
-                SizeCalculator::measure_path_with_pool(
-                    &path_buf,
-                    &signature.exclusions,
-                    pool,
-                    environment,
-                )
-            } else {
-                PathMeasurement::complete(FileSize::default(), 0)
+            // `Path::exists()` collapses every metadata error into `false`.
+            // Keep permission and I/O failures observable instead of treating
+            // a configured path as if it simply did not exist.
+            let (exists, measurement) = match fs::symlink_metadata(&path_buf) {
+                Ok(metadata) if metadata.file_type().is_symlink() => (
+                    true,
+                    PathMeasurement::unavailable(format!(
+                        "Configured path {} is a symlink; cleanup is blocked",
+                        path_buf.display()
+                    )),
+                ),
+                Ok(_) => (
+                    true,
+                    SizeCalculator::measure_path_with_pool(
+                        &path_buf,
+                        &signature.exclusions,
+                        pool,
+                        environment,
+                    ),
+                ),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    (false, PathMeasurement::complete(FileSize::default(), 0))
+                }
+                Err(err) => (
+                    true,
+                    PathMeasurement::unavailable(format!(
+                        "Could not inspect configured path {}: {}",
+                        path_buf.display(),
+                        err
+                    )),
+                ),
             };
 
             let size = measurement.size;
             let file_count = measurement.file_count;
-            let (quality, incomplete_reason) = if !exists {
-                (ObservationQuality::Fresh, None)
-            } else if measurement.complete {
+            let (quality, incomplete_reason) = if !exists || measurement.complete {
                 (ObservationQuality::Fresh, None)
             } else if size.reclaimable() == 0 {
                 (
@@ -155,22 +173,74 @@ impl DirectoryScanner {
         path_index: usize,
         min_age_days: u32,
     ) -> Vec<ScanItem> {
-        let Ok(entries) = fs::read_dir(root) else {
-            return vec![];
+        match fs::symlink_metadata(root) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return vec![Self::unavailable_aged_item(
+                    signature,
+                    root,
+                    format!("{}.{}.unavailable", signature.id, path_index),
+                    signature.name.clone(),
+                    FileSize::default(),
+                    0,
+                    None,
+                    format!(
+                        "Configured path {} is a symlink; cleanup is blocked",
+                        root.display()
+                    ),
+                )];
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return vec![],
+            Err(err) => {
+                return vec![Self::unavailable_aged_item(
+                    signature,
+                    root,
+                    format!("{}.{}.unavailable", signature.id, path_index),
+                    signature.name.clone(),
+                    FileSize::default(),
+                    0,
+                    None,
+                    format!("Could not inspect {}: {}", root.display(), err),
+                )];
+            }
+        }
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return vec![],
+            Err(err) => {
+                return vec![Self::unavailable_aged_item(
+                    signature,
+                    root,
+                    format!("{}.{}.unavailable", signature.id, path_index),
+                    signature.name.clone(),
+                    FileSize::default(),
+                    0,
+                    None,
+                    format!("Could not inspect {}: {}", root.display(), err),
+                )];
+            }
         };
         let minimum_age = Duration::from_secs(u64::from(min_age_days) * 86_400);
         let now = SystemTime::now();
         let mut items = Vec::new();
+        let mut entry_failure = None;
 
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    if entry_failure.is_none() {
+                        entry_failure = Some(format!(
+                            "Could not read an entry in {}: {}",
+                            root.display(),
+                            err
+                        ));
+                    }
+                    continue;
+                }
+            };
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
-            if fs::symlink_metadata(&path)
-                .map(|metadata| metadata.file_type().is_symlink())
-                .unwrap_or(true)
-            {
-                continue;
-            }
             if !signature.include_prefixes.is_empty()
                 && !signature
                     .include_prefixes
@@ -178,6 +248,38 @@ impl DirectoryScanner {
                     .any(|prefix| name.starts_with(prefix))
             {
                 continue;
+            }
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    items.push(Self::unavailable_aged_item(
+                        signature,
+                        &path,
+                        format!("{}.{}.{}", signature.id, path_index, name),
+                        name,
+                        FileSize::default(),
+                        0,
+                        None,
+                        format!(
+                            "Candidate {} is a symlink; cleanup is blocked",
+                            path.display()
+                        ),
+                    ));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    items.push(Self::unavailable_aged_item(
+                        signature,
+                        &path,
+                        format!("{}.{}.{}", signature.id, path_index, name),
+                        name,
+                        FileSize::default(),
+                        0,
+                        None,
+                        format!("Could not inspect {}: {}", path.display(), err),
+                    ));
+                    continue;
+                }
             }
             if signature
                 .exclude_prefixes
@@ -189,8 +291,26 @@ impl DirectoryScanner {
 
             // Single-pass fail-closed tree measurement
             let stats = Self::measure_tree_stats(environment, &path, &signature.exclusions, 0, 32);
-            // Fail-closed: If scan encountered permission errors, app bundles, or depth cutoff, exclude from stale cleanup
+            // An incomplete tree cannot prove the candidate's newest timestamp,
+            // so retain it for observability but block cleanup.
             if !stats.complete {
+                let size = FileSize::new(stats.logical, Some(stats.allocated));
+                let last_modified = stats
+                    .newest_mtime
+                    .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs());
+                items.push(Self::unavailable_aged_item(
+                    signature,
+                    &path,
+                    format!("{}.{}.{}", signature.id, path_index, name),
+                    name,
+                    size,
+                    stats.file_count,
+                    last_modified,
+                    stats.incomplete_reason.unwrap_or_else(|| {
+                        format!("Could not completely inspect {}", path.display())
+                    }),
+                ));
                 continue;
             }
 
@@ -233,7 +353,59 @@ impl DirectoryScanner {
             });
         }
 
+        if let Some(reason) = entry_failure {
+            items.push(Self::unavailable_aged_item(
+                signature,
+                root,
+                format!("{}.{}.unavailable", signature.id, path_index),
+                format!("{} (scan incomplete)", signature.name),
+                FileSize::default(),
+                0,
+                None,
+                reason,
+            ));
+        }
+
         items
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn unavailable_aged_item(
+        signature: &Signature,
+        path: &Path,
+        id: String,
+        name: String,
+        size: FileSize,
+        file_count: usize,
+        last_modified: Option<u64>,
+        reason: String,
+    ) -> ScanItem {
+        let mut cache_metadata = signature.cache_metadata();
+        cache_metadata.size_semantics = if size.reclaimable() == 0 {
+            CacheSizeSemantics::Informational
+        } else {
+            CacheSizeSemantics::ConservativeLowerBound
+        };
+        ScanItem {
+            id,
+            signature_id: signature.id.clone(),
+            name,
+            category: signature.category,
+            risk: signature.risk,
+            path: path.to_string_lossy().into_owned(),
+            size,
+            file_count,
+            description: format!(
+                "{} Age eligibility could not be verified, so cleanup is blocked.",
+                signature.description
+            ),
+            cache_metadata,
+            is_selected: false,
+            last_modified,
+            exists: true,
+            quality: ObservationQuality::Unavailable,
+            incomplete_reason: Some(reason),
+        }
     }
 
     /// Measures directory statistics (size, count, newest mtime) in a single recursive pass.
@@ -412,7 +584,7 @@ pub struct TreeStats {
 #[cfg(test)]
 mod tests {
     use super::DirectoryScanner;
-    use crate::models::{Category, CleanStrategy, RiskTier, Signature};
+    use crate::models::{Category, CleanStrategy, ObservationQuality, RiskTier, Signature};
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
 
@@ -461,11 +633,25 @@ mod tests {
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment());
-        let names = items
+        let eligible_item = items
             .iter()
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, vec!["third.party.cache"]);
+            .find(|item| item.name == "third.party.cache")
+            .expect("eligible cache remains visible");
+        assert_eq!(eligible_item.quality, ObservationQuality::Fresh);
+        assert!(!items.iter().any(|item| item.name == "com.apple.protected"));
+        #[cfg(unix)]
+        {
+            let symlink = items
+                .iter()
+                .find(|item| item.name == "linked-cache")
+                .expect("eligible symlink is retained as a blocked observation");
+            assert_eq!(symlink.quality, ObservationQuality::Unavailable);
+            assert!(!symlink.is_selected);
+            assert!(symlink
+                .incomplete_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("symlink")));
+        }
     }
 
     #[test]
@@ -508,11 +694,24 @@ mod tests {
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment());
-        let names = items
+        let plain = items
             .iter()
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, vec!["plain.cache"]);
+            .find(|item| item.name == "plain.cache")
+            .expect("complete cache remains visible");
+        assert_eq!(plain.quality, ObservationQuality::Fresh);
+        for name in [
+            "bundled.cache",
+            "mixed-case-bundled.cache",
+            "Standalone.app",
+        ] {
+            let blocked = items
+                .iter()
+                .find(|item| item.name == name)
+                .unwrap_or_else(|| panic!("{name} should be retained as an incomplete item"));
+            assert_eq!(blocked.quality, ObservationQuality::Unavailable);
+            assert!(!blocked.is_selected);
+            assert!(blocked.incomplete_reason.is_some());
+        }
 
         // The guard must also fail closed at delete-time TOCTOU re-verification.
         let stats = DirectoryScanner::measure_tree_stats(&environment(), &nested, &[], 0, 32);

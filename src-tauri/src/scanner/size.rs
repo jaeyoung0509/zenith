@@ -163,7 +163,11 @@ impl SizeCalculator {
                     return PathMeasurement::incomplete(
                         FileSize::default(),
                         0,
-                        format!("Could not read symlink metadata for {}: {}", path.display(), err),
+                        format!(
+                            "Could not read symlink metadata for {}: {}",
+                            path.display(),
+                            err
+                        ),
                     );
                 }
             };
@@ -277,7 +281,11 @@ impl SizeCalculator {
                     complete.store(false, Ordering::Relaxed);
                     let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                     if r.is_none() {
-                        *r = Some(format!("Failed to read directory {}: {}", dir.display(), err));
+                        *r = Some(format!(
+                            "Failed to read directory {}: {}",
+                            dir.display(),
+                            err
+                        ));
                     }
                     return;
                 }

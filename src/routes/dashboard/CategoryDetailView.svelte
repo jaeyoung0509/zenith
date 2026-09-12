@@ -48,7 +48,10 @@
     );
   });
 
-  let cleanableFilteredItems = $derived(filteredItems.filter((i) => i.risk !== 'manual'));
+  let cleanableFilteredItems = $derived(
+    filteredItems.filter((i) => i.risk !== 'manual'
+      && (i.quality === 'fresh' || i.quality === 'partial'))
+  );
 
   let allFilteredSelected = $derived.by(() => {
     if (cleanableFilteredItems.length === 0) return false;

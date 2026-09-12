@@ -13,6 +13,26 @@ use uuid::Uuid;
 
 pub struct ScanEngine;
 
+fn aggregate_quality(
+    qualities: impl IntoIterator<Item = ObservationQuality>,
+) -> ObservationQuality {
+    let mut saw_any = false;
+    let mut all_fresh = true;
+    let mut all_unavailable = true;
+    for quality in qualities {
+        saw_any = true;
+        all_fresh &= quality == ObservationQuality::Fresh;
+        all_unavailable &= quality == ObservationQuality::Unavailable;
+    }
+    if !saw_any || all_fresh {
+        ObservationQuality::Fresh
+    } else if all_unavailable {
+        ObservationQuality::Unavailable
+    } else {
+        ObservationQuality::Partial
+    }
+}
+
 impl ScanEngine {
     /// Executes a full or filtered scan across all categories, emitting streaming events.
     ///
@@ -88,14 +108,14 @@ impl ScanEngine {
                         RiskTier::Manual => cat_manual += bytes,
                     }
 
-                    if item.quality == ObservationQuality::Unavailable {
-                        on_event(ScanEvent::Error {
-                            message: format!(
-                                "Could not inspect {}: {}",
-                                item.name,
-                                item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
-                            ),
-                        });
+                    if item.quality != ObservationQuality::Fresh {
+                        let message = format!(
+                            "Could not fully inspect {}: {}",
+                            item.name,
+                            item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
+                        );
+                        crate::diagnostics::log_error("scanner", &message);
+                        on_event(ScanEvent::Error { message });
                     }
 
                     on_event(ScanEvent::ItemFound { item: item.clone() });
@@ -147,15 +167,7 @@ impl ScanEngine {
             rebuild_bytes += cat_rebuild;
             manual_bytes += cat_manual;
 
-            let mut cat_quality = ObservationQuality::Fresh;
-            for item in &category_items {
-                if item.quality == ObservationQuality::Partial
-                    || item.quality == ObservationQuality::Unavailable
-                {
-                    cat_quality = ObservationQuality::Partial;
-                    break;
-                }
-            }
+            let cat_quality = aggregate_quality(category_items.iter().map(|item| item.quality));
 
             let cat_item_count = category_items.len();
             category_results.push(CategoryResult {
@@ -181,12 +193,8 @@ impl ScanEngine {
             .unwrap_or_default()
             .as_secs();
 
-        let mut scan_quality = ObservationQuality::Fresh;
         let mut incomplete_reasons = Vec::new();
         for cat in &category_results {
-            if cat.quality != ObservationQuality::Fresh {
-                scan_quality = ObservationQuality::Partial;
-            }
             for item in &cat.items {
                 if let Some(reason) = &item.incomplete_reason {
                     if !incomplete_reasons.contains(reason) {
@@ -195,6 +203,7 @@ impl ScanEngine {
                 }
             }
         }
+        let scan_quality = aggregate_quality(category_results.iter().map(|cat| cat.quality));
 
         let result = ScanResult {
             scan_id,
@@ -215,5 +224,31 @@ impl ScanEngine {
         });
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aggregate_quality;
+    use crate::models::ObservationQuality;
+
+    #[test]
+    fn observation_quality_aggregation_distinguishes_total_and_partial_failure() {
+        assert_eq!(aggregate_quality([]), ObservationQuality::Fresh);
+        assert_eq!(
+            aggregate_quality([ObservationQuality::Fresh, ObservationQuality::Fresh]),
+            ObservationQuality::Fresh
+        );
+        assert_eq!(
+            aggregate_quality([
+                ObservationQuality::Unavailable,
+                ObservationQuality::Unavailable,
+            ]),
+            ObservationQuality::Unavailable
+        );
+        assert_eq!(
+            aggregate_quality([ObservationQuality::Fresh, ObservationQuality::Unavailable]),
+            ObservationQuality::Partial
+        );
     }
 }

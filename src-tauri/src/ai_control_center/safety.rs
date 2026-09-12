@@ -102,19 +102,25 @@ pub fn inspect(
                         if io_err.kind() == std::io::ErrorKind::PermissionDenied {
                             format!(
                                 "permission denied reading {}",
-                                err.path().map(file_label).unwrap_or_else(|| root_label(root))
+                                err.path()
+                                    .map(file_label)
+                                    .unwrap_or_else(|| root_label(root))
                             )
                         } else {
                             format!(
                                 "read error in {}: {}",
-                                err.path().map(file_label).unwrap_or_else(|| root_label(root)),
+                                err.path()
+                                    .map(file_label)
+                                    .unwrap_or_else(|| root_label(root)),
                                 io_err
                             )
                         }
                     } else {
                         format!(
                             "read_dir failure in {}",
-                            err.path().map(file_label).unwrap_or_else(|| root_label(root))
+                            err.path()
+                                .map(file_label)
+                                .unwrap_or_else(|| root_label(root))
                         )
                     };
                     boundary_reasons.push(reason);
@@ -128,7 +134,9 @@ pub fn inspect(
                     .path()
                     .strip_prefix(root)
                     .ok()
-                    .map(|path| crate::privacy::paths::normalize_separators(&path.to_string_lossy()))
+                    .map(|path| {
+                        crate::privacy::paths::normalize_separators(&path.to_string_lossy())
+                    })
                     .unwrap_or_else(|| file_label(entry.path()));
                 boundary_reasons.push(format!(
                     "directory depth limit of {MAX_DEPTH} exceeded at {relative} in {}",
@@ -1059,7 +1067,9 @@ mod tests {
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
         let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
-        assert!(result.status_message.contains("directory depth limit of 8 exceeded"));
+        assert!(result
+            .status_message
+            .contains("directory depth limit of 8 exceeded"));
         assert!(result.findings.is_empty());
     }
 
@@ -1081,7 +1091,9 @@ mod tests {
         let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
         assert_ne!(result.quality, ObservationQuality::Fresh);
-        assert!(result.status_message.contains("directory depth limit of 8 exceeded"));
+        assert!(result
+            .status_message
+            .contains("directory depth limit of 8 exceeded"));
     }
 
     #[test]
