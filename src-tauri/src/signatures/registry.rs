@@ -1,5 +1,5 @@
 use crate::models::{Category, PlatformKind, RiskTier, Signature, ZenithError};
-use crate::platform::path_algebra::{self, contains, is_absolute, normalize, PathFlavor};
+use crate::platform::path_algebra::{contains, is_absolute, normalize, PathFlavor};
 use crate::platform::PlatformEnvironment;
 use crate::safety::Blacklist;
 use crate::signatures::SignatureLoader;
@@ -330,10 +330,7 @@ fn audit_signature(
 
     if let Some(scope) = common_scope(&resolved, flavor) {
         for exclusion in &signature.exclusions {
-            if !is_path_shaped(exclusion, flavor) {
-                continue;
-            }
-            let Some(expanded) = SignatureLoader::expand_path(exclusion, environment) else {
+            let Some(expanded) = SignatureLoader::expand_exclusion(exclusion, environment) else {
                 continue;
             };
             let expanded_text = expanded.to_string_lossy().into_owned();
@@ -410,19 +407,6 @@ fn inferred_platforms(patterns: &[String]) -> BTreeSet<PlatformKind> {
 fn is_dynamic_pattern(pattern: &str) -> bool {
     let trimmed = pattern.trim();
     trimmed.contains("${") || trimmed.starts_with(['~', '$', '%']) || trimmed.contains('%')
-}
-
-/// An exclusion is path-shaped when the walkers treat it as a path rather than
-/// as a bare file name.
-///
-/// Absoluteness is decided by the described flavor, not by `Path::is_absolute`:
-/// on a Windows runner the host check would reject `C:\\Users\\me\\keep` and
-/// `\\\\server\\share\\keep`, so the scope audit would silently skip the most
-/// ordinary Windows absolute exclusion there is.
-fn is_path_shaped(exclusion: &str, flavor: PathFlavor) -> bool {
-    exclusion.starts_with('~')
-        || exclusion.contains("${")
-        || path_algebra::is_absolute(exclusion, flavor)
 }
 
 fn platform_token(platform: PlatformKind) -> &'static str {

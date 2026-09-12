@@ -40,16 +40,17 @@ impl BlacklistEnvironment {
             home: environment.user_home().map(text),
             temp_dir: environment.temp_dir().to_string_lossy().into_owned(),
             known_content_dirs,
-            system_roots: [
-                environment.program_files(),
-                environment.program_data(),
-                environment.local_app_data(),
-                environment.roaming_app_data(),
-            ]
-            .into_iter()
-            .flatten()
-            .map(text)
-            .collect(),
+            // Only the administrator-writable install roots are protected as
+            // trees. The application-data roots are protected as exact
+            // locations instead: a redirected `LOCALAPPDATA` on a corporate
+            // machine holds the very caches Zenith is meant to clean, and
+            // treating the whole tree as a system root refused every one of
+            // them.
+            system_roots: [environment.program_files(), environment.program_data()]
+                .into_iter()
+                .flatten()
+                .map(text)
+                .collect(),
             local_app_data: environment.local_app_data().map(text),
             roaming_app_data: environment.roaming_app_data().map(text),
         }
@@ -310,16 +311,11 @@ impl Blacklist {
     /// Windows classification, delegated to the environment-independent
     /// classifier so the rules execute on every host.
     fn is_blacklisted_windows(path: &Path, described: &BlacklistEnvironment) -> bool {
-        // The raw spelling carries the namespace prefix that normalization
-        // rewrites, so classify the raw text first. Normalization then goes
-        // through the algebra rather than the host's `Path`, which would treat
-        // `C:\\Windows` as a single component on a POSIX runner.
-        let raw = path.to_string_lossy();
-        if path_algebra::is_unsupported_namespace(&raw, WINDOWS) {
-            return true;
-        }
-        let normalized = path_algebra::normalize(&raw, WINDOWS);
-        classify_windows(&normalized, described).is_denied()
+        // The classifier receives the raw spelling: it accepts only a verbatim
+        // prefix that wraps a drive or UNC path and refuses the rest, and
+        // normalizing first would strip `\\?\GLOBALROOT\...` into a harmless
+        // looking relative path before that rule could see it.
+        classify_windows(&path.to_string_lossy(), described).is_denied()
     }
 
     /// POSIX classification keeps byte-exact `Path` semantics.
@@ -588,6 +584,80 @@ mod tests {
             system_roots: vec![r"Z:\Windows".to_string(), r"D:\Tools\System".to_string()],
             local_app_data: Some(r"D:\Users\me\AppData\Local".to_string()),
             roaming_app_data: Some(r"D:\Users\me\AppData\Roaming".to_string()),
+        }
+    }
+
+    /// A Windows machine whose application data was redirected off the system
+    /// drive, which is ordinary in managed corporate profiles.
+    fn redirected_app_data_environment() -> BlacklistEnvironment {
+        BlacklistEnvironment {
+            home: Some(r"D:\Users\me".to_string()),
+            temp_dir: r"E:\Profiles\me\AppData\Local\Temp".to_string(),
+            known_content_dirs: Vec::new(),
+            system_roots: vec![
+                r"C:\Program Files".to_string(),
+                r"C:\ProgramData".to_string(),
+            ],
+            local_app_data: Some(r"E:\Profiles\me\AppData\Local".to_string()),
+            roaming_app_data: Some(r"E:\Profiles\me\AppData\Roaming".to_string()),
+        }
+    }
+
+    #[test]
+    fn the_public_wrapper_refuses_every_unsupported_namespace() {
+        // `\\?\` is only meaningful when it wraps a drive or UNC path. A
+        // wrapper that normalized before classifying would strip
+        // `\\?\GLOBALROOT\...` into a harmless looking relative path and
+        // allow it, so the check has to see the raw spelling.
+        let environment = windows_environment();
+        for path in [
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1",
+            r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows",
+            r"\\.\PhysicalDrive0",
+            r"\??\C:\Windows",
+        ] {
+            let verdict = classify_windows(path, &environment);
+            assert!(
+                verdict.is_denied(),
+                "expected {path} to be denied, got {verdict:?}"
+            );
+        }
+
+        // A verbatim prefix that does wrap a drive or UNC path stays usable.
+        assert_eq!(
+            classify_windows(r"\\?\C:\Users\me\dev\cache", &environment),
+            BlacklistVerdict::Allowed
+        );
+        assert!(classify_windows(r"\\?\C:\Windows\System32", &environment).is_denied());
+    }
+
+    #[test]
+    fn a_redirected_application_data_root_does_not_protect_its_whole_tree() {
+        // The root itself is protected as a location.
+        let environment = redirected_app_data_environment();
+        for path in [
+            r"E:\Profiles\me\AppData\Local",
+            r"E:\Profiles\me\AppData\Roaming",
+            r"E:\Profiles\me\AppData\Local\",
+        ] {
+            assert!(
+                classify_windows(path, &environment).is_denied(),
+                "expected the application-data root {path} to be denied"
+            );
+        }
+
+        // Its caches are exactly what the cleanup features operate on, so they
+        // must stay cleanable even though the root moved off the system drive.
+        for path in [
+            r"E:\Profiles\me\AppData\Local\D3DSCache",
+            r"E:\Profiles\me\AppData\Local\NVIDIA\DXCache",
+            r"E:\Profiles\me\AppData\Roaming\Vendor\cache\item.bin",
+        ] {
+            assert_eq!(
+                classify_windows(path, &environment),
+                BlacklistVerdict::Allowed,
+                "expected {path} to stay cleanable"
+            );
         }
     }
 

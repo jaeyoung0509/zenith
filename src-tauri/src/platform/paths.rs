@@ -68,7 +68,12 @@ pub trait PlatformPathsProvider: Send + Sync {
             joined(self.user_home()?, rest)
         } else if pattern == "${USER_HOME}" || pattern == "~" {
             self.user_home()?
-        } else if let Some(rest) = pattern.strip_prefix("~/") {
+        } else if let Some(rest) = pattern
+            .strip_prefix("~/")
+            .or_else(|| pattern.strip_prefix("~\\"))
+        {
+            // `~\Documents` is the Windows spelling of the same profile
+            // reference, and the built-in signatures may use either.
             joined(self.user_home()?, rest)
         } else if let Some(rest) = pattern
             .strip_prefix("${LOCAL_APP_DATA}/")

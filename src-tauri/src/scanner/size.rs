@@ -254,11 +254,8 @@ impl SizeCalculator {
     ) -> bool {
         let child_str = child_path.to_string_lossy();
         exclusions.iter().any(|exclusion| {
-            if (exclusion.starts_with('~') || exclusion.starts_with('/'))
-                && crate::signatures::SignatureLoader::expand_path(exclusion, environment)
-                    .is_some_and(|expanded| {
-                        child_path == expanded || child_path.starts_with(expanded)
-                    })
+            if crate::signatures::SignatureLoader::expand_exclusion(exclusion, environment)
+                .is_some_and(|expanded| child_path == expanded || child_path.starts_with(expanded))
             {
                 return true;
             }

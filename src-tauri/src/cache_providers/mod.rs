@@ -611,6 +611,21 @@ mod tests {
             vec![expected],
             "the stated application-data container is the only relocated root"
         );
+        // An approved relocation must not be refused by the blacklist: a
+        // redirected application-data root that protects its whole tree would
+        // make every cache under it cleanable in one place and forbidden in
+        // the other.
+        for root in &relocated {
+            assert!(
+                crate::safety::Blacklist::validate_with(root, &environment).is_ok(),
+                "the approved relocated root {} must stay cleanable",
+                root.display()
+            );
+        }
+        assert!(
+            crate::safety::Blacklist::validate_with(local_app_data.path(), &environment).is_err(),
+            "the relocated application-data root itself stays protected"
+        );
     }
 
     #[test]

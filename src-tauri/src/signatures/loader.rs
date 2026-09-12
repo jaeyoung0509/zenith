@@ -50,6 +50,28 @@ impl SignatureLoader {
         }
     }
 
+    /// Expands an exclusion the walkers treat as a path.
+    ///
+    /// An exclusion is path-shaped when it names the profile (`~`), uses a
+    /// placeholder (`${...}`), or is absolute in the described environment's
+    /// own spelling. Every one of those goes through the same resolution as a
+    /// signature path, so the manifest lint, the size calculator, and the tree
+    /// deleter agree on which exclusions protect a file. Anything else is a
+    /// bare file name matched against the entry's own name.
+    pub fn expand_exclusion(exclusion: &str, environment: &PlatformEnvironment) -> Option<PathBuf> {
+        let trimmed = exclusion.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let path_shaped = trimmed.starts_with('~')
+            || trimmed.contains("${")
+            || crate::platform::path_algebra::is_absolute(trimmed, environment.flavor());
+        if !path_shaped {
+            return None;
+        }
+        Self::expand_path(trimmed, environment)
+    }
+
     /// Rewrites a user-content folder pattern (`~/Documents/x`) to the
     /// environment's resolved folder when it states one. `None` when the
     /// pattern does not name a known folder or nothing is stated for it, so the
@@ -174,6 +196,41 @@ mod tests {
             SignatureLoader::expand_path("~/Movies", &environment),
             Some(PathBuf::from(r"C:\Users\me\Movies"))
         );
+    }
+
+    #[test]
+    fn exclusion_expansion_is_shared_by_every_consumer() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"D:\Users\me")
+                .with_local_app_data(r"E:\Profiles\me\AppData\Local"),
+        ));
+
+        // Every path-shaped spelling expands, including the placeholder form
+        // the size calculator and the tree deleter used to ignore.
+        for (exclusion, expected) in [
+            (r"~\Documents\keep", r"D:\Users\me\Documents\keep"),
+            (
+                "${LOCAL_APP_DATA}/Vendor/config.json",
+                r"E:\Profiles\me\AppData\Local\Vendor\config.json",
+            ),
+            (r"D:\Documents\keep", r"D:\Documents\keep"),
+            (r"\\fileserver\share\keep", r"\\fileserver\share\keep"),
+        ] {
+            assert_eq!(
+                SignatureLoader::expand_exclusion(exclusion, &environment),
+                Some(PathBuf::from(expected)),
+                "exclusion {exclusion}"
+            );
+        }
+
+        // A bare file name is not a path and is matched by name instead.
+        assert_eq!(
+            SignatureLoader::expand_exclusion("settings.json", &environment),
+            None
+        );
+        assert_eq!(SignatureLoader::expand_exclusion("", &environment), None);
     }
 
     #[test]

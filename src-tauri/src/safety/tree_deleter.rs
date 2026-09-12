@@ -1190,12 +1190,9 @@ impl SafeTreeDeleter {
 
     fn is_excluded(path: &Path, exclusions: &[String], environment: &PlatformEnvironment) -> bool {
         exclusions.iter().any(|exclusion| {
-            let exclusion_path = Path::new(exclusion);
-            if (exclusion.starts_with('~') || exclusion_path.is_absolute())
-                && SignatureLoader::expand_path(exclusion, environment).is_some_and(|expanded| {
-                    Self::paths_equal(path, &expanded) || Self::path_starts_with(path, &expanded)
-                })
-            {
+            if SignatureLoader::expand_exclusion(exclusion, environment).is_some_and(|expanded| {
+                Self::paths_equal(path, &expanded) || Self::path_starts_with(path, &expanded)
+            }) {
                 return true;
             }
             path.file_name()
