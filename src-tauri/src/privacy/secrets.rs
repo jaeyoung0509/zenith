@@ -8,6 +8,19 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+/// Where a scanned line came from.
+///
+/// An assignment is reported broadly in a credential-bearing file, where a
+/// password may contain punctuation, and conservatively in source, where the
+/// same text is usually an identifier or an expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanContext {
+    /// Source, tests, and documentation.
+    Source,
+    /// `.env`, credential stores, and configuration files.
+    CredentialFile,
+}
+
 /// A credential pattern. Detection and redaction are separate regexes because
 /// their correct semantics differ: a private-key header is enough to detect a
 /// secret but redaction must remove the whole key block; an assignment whose
@@ -25,6 +38,10 @@ pub struct SecretPattern {
     /// must report real exposures, not every line that mentions a password.
     /// A detector that carries a guard therefore captures the value first.
     pub detector_guard: Option<fn(&str) -> bool>,
+    /// Detector for credential-bearing files, where an assignment is reported
+    /// even when its value is not credential-shaped. `None` means the detector
+    /// above applies in both contexts.
+    pub credential_file_detector: Option<Regex>,
 }
 
 macro_rules! pattern {
@@ -35,6 +52,7 @@ macro_rules! pattern {
             redactor: Regex::new($regex).expect("valid secret redactor"),
             replacement: $replacement,
             detector_guard: None,
+            credential_file_detector: None,
         }
     };
 }
@@ -47,6 +65,7 @@ macro_rules! block_pattern {
             redactor: Regex::new($redactor).expect("valid secret redactor"),
             replacement: $replacement,
             detector_guard: None,
+            credential_file_detector: None,
         }
     };
 }
@@ -55,17 +74,30 @@ macro_rules! block_pattern {
 /// replacement expressed in terms of the redactor's capture groups.
 macro_rules! split_pattern {
     ($category:expr, $redactor:expr, $detector:expr, $replacement:expr) => {
-        split_pattern!($category, $redactor, $detector, $replacement, None)
+        split_pattern!($category, $redactor, $detector, $replacement, None, None)
     };
     ($category:expr, $redactor:expr, $detector:expr, $replacement:expr, $guard:expr) => {
+        split_pattern!($category, $redactor, $detector, $replacement, $guard, None)
+    };
+    (
+        $category:expr,
+        $redactor:expr,
+        $detector:expr,
+        $replacement:expr,
+        $guard:expr,
+        $credential_file_detector:expr
+    ) => {{
+        let credential_file_detector: Option<String> = $credential_file_detector;
         SecretPattern {
             category: $category,
             detector: Regex::new(&$detector).expect("valid secret detector"),
             redactor: Regex::new(&$redactor).expect("valid secret redactor"),
             replacement: $replacement,
             detector_guard: $guard,
+            credential_file_detector: credential_file_detector
+                .map(|source| Regex::new(&source).expect("valid credential file detector")),
         }
-    };
+    }};
 }
 
 /// Credential key names that introduce an assigned value, shared by every
@@ -80,6 +112,25 @@ const MIN_DETECTED_QUOTED_VALUE: usize = 8;
 /// turn `password = some_identifier` into a critical finding.
 const MIN_DETECTED_UNQUOTED_VALUE: usize = 12;
 
+/// The `key =` prefix shared by every assignment shape. Its captured group is
+/// what survives redaction, so the value is always the shape's second group.
+fn assignment_prefix(quote: Option<char>) -> String {
+    match quote {
+        Some(quote) => format!(r#"(?i)(["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*{quote})"#),
+        None => format!(r#"(?i)(["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*)"#),
+    }
+}
+
+/// A quoted value body in which `\\.` consumes an escaped character, so an
+/// escaped quote inside the value is not treated as its terminator.
+fn quoted_value_body(quote: char) -> String {
+    format!(r"(?:\\.|[^{quote}\\\r\n])")
+}
+
+/// A value that reached the end of its line, possibly cut off in the middle of
+/// an escape sequence or a Windows line ending.
+const LINE_END: &str = r"\\?\r?";
+
 /// Assignment shapes for `quote`-delimited values.
 ///
 /// Detection is stricter than redaction on purpose: a sanitizer must
@@ -87,78 +138,98 @@ const MIN_DETECTED_UNQUOTED_VALUE: usize = 12;
 /// report ordinary source as an exposed credential. Every shape therefore
 /// carries the same prefix and replacement, and only the value width differs.
 fn quoted_assignment_patterns(quote: char, patterns: &mut Vec<SecretPattern>) {
-    // `\\.` consumes an escaped character, so an escaped quote inside the
-    // value is not treated as its terminator.
-    let value = format!(r"(?:\\.|[^{quote}\\\r\n])");
-    let prefix = format!(r#"(?i)(["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*{quote})"#);
+    let value = quoted_value_body(quote);
+    let prefix = assignment_prefix(Some(quote));
     // A closing quote followed by anything other than a delimiter does not
-    // terminate the value: an unterminated-quote fallback would leave the
-    // remainder as a `[REDACTED]SECRET_SUFFIX` leak, so the whole line is the
-    // secret.
-    let continuation = format!(r#"{prefix}({value}*){quote}[^\s,;:)\]}}>]"#);
+    // terminate the value: everything from that point to the end of the line is
+    // the secret, because a sanitizer that stopped at the second quote would
+    // expose whatever follows it.
+    let invalid_close = format!(r#"{prefix}({value}*){quote}[^\s,;:)\]}}>][^\r\n]*"#);
     patterns.push(split_pattern!(
         "Credential assignment",
-        continuation,
-        continuation,
+        invalid_close,
+        invalid_close,
         "${1}[REDACTED]"
     ));
     let complete_detector = format!(r#"{prefix}({value}{{{MIN_DETECTED_QUOTED_VALUE},}}){quote}"#);
     let complete_redactor = format!(r#"{prefix}({value}+)({quote})"#);
+    // Any non-empty quoted value is reported in a credential file: short
+    // passwords are normal there and a missed one costs more than a finding.
+    let complete_credential_file_detector = format!(r#"{prefix}({value}+)({quote})"#);
     patterns.push(split_pattern!(
         "Credential assignment",
         complete_redactor,
         complete_detector,
-        "${1}[REDACTED]${3}"
+        "${1}[REDACTED]${3}",
+        None,
+        Some(complete_credential_file_detector)
     ));
-    // Opening quote with no closing quote at all: the value runs to the end of
-    // the line (or input) instead of stopping at whitespace, because the
-    // closing quote may have been cut off by truncation. The detector requires
-    // exactly that end-of-line shape, so a closed quote further along the line
-    // is left to the complete shape above instead of matching here as well.
-    let open_detector = format!(r#"(?m){prefix}({value}{{{MIN_DETECTED_QUOTED_VALUE},}})$"#);
-    let open_redactor = format!(r#"{prefix}({value}*)"#);
+    // An opening quote with no closing quote runs to the end of the line: the
+    // closing quote may have been cut off by truncation and whitespace is part
+    // of the value. The detector requires exactly that end-of-line shape, so a
+    // closed quote further along the line is left to the shapes above.
+    let open_detector =
+        format!(r#"(?m){prefix}({value}{{{MIN_DETECTED_QUOTED_VALUE},}}{LINE_END})$"#);
+    let open_redactor = format!(r#"(?m){prefix}({value}*{LINE_END})$"#);
+    let open_credential_file_detector = format!(r#"(?m){prefix}({value}+{LINE_END})$"#);
     patterns.push(split_pattern!(
         "Credential assignment",
         open_redactor,
         open_detector,
-        "${1}[REDACTED]"
+        "${1}[REDACTED]",
+        None,
+        Some(open_credential_file_detector)
     ));
 }
+
+/// Longest unquoted value that still needs a mixed case to be reported in
+/// source. A single-case run this long is a generated key (a hex digest, a
+/// base64 blob) rather than an identifier.
+const LONG_DETECTED_UNQUOTED_VALUE: usize = 32;
 
 /// Whether an assigned value reads like a generated secret rather than an
 /// identifier, a path, or a function call.
 ///
-/// The scanner runs over source trees, where `let token = platform_token(…)`
-/// or `secret: SecretString` is ordinary code. Requiring the value to carry
-/// both a letter and a digit keeps those out of the findings — identifiers are
-/// spelled out, generated keys are mixed — while still reporting a short
-/// lowercase key such as `abcdef123456`.
+/// The scanner runs over source trees, where `let token = platform_token2`,
+/// `secret: SecretString`, or `tokens.get('ring')` is ordinary code. A
+/// generated key carries a digit together with a mixed case, or is long enough
+/// that an identifier is implausible, so those are the shapes source reports.
+/// A credential file is scanned broadly instead, because a password there may
+/// be lower case, short, or full of punctuation.
 fn looks_like_a_secret(value: &str) -> bool {
+    let has_digit = value.chars().any(|c| c.is_ascii_digit());
+    let has_lowercase = value.chars().any(|c| c.is_ascii_lowercase());
+    let has_uppercase = value.chars().any(|c| c.is_ascii_uppercase());
     value.len() >= MIN_DETECTED_UNQUOTED_VALUE
-        && value.chars().any(|c| c.is_ascii_digit())
-        && value.chars().any(|c| c.is_ascii_alphabetic())
+        && has_digit
+        && ((has_lowercase && has_uppercase) || value.len() >= LONG_DETECTED_UNQUOTED_VALUE)
 }
 
 /// Assignment shapes for unquoted values.
 fn unquoted_assignment_patterns(patterns: &mut Vec<SecretPattern>) {
-    let prefix = format!(r#"(?i)(["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*)"#);
+    let prefix = assignment_prefix(None);
     // Redaction runs to the next whitespace or newline: anything narrower
     // (`&`, `;`, `?`, `,`) leaves a credential suffix behind, and a sanitizer
     // must over-redact rather than under-redact.
     let redactor = format!(r#"{prefix}([^\s"'\r\n]{{2,}})"#);
-    // Detection only accepts credential-shaped tokens, so identifiers, paths,
-    // and punctuation-heavy source are not reported as secrets. Its prefix does
-    // not capture: the guard inspects the detector's first capture group, which
-    // is the value.
+    // Source detection only accepts credential-shaped tokens, so identifiers,
+    // paths, and punctuation-heavy code are not reported as secrets. Its prefix
+    // does not capture: the guard inspects the detector's first capture group,
+    // which is the value.
     let detector_prefix = format!(r#"(?i)["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*"#);
     let detector =
         format!(r#"{detector_prefix}([A-Za-z0-9+/=_.-]{{{MIN_DETECTED_UNQUOTED_VALUE},}})"#);
+    // A credential file holds exactly this shape, so punctuation is part of the
+    // value: `password=p@ssw0rd!very-secret` is a credential there while the
+    // same text in source is an expression.
+    let credential_file_detector = format!(r#"{prefix}([^\s"'\r\n]+)"#);
     patterns.push(split_pattern!(
         "Credential assignment",
         redactor,
         detector,
         "${1}[REDACTED]",
-        Some(looks_like_a_secret)
+        Some(looks_like_a_secret),
+        Some(credential_file_detector)
     ));
 }
 
@@ -304,22 +375,45 @@ pub fn redact(text: &str) -> String {
 /// Whether the text contains any credential shape. Used by the scanner, which
 /// intentionally never extracts or returns the matched value.
 pub fn contains_secret(text: &str) -> bool {
+    contains_secret_in(text, ScanContext::Source)
+}
+
+/// Context-aware [`contains_secret`].
+pub fn contains_secret_in(text: &str, context: ScanContext) -> bool {
     patterns()
         .iter()
-        .any(|pattern| detector_matches(pattern, text))
+        .any(|pattern| detector_matches(pattern, text, context))
 }
 
 /// Returns the category of the first matching credential shape without
 /// extracting the value.
 pub fn match_category(text: &str) -> Option<&'static str> {
+    match_category_in(text, ScanContext::Source)
+}
+
+/// Context-aware [`match_category`].
+///
+/// A credential-bearing file reports an assigned value that source would not:
+/// `password=p@ssw0rd!very-secret` is a credential there, while the same text in
+/// source is an expression.
+pub fn match_category_in(text: &str, context: ScanContext) -> Option<&'static str> {
     patterns()
         .iter()
-        .find(|pattern| detector_matches(pattern, text))
+        .find(|pattern| detector_matches(pattern, text, context))
         .map(|pattern| pattern.category)
 }
 
 /// Whether a pattern's detector applies, including its optional value guard.
-fn detector_matches(pattern: &SecretPattern, text: &str) -> bool {
+///
+/// The guard only narrows the source context: it exists so identifiers are not
+/// reported as credentials, and a credential file is scanned for values of any
+/// shape instead.
+fn detector_matches(pattern: &SecretPattern, text: &str, context: ScanContext) -> bool {
+    if context == ScanContext::CredentialFile {
+        if let Some(broad) = &pattern.credential_file_detector {
+            return broad.is_match(text);
+        }
+    }
     match pattern.detector_guard {
         None => pattern.detector.is_match(text),
         Some(guard) => pattern
@@ -527,6 +621,43 @@ mod tests {
         );
     }
 
+    /// A later quote must not end the redaction. Once a closing quote is seen
+    /// followed by a non-delimiter, the value is invalid and everything to the
+    /// end of the line belongs to the secret, however many quotes follow.
+    #[test]
+    fn malformed_quoted_credentials_never_expose_a_suffix() {
+        let cases = vec![
+            assignment("client_secret", "\"abc\"def\"ghiVERYSECRET"),
+            assignment("client_secret", "\"abc\"def\"ghi\"VERYSECRET"),
+            assignment("token", "'abc'def'ghiVERYSECRET"),
+            assignment("client_secret", "\"abc\\\"defVERYSECRET"),
+            assignment("password", "\"abc defVERYSECRET"),
+        ];
+        for input in &cases {
+            let output = sanitized(input);
+            assert!(
+                !output.contains("VERYSECRET"),
+                "secret suffix survived on `{input}`: {output}"
+            );
+            assert!(
+                !output.contains("[REDACTED]ghi"),
+                "redaction stopped at a later quote: {output}"
+            );
+            assert_eq!(
+                sanitized(&output),
+                output,
+                "redaction must be idempotent: {output}"
+            );
+        }
+
+        // Everything after the invalid close is removed, not just the first
+        // character that made the close invalid.
+        assert_eq!(
+            sanitized(&assignment("client_secret", "\"abc\"def\"ghiVERYSECRET")),
+            assignment("client_secret", "\"[REDACTED]")
+        );
+    }
+
     #[test]
     fn private_key_material_is_redacted_as_a_whole_block() {
         let block = format!(
@@ -669,12 +800,53 @@ mod tests {
             "password",
             "\"supersecretvalue\""
         )));
-        assert!(contains_secret(&assignment("password", "hunter2hunter2")));
-        // `platform_token` has no digit, so the value reads as an identifier.
+        // A generated value in source: mixed case plus a digit.
+        assert!(contains_secret(&assignment("password", "Abc123XyZ456")));
+        // `platform_token2` is an identifier, not a generated key.
+        assert!(!contains_secret(&assignment("token", "platform_token2")));
         assert!(!contains_secret("let token = platform_token(platform);"));
         assert!(!contains_secret(&assignment("secret", "SecretString")));
         assert_eq!(
             match_category(&assignment("password", "\"abc defVERYSECRET")),
+            Some("Credential assignment")
+        );
+    }
+
+    /// A credential-bearing file is scanned for values of any shape, because a
+    /// missed password costs more there than a finding for a literal one.
+    #[test]
+    fn credential_files_report_assigned_values_source_would_not() {
+        let punctuation = assignment("password", "p@ssw0rd!very-secret");
+        assert!(
+            !contains_secret(&punctuation),
+            "source must not read an expression as a credential"
+        );
+        assert!(contains_secret_in(
+            &punctuation,
+            ScanContext::CredentialFile
+        ));
+
+        let identifier = assignment("token", "platform_token2");
+        assert!(!contains_secret(&identifier));
+        assert!(contains_secret_in(&identifier, ScanContext::CredentialFile));
+
+        let short_quoted = assignment("password", "\"short\"");
+        assert!(!contains_secret(&short_quoted));
+        assert!(contains_secret_in(
+            &short_quoted,
+            ScanContext::CredentialFile
+        ));
+
+        let lowercase = assignment("api_key", "abcdef123456");
+        assert!(!contains_secret(&lowercase));
+        assert!(contains_secret_in(&lowercase, ScanContext::CredentialFile));
+
+        // Provider shapes are reported in either context.
+        let provider = joined(&["github_pat_", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"]);
+        assert!(contains_secret(&provider));
+        assert!(contains_secret_in(&provider, ScanContext::CredentialFile));
+        assert_eq!(
+            match_category_in(&punctuation, ScanContext::CredentialFile),
             Some("Credential assignment")
         );
     }

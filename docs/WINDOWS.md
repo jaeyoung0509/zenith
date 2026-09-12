@@ -13,7 +13,7 @@ must remain disabled rather than reporting a successful no-op.
 - Rust stable MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`).
   The crate declares `rust-version = "1.95.0"`; that is the oldest toolchain the
   locked dependency set builds with.
-- Node.js 22 or newer and pnpm 9
+- Node.js 22.22.2 or newer on the 22.x line (24.15+ or 26+) and pnpm 9
 - WebView2 Runtime (normally preinstalled on supported Windows versions; the
   installer carries Microsoft's offline installer, so it is not a prerequisite
   for installing a release build)

@@ -199,10 +199,18 @@ pub fn inspect(
             };
             scanned += 1;
             // Report every credential shape in the file, bounded per file so a
-            // generated file cannot flood the result.
+            // generated file cannot flood the result. A configuration or
+            // credential file is read broadly: a password there may be short or
+            // full of punctuation, while the same text in source is usually an
+            // expression.
+            let context = if is_credential_file(&relative, entry.path()) {
+                secrets::ScanContext::CredentialFile
+            } else {
+                secrets::ScanContext::Source
+            };
             let mut file_findings = 0usize;
             for (line_index, line) in text.lines().enumerate() {
-                if let Some(category) = secrets::match_category(line) {
+                if let Some(category) = secrets::match_category_in(line, context) {
                     push_finding(&mut findings, project_id, SafetyFindingKind::SecretsExposure, FindingSeverity::Critical, category, "local_secret_detector", Some(relative.clone()), Some(line_index as u32 + 1), now, "Remove the exposed value, rotate it with the provider, and keep secrets outside the repository.", None, &dismissed);
                     file_findings += 1;
                     if file_findings >= MAX_FINDINGS_PER_FILE {
@@ -289,6 +297,40 @@ fn safe_entry(entry: &DirEntry) -> bool {
         ".git" | "node_modules" | "target" | "dist" | "build" | ".venv" | "vendor"
     )
 }
+/// Extensions that carry code or prose, where an assignment is an expression
+/// rather than a credential.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "js", "svelte", "py", "go", "java", "kt", "rb", "php", "md", "txt", "sh",
+];
+
+/// Extensions that carry configuration or credential material.
+const CREDENTIAL_EXTENSIONS: &[&str] = &[
+    "env",
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "jsonc",
+    "ini",
+    "conf",
+    "cfg",
+    "properties",
+    "npmrc",
+    "netrc",
+    "pem",
+    "key",
+    "p12",
+    "pfx",
+];
+
+/// The lowercased extension of a path, or an empty string.
+fn extension_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
 fn is_scannable_file(path: &Path, relative: &str) -> bool {
     if is_recognized_config(relative) {
         return true;
@@ -300,32 +342,33 @@ fn is_scannable_file(path: &Path, relative: &str) -> bool {
     if is_scannable_name(&name) {
         return true;
     }
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default(),
-        "rs" | "ts"
-            | "js"
-            | "svelte"
-            | "py"
-            | "go"
-            | "java"
-            | "kt"
-            | "rb"
-            | "php"
-            | "env"
-            | "toml"
-            | "yaml"
-            | "yml"
-            | "json"
-            | "md"
-            | "txt"
-            | "sh"
-            | "pem"
-            | "key"
-            | "p12"
-            | "pfx"
-    )
+    let extension = extension_of(path);
+    SOURCE_EXTENSIONS.contains(&extension.as_str())
+        || CREDENTIAL_EXTENSIONS.contains(&extension.as_str())
+}
+
+/// Whether a file holds configuration or credentials rather than code.
+///
+/// An assignment in one of these is reported even when its value is not
+/// credential-shaped: `password=p@ssw0rd!very-secret` is a credential in a
+/// `.env` file, while the same text in source is an expression. The classifier
+/// is deliberately name- and extension-based so it cannot drift from the file
+/// selection rules above, and the extension decides for a stem like
+/// `credentials.rs`, which is source that happens to share a credential file's
+/// name.
+fn is_credential_file(relative: &str, path: &Path) -> bool {
+    if is_recognized_config(relative) {
+        return true;
+    }
+    let extension = extension_of(path);
+    if SOURCE_EXTENSIONS.contains(&extension.as_str()) {
+        return false;
+    }
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    is_scannable_name(&name) || CREDENTIAL_EXTENSIONS.contains(&extension.as_str())
 }
 
 /// Dotfiles such as `.env` have no extension and must be selected by name.
@@ -767,8 +810,13 @@ mod tests {
                     continue;
                 };
                 scanned_files += 1;
+                let context = if is_credential_file(&relative, entry.path()) {
+                    secrets::ScanContext::CredentialFile
+                } else {
+                    secrets::ScanContext::Source
+                };
                 for (line_index, line) in text.lines().enumerate() {
-                    if let Some(category) = secrets::match_category(line) {
+                    if let Some(category) = secrets::match_category_in(line, context) {
                         hits.push(format!("{relative}:{}: {category}", line_index + 1));
                     }
                 }
@@ -802,6 +850,35 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("abcdefghijklmnop1234"));
         assert_eq!(result.findings[0].line_start, Some(1));
+    }
+
+    /// The scan context follows the file: a credential file reports a password
+    /// with punctuation, while the same kind of assignment in source must not
+    /// report an identifier.
+    #[test]
+    fn credential_files_are_scanned_broadly_and_source_is_not() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(".env"),
+            format!("{}={}\n", "password", "p@ssw0rd!very-secret"),
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("main.ts"),
+            format!("let token = {};\n", "platform_token2"),
+        )
+        .unwrap();
+
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&simulated(), &roots, &[], 10);
+
+        assert_eq!(result.findings.len(), 1);
+        let finding = &result.findings[0];
+        assert_eq!(finding.kind, SafetyFindingKind::SecretsExposure);
+        assert_eq!(finding.relative_path.as_deref(), Some(".env"));
+        assert_eq!(finding.line_start, Some(1));
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("p@ssw0rd"));
     }
     #[test]
     fn config_parser_never_returns_args_headers_or_env_values() {

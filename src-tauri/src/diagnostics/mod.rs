@@ -94,13 +94,19 @@ fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictP
     if fs::create_dir_all(dir).is_err() {
         return;
     }
-    // Best effort for the directory; the file below is fail-closed.
+    // Best effort for the directory; the files below are fail-closed.
     let _ = restrict(dir, 0o700);
 
     let file_path = dir.join("zenith.log");
-    // Repair and rotate before appending. A failure means the log is not known
-    // to be owner-only, so the line is dropped rather than written insecurely.
-    if rotate_log_if_needed(dir, &file_path, restrict).is_err() {
+    // Repair every log file before anything is written. Rotation only rewrites
+    // `zenith.log`, so a `0644` `zenith.log.1` created by an older Zenith would
+    // otherwise stay readable until the next rotation, possibly for months. A
+    // failure means a log is not known to be owner-only, so the line is dropped
+    // rather than written insecurely.
+    if repair_log_permissions(dir, restrict).is_err() {
+        return;
+    }
+    if rotate_log_if_needed(dir, &file_path).is_err() {
         return;
     }
 
@@ -130,36 +136,49 @@ fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictP
     }
 }
 
+/// Repairs the mode of every diagnostics log file, existing or not.
+///
+/// A symlinked log path is refused instead of followed: repairing or writing
+/// through it would reach a file outside the log directory, and the log would
+/// be redirected by whoever created the link.
+fn repair_log_permissions(dir: &Path, restrict: RestrictPermissions) -> std::io::Result<()> {
+    for name in ["zenith.log", "zenith.log.1"] {
+        let path = dir.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(std::io::Error::other(
+                        "the diagnostics log path must not be a symlink",
+                    ));
+                }
+                restrict(&path, 0o600)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 /// Rotates the log into `zenith.log.1` once it exceeds the threshold.
 ///
-/// The permission repair runs before the rename: a log created by an older
-/// Zenith as `0644` must not be rotated into a broadly readable backup, and an
-/// existing `0644` backup must not survive the rotation either. A repair
-/// failure is returned so the caller fails closed instead of continuing with a
-/// log whose readability is unknown.
-fn rotate_log_if_needed(
-    dir: &Path,
-    file_path: &Path,
-    restrict: RestrictPermissions,
-) -> std::io::Result<()> {
+/// Both files were repaired to `0600` before this runs, and a rename inside one
+/// directory preserves the mode, so a world-readable legacy log can never
+/// become a world-readable backup.
+fn rotate_log_if_needed(dir: &Path, file_path: &Path) -> std::io::Result<()> {
     let Ok(metadata) = fs::metadata(file_path) else {
-        // No existing log to repair or rotate.
+        // No existing log to rotate.
         return Ok(());
     };
-    restrict(file_path, 0o600)?;
     if metadata.len() <= MAX_LOG_BYTES {
         return Ok(());
     }
 
     let backup = dir.join("zenith.log.1");
-    if fs::rename(file_path, &backup).is_err() {
-        // Rotation is best effort: the log itself was just made owner-only, so
-        // appending to it stays safe.
-        return Ok(());
-    }
-    // The rename preserves the mode; re-assert it so the invariant holds on a
-    // platform where it would not.
-    restrict(&backup, 0o600)
+    // Rotation is best effort: the log itself was just made owner-only, so
+    // appending to it stays safe even when the rename is refused.
+    let _ = fs::rename(file_path, &backup);
+    Ok(())
 }
 
 pub fn get_recent_errors(limit: usize) -> Vec<String> {
@@ -563,6 +582,64 @@ mod tests {
         write_log_line(dir.path(), "test", "second rotation", restrict_permissions);
         assert_eq!(mode_of(&log), 0o600);
         assert_eq!(mode_of(&backup), 0o600);
+    }
+
+    /// A backup written by an older Zenith stays `0644` until the next
+    /// rotation, which may be months away. Every write repairs it instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_world_readable_backup_is_repaired_on_the_next_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        let backup = dir.path().join("zenith.log.1");
+        std::fs::write(&log, b"current log\n").unwrap();
+        std::fs::write(&backup, b"legacy rotated log\n").unwrap();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_log_line(dir.path(), "test", "after upgrade", restrict_permissions);
+
+        assert_eq!(
+            mode_of(&backup),
+            0o600,
+            "the legacy backup must be repaired"
+        );
+        assert_eq!(mode_of(&log), 0o600);
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "legacy rotated log\n",
+            "repair must not disturb the backup's contents"
+        );
+        let written = std::fs::read_to_string(&log).unwrap();
+        assert!(written.contains("after upgrade"), "{written}");
+    }
+
+    /// A symlinked log path must not be followed: repairing or writing through
+    /// it would reach a file outside the log directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_log_path_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere.log");
+        std::fs::write(&target, b"outside\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("zenith.log")).unwrap();
+
+        write_log_line(
+            dir.path(),
+            "test",
+            "must not be written",
+            restrict_permissions,
+        );
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside\n");
+        assert_eq!(
+            mode_of(&target),
+            0o644,
+            "the link target must keep its own mode"
+        );
     }
 
     /// The repair is not advisory: when the mode cannot be fixed, the line is

@@ -43,7 +43,11 @@ jobs:
         id: node-cache
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          # The exact floor of the dependency set (jsdom 30 requires
+          # ^22.22.2 || ^24.15.0 || >=26.0.0). The gate runs on the floor so a
+          # dependency that raises it fails here instead of on a user's machine;
+          # the packaging jobs cover the newest patch of the line.
+          node-version: '22.22.2'
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
 

@@ -233,7 +233,10 @@ Requirements:
 - Rust 1.95 or newer. The crate declares `rust-version = "1.95.0"` in
   `src-tauri/Cargo.toml`, and CI verifies the build against exactly that
   toolchain.
-- Node.js 22 or newer
+- Node.js 22.22.2 or newer on the 22.x line (24.15+ or 26+ also work);
+  `package.json` declares this floor, which comes from the frontend
+  toolchain, and CI runs the typecheck and test gate on exactly that
+  version.
 - pnpm
 - `just` (recommended)
 

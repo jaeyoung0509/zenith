@@ -5,6 +5,9 @@
   "license": "MIT",
   "repository": "https://github.com/jaeyoung0509/zenith",
   "type": "module",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/verify_tailwind_build.mjs",
