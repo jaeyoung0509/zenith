@@ -112,21 +112,26 @@ pub trait PlatformPathsProvider: Send + Sync {
             PathBuf::from(pattern)
         };
 
-        // Normalize without following symlinks. POSIX keeps the byte-exact
-        // `Path` form; Windows uses the flavor-parameterized algebra, which is
-        // also what a simulated Windows environment is checked against.
-        let normalized = if flavor.is_windows() {
+        // The host's own `Path` rules apply only when the described environment
+        // is the host's: that keeps POSIX normalization byte-exact. A simulated
+        // environment is normalized by the algebra for its own flavor, so a
+        // POSIX environment produces POSIX spellings on a Windows runner.
+        let normalized = if flavor == crate::platform::path_algebra::PathFlavor::current() {
+            crate::safety::Blacklist::normalize_path(&raw_path)
+        } else {
             PathBuf::from(crate::platform::path_algebra::normalize(
                 &raw_path.to_string_lossy(),
                 flavor,
             ))
-        } else {
-            crate::safety::Blacklist::normalize_path(&raw_path)
         };
 
         // Safety: the path must be absolute under its own flavor's rules and
         // must not be a broad root such as `C:\` or `/`.
-        if flavor.is_windows() {
+        if flavor == crate::platform::path_algebra::PathFlavor::current() {
+            if !normalized.is_absolute() || is_broad_root(&normalized) {
+                return None;
+            }
+        } else {
             let text = normalized.to_string_lossy();
             if !crate::platform::path_algebra::is_absolute(&text, flavor) {
                 return None;
@@ -134,8 +139,6 @@ pub trait PlatformPathsProvider: Send + Sync {
             if crate::platform::path_algebra::is_root(&text, flavor) {
                 return None;
             }
-        } else if !normalized.is_absolute() || is_broad_root(&normalized) {
-            return None;
         }
 
         Some(normalized)
@@ -965,6 +968,42 @@ mod tests {
             environment.expand_placeholder("$TMPDIR"),
             Some(dir.path().join("temp"))
         );
+    }
+
+    #[test]
+    fn a_simulated_environment_never_leaks_the_hosts_separators() {
+        // A POSIX environment simulated on a Windows runner used to normalize
+        // through the host's `Path` and come back with backslashes, which then
+        // stopped matching anything. Each case asserts the described flavor's
+        // spelling, so the macOS and Windows runners check the two directions
+        // of the same invariant.
+        let cases = [
+            (
+                PathFlavor::Posix,
+                "/home/tester",
+                "Downloads/cache",
+                "/home/tester/Downloads/cache",
+                '\\',
+            ),
+            (
+                PathFlavor::Windows,
+                r"D:\Users\tester",
+                r"Documents\cache",
+                r"D:\Users\tester\Documents\cache",
+                '/',
+            ),
+        ];
+        for (flavor, home, tail, expected, foreign) in cases {
+            let environment = SimulatedPaths::new().with_flavor(flavor).with_home(home);
+            let expanded = environment
+                .expand_placeholder(&format!("~/{tail}"))
+                .unwrap_or_else(|| panic!("{flavor} environment did not expand ~/{tail}"));
+            assert_eq!(expanded.to_string_lossy(), expected);
+            assert!(
+                !expanded.to_string_lossy().contains(foreign),
+                "{flavor} expansion leaked the host separator: {expanded:?}"
+            );
+        }
     }
 
     #[test]
