@@ -146,7 +146,10 @@ impl SymlinkGuard {
     }
 
     /// Verifies that the path itself is safe. If it is a symlink, ensures its target does not point to a blacklisted destination.
-    pub fn validate_symlink_target(path: &Path) -> Result<(), ZenithError> {
+    pub fn validate_symlink_target(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         if Self::is_symlink(path) {
             // Read link destination
             if let Ok(target) = fs::read_link(path) {
@@ -157,23 +160,29 @@ impl SymlinkGuard {
                 };
 
                 // Target cannot be blacklisted
-                crate::safety::Blacklist::validate(&resolved_target)?;
+                crate::safety::Blacklist::validate_with(&resolved_target, environment)?;
             }
         }
         Ok(())
     }
 
     /// Canonicalizes the path and verifies that its canonical location does not violate Blacklist.
-    pub fn validate_canonical_blacklist(path: &Path) -> Result<(), ZenithError> {
+    pub fn validate_canonical_blacklist(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         if let Ok(canonical) = fs::canonicalize(path) {
-            crate::safety::Blacklist::validate(&canonical)?;
+            crate::safety::Blacklist::validate_with(&canonical, environment)?;
         }
         Ok(())
     }
 
     /// Strict variant for mutation paths: canonicalization failure aborts the
     /// affected mutation instead of being treated as safe.
-    pub fn validate_canonical_blacklist_strict(path: &Path) -> Result<(), ZenithError> {
+    pub fn validate_canonical_blacklist_strict(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         let canonical = fs::canonicalize(path).map_err(|error| {
             ZenithError::ChangedSinceScan(format!(
                 "Could not verify canonical location for {}: {}",
@@ -181,7 +190,7 @@ impl SymlinkGuard {
                 error
             ))
         })?;
-        crate::safety::Blacklist::validate(&canonical)?;
+        crate::safety::Blacklist::validate_with(&canonical, environment)?;
         Ok(())
     }
 
@@ -299,6 +308,46 @@ mod tests {
         assert!(!is_reparse_tag_name_surrogate(0));
     }
 
+    #[test]
+    fn a_path_that_cannot_be_inspected_is_never_verified_by_the_strict_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-created-yet");
+
+        // Read-side helpers report "no link to follow" for a missing path.
+        assert!(!SymlinkGuard::is_symlink(&missing));
+        let environment = crate::platform::PlatformEnvironment::native();
+        assert!(SymlinkGuard::validate_symlink_target(&missing, &environment).is_ok());
+
+        // Mutation-side helpers must fail closed instead of mistaking an
+        // unreadable path for a verified-safe one.
+        assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
+        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_detected_even_when_their_targets_do_not_exist() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plain.txt");
+        fs::write(&file, b"payload").unwrap();
+        let link = dir.path().join("link");
+        symlink(&file, &link).unwrap();
+        let dangling = dir.path().join("dangling");
+        symlink(dir.path().join("missing-target"), &dangling).unwrap();
+
+        assert!(SymlinkGuard::is_symlink(&link));
+        assert!(SymlinkGuard::is_symlink_strict(&link).unwrap());
+        assert!(!SymlinkGuard::is_symlink(&file));
+        assert!(!SymlinkGuard::is_symlink_strict(&file).unwrap());
+
+        // A link is a link even when following it leads nowhere, so a dangling
+        // link is still refused as a traversal path.
+        assert!(SymlinkGuard::is_symlink(&dangling));
+        assert!(SymlinkGuard::is_symlink_strict(&dangling).unwrap());
+    }
+
     #[cfg(windows)]
     #[test]
     fn reparse_classification_returns_error_for_unopenable_paths() {
@@ -323,13 +372,19 @@ mod tests {
                 panic!("target={plain_workspace:?}, base={canonical_profile:?}: {error}")
             });
         assert!(SymlinkGuard::validate_components_between(&other, &canonical_profile).is_err());
-        assert!(
-            crate::developer_artifacts::validate_workspace_root(&plain_workspace, &profile).is_ok()
-        );
+        let environment = crate::platform::PlatformEnvironment::simulated(
+            crate::platform::path_algebra::PathFlavor::Windows,
+        )
+        .with_home(profile.clone());
+        assert!(crate::developer_artifacts::validate_workspace_root(
+            &environment,
+            &plain_workspace
+        )
+        .is_ok());
         // A relocated workspace outside the selected profile (D:\dev-style)
         // is accepted under anchored symlink validation; the cross-account
         // traversal check above still rejects reading through another profile.
-        assert!(crate::developer_artifacts::validate_workspace_root(&other, &profile).is_ok());
+        assert!(crate::developer_artifacts::validate_workspace_root(&environment, &other).is_ok());
     }
 
     #[cfg(windows)]

@@ -1,37 +1,47 @@
 use crate::models::{LocalModelItem, ModelSource};
+use crate::platform::PlatformEnvironment;
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub struct LocalModelScanner;
 
 impl LocalModelScanner {
+    /// Resolves one model search root through the environment's own path rules
+    /// and keeps it only when the stated machine actually has that directory.
+    fn resolve_root(pattern: &str, environment: &PlatformEnvironment) -> Option<PathBuf> {
+        SignatureLoader::expand_path(pattern, environment).filter(|root| root.exists())
+    }
+
     /// Discovers all local models across Ollama, HuggingFace Hub, LM Studio, and Apple MLX.
-    pub fn scan_all_models() -> Vec<LocalModelItem> {
+    ///
+    /// Every root is resolved through the stated environment, so a relocated or
+    /// redirected profile is honored instead of the literal `~` spelling.
+    pub fn scan_all_models(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
         let mut models = Vec::new();
 
         // 1. Ollama models
-        models.extend(Self::scan_ollama());
+        models.extend(Self::scan_ollama(environment));
 
         // 2. HuggingFace Hub models
-        models.extend(Self::scan_huggingface());
+        models.extend(Self::scan_huggingface(environment));
 
         // 3. LM Studio models
-        models.extend(Self::scan_lmstudio());
+        models.extend(Self::scan_lmstudio(environment));
 
         // 4. Apple MLX models
-        models.extend(Self::scan_mlx());
+        models.extend(Self::scan_mlx(environment));
 
         models
     }
 
     /// Scans Ollama manifest directory to identify installed models and their sizes.
-    pub fn scan_ollama() -> Vec<LocalModelItem> {
-        let manifests_root = match SignatureLoader::expand_path("~/.ollama/models/manifests") {
-            Some(p) if p.exists() => p,
-            _ => return Vec::new(),
+    pub fn scan_ollama(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let manifests_root = match Self::resolve_root("~/.ollama/models/manifests", environment) {
+            Some(root) => root,
+            None => return Vec::new(),
         };
 
         let mut models = Vec::new();
@@ -126,10 +136,10 @@ impl LocalModelScanner {
     }
 
     /// Scans HuggingFace Hub snapshots.
-    pub fn scan_huggingface() -> Vec<LocalModelItem> {
-        let hf_root = match SignatureLoader::expand_path("~/.cache/huggingface/hub") {
-            Some(p) if p.exists() => p,
-            _ => return Vec::new(),
+    pub fn scan_huggingface(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let hf_root = match Self::resolve_root("~/.cache/huggingface/hub", environment) {
+            Some(root) => root,
+            None => return Vec::new(),
         };
 
         let mut models = Vec::new();
@@ -139,7 +149,7 @@ impl LocalModelScanner {
                 if name.starts_with("models--") {
                     let clean_name = name.trim_start_matches("models--").replace("--", "/");
                     let path = entry.path();
-                    let (size, _) = SizeCalculator::measure_path(&path, &[]);
+                    let (size, _) = SizeCalculator::measure_path(&path, &[], environment);
                     let last_modified = fs::metadata(&path)
                         .ok()
                         .and_then(|m| m.modified().ok())
@@ -164,10 +174,10 @@ impl LocalModelScanner {
     }
 
     /// Scans LM Studio downloaded models directory.
-    pub fn scan_lmstudio() -> Vec<LocalModelItem> {
-        let lm_root = match SignatureLoader::expand_path("~/.cache/lm-studio/models") {
-            Some(p) if p.exists() => p,
-            _ => return Vec::new(),
+    pub fn scan_lmstudio(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let lm_root = match Self::resolve_root("~/.cache/lm-studio/models", environment) {
+            Some(root) => root,
+            None => return Vec::new(),
         };
 
         let mut models = Vec::new();
@@ -182,10 +192,10 @@ impl LocalModelScanner {
     }
 
     /// Scans MLX model weights directory.
-    pub fn scan_mlx() -> Vec<LocalModelItem> {
-        let mlx_root = match SignatureLoader::expand_path("~/.cache/mlx") {
-            Some(p) if p.exists() => p,
-            _ => return Vec::new(),
+    pub fn scan_mlx(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let mlx_root = match Self::resolve_root("~/.cache/mlx", environment) {
+            Some(root) => root,
+            None => return Vec::new(),
         };
 
         let mut models = Vec::new();
@@ -202,7 +212,7 @@ impl LocalModelScanner {
 
                 if meta.is_dir() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let (size, _) = SizeCalculator::measure_path(&path, &[]);
+                    let (size, _) = SizeCalculator::measure_path(&path, &[], environment);
                     let last_modified = meta
                         .modified()
                         .ok()
@@ -278,5 +288,124 @@ impl LocalModelScanner {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LocalModelScanner;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::{KnownFolder, PlatformEnvironment};
+    use std::path::{Path, PathBuf};
+
+    /// A stated POSIX home holding one fixture per supported model source.
+    fn fixture_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let manifests = home
+            .path()
+            .join(".ollama/models/manifests/registry.ollama.ai/library/zenith-env-probe");
+        std::fs::create_dir_all(&manifests).unwrap();
+        std::fs::write(
+            manifests.join("local"),
+            r#"{"layers":[{"size":4096}],"config":{"size":512}}"#,
+        )
+        .unwrap();
+
+        let hf = home
+            .path()
+            .join(".cache/huggingface/hub/models--zenith--probe");
+        std::fs::create_dir_all(&hf).unwrap();
+        std::fs::write(hf.join("weights.safetensors"), vec![1u8; 2_048]).unwrap();
+
+        let lm = home.path().join(".cache/lm-studio/models/zenith-gguf");
+        std::fs::create_dir_all(&lm).unwrap();
+        std::fs::write(lm.join("model.gguf"), vec![2u8; 1_024]).unwrap();
+
+        let mlx = home.path().join(".cache/mlx/zenith-mlx");
+        std::fs::create_dir_all(&mlx).unwrap();
+        std::fs::write(mlx.join("weights.npz"), vec![3u8; 512]).unwrap();
+
+        home
+    }
+
+    #[test]
+    fn every_model_root_is_resolved_from_the_stated_environment() {
+        let home = fixture_home();
+        // The fixture comes from `tempfile`, so it follows the host's path
+        // rules; the test is about which profile answers, not about spelling.
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+
+        let ollama = LocalModelScanner::scan_ollama(&environment);
+        assert_eq!(ollama.len(), 1, "the stated home holds one Ollama manifest");
+        assert_eq!(ollama[0].id, "ollama.zenith-env-probe:local");
+        assert_eq!(
+            ollama[0].size_bytes, 4_608,
+            "layer and config sizes come from the manifest"
+        );
+        assert!(ollama[0].path.starts_with(home.path().to_str().unwrap()));
+
+        let huggingface = LocalModelScanner::scan_huggingface(&environment);
+        assert_eq!(huggingface.len(), 1);
+        assert_eq!(huggingface[0].name, "zenith/probe");
+        // Measured from disk, so the block-rounded allocation is at least the
+        // file's logical length; a scanner that reported nothing would fail.
+        assert!(
+            huggingface[0].size_bytes >= 2_048,
+            "huggingface snapshot size: {}",
+            huggingface[0].size_bytes
+        );
+
+        let lmstudio = LocalModelScanner::scan_lmstudio(&environment);
+        assert_eq!(lmstudio.len(), 1);
+        assert_eq!(lmstudio[0].name, "model.gguf");
+        assert_eq!(lmstudio[0].size_bytes, 1_024);
+
+        let mlx = LocalModelScanner::scan_mlx(&environment);
+        assert_eq!(mlx.len(), 1);
+        assert_eq!(mlx[0].name, "zenith-mlx");
+        assert!(
+            mlx[0].size_bytes >= 512,
+            "mlx weights size: {}",
+            mlx[0].size_bytes
+        );
+
+        assert_eq!(
+            LocalModelScanner::scan_all_models(&environment).len(),
+            4,
+            "one model per source is discovered through the stated home"
+        );
+    }
+
+    #[test]
+    fn a_stated_windows_profile_is_never_replaced_by_the_host_profile() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows)
+            .with_home(r"D:\Users\me")
+            .with_known_folder(KnownFolder::Downloads, r"D:\Redirected\Downloads");
+
+        // The `~` spelling resolves through the stated profile and its own
+        // separators, not through whatever home the host happens to have.
+        assert!(
+            LocalModelScanner::resolve_root("~/.ollama/models/manifests", &environment).is_none(),
+            "the stated machine has no Ollama install"
+        );
+        assert_eq!(
+            crate::signatures::SignatureLoader::expand_path(
+                "~/.ollama/models/manifests",
+                &environment
+            ),
+            Some(PathBuf::from(r"D:\Users\me\.ollama\models\manifests"))
+        );
+        assert!(
+            LocalModelScanner::scan_all_models(&environment).is_empty(),
+            "a stated Windows profile must not fall back to the host profile"
+        );
+    }
+
+    #[test]
+    fn missing_roots_yield_no_models_instead_of_host_paths() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_home(Path::new("/nonexistent-zenith-test-home"));
+        assert!(LocalModelScanner::scan_all_models(&environment).is_empty());
     }
 }

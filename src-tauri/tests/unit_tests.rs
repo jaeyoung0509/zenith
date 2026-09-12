@@ -5,6 +5,7 @@ use zenith_lib::docker::DockerAdapter;
 use zenith_lib::models::{
     AwakeBehavior, Category, CleanStrategy, DiskMetrics, RiskTier, Signature,
 };
+use zenith_lib::platform::PlatformEnvironment;
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
@@ -88,7 +89,7 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         reclaimable_is_lower_bound: false,
     };
 
-    let items = DirectoryScanner::scan_signature(&signature);
+    let items = DirectoryScanner::scan_signature(&signature, &PlatformEnvironment::native());
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].path, known.to_string_lossy());
     assert!(items[0].is_selected);
@@ -140,7 +141,14 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
             .into_owned(),
     ));
 
-    let result = ScanEngine::scan(&registry, Some(&[Category::System]), &[], false, |_| {});
+    let result = ScanEngine::scan(
+        &registry,
+        Some(&[Category::System]),
+        &[],
+        false,
+        &PlatformEnvironment::native(),
+        |_| {},
+    );
     let items = &result.categories[0].items;
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].id, "large");
@@ -152,6 +160,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         Some(&[Category::System]),
         &excluded,
         false,
+        &PlatformEnvironment::native(),
         |_| {},
     );
     assert_eq!(filtered.categories[0].items.len(), 1);
@@ -195,13 +204,17 @@ fn test_size_calculator_recursive_and_exclusions() {
         .unwrap();
 
     // Measure without exclusions
-    let (total_size, total_count) = SizeCalculator::measure_path(dir.path(), &[]);
+    let (total_size, total_count) =
+        SizeCalculator::measure_path(dir.path(), &[], &PlatformEnvironment::native());
     assert_eq!(total_count, 2);
     assert!(total_size.logical >= 60000);
 
     // Measure with exclusion of "excluded_folder"
-    let (filtered_size, filtered_count) =
-        SizeCalculator::measure_path(dir.path(), &["excluded_folder".to_string()]);
+    let (filtered_size, filtered_count) = SizeCalculator::measure_path(
+        dir.path(),
+        &["excluded_folder".to_string()],
+        &PlatformEnvironment::native(),
+    );
     assert_eq!(filtered_count, 1);
     assert_eq!(filtered_size.logical, 10000);
 }
@@ -306,44 +319,103 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
 #[test]
 fn test_windows_blacklist_and_path_defense() {
     use std::path::Path;
+    use zenith_lib::platform::path_algebra::PathFlavor;
+    use zenith_lib::platform::paths::SimulatedPaths;
+    use zenith_lib::platform::KnownFolder;
+    use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
     use zenith_lib::safety::Blacklist;
 
-    // Drive root
-    assert!(Blacklist::is_blacklisted(Path::new("C:\\")));
-    assert!(Blacklist::is_blacklisted(Path::new("D:/")));
+    // Stated environment: the profile lives on `Z:`, the redirected Documents
+    // folder lives on `D:`, and nothing here mirrors this host's layout.
+    let platform = PlatformEnvironment::simulated(PathFlavor::Windows)
+        .with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"Z:\Users\tester")
+                .with_temp_dir(r"Z:\Users\tester\AppData\Local\Temp")
+                .with_local_app_data(r"Z:\Users\tester\AppData\Local")
+                .with_roaming_app_data(r"Z:\Users\tester\AppData\Roaming")
+                .with_program_files(r"Z:\Program Files")
+                .with_program_data(r"Z:\ProgramData"),
+        ))
+        .with_known_folder(KnownFolder::Documents, r"D:\OneDrive\Documents");
+    let environment = BlacklistEnvironment::from_environment(&platform);
 
-    // Windows System directories
-    assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        "C:\\Windows\\System32"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new("C:\\Program Files")));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        "C:\\Program Files (x86)"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new("C:\\Users")));
+    // Drive roots, system directories, and the users root on every drive
+    // letter, including the 32-bit Program Files tail.
+    for drive in ["C:", "D:", "Z:"] {
+        let roots = [
+            format!("{drive}:"),
+            format!(r"{drive}\"),
+            format!(r"{drive}\Windows\System32"),
+            format!(r"{drive}\Program Files"),
+            format!(r"{drive}\Program Files (x86)"),
+            format!(r"{drive}\ProgramData\App"),
+            format!(r"{drive}\Users"),
+        ];
+        for path_str in roots {
+            let verdict = classify_windows(&path_str, &environment);
+            assert!(
+                verdict.is_denied(),
+                "expected {path_str} to be denied, got {verdict:?}"
+            );
+            assert!(
+                Blacklist::validate_with(Path::new(&path_str), &platform).is_err(),
+                "expected {path_str} to be rejected"
+            );
+        }
+    }
 
-    // The X:\Users root itself is protected on any drive, but its descendants
-    // (temp directories, projects, caches) must remain scannable and cleanable.
-    assert!(!Blacklist::is_blacklisted(Path::new(
-        "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\zenith-test"
-    )));
-    assert!(!Blacklist::is_blacklisted(Path::new(
-        "D:\\Users\\tester\\dev\\repo"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new("D:\\Users")));
-    // A system installed to a non-C: drive is protected identically.
-    assert!(Blacklist::is_blacklisted(Path::new(
-        "D:\\Windows\\System32"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new("D:\\ProgramData\\App")));
+    // Only the `X:\Users` root itself is protected: descendants (temp
+    // directories, projects, caches) stay scannable and cleanable.
+    for path in [
+        r"Z:\Users\tester\AppData\Local\Temp\zenith-test",
+        r"Z:\Users\tester\dev\repo",
+        r"D:\Users\tester\dev\repo",
+        r"Z:\Users\tester\.cargo\registry\cache",
+    ] {
+        assert_eq!(
+            classify_windows(path, &environment),
+            BlacklistVerdict::Allowed,
+            "expected {path} to stay cleanable"
+        );
+    }
 
-    // Alternate Data Streams and trailing aliases
-    assert!(Blacklist::is_blacklisted(Path::new(
-        "C:\\safe\\file.txt:stream"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder.")));
-    assert!(Blacklist::is_blacklisted(Path::new("C:\\safe\\folder ")));
+    // Alternate data streams, trailing aliases, and unresolvable 8.3 aliases.
+    for path in [
+        r"Z:\Users\tester\dev\file.txt:stream",
+        r"Z:\Users\tester\dev\folder.",
+        r"Z:\Users\tester\dev\folder ",
+        r"C:\PROGRA~1\Vendor",
+        r"Z:\Users\tester\dev\CON",
+    ] {
+        let verdict = classify_windows(path, &environment);
+        assert!(
+            verdict.is_denied(),
+            "expected {path} to be denied, got {verdict:?}"
+        );
+    }
+    for path in [
+        r"Z:\Users\tester\dev\file.txt:stream",
+        r"Z:\Users\tester\dev\folder.",
+        r"Z:\Users\tester\dev\folder ",
+    ] {
+        assert!(
+            Blacklist::validate_with(Path::new(path), &platform).is_err(),
+            "expected {path} to be rejected"
+        );
+    }
+
+    // A content folder redirected outside the profile is still protected.
+    assert!(
+        classify_windows(r"D:\OneDrive\Documents\report.docx", &environment).is_denied(),
+        "a redirected Documents folder must be protected"
+    );
+    // The same document spelled through the stated profile is cleanable.
+    assert_eq!(
+        classify_windows(r"Z:\Users\tester\dev\report.docx", &environment),
+        BlacklistVerdict::Allowed
+    );
 }
 
 #[cfg(target_os = "windows")]
@@ -351,6 +423,8 @@ fn test_windows_blacklist_and_path_defense() {
 fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
     use std::path::{Path, PathBuf};
     use zenith_lib::safety::Blacklist;
+
+    let host = PlatformEnvironment::native();
 
     let user_cache = Path::new(r"\\?\C:\Users\테스트\.gemini\antigravity-cli\log");
     assert_eq!(
@@ -361,20 +435,26 @@ fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
         Blacklist::normalize_path(Path::new(r"\\?\UNC\server\share\cache")),
         PathBuf::from(r"\\server\share\cache")
     );
-    assert!(!Blacklist::is_blacklisted(user_cache));
-    assert!(Blacklist::validate(user_cache).is_ok());
+    assert!(!Blacklist::is_blacklisted_with(user_cache, &host));
+    assert!(Blacklist::validate_with(user_cache, &host).is_ok());
 
-    assert!(Blacklist::is_blacklisted(Path::new(r"\\?\C:\")));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        r"\\?\C:\Windows\System32"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        r"\\?\C:\safe\file.txt:stream"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new(r"\\.\PhysicalDrive0")));
+    assert!(Blacklist::is_blacklisted_with(Path::new(r"\\?\C:\"), &host));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\?\C:\Windows\System32"),
+        &host
+    ));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\?\C:\safe\file.txt:stream"),
+        &host
+    ));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"),
+        &host
+    ));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\.\PhysicalDrive0"),
+        &host
+    ));
 }
 
 #[test]
@@ -477,6 +557,70 @@ fn test_windows_dev_ports_classification_defense() {
     let res_vite = classify_listener(&input_vite);
     assert!(res_vite.can_release);
     assert_eq!(res_vite.server_name, "Vite");
+}
+
+#[test]
+fn port_release_refuses_a_privileged_or_unidentified_owner_only() {
+    use std::path::Path;
+    use zenith_lib::dev_ports::{classify_listener, ProcessClassificationInput};
+    use zenith_lib::process_owner::ProcessOwner;
+
+    fn input<'a>(
+        owner: ProcessOwner,
+        current_owner: ProcessOwner,
+        argv: &'a [String],
+    ) -> ProcessClassificationInput<'a> {
+        ProcessClassificationInput {
+            pid: 5600,
+            owner: Some(owner),
+            current_owner,
+            zenith_pid: 9999,
+            port: 5173,
+            raw_command: "node.exe",
+            process_name: "node.exe",
+            exe_path: Some(Path::new("C:\\Program Files\\nodejs\\node.exe")),
+            cwd: Some(Path::new("C:\\Users\\test\\projects\\my-app")),
+            argv,
+            started_at: Some(200),
+        }
+    }
+
+    let argv = [
+        "node.exe".to_string(),
+        "C:\\Users\\test\\projects\\my-app\\node_modules\\vite\\bin\\vite.js".to_string(),
+    ];
+    let own = ProcessOwner::Unix(501);
+
+    // A system owner is refused, and the refusal names the reason.
+    let root = classify_listener(&input(ProcessOwner::Unix(0), own.clone(), &argv));
+    assert!(!root.can_release);
+    assert_eq!(
+        root.blocked_reason.as_deref(),
+        Some("Root-owned system process")
+    );
+
+    // An unavailable identity (the sentinel `ProcessOwner::current` returns
+    // when no SID can be read) fails closed on every platform.
+    let unidentified = classify_listener(&input(
+        ProcessOwner::Windows(String::new()),
+        own.clone(),
+        &argv,
+    ));
+    assert!(!unidentified.can_release);
+    assert_eq!(
+        unidentified.blocked_reason.as_deref(),
+        Some("Process identity is unavailable")
+    );
+
+    // The same listener owned by the current, unprivileged user is releasable.
+    let allowed = classify_listener(&input(own.clone(), own, &argv));
+    assert!(
+        allowed.can_release,
+        "an unprivileged same-user dev server must stay releasable: {:?}",
+        allowed.blocked_reason
+    );
+    assert_eq!(allowed.blocked_reason, None);
+    assert_eq!(allowed.server_name, "Vite");
 }
 
 #[test]

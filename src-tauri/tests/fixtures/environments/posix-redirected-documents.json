@@ -1,0 +1,10 @@
+{
+  "name": "posix-redirected-documents",
+  "flavor": "posix",
+  "system_drive": null,
+  "profile_shape": "posix_home",
+  "known_folder_redirected": true,
+  "temp_inside_profile": true,
+  "volume_identity": true,
+  "missing_tools": ["podman"]
+}

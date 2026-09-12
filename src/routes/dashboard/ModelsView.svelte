@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import type { LocalModelItem } from '../../lib/models/types';
   import { localModelsStore } from '../../lib/stores/models.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { formatBytes, formatTimeAgo } from '../../lib/utils/format';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import { withMinimumDuration } from '../../lib/utils/async';
   import { tauriShowInFileManager } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
@@ -26,8 +28,10 @@
 
   let searchQuery = $state('');
   let modelToDelete = $state<LocalModelItem | null>(null);
+  let revealError = $state<string | null>(null);
 
   onMount(() => {
+    if (!platformContextStore.context) void platformContextStore.load();
     void localModelsStore.refresh();
   });
 
@@ -127,6 +131,14 @@
       <p>Discovering installed local models...</p>
     </div>
   {:else if filteredModels.length > 0}
+    {#if revealError}
+      <InlineNotice
+        variant="error"
+        title="Reveal failed"
+        message={revealError}
+        onDismiss={() => (revealError = null)}
+      />
+    {/if}
     <div class="space-y-2.5">
       {#each filteredModels as model (model.id)}
         <div
@@ -162,9 +174,14 @@
               variant="ghost"
               size="icon"
               class="h-7 w-7 text-muted-foreground"
-              onclick={() => tauriShowInFileManager(model.path)}
+              disabled={!canReveal()}
+              onclick={() =>
+                void runReveal(
+                  () => tauriShowInFileManager(model.path),
+                  (message) => (revealError = message)
+                )}
               ariaLabel={`Show ${model.name} in file manager`}
-              title="Show in File Manager"
+              title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
             >
               <FolderOpen size={13} />
             </Button>

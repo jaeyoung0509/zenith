@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -35,7 +36,13 @@ impl std::error::Error for SubprocessError {}
 /// installation locations. Desktop-launched applications can receive a minimal
 /// PATH, so relying on `Command::new("tool")` alone makes installed tools disappear.
 pub fn command(name: &str) -> Command {
-    let mut command = Command::new(resolve(name).unwrap_or_else(|| PathBuf::from(name)));
+    command_with(name, &crate::platform::PlatformEnvironment::native())
+}
+
+/// Environment-aware [`command`].
+pub fn command_with(name: &str, environment: &crate::platform::PlatformEnvironment) -> Command {
+    let mut command =
+        Command::new(resolve_with(name, environment).unwrap_or_else(|| PathBuf::from(name)));
     configure_background_command(&mut command);
     command
 }
@@ -598,10 +605,29 @@ fn versioned_install_dirs(versions_dir: &Path, leaf: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Native tool resolution: the PATH and tool roots of the running process.
 pub fn resolve(name: &str) -> Option<PathBuf> {
+    resolve_with(name, &crate::platform::PlatformEnvironment::native())
+}
+
+/// Environment-aware tool resolution.
+///
+/// A resolution the environment states is the authority: `Found` is returned
+/// as stated, and `NotFound` is reported as not found rather than being
+/// re-discovered from the host, so a simulated environment cannot be answered
+/// by whatever the runner happens to have installed. The PATH and tool-root
+/// search runs only when the environment states nothing for `name`.
+pub fn resolve_with(
+    name: &str,
+    environment: &crate::platform::PlatformEnvironment,
+) -> Option<PathBuf> {
+    if let Some(stated) = environment.tool(name) {
+        return stated.path().map(Path::to_path_buf);
+    }
+
     let name_variations = executable_name_variations(name);
 
-    for directory in search_candidates() {
+    for directory in search_candidates(environment) {
         for variation in &name_variations {
             let candidate = directory.join(variation);
             if is_executable(&candidate) {
@@ -616,13 +642,13 @@ pub fn resolve(name: &str) -> Option<PathBuf> {
 /// Directories consulted by [`resolve`], in priority order. Used to report
 /// honest "not detected" diagnostics with the locations that were searched.
 pub fn search_locations() -> Vec<PathBuf> {
-    search_candidates()
+    search_candidates(&crate::platform::PlatformEnvironment::native())
 }
 
-fn search_candidates() -> Vec<PathBuf> {
-    let mut candidates = env::var_os("PATH")
-        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
+fn search_candidates(environment: &crate::platform::PlatformEnvironment) -> Vec<PathBuf> {
+    // The stated PATH is the primary search path; the OS-owned tool roots below
+    // stay host-derived, which is what "fall back to the platform search" means.
+    let mut candidates = environment.path_entries().to_vec();
 
     // One shared root set for discovery. `tool_search_locations` reads
     // ProgramW6432/ProgramFiles(x86), package-manager environment variables,
@@ -630,7 +656,7 @@ fn search_candidates() -> Vec<PathBuf> {
     candidates.extend(crate::platform::NativePlatformPaths::tool_search_locations());
 
     #[cfg(target_os = "macos")]
-    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
+    if let Some(home) = environment.user_home() {
         // Version-manager installs (nvm) keep one `bin` dir per Node version;
         // scan them bounded so resolution work cannot grow without limit.
         candidates.extend(nvm_node_bin_dirs(&home.join(".nvm/versions/node")));
@@ -638,7 +664,11 @@ fn search_candidates() -> Vec<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
-        if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
+        if let Some(appdata) = environment.roaming_app_data().or_else(|| {
+            environment
+                .user_home()
+                .map(|home| home.join("AppData/Roaming"))
+        }) {
             candidates.push(appdata.join("nodejs"));
             candidates.extend(nvm_windows_bin_dirs(&appdata.join("nvm")));
         }
@@ -697,7 +727,8 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     #[cfg(unix)]
     use super::is_executable;
-    #[cfg(unix)]
+    // Used by portable tests as well as the Unix ones, so it must not be
+    // gated on `unix`: gating it made the Windows job fail to compile.
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -713,6 +744,51 @@ mod tests {
 
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(is_executable(&file));
+    }
+
+    /// The tool that exists on every supported host, used to prove a stated
+    /// resolution is not answered by host discovery.
+    const HOST_TOOL: &str = if cfg!(windows) { "cmd.exe" } else { "sh" };
+
+    #[test]
+    fn a_stated_tool_resolution_is_the_authority() {
+        use crate::platform::path_algebra::PathFlavor;
+        use crate::platform::PlatformEnvironment;
+        use std::path::PathBuf;
+
+        let stated = if cfg!(windows) {
+            PathBuf::from(r"D:\tools\npm.cmd")
+        } else {
+            PathBuf::from("/stated/bin/npm")
+        };
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_tool("npm", &stated);
+        assert_eq!(super::resolve_with("npm", &environment), Some(stated));
+    }
+
+    #[test]
+    fn a_stated_missing_tool_is_never_re_discovered_from_the_host() {
+        use crate::platform::path_algebra::PathFlavor;
+        use crate::platform::PlatformEnvironment;
+
+        // The host resolves this tool; the environment states it is absent.
+        assert!(
+            super::resolve(HOST_TOOL).is_some(),
+            "the host is expected to provide {HOST_TOOL}"
+        );
+        let missing =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_missing_tool(HOST_TOOL);
+        assert_eq!(super::resolve_with(HOST_TOOL, &missing), None);
+
+        // A stated PATH is searched when the environment states no tool.
+        let directory = tempfile::tempdir().unwrap();
+        let tool = directory.path().join(HOST_TOOL);
+        fs::write(&tool, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let stated_path =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_path_entry(directory.path());
+        assert_eq!(super::resolve_with(HOST_TOOL, &stated_path), Some(tool));
     }
 
     #[cfg(target_os = "windows")]
@@ -995,5 +1071,99 @@ mod tests {
     fn nvm_scan_returns_empty_for_missing_versions_dir() {
         let directory = tempfile::tempdir().unwrap();
         assert!(super::nvm_node_bin_dirs(&directory.path().join("versions/node")).is_empty());
+    }
+
+    // The tests below execute only on Windows. They exist because the job
+    // object ownership (`Win32_System_JobObjects`) that these runners depend on
+    // is the only mechanism that terminates a *tree*, and a tree can only be
+    // presented by a real Windows process hierarchy: `start /B` detaches a
+    // grandchild that inherits the captured pipes, so a runner without job
+    // ownership blocks until that grandchild exits on its own.
+    #[cfg(target_os = "windows")]
+    fn windows_cmd(script: &str) -> std::process::Command {
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", script]);
+        command
+    }
+
+    /// A detached grandchild outlives its parent and holds the captured stdout
+    /// pipe. Terminating the job object is what lets the drain finish.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_job_object_terminates_a_tree_that_outlives_its_parent() {
+        let start = std::time::Instant::now();
+        let result = super::run_with_timeout(
+            windows_cmd("start /B ping -n 30 127.0.0.1 & exit 0"),
+            std::time::Duration::from_millis(1_500),
+        );
+        let elapsed = start.elapsed();
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "Hanged for {elapsed:?} on a detached grandchild holding the pipe"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_job_object_terminates_the_tree_on_timeout() {
+        let start = std::time::Instant::now();
+        let result = super::run_with_timeout(
+            windows_cmd("start /B ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"),
+            std::time::Duration::from_millis(300),
+        );
+        let elapsed = start.elapsed();
+        assert!(matches!(result, Err(super::SubprocessError::Timeout(..))));
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "Hanged for {elapsed:?} during timeout cleanup"
+        );
+
+        // Every owned handle is released, so a follow-up collection starts
+        // immediately instead of waiting on a leaked job object.
+        let output = super::run_with_timeout(
+            windows_cmd("echo reused"),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "reused");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_run_caps_captured_output() {
+        // ~2 MiB of stdout against the 1 MiB capture limit. `type` streams the
+        // file at C speed, so the cap is exercised without a slow shell loop.
+        let directory = tempfile::tempdir().unwrap();
+        let block = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\n";
+        let mut payload = Vec::with_capacity(super::MAX_CAPTURE_BYTES * 2);
+        while payload.len() < super::MAX_CAPTURE_BYTES * 2 {
+            payload.extend_from_slice(block);
+        }
+        let big = directory.path().join("big.txt");
+        fs::write(&big, &payload).unwrap();
+
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/D", "/C", "type"]).arg(&big);
+        let output = super::run_with_timeout(command, std::time::Duration::from_secs(30)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), super::MAX_CAPTURE_BYTES);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_async_job_object_terminates_the_tree_without_hanging_the_caller() {
+        let start = std::time::Instant::now();
+        let result = super::run_with_timeout_async(
+            windows_cmd("start /B ping -n 30 127.0.0.1 & ping -n 30 127.0.0.1"),
+            std::time::Duration::from_millis(300),
+        )
+        .await;
+        let elapsed = start.elapsed();
+        assert!(matches!(result, Err(super::SubprocessError::Timeout(..))));
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "Hanged for {elapsed:?} during timeout cleanup"
+        );
     }
 }

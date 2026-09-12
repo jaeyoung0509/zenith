@@ -7,8 +7,8 @@ use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AwakeBehavior, AwakeRule, AwakeState, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
     DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, MemoryTerminationMode,
-    MemoryTerminationResult, PlatformCapabilities, ReleaseDevelopmentListenerResult, ReleaseMode,
-    SelectedApplication, ZenithSettings,
+    MemoryTerminationResult, PlatformCapabilities, PlatformContext,
+    ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
 use crate::platform::PlatformPathsProvider;
@@ -65,9 +65,12 @@ pub async fn pick_keep_awake_application() -> Result<Option<SelectedApplication>
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_disk_metrics() -> Result<DiskMetrics, String> {
+pub async fn get_disk_metrics(state: State<'_, AppState>) -> Result<DiskMetrics, String> {
+    let environment = state.environment.clone();
     run_blocking(
-        || DiskMetricsCollector::get_primary_disk().map_err(|error| error.to_string()),
+        move || {
+            DiskMetricsCollector::get_primary_disk(&environment).map_err(|error| error.to_string())
+        },
         "Disk metrics worker panicked",
     )
     .await
@@ -75,9 +78,10 @@ pub async fn get_disk_metrics() -> Result<DiskMetrics, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_disk_volumes() -> Result<Vec<DiskVolume>, String> {
+pub async fn get_disk_volumes(state: State<'_, AppState>) -> Result<Vec<DiskVolume>, String> {
+    let environment = state.environment.clone();
     run_blocking(
-        || Ok(DiskMetricsCollector::get_volumes()),
+        move || Ok(DiskMetricsCollector::get_volumes(&environment)),
         "Disk volume worker panicked",
     )
     .await
@@ -115,6 +119,8 @@ pub async fn get_docker_status(state: State<'_, AppState>) -> Result<DockerStatu
     let _permit = state.execution_budgets.acquire_subprocess().await?;
     let cache_store = state.docker_status_cache.clone();
     let operation_gate = state.storage_operation_gate.clone();
+    let environment = state.environment.clone();
+    let container_host = state.container_host.clone();
     run_blocking(
         move || {
             operation_gate.run_read(|| {
@@ -129,7 +135,7 @@ pub async fn get_docker_status(state: State<'_, AppState>) -> Result<DockerStatu
                     }
                 }
 
-                let fresh = DockerAdapter::get_status();
+                let fresh = DockerAdapter::get_status(&environment, &container_host);
                 let mut cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
                 *cache = Some((fresh.clone(), std::time::Instant::now()));
                 Ok(fresh)
@@ -158,12 +164,13 @@ pub async fn prune_docker_target(
     let _permit = state.execution_budgets.acquire_subprocess().await?;
     let cache_store = state.docker_status_cache.clone();
     let operation_gate = state.storage_operation_gate.clone();
+    let environment = state.environment.clone();
     run_blocking(
         move || {
             operation_gate.run_write(|| {
                 *cache_store.lock().unwrap_or_else(|p| p.into_inner()) = None;
-                let result =
-                    DockerAdapter::prune_category(&signature_id).map_err(|error| error.to_string());
+                let result = DockerAdapter::prune_category(&environment, &signature_id)
+                    .map_err(|error| error.to_string());
                 // The command may have changed Docker state even if its final
                 // status/delta query failed, so never retain a pre-prune snapshot.
                 *cache_store.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -189,8 +196,9 @@ pub async fn get_local_models(state: State<'_, AppState>) -> Result<Vec<LocalMod
 
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let operation_gate = state.storage_operation_gate.clone();
+    let environment = state.environment.clone();
     run_blocking(
-        move || operation_gate.run_read(|| Ok(LocalModelScanner::scan_all_models())),
+        move || operation_gate.run_read(|| Ok(LocalModelScanner::scan_all_models(&environment))),
         "Local model scan worker panicked",
     )
     .await
@@ -212,10 +220,12 @@ pub async fn delete_local_model(
         .map_err(|e| e.to_string())?;
 
     let operation_gate = state.storage_operation_gate.clone();
+    let environment = state.environment.clone();
     run_blocking(
         move || {
             operation_gate.run_write(|| {
-                LocalModelManager::delete_by_id(&model_id).map_err(|error| error.to_string())
+                LocalModelManager::delete_by_id(&environment, &model_id)
+                    .map_err(|error| error.to_string())
             })
         },
         "Local model deletion worker panicked",
@@ -346,7 +356,15 @@ pub async fn save_settings(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn show_in_file_manager(path: String) -> Result<(), String> {
+pub async fn show_in_file_manager(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .platform_capabilities
+        .capabilities()
+        .require(
+            crate::models::PlatformFeature::SystemActions,
+            crate::models::CapabilityAccess::Inspect,
+        )
+        .map_err(|error| error.to_string())?;
     run_blocking(
         move || {
             use crate::platform::SystemActionProvider;
@@ -412,17 +430,37 @@ pub fn get_platform_capabilities(state: State<'_, AppState>) -> PlatformCapabili
     state.platform_capabilities.capabilities()
 }
 
+/// Platform vocabulary and locations the interface renders.
+///
+/// Copy such as "Move to Trash", "menu bar", or a log directory literal is only
+/// true on one platform; the frontend asks for it instead of hardcoding it.
+/// Runs the `--doctor` self-check against the running environment.
+///
+/// The command line and the interface execute the same assertions: a user who
+/// cannot open a terminal can still see which invariant failed.
+#[tauri::command]
+#[specta::specta]
+pub async fn run_environment_self_check(
+    state: State<'_, AppState>,
+) -> Result<crate::diagnostics::doctor::EnvironmentReport, String> {
+    let environment = state.environment.clone();
+    run_blocking(
+        move || Ok(crate::diagnostics::doctor::self_check(&environment)),
+        "Environment self-check worker panicked",
+    )
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_platform_context() -> PlatformContext {
+    PlatformContext::current(crate::diagnostics::log_directory_display())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
-    if let Ok(window) = crate::ensure_window(&app_handle, "quick") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
-        } else {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }
+    crate::toggle_quick_panel_from_app(&app_handle);
     Ok(())
 }
 

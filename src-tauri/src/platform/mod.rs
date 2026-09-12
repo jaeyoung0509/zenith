@@ -1,14 +1,21 @@
 use crate::models::PlatformCapabilities;
 
 pub mod capabilities;
+pub mod description;
 pub mod environment;
 pub mod file_ops;
+pub mod path_algebra;
 pub mod paths;
 pub mod process;
 pub mod system_actions;
 
 pub use capabilities::NativePlatformCapabilities;
+pub use description::{
+    EnvironmentFixture, EnvironmentShape, KnownFolder, PlatformEnvironment, ProfileShape,
+    ToolResolution, VolumeIdentity,
+};
 pub use environment::{RuntimeEnvironment, SecurityPolicyState};
+pub use path_algebra::PathFlavor;
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
 pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};
@@ -38,7 +45,10 @@ mod tests {
 
     #[test]
     fn native_provider_reports_the_compiled_platform() {
-        let capabilities = NativePlatformCapabilities::new().capabilities();
+        let capabilities = NativePlatformCapabilities::new(std::sync::Arc::new(
+            crate::platform::PlatformEnvironment::simulated(crate::platform::PathFlavor::current()),
+        ))
+        .capabilities();
 
         #[cfg(target_os = "macos")]
         assert_eq!(capabilities.platform, PlatformKind::Macos);

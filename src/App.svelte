@@ -4,8 +4,13 @@
 
   import { settingsStore } from './lib/stores/settings.svelte';
   import { platformCapabilitiesStore } from './lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from './lib/stores/platformContext.svelte';
   import { isTauri } from './lib/utils/tauri';
-  import { isQuickPanelDismissShortcut } from './lib/utils/quickPanel';
+  import {
+    isAcceleratorPressed,
+    isQuickPanelDismissShortcut,
+    platformAccelerator,
+  } from './lib/utils/quickPanel';
 
   type View = 'dashboard' | 'quick';
 
@@ -38,6 +43,7 @@
 
     settingsStore.load();
     void platformCapabilitiesStore.load();
+    void platformContextStore.load();
 
     async function activateView(view: View) {
       const generation = ++loadGeneration;
@@ -53,7 +59,7 @@
     }
 
     async function resolveInitialView() {
-      if (isTauri) {
+      if (isTauri()) {
         try {
           const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
           if (disposed) return;
@@ -83,11 +89,16 @@
     void resolveInitialView();
 
     const closeOnCommandW = (event: KeyboardEvent) => {
+      // The dashboard close chord keeps its historical behavior; the quick
+      // panel dismissal follows the platform's primary accelerator so Ctrl+W
+      // also works on Windows and Linux.
       const shouldClose = event.metaKey && event.key.toLowerCase() === 'w';
+      const accelerator = platformAccelerator(platformContextStore.context?.primary_accelerator);
       const shouldDismissQuick =
-        currentView === 'quick' && isQuickPanelDismissShortcut(event.key, event.metaKey);
+        currentView === 'quick' &&
+        isQuickPanelDismissShortcut(event.key, isAcceleratorPressed(event, accelerator));
 
-      if (!isTauri || (!shouldClose && !shouldDismissQuick)) {
+      if (!isTauri() || (!shouldClose && !shouldDismissQuick)) {
         return;
       }
 

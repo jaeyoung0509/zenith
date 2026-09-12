@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-large-file"
+description = "Enables the reveal_large_file command without any pre-configured scope."
+commands.allow = ["reveal_large_file"]
+
+[[permission]]
+identifier = "deny-reveal-large-file"
+description = "Denies the reveal_large_file command without any pre-configured scope."
+commands.deny = ["reveal_large_file"]

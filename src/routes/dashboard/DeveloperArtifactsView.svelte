@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type {
     DeveloperArtifact,
     DeveloperArtifactStatus,
@@ -22,6 +22,8 @@
     tauriShowInFileManager,
     tauriStartDeveloperArtifactScan,
   } from '../../lib/utils/tauri';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import {
     AlertCircle,
     ArrowLeft,
@@ -40,6 +42,10 @@
   }
 
   let { onBack }: Props = $props();
+
+  onMount(() => {
+    void platformContextStore.load();
+  });
 
   type SortKey = 'size' | 'activity' | 'project' | 'type';
 
@@ -60,6 +66,7 @@
   let measuredCount = $state(0);
   let skippedEntries = $state(0);
   let error = $state<string | null>(null);
+  let revealError = $state<string | null>(null);
   let now = $state(Date.now());
   let expiryActionFocused = $state(false);
   let partialCleanupConfirmed = $state(false);
@@ -338,7 +345,7 @@
   async function executeCleanup() {
     if (!plan) return;
     if (hasMeasurementIncompleteSelected && !partialCleanupConfirmed) {
-      error = 'Confirm the partial-measurement warning before moving these artifacts to Trash.';
+      error = `Confirm the partial-measurement warning before moving these artifacts to ${platformContextStore.trashLabel}.`;
       return;
     }
     isExecuting = true;
@@ -452,13 +459,20 @@
     </div>
   {/if}
 
+  {#if revealError}
+    <div role="alert" class="flex items-center gap-2.5 rounded-xl border border-destructive/30 bg-destructive/15 p-3.5 text-xs text-destructive">
+      <AlertCircle size={16} class="shrink-0" />
+      <span>{revealError}</span>
+    </div>
+  {/if}
+
   {#if trashResult}
     <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-warning/30 bg-warning/5' : 'border-success/30 bg-success/5'}`}>
       <div class="flex items-center justify-between gap-3 text-xs">
         <span class={`font-medium ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-warning' : 'text-success'}`}>
-          Moved {trashResult.moved_count} artifact{trashResult.moved_count === 1 ? '' : 's'} to Trash
+          Moved {trashResult.moved_count} artifact{trashResult.moved_count === 1 ? '' : 's'} to {platformContextStore.trashLabel}
         </span>
-        <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)} · empty Trash to reclaim</span>
+        <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)} · empty {platformContextStore.trashLabel} to reclaim</span>
       </div>
     </Card>
   {/if}
@@ -477,13 +491,13 @@
           <Button variant="ghost" size="sm" onclick={() => { plan = null; partialCleanupConfirmed = false; }}>Cancel</Button>
           <Button variant="destructive" size="md" onclick={executeCleanup} disabled={isExecuting || isExpired || (hasMeasurementIncompleteSelected && !partialCleanupConfirmed)} class="gap-1.5">
             {#if isExecuting}<DeletingDots size="sm" />{:else}<Trash2 size={14} />{/if}
-            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move generated folders to Trash'}
+            {isExecuting ? 'Moving…' : isExpired ? 'Expired' : `Move generated folders to ${platformContextStore.trashLabel}`}
           </Button>
         </div>
       </div>
       <div class="rounded-lg border border-border/70 bg-background/60 p-3">
         <p class="text-meta text-muted-foreground">Only the exact generated directories below will move. Project code and configuration stay in place.</p>
-        <div class="mt-2 max-h-32 space-y-1.5 overflow-y-auto">
+        <div class="mt-2 max-h-32 space-y-1.5 overflow-y-auto scroll-stable">
           {#each selectedItems as item (item.id)}
             <div class="flex items-center justify-between gap-3 text-caption">
               <span class="min-w-0 truncate font-mono" title={item.path}>{item.path}</span>
@@ -505,7 +519,7 @@
             <p class="text-warning/90">The generated-folder scope and project evidence were verified, but one or more entries could not be measured. The displayed size and file count may be lower than the actual contents. Nested links are not followed.</p>
             <label class="flex items-start gap-2 text-warning">
               <input type="checkbox" bind:checked={partialCleanupConfirmed} class="mt-0.5 accent-warning" />
-              <span>I understand the measurements may be partial and want to move the verified generated folder(s) to Trash.</span>
+              <span>I understand the measurements may be partial and want to move the verified generated folder(s) to {platformContextStore.trashLabel}.</span>
             </label>
           </div>
         {/if}
@@ -579,7 +593,15 @@
                 {#if item.incomplete_reason}<span class={item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}>{item.incomplete_reason}</span>{/if}
               </div>
             </div>
-            <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={() => tauriShowInFileManager(item.path)} ariaLabel={`Show ${item.path} in file manager`} title="Show in File Manager">
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-7 w-7 shrink-0"
+              disabled={!canReveal()}
+              onclick={() => void runReveal(() => tauriShowInFileManager(item.path), (message) => (revealError = message))}
+              ariaLabel={`Show ${item.path} in file manager`}
+              title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
+            >
               <FolderOpen size={13} />
             </Button>
           </div>

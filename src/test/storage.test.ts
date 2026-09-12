@@ -304,6 +304,19 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(storageView).not.toContain('animate-gentle-spin');
     expect(storageTools).not.toContain('animate-gentle-spin');
   });
+
+  it('reveals scanned large files through the backend-owned inventory', () => {
+    const largeFilesView = readFileSync(
+      new URL('../routes/dashboard/LargeFilesView.svelte', import.meta.url),
+      'utf-8'
+    );
+
+    // The backend resolves the path from its own inventory; rebuilding it in
+    // the view would mix separators on Windows (`display_parent` + '/' + name).
+    expect(largeFilesView).toContain('tauriRevealLargeFile(item.id)');
+    expect(largeFilesView).not.toContain('display_parent}/${item.name}');
+    expect(largeFilesView).not.toContain('tauriShowInFileManager(`${item.display_parent}');
+  });
 });
 
 describe('detected versus reclaimable storage copy', () => {

@@ -1,4 +1,5 @@
 use crate::models::{FileSize, ScanItem, Signature};
+use crate::platform::PlatformEnvironment;
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
 use rayon::ThreadPool;
@@ -13,13 +14,17 @@ pub struct DirectoryScanner;
 
 impl DirectoryScanner {
     /// Scans all configured paths for a given signature and returns discovered ScanItems.
-    pub fn scan_signature(signature: &Signature) -> Vec<ScanItem> {
-        Self::scan_signature_with_pool(signature, None)
+    pub fn scan_signature(
+        signature: &Signature,
+        environment: &PlatformEnvironment,
+    ) -> Vec<ScanItem> {
+        Self::scan_signature_with_pool(signature, None, environment)
     }
 
     pub(crate) fn scan_signature_with_pool(
         signature: &Signature,
         pool: Option<&ThreadPool>,
+        environment: &PlatformEnvironment,
     ) -> Vec<ScanItem> {
         let mut items = Vec::new();
 
@@ -29,7 +34,7 @@ impl DirectoryScanner {
         }
 
         for (idx, pattern) in signature.paths.iter().enumerate() {
-            let path_buf = match SignatureLoader::expand_path(pattern) {
+            let path_buf = match SignatureLoader::expand_path(pattern, environment) {
                 Some(p) => p,
                 None => continue,
             };
@@ -38,6 +43,7 @@ impl DirectoryScanner {
 
             if let Some(min_age_days) = signature.min_age_days {
                 items.extend(Self::scan_aged_children(
+                    environment,
                     signature,
                     &path_buf,
                     idx,
@@ -47,7 +53,12 @@ impl DirectoryScanner {
             }
 
             let (size, file_count) = if exists {
-                SizeCalculator::measure_path_with_pool(&path_buf, &signature.exclusions, pool)
+                SizeCalculator::measure_path_with_pool(
+                    &path_buf,
+                    &signature.exclusions,
+                    pool,
+                    environment,
+                )
             } else {
                 (FileSize::default(), 0)
             };
@@ -105,6 +116,7 @@ impl DirectoryScanner {
     }
 
     fn scan_aged_children(
+        environment: &PlatformEnvironment,
         signature: &Signature,
         root: &std::path::Path,
         path_index: usize,
@@ -143,7 +155,7 @@ impl DirectoryScanner {
             }
 
             // Single-pass fail-closed tree measurement
-            let stats = Self::measure_tree_stats(&path, &signature.exclusions, 0, 32);
+            let stats = Self::measure_tree_stats(environment, &path, &signature.exclusions, 0, 32);
             // Fail-closed: If scan encountered permission errors or depth cutoff, exclude from stale cleanup
             if !stats.complete {
                 continue;
@@ -189,6 +201,7 @@ impl DirectoryScanner {
     /// Measures directory statistics (size, count, newest mtime) in a single recursive pass.
     /// Marks complete = false if any error, symlink escape, or depth cutoff occurs.
     pub fn measure_tree_stats(
+        environment: &PlatformEnvironment,
         path: &Path,
         exclusions: &[String],
         current_depth: usize,
@@ -277,7 +290,7 @@ impl DirectoryScanner {
             };
             let child_path = ent.path();
 
-            if crate::safety::Blacklist::is_blacklisted(&child_path) {
+            if crate::safety::Blacklist::is_blacklisted_with(&child_path, environment) {
                 continue;
             }
 
@@ -293,8 +306,13 @@ impl DirectoryScanner {
                 continue;
             }
 
-            let sub_stats =
-                Self::measure_tree_stats(&child_path, exclusions, current_depth + 1, max_depth);
+            let sub_stats = Self::measure_tree_stats(
+                environment,
+                &child_path,
+                exclusions,
+                current_depth + 1,
+                max_depth,
+            );
             if !sub_stats.complete {
                 stats.complete = false;
             }
@@ -322,23 +340,35 @@ pub struct TreeStats {
     pub complete: bool,
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::DirectoryScanner;
     use crate::models::{Category, CleanStrategy, RiskTier, Signature};
-    use std::os::unix::fs::symlink;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::PlatformEnvironment;
+
+    fn environment() -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::current())
+    }
 
     #[test]
     fn aged_child_scan_excludes_protected_prefixes_and_symlinks() {
         let root = tempfile::tempdir().unwrap();
         let eligible = root.path().join("third.party.cache");
         let protected = root.path().join("com.apple.protected");
-        let link = root.path().join("linked-cache");
         std::fs::create_dir(&eligible).unwrap();
         std::fs::create_dir(&protected).unwrap();
         std::fs::write(eligible.join("data.bin"), vec![1u8; 4096]).unwrap();
         std::fs::write(protected.join("data.bin"), vec![1u8; 4096]).unwrap();
-        symlink(&eligible, &link).unwrap();
+
+        // Only a POSIX host can create the symlink; the prefix exclusion below
+        // is asserted on every platform.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = root.path().join("linked-cache");
+            symlink(&eligible, &link).unwrap();
+        }
 
         let signature = Signature {
             id: "system.test.intensive".into(),
@@ -361,7 +391,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature);
+        let items = DirectoryScanner::scan_signature(&signature, &environment());
         let names = items
             .iter()
             .map(|item| item.name.as_str())
@@ -408,7 +438,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature);
+        let items = DirectoryScanner::scan_signature(&signature, &environment());
         let names = items
             .iter()
             .map(|item| item.name.as_str())
@@ -416,9 +446,10 @@ mod tests {
         assert_eq!(names, vec!["plain.cache"]);
 
         // The guard must also fail closed at delete-time TOCTOU re-verification.
-        let stats = DirectoryScanner::measure_tree_stats(&nested, &[], 0, 32);
+        let stats = DirectoryScanner::measure_tree_stats(&environment(), &nested, &[], 0, 32);
         assert!(!stats.complete);
-        let mixed_case_stats = DirectoryScanner::measure_tree_stats(&mixed_case, &[], 0, 32);
+        let mixed_case_stats =
+            DirectoryScanner::measure_tree_stats(&environment(), &mixed_case, &[], 0, 32);
         assert!(!mixed_case_stats.complete);
     }
 }

@@ -9,6 +9,7 @@
   } from '../../lib/models/types';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
+  import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import { formatBytes, formatCountdown, formatTimeAgo, ttlRemaining } from '../../lib/utils/format';
   import { getVirtualWindow } from '../../lib/utils/virtualList';
   import {
@@ -23,6 +24,8 @@
     tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import {
     AlertCircle,
     AppWindow,
@@ -53,6 +56,7 @@
   let plan = $state<TrashPlanPreview | null>(null);
   let trashResult = $state<TrashResult | null>(null);
   let error = $state<string | null>(null);
+  let revealError = $state<string | null>(null);
 
   let isInstalledAppsInspectable = $derived(
     platformCapabilitiesStore.isInspectable('installed_apps')
@@ -158,6 +162,7 @@
     if (app.is_running || app.is_system_protected) return;
     isInspecting = true;
     error = null;
+    revealError = null;
     plan = null;
     trashResult = null;
     try {
@@ -232,6 +237,7 @@
   }
 
   onMount(() => {
+    void platformContextStore.load();
     void platformCapabilitiesStore.load().then(() => {
       if (platformCapabilitiesStore.isInspectable('installed_apps')) {
         void loadApps();
@@ -256,7 +262,7 @@
         <h1 class="text-xl font-semibold tracking-tight">Applications</h1>
         <div class="flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground">
           <ShieldCheck size={14} class="text-success" />
-          <span>{isUninstallAvailable ? 'Moves to Trash, never permanently deletes' : 'Application inventory'}</span>
+          <span>{isUninstallAvailable ? `Moves to ${platformContextStore.trashLabel}, never permanently deletes` : 'Application inventory'}</span>
         </div>
       </div>
       <p class="mt-1 text-xs text-muted-foreground">
@@ -265,7 +271,15 @@
     </div>
   </div>
 
-  {#if platformCapabilitiesStore.feature('installed_apps') && !isInstalledAppsInspectable}
+  {#if platformCapabilitiesStore.error && !platformCapabilitiesStore.capabilities}
+    <InlineNotice
+      variant="error"
+      title="Platform capabilities unavailable"
+      message={platformCapabilitiesStore.error}
+      actionLabel="Retry"
+      onAction={() => void platformCapabilitiesStore.load(true)}
+    />
+  {:else if platformCapabilitiesStore.feature('installed_apps') && !isInstalledAppsInspectable}
     <div class="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5 text-xs text-muted-foreground">
       <p class="font-medium text-foreground">Applications unavailable</p>
       <p>{installedAppsReason}</p>
@@ -293,7 +307,7 @@
           {:else}
             <CheckCircle2 size={15} />
           {/if}
-          Moved {trashResult.moved_count} reviewed item{trashResult.moved_count === 1 ? '' : 's'} to Trash
+          Moved {trashResult.moved_count} reviewed item{trashResult.moved_count === 1 ? '' : 's'} to {platformContextStore.trashLabel}
           {#if trashResult.failed_count + trashResult.skipped_count > 0}
             · {trashResult.failed_count + trashResult.skipped_count} not moved
           {/if}
@@ -327,7 +341,7 @@
 
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll the virtualized region) -->
       <div
-        class="max-h-[calc(100vh-245px)] overflow-y-auto pr-1 md:min-h-0 md:max-h-none md:flex-1"
+        class="max-h-[calc(100vh-245px)] overflow-y-auto scroll-stable md:min-h-0 md:max-h-none md:flex-1"
         bind:clientHeight={appListViewportHeight}
         onscroll={(event) => (appListScrollTop = event.currentTarget.scrollTop)}
         role="region"
@@ -374,7 +388,7 @@
       </div>
     </Card>
 
-    <div class="space-y-4 min-w-0 md:max-h-[calc(100vh-5rem)] md:overflow-y-auto md:pr-1">
+    <div class="space-y-4 min-w-0 md:max-h-[calc(100vh-5rem)] md:overflow-y-auto md:scroll-stable">
       {#if inspection}
         <Card class="p-5 space-y-4">
           <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -386,7 +400,7 @@
                 {/if}
               </div>
               <p class="mt-1 text-caption text-muted-foreground font-mono break-all">
-                {inspection.app.bundle_id ?? 'No bundle identifier'}
+                {inspection.app.bundle_id ?? `No ${platformContextStore.appIdentityLabel}`}
               </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
                 <span>{formatBytes(inspection.app.allocated_size)} app bundle</span>
@@ -398,13 +412,25 @@
             <Button
               variant="ghost"
               size="sm"
-              onclick={() => tauriShowInFileManager(inspection!.app.display_path)}
+              disabled={!canReveal()}
+              title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
+              onclick={() => {
+                revealError = null;
+                void runReveal(
+                  () => tauriShowInFileManager(inspection!.app.display_path),
+                  (message) => (revealError = message)
+                );
+              }}
               class="gap-1.5"
             >
               <FolderOpen size={13} />
-              File Manager
+              {platformContextStore.revealLabel}
             </Button>
           </div>
+
+          {#if revealError}
+            <p role="alert" class="text-caption text-destructive">{revealError}</p>
+          {/if}
 
           {#if inspection.warnings.length > 0 || inspection.incomplete}
             <div class="rounded-lg border border-warning/25 bg-warning/5 p-3 space-y-1.5 text-meta text-warning">
@@ -441,7 +467,7 @@
                   <Button variant="ghost" size="sm" onclick={() => (plan = null)}>Cancel</Button>
                   <Button variant="destructive" size="md" onclick={executeUninstall} disabled={isExecuting || isExpired} class="gap-1.5" title={isExpired ? 'Plan expired — review again' : ''}>
                     <Trash2 size={14} />
-                    {isExecuting ? 'Moving…' : isExpired ? 'Expired' : 'Move App to Trash'}
+                    {isExecuting ? 'Moving…' : isExpired ? 'Expired' : `Move App to ${platformContextStore.trashLabel}`}
                   </Button>
                 </div>
               </div>
@@ -455,7 +481,7 @@
                 </div>
               {:else}
                 <p class="text-meta text-muted-foreground">
-                  One-shot, expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({formatCountdown(remainingSecs)}). Zenith rechecks the app and each selected Library item immediately before moving them to Trash.
+                  One-shot, expires at {new Date(plan.expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({formatCountdown(remainingSecs)}). Zenith rechecks the app and each selected {platformContextStore.appDataLabel} item immediately before moving them to {platformContextStore.trashLabel}.
                 </p>
               {/if}
             </div>
@@ -464,7 +490,7 @@
               <div>
                 <div class="text-xs font-medium">Ready to review this uninstall?</div>
                 <p class="text-meta text-muted-foreground mt-1">
-                  {formatBytes(selectedBytes)} selected for review. You can adjust related Library data below before creating the one-shot Trash plan.
+                  {formatBytes(selectedBytes)} selected for review. You can adjust related {platformContextStore.appDataLabel} below before creating the one-shot {platformContextStore.trashLabel} plan.
                 </p>
               </div>
               <Button
@@ -483,7 +509,7 @@
           <div class="pt-3 border-t border-border/60 space-y-2">
             <div class="flex items-center justify-between gap-3">
               <div>
-                <h3 class="text-xs font-semibold">Related Library data</h3>
+                <h3 class="text-xs font-semibold">Related {platformContextStore.appDataLabel}</h3>
                 <p class="text-caption text-muted-foreground mt-0.5">
                   Only high-confidence exact bundle matches are selected by default.
                 </p>

@@ -17,6 +17,7 @@ import type {
   AgentQuickSummary,
   IngestedAgentEvent,
   DiagnosticsSnapshot,
+  EnvironmentReport,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -24,6 +25,7 @@ import type {
   MemoryMetrics,
   PlanPreview,
   PlatformCapabilities,
+  PlatformContext,
   ProviderDescriptor,
   ProviderId,
   RecommendationPreview,
@@ -37,6 +39,7 @@ import type {
 } from '../models/types';
 import type { nativeApi } from './native';
 import { createDevelopmentPortsMock } from './mocks/developmentPorts';
+import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
 
 type ZenithApi = typeof nativeApi;
 
@@ -275,22 +278,24 @@ let lastMockScan: ScanResult | null = null;
 
 export const mockApi = {
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
+    return goldenCapabilitiesByPlatform.macos;
+  },
+
+  async getPlatformContext(): Promise<PlatformContext> {
     return {
       platform: 'macos',
-      system_actions: { status: 'available' },
-      cleanup: { status: 'available' },
-      intensive_cleanup: { status: 'available' },
-      large_files: { status: 'available' },
-      developer_artifacts: { status: 'available' },
-      installed_apps: { status: 'available' },
-      app_uninstall: { status: 'available' },
-      memory_metrics: { status: 'available' },
-      process_termination: { status: 'available' },
-      development_ports: { status: 'available' },
-      keep_awake: { status: 'available' },
-      local_models: { status: 'available' },
-      docker: { status: 'available' },
-      ai_integrations: { status: 'available' },
+      log_directory: '~/Library/Logs/Zenith',
+      reveal_label: 'Reveal in Finder',
+      trash_label: 'Trash',
+      app_data_label: 'Application Support',
+      quick_panel_surface_label: 'menu bar',
+      container_runtime_hint: 'Colima',
+      native_caption_bar: false,
+      overlay_title_bar: true,
+      primary_accelerator: 'meta',
+      app_identity_label: 'bundle identifier',
+      terminal_label: 'Terminal',
+      releases_url: 'https://github.com/jaeyoung0509/zenith/releases',
     };
   },
 
@@ -1393,6 +1398,34 @@ export const mockApi = {
       ],
       recent_errors: [],
       settings_corrupt_recovered: false,
+    };
+  },
+
+  /**
+   * Preview data for the environment self-check.
+   *
+   * The preview runs on the browser's platform, not on a machine with a
+   * Windows drive layout, so this reports what the preview session actually
+   * is instead of inventing a native fingerprint. The shape matches the
+   * backend response; the values are preview-only.
+   */
+  async runEnvironmentSelfCheck(): Promise<EnvironmentReport> {
+    return {
+      platform: 'macos',
+      fingerprint: [
+        'flavor: posix',
+        'profile_shape: posix_home',
+        'known_folder_redirected: false',
+        'temp_inside_profile: false',
+        'volume_identity: false',
+        'missing_tools: none',
+      ],
+      checks: [
+        { name: 'normalize_is_idempotent', outcome: 'pass', detail: '14 fixtures' },
+        { name: 'home_resolves', outcome: 'pass', detail: 'absolute, not a root' },
+        { name: 'signature_catalog_platforms', outcome: 'pass', detail: '0 findings' },
+      ],
+      failures: 0,
     };
   },
 

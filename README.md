@@ -57,24 +57,40 @@ and AI usage snapshots use a short backend cache.
 ## Public Beta Installation
 
 Zenith is distributed as a public beta for Apple Silicon (ARM64) Macs and
-Windows x64. Pre-built `.dmg` and NSIS `.exe` installers, build metadata, and
-SHA256 checksums are available under
+Windows x64. Pre-built `.dmg` and NSIS `.exe` installers, an SPDX software bill
+of materials, SHA256 checksums, build metadata, a recorded endpoint-protection
+review, and GitHub build provenance attestation are available under
 [GitHub Releases](https://github.com/jaeyoung0509/zenith/releases).
 
 ### Windows x64
 
-Download `Zenith-windows-x64-setup.exe`. It installs for the current user under
-`%LOCALAPPDATA%`, so normal installation does not require administrator access.
-The installer downloads Microsoft's WebView2 bootstrapper if the runtime is not
-already available.
+Two NSIS installers are published for Windows x64:
 
-The first Windows beta is intentionally unsigned while Zenith completes the
+- `Zenith-windows-x64-setup.exe` installs for the current user under
+  `%LOCALAPPDATA%\Zenith` and requires no administrator access.
+- `Zenith-windows-x64-setup-machine.exe` installs for all users under
+  `Program Files\Zenith` and requires elevation. It exists for managed machines
+  whose application-control policy (AppLocker default rules, WDAC, or Smart App
+  Control) refuses to execute binaries from user-writable locations. Installing
+  into `Program Files` does not make the binary trusted.
+
+Both installers embed Microsoft's WebView2 offline installer. Installation
+therefore completes without network access and the download grows by roughly
+130 MB. When WebView2 is missing, the installer runs Microsoft's WebView2
+installer with its own interface, so a failure is visible during installation
+instead of surfacing later as a window that never opens.
+
+The Windows beta is intentionally unsigned while Zenith completes the
 [SignPath Foundation](https://signpath.org/) open-source onboarding process.
-Microsoft Defender SmartScreen will therefore identify it as an unknown
-publisher. Confirm that the installer came from this repository's GitHub
-Release and verify its SHA256 value against `SHA256SUMS.txt` before choosing
-**More info → Run anyway**. See the [Windows guide](docs/WINDOWS.md) and
-[code signing policy](CODE_SIGNING_POLICY.md) for the exact transition plan.
+Microsoft Defender SmartScreen will identify it as an unknown publisher, and
+because SignPath Foundation issues organization-validated certificates that
+carry no SmartScreen reputation, **that warning is expected to persist after
+the first signed release**. Confirm that the installer came from this
+repository's GitHub Release and verify its SHA256 value against
+`SHA256SUMS.txt` before choosing **More info → Run anyway**. See the
+[Windows guide](docs/WINDOWS.md) and [code signing policy](CODE_SIGNING_POLICY.md)
+for the install modes, the endpoint-protection review gate, and the GitHub
+build provenance attestation.
 
 ### macOS ARM64
 
@@ -87,16 +103,37 @@ Release and verify its SHA256 value against `SHA256SUMS.txt` before choosing
 
 #### Opening unsigned beta builds on macOS
 
-Because beta builds are not notarized with a paid Apple Developer ID, macOS Gatekeeper will display a security warning on first launch (*"cannot be opened because the developer cannot be verified"* or *"is damaged and can't be opened"*).
+The macOS beta is unsigned and not notarized. That is a dated decision recorded
+in the [code signing policy](CODE_SIGNING_POLICY.md#macos-notarization): Zenith
+does not hold a paid Apple Developer ID, so the `.dmg` is never submitted to
+Apple's notary service and carries no stapled ticket. macOS Gatekeeper therefore
+blocks the first launch and displays a security warning (*"cannot be opened
+because the developer cannot be verified"* or, for some download paths,
+*"is damaged and can't be opened"*).
 
 To launch Zenith on macOS:
 1. Open the downloaded `.dmg` and drag **Zenith.app** into `/Applications`.
 2. In Finder, navigate to `/Applications`, right-click (or Control-click) **Zenith.app**, and select **Open**.
 3. In the confirmation dialog, click **Open**. (You only need to do this once).
-4. *Alternatively*, clear the macOS quarantine attribute in Terminal:
+4. *Alternatively*, clear the macOS quarantine attribute for this bundle in Terminal:
    ```bash
    xattr -cr /Applications/Zenith.app
    ```
+   This removes the malware check for that one bundle, so verify the published
+   SHA256 checksum and the GitHub build provenance attestation first.
+
+Do not disable Gatekeeper system-wide. Verify the DMG against `SHA256SUMS.txt`
+before overriding any warning.
+
+### Knowing when a corrected version exists
+
+Zenith has no updater and performs no background network activity, so it never
+checks for updates on its own and cannot tell you that a fix exists. To find
+out, open the [GitHub Releases](https://github.com/jaeyoung0509/zenith/releases)
+page and compare the newest tag with the version shown in Zenith. The
+application exposes that release URL (`PlatformContext.releases_url`) and links
+to it from the interface, so the check is one click away, but every check is
+user-initiated.
 
 ## Privacy & Local Diagnostics
 
@@ -104,6 +141,7 @@ To launch Zenith on macOS:
 - **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
 - **Local Logs**: Rotating error logs are stored on your Mac at `~/Library/Logs/Zenith/zenith.log`.
 - **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
+- **Doctor Self-Check**: run `Zenith --doctor` (or `Zenith --doctor --json`) to print a de-identified environment fingerprint and a self-check table; the command exits 1 when a self-check fails. It performs no network access, and nothing it prints contains a user name, machine name, drive letter, or profile path. Windows bug reports ask for this output because it is safe to paste.
 - **Minimized Agent Metadata**: Project Cockpit returns opaque project/session
   IDs, compact location hints, resource totals, and evidence labels. It does not
   return process IDs, command lines, environment values, prompts, or transcripts.
@@ -190,8 +228,11 @@ signing follows the project's [code signing policy](CODE_SIGNING_POLICY.md).
 
 Requirements:
 
-- macOS
-- Rust 1.80 or newer
+- macOS, or Windows 10 1809 or newer with the MSVC build tools (see
+  [docs/WINDOWS.md](docs/WINDOWS.md))
+- Rust 1.93 or newer. The crate declares `rust-version = "1.93.0"` in
+  `src-tauri/Cargo.toml`, and CI verifies the build against exactly that
+  toolchain.
 - Node.js 20 or newer
 - pnpm
 - `just` (recommended)
@@ -224,14 +265,31 @@ the configured application and Dock identity.
 Run the same checks expected before a change is submitted:
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-pnpm check
-pnpm test -- --run
-pnpm build
-just build-fast
+just lint              # cargo fmt --check, cargo clippy -D warnings, pnpm check
+just test              # Rust tests, Vitest, release-installer regression
+just check             # cargo check, pnpm check, pnpm build
+just supply-chain      # cargo deny, cargo audit, pnpm audit
+just build-fast        # macOS: debug .app bundle
 ```
+
+### What CI does and does not verify
+
+CI verifies frontend typecheck, Vitest, binding drift, and the Vite build; Rust
+formatting, clippy, unit and safety tests on macOS and Windows x64; packaging
+smoke builds for macOS and Windows; the declared MSRV build with Rust 1.93.0;
+and locked-dependency audits for both ecosystems. On Windows it also silently
+installs the per-user installer, runs `Zenith --doctor`, requires every
+self-check to pass, silently uninstalls, and fails if the install directory
+survives. The same job builds the machine-wide installer to prove it packages.
+
+CI does **not** verify redirected user folders, machines whose system drive is
+not `C:`, UNC or domain-joined profiles, non-NTFS volumes, non-UTF-8 code pages,
+standard-user (unprivileged) installation, application-control policy
+configurations, or machines without the WebView2 runtime under interactive use.
+The Windows validation matrix in
+[docs/WINDOWS_VALIDATION.md](docs/WINDOWS_VALIDATION.md) is a plan for manual
+runs; a row is evidence only once a run records its application version,
+Windows build, and date.
 
 ## Adding a cleanup signature
 

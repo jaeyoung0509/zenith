@@ -29,6 +29,7 @@ pub async fn start_scan(
 
     let execution_budgets = state.execution_budgets.clone();
     let registry = state.registry.clone();
+    let environment = state.environment.clone();
     let last_scan_store = state.last_scan.clone();
     let operation_gate = state.storage_operation_gate.clone();
     let (excluded_signatures, intensive_cleanup) = {
@@ -58,6 +59,7 @@ pub async fn start_scan(
                 cat_ref,
                 &excluded_signatures,
                 intensive_cleanup,
+                &environment,
                 |event| {
                     let _ = on_event.send(event);
                 },
@@ -97,6 +99,7 @@ pub async fn create_delete_plan(
     const PLAN_TTL_SECS: u64 = 300;
     let last_scan = state.last_scan.clone();
     let registry = state.registry.clone();
+    let environment = state.environment.clone();
     let delete_plans = state.delete_plans.clone();
     run_blocking(
         move || {
@@ -112,6 +115,7 @@ pub async fn create_delete_plan(
                 &scan_id,
                 &selected_item_ids,
                 &registry,
+                &environment,
             )
             .map_err(|error| error.to_string())?;
             let mut preview = plan.preview(PLAN_TTL_SECS);
@@ -159,6 +163,7 @@ pub async fn execute_clean(
     let operation_gate = state.storage_operation_gate.clone();
     let plans = state.delete_plans.clone();
     let last_scan = state.last_scan.clone();
+    let environment = state.environment.clone();
     let docker_status_cache = state.docker_status_cache.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
         operation_gate.run_write(|| {
@@ -190,7 +195,7 @@ pub async fn execute_clean(
             {
                 *lock_recover(&docker_status_cache) = None;
             }
-            Ok(CleanExecutor::execute(plan, |event| {
+            Ok(CleanExecutor::execute(plan, &environment, |event| {
                 let _ = on_event.send(event);
             }))
         })
@@ -231,6 +236,7 @@ pub async fn quick_clean_safe(
 ) -> Result<CleanResult, String> {
     let operation_gate = state.storage_operation_gate.clone();
     let registry = state.registry.clone();
+    let environment = state.environment.clone();
     let last_scan_store = state.last_scan.clone();
     let docker_status_cache = state.docker_status_cache.clone();
 
@@ -268,9 +274,14 @@ pub async fn quick_clean_safe(
     }
 
     // 2. Build the SafetyPlanner plan from trusted Safe-only IDs
-    let plan =
-        SafetyPlanner::create_plan_from_scan(&scan, &scan.scan_id, &selected_item_ids, &registry)
-            .map_err(|error| error.to_string())?;
+    let plan = SafetyPlanner::create_plan_from_scan(
+        &scan,
+        &scan.scan_id,
+        &selected_item_ids,
+        &registry,
+        &environment,
+    )
+    .map_err(|error| error.to_string())?;
 
     // 3. Execute through the operation gate, invalidating last_scan
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
@@ -295,7 +306,7 @@ pub async fn quick_clean_safe(
                 *lock_recover(&docker_status_cache) = None;
             }
 
-            Ok(CleanExecutor::execute(plan, |event| {
+            Ok(CleanExecutor::execute(plan, &environment, |event| {
                 let _ = on_event.send(event);
             }))
         })

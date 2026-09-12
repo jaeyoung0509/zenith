@@ -415,11 +415,17 @@ method requires an intentional mock decision.
 The shared Linux frontend job exports Specta bindings, checks binding and lock
 file drift, runs Svelte/Vitest, builds `dist`, and uploads that verified frontend
 artifact. macOS and Windows x64 run Rust format, Clippy, tests, and check in
-parallel. Each packaging smoke job depends on the shared frontend artifact and
-its matching Rust job, proving that the platform bundle embeds the exact tested
-frontend without rerunning the same frontend suite on every OS. Both packaging
-jobs pass the checked-in `.github/tauri.package-ci.json` override by path; this
-avoids shell-specific inline JSON quoting and disables `beforeBuildCommand`.
+parallel. Two additional jobs are independent of the packaging chain: `msrv`
+builds with the toolchain declared in `src-tauri/Cargo.toml` (Rust 1.93.0)
+through `just check-msrv`, and `supply-chain` runs `just supply-chain`
+(`cargo deny`, `cargo audit`, and `pnpm audit`) against both lockfiles. Each
+packaging smoke job depends on the shared frontend artifact and its matching
+Rust job, proving that the platform bundle embeds the exact tested frontend
+without rerunning the same frontend suite on every OS. Both packaging jobs pass
+a checked-in `.github/tauri.package-ci.json` override by path; this avoids
+shell-specific inline JSON quoting and disables `beforeBuildCommand`. The
+Windows packaging job builds both install modes and runs the installer/doctor
+gate described under [Release dependency graph](#release-dependency-graph).
 
 ### Release dependency graph
 
@@ -427,32 +433,62 @@ The release workflow is intentionally a fan-out/fan-in pipeline:
 
 ```text
 version + binding + frontend verification
+   + SPDX SBOM (locked manifests)
               |
        +------+------+
        |             |
  macOS ARM64     Windows x64
- unsigned DMG    current-user NSIS
+ unsigned DMG    per-user + machine-wide NSIS
        |             |
        +------+------+
+              |
+   build provenance attestation
+   (id-token + attestations write)
+              |
+   release-approval environment:
+   record + verify endpoint-review.json
               |
      one tagged prerelease
 ```
 
-Only the final job has `contents: write`; platform jobs can build and upload
-workflow artifacts but cannot create competing GitHub Releases. Public filenames
-are stable, while their download URLs remain immutable because the version is
-part of the tag path. Each platform emits separate build metadata and checksums,
-and the publisher also emits their combined checksum file. Both platform jobs
-use `scripts/release_checksums.cjs` rather than shell-specific text writers.
-The publisher normalizes any incoming CRLF to LF, validates every checksum line,
-and runs `shasum -c` against the merged artifacts before it can create a release.
+Only the final job has `contents: write`. The attestation job carries only
+`id-token: write` and `attestations: write`, and platform jobs can build and
+upload workflow artifacts but cannot create competing GitHub Releases. Public
+filenames are stable, while their download URLs remain immutable because the
+version is part of the tag path. Each platform emits build metadata and a
+checksum manifest; the verification job emits one SPDX SBOM generated from the
+locked `Cargo.lock`, `package.json`, and `pnpm-lock.yaml` (a staging directory
+keeps the scanner out of the multi-gigabyte build tree), and the publisher
+hashes the SBOM into its own manifest and emits the combined checksum file. All
+of them go through `scripts/release_checksums.cjs` rather than shell-specific
+text writers. The publisher normalizes any incoming CRLF to LF, validates every
+checksum line, and runs `shasum -c` against the merged artifacts before it can
+create a release.
 
-The Windows job generates a WinGet community-repository multi-file manifest
-from the exact NSIS bytes and computed SHA256 hash. v0.2.0 is the explicitly
-unsigned transition release. After SignPath Foundation approval, signing must
-be inserted between build and checksum generation and must follow
-`CODE_SIGNING_POLICY.md`; WinGet submission remains a post-publication gate so
+The Windows job builds the per-user installer from `src-tauri/tauri.conf.json`
+and the machine-wide installer from `.github/tauri.nsis-permachine.json`, then
+generates the WinGet community-repository multi-file manifest from the per-user
+installer's exact NSIS bytes and computed SHA256 hash. The public release
+remains unsigned in this transition; after SignPath Foundation approval,
+signing must be inserted between build and checksum generation and must follow
+`CODE_SIGNING_POLICY.md`, with checksums, SBOM, and attestation computed from
+the verified signed bytes. WinGet submission remains a post-publication gate so
 its immutable URL can be validated in Windows Sandbox.
+
+Two gates run before publication. The `attest-provenance` job uses
+`actions/attest-build-provenance` to bind each installer and SBOM to the
+repository, workflow, and tagged commit. The publishing job then runs inside the
+`release-approval` environment, where a maintainer submits the installers to
+Microsoft's endpoint-protection analysis and records the result; a detection, a
+missing record, or an artifact whose hash differs from the reviewed bytes fails
+the release before the publish step. `scripts/endpoint_review.cjs` writes and
+verifies the machine-checkable record.
+
+Windows packaging is also gated in CI: the `package-windows` job installs the
+built per-user installer silently, runs the binary's `--doctor` self-check,
+requires exit code 0 with zero failing checks, uninstalls silently, and fails if
+the install directory survives. The same job proves the machine-wide installer
+packages.
 
 ## External tools
 

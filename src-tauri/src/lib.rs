@@ -35,17 +35,44 @@ pub mod tooling;
 pub mod trash_manager;
 
 use commands::AppState;
+use platform::path_algebra::PathFlavor;
 use platform::{NativePlatformCapabilities, PlatformCapabilitiesProvider};
 use power::KeepAwakeManager;
 use signatures::SignatureRegistry;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::utils::config::WindowConfig;
+use tauri::utils::TitleBarStyle;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow, WebviewWindowBuilder,
 };
+
+/// How long after a dismissal a tray click is treated as part of that same
+/// click rather than as a new toggle request.
+///
+/// Windows delivers the focus loss before the tray mouse-up, so a naive
+/// `is_visible()` read on mouse-up re-shows the panel the user just dismissed.
+const TRAY_TOGGLE_SUPPRESSION: Duration = Duration::from_millis(400);
+
+/// Adapts a window's declarative configuration to the platform that draws it.
+///
+/// The overlay title bar and the transparent undecorated quick window are
+/// WebKit behaviors. WebView2 draws a native caption bar and does not composite
+/// a transparent undecorated window the same way, so the same configuration
+/// would reserve dead space and show alpha artifacts on Windows.
+fn platform_window_config(mut config: WindowConfig, flavor: PathFlavor) -> WindowConfig {
+    if flavor.is_windows() {
+        config.title_bar_style = TitleBarStyle::Visible;
+        if config.label == "quick" {
+            config.transparent = false;
+        }
+    }
+    config
+}
 
 pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     if let Some(window) = app.get_webview_window(label) {
@@ -62,8 +89,104 @@ pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindo
         .ok_or_else(|| {
             tauri::Error::AssetNotFound(format!("Window config for {label} not found"))
         })?;
+    let config = platform_window_config(config, PathFlavor::current());
 
     WebviewWindowBuilder::from_config(app, &config)?.build()
+}
+
+/// Tracks when the quick panel was last hidden so a tray click that arrives
+/// immediately after a dismissal is not mistaken for a request to open it.
+#[derive(Default)]
+struct QuickPanelVisibility {
+    hidden_at: Mutex<Option<Instant>>,
+}
+
+impl QuickPanelVisibility {
+    fn mark_hidden(&self) {
+        let mut hidden_at = self.hidden_at.lock().unwrap_or_else(|p| p.into_inner());
+        *hidden_at = Some(Instant::now());
+    }
+
+    fn mark_shown(&self) {
+        let mut hidden_at = self.hidden_at.lock().unwrap_or_else(|p| p.into_inner());
+        *hidden_at = None;
+    }
+
+    fn hidden_ago(&self) -> Option<Duration> {
+        self.hidden_at
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .map(|hidden_at| hidden_at.elapsed())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayToggle {
+    Show,
+    Hide,
+    /// Consume the click: it belongs to the dismissal that just happened.
+    Suppress,
+}
+
+fn tray_toggle_action(
+    visible: bool,
+    hidden_ago: Option<Duration>,
+    suppression: Duration,
+) -> TrayToggle {
+    if visible {
+        return TrayToggle::Hide;
+    }
+    match hidden_ago {
+        Some(ago) if ago < suppression => TrayToggle::Suppress,
+        _ => TrayToggle::Show,
+    }
+}
+
+fn hide_quick_panel(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("quick") {
+        // Only a visible-to-hidden transition is a dismissal. Recording a
+        // marker while the panel is already hidden would let the suppression
+        // window swallow the user's next, genuine request to open it.
+        let was_visible = window.is_visible().unwrap_or(false);
+        let _ = window.hide();
+        if was_visible {
+            app.state::<QuickPanelVisibility>().mark_hidden();
+        }
+    }
+}
+
+/// Toggles the quick panel in response to an interface request.
+///
+/// The interface toggle resolves the same tray anchor as a tray click, so the
+/// panel is positioned where the menu-bar or notification-area icon is instead
+/// of wherever it was last left.
+pub fn toggle_quick_panel_from_app(app: &AppHandle) {
+    let tray_rect = app
+        .tray_by_id("main-tray")
+        .and_then(|tray| tray.rect().ok().flatten());
+    toggle_quick_panel(app, tray_rect);
+}
+
+/// Toggles the quick panel for a user-initiated click, suppressing a click that
+/// is really the tail of the dismissal it would otherwise undo.
+fn toggle_quick_panel(app: &AppHandle, tray_rect: Option<Rect>) {
+    let Ok(window) = ensure_window(app, "quick") else {
+        return;
+    };
+    let visibility = app.state::<QuickPanelVisibility>();
+    let visible = window.is_visible().unwrap_or(false);
+
+    match tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION) {
+        TrayToggle::Hide => {
+            let _ = window.hide();
+            visibility.mark_hidden();
+        }
+        TrayToggle::Suppress => {
+            // Clear the marker so the next click opens the panel.
+            visibility.mark_shown();
+        }
+        TrayToggle::Show => show_quick_panel_tracked(app, &window, tray_rect),
+    }
 }
 
 pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
@@ -71,8 +194,8 @@ pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
-    if let Some(quick) = app.get_webview_window("quick") {
-        let _ = quick.hide();
+    if app.get_webview_window("quick").is_some() {
+        hide_quick_panel(app);
     }
     Ok(())
 }
@@ -150,9 +273,20 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
     let _ = window.set_focus();
 }
 
+/// Shows the quick panel and records that it is open, which clears the
+/// dismissal marker a stale tray click would otherwise consume.
+fn show_quick_panel_tracked(app: &AppHandle, window: &WebviewWindow, tray_rect: Option<Rect>) {
+    show_quick_panel(window, tray_rect);
+    app.state::<QuickPanelVisibility>().mark_shown();
+}
+
 pub fn run() {
     crate::platform::environment::set_webview_version(tauri::webview_version().ok());
-    let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
+    let environment = Arc::new(crate::platform::PlatformEnvironment::native());
+    // The catalog is loaded against the same description every other component
+    // receives, instead of building a second, unrelated native environment.
+    let registry =
+        Arc::new(SignatureRegistry::load_embedded_with(&environment).unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
     awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
@@ -195,9 +329,15 @@ pub fn run() {
         settings.clone(),
     ));
     let platform_capabilities: Arc<dyn PlatformCapabilitiesProvider> =
-        Arc::new(NativePlatformCapabilities::new());
+        Arc::new(NativePlatformCapabilities::new(environment.clone()));
+    // The container host is observed once, at the composition root. The
+    // adapter never reads the process environment itself.
+    let container_host =
+        crate::docker::adapter::ContainerHost::from_value(std::env::var("DOCKER_HOST").ok());
 
     let app_state = AppState {
+        environment: environment.clone(),
+        container_host,
         registry,
         awake_manager: awake_manager.clone(),
         settings: settings.clone(),
@@ -233,12 +373,23 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .manage(app_state)
+        .manage(QuickPanelVisibility::default())
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "quick" {
+            if window.label() != "quick" {
+                return;
+            }
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = window.hide();
+                    hide_quick_panel(window.app_handle());
                 }
+                // The panel dismisses itself when it loses focus. Recording
+                // that here is what makes the following tray mouse-up
+                // recognisable as the tail of this dismissal.
+                tauri::WindowEvent::Focused(false) => {
+                    hide_quick_panel(window.app_handle());
+                }
+                _ => {}
             }
         })
         .setup(move |app| {
@@ -288,16 +439,10 @@ pub fn run() {
                         let _ = show_main_window(app);
                     }
                     "toggle_quick" => {
-                        if let Ok(window) = ensure_window(app, "quick") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let tray_rect = app
-                                    .tray_by_id("main-tray")
-                                    .and_then(|tray| tray.rect().ok().flatten());
-                                show_quick_panel(&window, tray_rect);
-                            }
-                        }
+                        let tray_rect = app
+                            .tray_by_id("main-tray")
+                            .and_then(|tray| tray.rect().ok().flatten());
+                        toggle_quick_panel(app, tray_rect);
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -310,15 +455,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Ok(quick_win) = ensure_window(app, "quick") {
-                            let is_vis = quick_win.is_visible().unwrap_or(false);
-                            if is_vis {
-                                let _ = quick_win.hide();
-                            } else {
-                                show_quick_panel(&quick_win, Some(rect));
-                            }
-                        }
+                        toggle_quick_panel(tray.app_handle(), Some(rect));
                     }
                 })
                 .build(app)?;
@@ -406,6 +543,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::open_dashboard_window,
             commands::get_app_version,
             commands::get_platform_capabilities,
+            commands::get_platform_context,
+            commands::run_environment_self_check,
             commands::toggle_quick_panel,
             commands::get_diagnostics,
             commands::open_logs_folder,
@@ -414,6 +553,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             storage_commands::start_large_file_scan,
             storage_commands::cancel_large_file_scan,
             storage_commands::prepare_large_file_trash,
+            storage_commands::reveal_large_file,
             storage_commands::pick_developer_workspace,
             storage_commands::register_developer_home_workspace,
             storage_commands::start_developer_artifact_scan,
@@ -428,8 +568,17 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg(test)]
 mod tests {
+    use super::platform_window_config;
     use super::quick_panel_position;
     use super::specta_builder;
+    use super::tray_toggle_action;
+    use super::QuickPanelVisibility;
+    use super::TrayToggle;
+    use super::TRAY_TOGGLE_SUPPRESSION;
+    use crate::platform::path_algebra::PathFlavor;
+    use std::time::Duration;
+    use tauri::utils::config::WindowConfig;
+    use tauri::utils::TitleBarStyle;
     use tauri::{PhysicalPosition, PhysicalSize};
 
     #[test]
@@ -468,6 +617,124 @@ mod tests {
     }
 
     #[test]
+    fn windows_window_config_uses_the_native_caption_bar() {
+        let config: WindowConfig = serde_json::from_str(
+            r#"{
+                "label": "main",
+                "title": "Zenith",
+                "decorations": true,
+                "transparent": false,
+                "titleBarStyle": "Overlay"
+            }"#,
+        )
+        .expect("parse window config");
+        let adapted = platform_window_config(config, PathFlavor::Windows);
+
+        assert_eq!(adapted.title_bar_style, TitleBarStyle::Visible);
+        assert!(adapted.decorations);
+    }
+
+    #[test]
+    fn windows_quick_window_is_not_transparent() {
+        let config: WindowConfig = serde_json::from_str(
+            r#"{
+                "label": "quick",
+                "title": "Zenith Quick",
+                "decorations": false,
+                "transparent": true,
+                "alwaysOnTop": true
+            }"#,
+        )
+        .expect("parse window config");
+        let adapted = platform_window_config(config, PathFlavor::Windows);
+
+        assert!(
+            !adapted.transparent,
+            "WebView2 does not composite a transparent undecorated window"
+        );
+        assert!(!adapted.decorations);
+        assert!(adapted.always_on_top);
+    }
+
+    #[test]
+    fn macos_window_config_is_left_alone() {
+        let config: WindowConfig = serde_json::from_str(
+            r#"{
+                "label": "main",
+                "title": "Zenith",
+                "decorations": true,
+                "transparent": false,
+                "titleBarStyle": "Overlay"
+            }"#,
+        )
+        .expect("parse window config");
+        let adapted = platform_window_config(config, PathFlavor::Posix);
+        assert_eq!(adapted.title_bar_style, TitleBarStyle::Overlay);
+
+        let quick: WindowConfig = serde_json::from_str(
+            r#"{"label": "quick", "title": "Zenith Quick", "transparent": true}"#,
+        )
+        .expect("parse window config");
+        assert!(platform_window_config(quick, PathFlavor::Posix).transparent);
+    }
+
+    #[test]
+    fn a_click_after_a_dismissal_does_not_reopen_the_panel() {
+        let suppression = Duration::from_millis(400);
+
+        // Blur dismissal already ran: the click belongs to that dismissal.
+        assert_eq!(
+            tray_toggle_action(false, Some(Duration::from_millis(20)), suppression),
+            TrayToggle::Suppress
+        );
+        // A click after the suppression window is a genuine open request.
+        assert_eq!(
+            tray_toggle_action(false, Some(Duration::from_millis(900)), suppression),
+            TrayToggle::Show
+        );
+        // Nothing was hidden recently, so the click opens the panel.
+        assert_eq!(
+            tray_toggle_action(false, None, suppression),
+            TrayToggle::Show
+        );
+        // A visible panel always hides, however recently it appeared.
+        for hidden_ago in [None, Some(Duration::from_millis(1))] {
+            assert_eq!(
+                tray_toggle_action(true, hidden_ago, suppression),
+                TrayToggle::Hide
+            );
+        }
+    }
+
+    #[test]
+    fn a_consumed_click_clears_the_dismissal_marker() {
+        let visibility = QuickPanelVisibility::default();
+        assert!(visibility.hidden_ago().is_none());
+
+        visibility.mark_hidden();
+        let hidden_ago = visibility.hidden_ago().expect("just hidden");
+        assert!(hidden_ago < Duration::from_secs(5));
+        assert_eq!(
+            tray_toggle_action(false, Some(hidden_ago), TRAY_TOGGLE_SUPPRESSION),
+            TrayToggle::Suppress
+        );
+
+        // The suppressed click clears the marker so the next click opens.
+        visibility.mark_shown();
+        assert!(visibility.hidden_ago().is_none());
+        assert_eq!(
+            tray_toggle_action(false, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION),
+            TrayToggle::Show
+        );
+
+        visibility.mark_hidden();
+        assert_eq!(
+            tray_toggle_action(true, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION),
+            TrayToggle::Hide
+        );
+    }
+
+    #[test]
     #[ignore = "code generation"]
     fn export_typescript_bindings() {
         let builder = specta_builder();
@@ -477,5 +744,29 @@ mod tests {
                 "../src/lib/bindings/tauri.ts",
             )
             .expect("Failed to export TypeScript bindings");
+    }
+
+    /// Exports the capability snapshots the frontend renders.
+    ///
+    /// The frontend consumes this file instead of a hand-written literal, so
+    /// its idea of what Windows can do cannot drift from the backend's. The
+    /// binding drift gate in CI covers this file at no additional cost.
+    #[test]
+    #[ignore = "code generation"]
+    fn export_platform_capability_golden() {
+        use crate::models::{PlatformCapabilities, PlatformKind};
+        let golden = serde_json::json!({
+            "macos": PlatformCapabilities::macos(),
+            "windows": PlatformCapabilities::windows(),
+            "linux": PlatformCapabilities::unsupported(PlatformKind::Linux),
+            "other": PlatformCapabilities::unsupported(PlatformKind::Other),
+        });
+        let rendered =
+            serde_json::to_string_pretty(&golden).expect("serialize capability golden data") + "\n";
+        std::fs::write(
+            "../src/lib/bindings/platform-capabilities.golden.json",
+            rendered,
+        )
+        .expect("write capability golden data");
     }
 }

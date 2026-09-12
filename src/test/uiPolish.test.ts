@@ -1,15 +1,25 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import type { CleanFailureReason, CleanResult } from '../lib/models/types';
 import CleanResultModal from '../lib/components/CleanResultModal.svelte';
 import QuickPanel from '../routes/quick/QuickPanel.svelte';
 import SettingsView from '../routes/dashboard/SettingsView.svelte';
+import ModelsView from '../routes/dashboard/ModelsView.svelte';
 import Card from '../lib/components/Card.svelte';
 import Button from '../lib/components/Button.svelte';
 import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { platformContextStore } from '../lib/stores/platformContext.svelte';
+import { localModelsStore } from '../lib/stores/models.svelte';
+import { goldenCapabilitiesByPlatform } from '../lib/models/platformCapabilities';
 import { mockApi } from '../lib/api/mock';
 import ReorderControls from '../lib/components/ReorderControls.svelte';
+
+afterEach(() => {
+  localModelsStore.models = [];
+  platformCapabilitiesStore.reset();
+  platformContextStore.reset();
+});
 
 describe('theme surface contract', () => {
   it('lets the document body follow the active design tokens', () => {
@@ -38,14 +48,36 @@ describe('compact-window layout contracts', () => {
 });
 
 describe('accessible action contracts', () => {
-  it('labels icon-only model reveal actions', () => {
-    const source = readFileSync(
-      new URL('../routes/dashboard/ModelsView.svelte', import.meta.url),
-      'utf8'
-    );
+  it('labels the icon-only model reveal action and gates it on platform capabilities', async () => {
+    localModelsStore.models = [
+      {
+        id: 'model-reveal-contract',
+        name: 'Llama 3 8B',
+        source: 'ollama',
+        path: '/Users/mock/.ollama/models/llama3',
+        size_bytes: 4 * 1024 ** 3,
+        format: 'gguf',
+        parameter_size: '8B',
+        quantization: 'Q4_K_M',
+        last_modified: null,
+      },
+    ];
+    platformContextStore.context = await mockApi.getPlatformContext();
+    platformCapabilitiesStore.capabilities = {
+      ...goldenCapabilitiesByPlatform.macos,
+      system_actions: { status: 'unavailable', reason: 'Revealing files is not supported here.' },
+    };
 
-    expect(source).toContain('ariaLabel={`Show ${model.name} in file manager`}');
-    expect(source).toContain('title="Show in File Manager"');
+    const unavailable = render(ModelsView);
+    expect(unavailable.body).toContain('aria-label="Show Llama 3 8B in file manager"');
+    expect(unavailable.body).toContain('title="Revealing files is not supported here."');
+    expect(unavailable.body).toContain('disabled=""');
+
+    platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+    const available = render(ModelsView);
+    // The tooltip is the backend's own action label, not a hardcoded macOS noun.
+    expect(available.body).toContain('title="Reveal in Finder"');
+    expect(available.body).not.toContain('disabled=""');
   });
 
   it('offers keyboard-operable ordering controls in Settings', () => {

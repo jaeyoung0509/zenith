@@ -1,4 +1,5 @@
 use crate::models::{Category, FileSize, RiskTier, ScanItem};
+use crate::platform::description::PlatformEnvironment;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -13,8 +14,16 @@ pub struct OrbStackAdapter;
 
 impl OrbStackAdapter {
     /// Reports OrbStack's stateful VM disk for visibility without making it cleanable.
-    pub fn scan_items() -> Vec<ScanItem> {
-        let Some(home) = crate::platform::NativePlatformPaths::new().home() else {
+    ///
+    /// The reviewed path is a macOS group container, so this adapter reports
+    /// nothing on any other platform rather than looking for the same literal
+    /// folders under a different profile layout. The profile comes from the
+    /// environment instead of the host.
+    pub fn scan_items(environment: &PlatformEnvironment) -> Vec<ScanItem> {
+        if !cfg!(target_os = "macos") {
+            return Vec::new();
+        }
+        let Some(home) = environment.user_home() else {
             return Vec::new();
         };
         Self::scan_path(&Self::storage_path_for_home(&home))
@@ -73,10 +82,46 @@ mod tests {
     use super::{OrbStackAdapter, ORBSTACK_STORAGE_PATH};
     #[cfg(unix)]
     use crate::models::{Category, RiskTier};
+    use crate::platform::description::PlatformEnvironment;
+    use crate::platform::path_algebra::PathFlavor;
     #[cfg(unix)]
     use std::fs::OpenOptions;
     #[cfg(unix)]
     use std::io::{Seek, SeekFrom, Write};
+
+    fn profile_with_storage() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("profile");
+        let storage = home.join(ORBSTACK_STORAGE_PATH);
+        std::fs::create_dir_all(storage.parent().unwrap()).unwrap();
+        std::fs::write(&storage, b"data").unwrap();
+        (fixture, home, storage)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn storage_is_resolved_from_the_stated_profile() {
+        let (_fixture, home, storage) = profile_with_storage();
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(&home);
+
+        let items = OrbStackAdapter::scan_items(&environment);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].path, storage.to_string_lossy());
+
+        // An unstated profile reports nothing instead of falling back to the
+        // host profile.
+        let unstated = PlatformEnvironment::simulated(PathFlavor::Posix);
+        assert!(OrbStackAdapter::scan_items(&unstated).is_empty());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn other_platforms_report_no_orbstack_storage() {
+        let (_fixture, home, _storage) = profile_with_storage();
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(&home);
+
+        assert!(OrbStackAdapter::scan_items(&environment).is_empty());
+    }
 
     #[test]
     fn resolves_only_the_reviewed_group_container_path() {

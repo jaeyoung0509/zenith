@@ -568,7 +568,7 @@
 
   {#if showRuleEditor}
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="presentation">
-      <div class="w-full max-w-xl max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-border bg-card p-5 text-foreground shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="rule-editor-title" tabindex="-1">
+      <div class="w-full max-w-xl max-h-[calc(100vh-2rem)] overflow-y-auto scroll-stable rounded-xl border border-border bg-card p-5 text-foreground shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="rule-editor-title" tabindex="-1">
         <div class="flex items-start justify-between gap-3 border-b border-border/60 pb-3">
           <div>
             <h2 id="rule-editor-title" class="text-sm font-semibold">{editorMode === 'basic' ? 'Build an app rule' : 'Edit legacy process rule'}</h2>

@@ -2,6 +2,8 @@
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
   import { scanStore } from '../stores/scan.svelte';
+  import { platformContextStore } from '../stores/platformContext.svelte';
+  import { canReveal, revealUnavailableReason, runReveal } from '../utils/reveal';
   import { tauriShowInFileManager } from '../utils/tauri';
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
@@ -24,6 +26,7 @@
   });
   let isManual = $derived(item.risk === 'manual' || cacheMetadata.management_mode === 'advisory');
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual);
+  let revealError = $state<string | null>(null);
 
   function handleToggle() {
     if (isManual) return;
@@ -32,7 +35,8 @@
 
   function handleReveal(e: MouseEvent) {
     e.stopPropagation();
-    tauriShowInFileManager(item.path);
+    revealError = null;
+    void runReveal(() => tauriShowInFileManager(item.path), (message) => (revealError = message));
   }
 </script>
 
@@ -46,8 +50,9 @@
       <button
         type="button"
         onclick={handleReveal}
-        title="Manual item: requires dedicated adapter or review"
-        class="mt-0.5 px-1.5 py-0.5 rounded text-caption font-medium border border-destructive/30 text-destructive bg-destructive/10 flex items-center gap-0.5 shrink-0 hover:bg-destructive/20 transition-colors cursor-pointer"
+        disabled={!canReveal()}
+        title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
+        class="mt-0.5 px-1.5 py-0.5 rounded text-caption font-medium border border-destructive/30 text-destructive bg-destructive/10 flex items-center gap-0.5 shrink-0 hover:bg-destructive/20 transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
       >
         <span>Manual</span>
         <ArrowUpRight size={10} />
@@ -104,6 +109,9 @@
   </div>
 
   <div class="flex items-center gap-2 shrink-0">
+    {#if revealError}
+      <span role="alert" class="text-caption text-destructive">{revealError}</span>
+    {/if}
     <span class="w-[12ch] whitespace-nowrap text-right text-xs font-mono tabular-nums font-semibold text-foreground">
       {cacheMetadata.size_semantics === 'conservative_lower_bound' ? '≥ ' : cacheMetadata.size_semantics === 'informational' ? '~ ' : ''}{formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
@@ -112,9 +120,10 @@
       variant="ghost"
       size="icon"
       class="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+      disabled={!canReveal()}
       onclick={handleReveal}
       ariaLabel={`Show ${item.name} in file manager`}
-      title={`Show ${item.name} in file manager`}
+      title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
     >
       <FolderOpen size={13} class="text-muted-foreground" />
     </Button>

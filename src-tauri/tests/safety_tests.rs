@@ -1,130 +1,297 @@
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
     Category, CategoryResult, CleanFailureReason, CleanStrategy, FileSize, RiskTier, ScanItem,
     ScanResult, Signature, ZenithError,
 };
+use zenith_lib::platform::path_algebra::PathFlavor;
+use zenith_lib::platform::paths::SimulatedPaths;
+use zenith_lib::platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
+use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
 use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
 use zenith_lib::scanner::SizeCalculator;
 use zenith_lib::signatures::SignatureRegistry;
 
+/// The Windows environment every Windows blacklist assertion is computed
+/// against. The classifier's input is derived from the same value the runtime
+/// would receive, so a test cannot describe one machine and classify another.
+fn windows_environment(home: Option<&str>, temp_dir: &str) -> PlatformEnvironment {
+    let mut roots = SimulatedPaths::new()
+        .with_flavor(PathFlavor::Windows)
+        .with_temp_dir(temp_dir)
+        .with_program_files(r"Z:\Program Files")
+        .with_program_data(r"Z:\ProgramData");
+    if let Some(home) = home {
+        roots = roots
+            .with_home(home)
+            .with_local_app_data(format!(r"{home}\AppData\Local"))
+            .with_roaming_app_data(format!(r"{home}\AppData\Roaming"));
+    }
+    PlatformEnvironment::simulated(PathFlavor::Windows)
+        .with_roots(std::sync::Arc::new(roots))
+        .with_known_folder(KnownFolder::Documents, r"D:\OneDrive\Documents")
+        .with_path_entry(r"Z:\Windows\System32")
+}
+
+/// The classifier input derived from [`windows_environment`].
+fn windows_classifier(home: Option<&str>, temp_dir: &str) -> BlacklistEnvironment {
+    BlacklistEnvironment::from_environment(&windows_environment(home, temp_dir))
+}
+
+/// The host's own environment: the POSIX assertions are about the real profile
+/// the process runs under, which is the one case where host facts are the
+/// intended input.
+fn native_environment() -> PlatformEnvironment {
+    PlatformEnvironment::native()
+}
+
 #[test]
 fn test_blacklist_root_and_home_rejection() {
-    // 1. Root / must be rejected
-    assert!(Blacklist::is_blacklisted(Path::new("/")));
-    assert!(Blacklist::validate(Path::new("/")).is_err());
-
-    // 2. Home ~ must be rejected
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = PathBuf::from(&home);
-        assert!(Blacklist::is_blacklisted(&home_path));
-        assert!(Blacklist::validate(&home_path).is_err());
+    // 1. Root / and every drive root must be rejected
+    let host = native_environment();
+    for root in ["/", "//", "///"] {
+        assert!(Blacklist::is_blacklisted_with(Path::new(root), &host));
+        assert!(Blacklist::validate_with(Path::new(root), &host).is_err());
     }
+
+    // 2. The user home the rule protects is stated literally, so this body
+    // executes identically on every host instead of depending on the profile
+    // the test runner happens to have.
+    let stated_home = "/Users/zenith-tester";
+    let environment = windows_classifier(Some(stated_home), "/var/folders/zenith/T");
+    assert_eq!(
+        classify_windows(stated_home, &environment),
+        BlacklistVerdict::Denied("user home")
+    );
+    assert_eq!(
+        classify_windows("/users/ZENITH-TESTER", &environment),
+        BlacklistVerdict::Denied("user home"),
+        "Windows home comparison folds case"
+    );
+    for app_data in [
+        "/Users/zenith-tester/AppData",
+        "/Users/zenith-tester/AppData/Local",
+        "/Users/zenith-tester/AppData/Roaming",
+    ] {
+        assert!(
+            classify_windows(app_data, &environment).is_denied(),
+            "Expected {app_data} to be denied"
+        );
+    }
+    // The rule is driven by the stated home: without one this location is not
+    // recognized as a profile, while the filesystem root still is.
+    let without_home = windows_classifier(None, "/var/folders/zenith/T");
+    assert_eq!(
+        classify_windows(stated_home, &without_home),
+        BlacklistVerdict::Allowed
+    );
+    assert_eq!(
+        classify_windows("/", &without_home),
+        BlacklistVerdict::Denied("filesystem root")
+    );
+
+    // 3. POSIX flavor: the provider's own home is refused as a whole. The
+    // assertion is unconditional; a missing home fails the test loudly.
+    let native_home = NativePlatformPaths::new()
+        .home()
+        .expect("a POSIX host exposes a home directory");
+    assert!(Blacklist::is_blacklisted_with(&native_home, &host));
+    assert!(Blacklist::validate_with(&native_home, &host).is_err());
 }
 
 #[test]
 fn test_blacklist_system_directories_rejection() {
     #[cfg(unix)]
-    let sys_paths = [
-        "/System",
-        "/System/Library",
-        "/bin",
-        "/sbin",
-        "/usr",
-        "/usr/bin",
-        "/etc",
-        "/var",
-        "/private",
-        "/Applications",
-        "/Library",
-    ];
-    #[cfg(windows)]
-    let sys_paths = [
-        "C:\\Windows",
-        "C:\\Windows\\System32",
-        "C:\\Program Files",
-        "C:\\Program Files (x86)",
-    ];
-
-    for path_str in &sys_paths {
-        let path = Path::new(path_str);
-        assert!(
-            Blacklist::is_blacklisted(path),
-            "Expected {} to be blacklisted",
-            path_str
-        );
-        assert!(Blacklist::validate(path).is_err());
-    }
-}
-
-#[test]
-fn test_blacklist_sensitive_user_directories() {
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = PathBuf::from(&home);
-        let sensitive = [
-            ".ssh",
-            ".ssh/id_rsa",
-            ".gnupg",
-            ".aws",
-            ".aws/credentials",
-            ".azure",
-            ".kube",
-            "Library/Keychains",
-            "Desktop",
-            "Documents",
-            "Pictures",
-            "Movies",
-            "Music",
+    {
+        let sys_paths = [
+            "/System",
+            "/System/Library",
+            "/bin",
+            "/sbin",
+            "/usr",
+            "/usr/bin",
+            "/etc",
+            "/var",
+            "/private",
+            "/Applications",
+            "/Library",
         ];
-
-        for rel in &sensitive {
-            let full_path = home_path.join(rel);
+        let host = native_environment();
+        for path_str in &sys_paths {
+            let path = Path::new(path_str);
             assert!(
-                Blacklist::is_blacklisted(&full_path),
+                Blacklist::is_blacklisted_with(path, &host),
                 "Expected {} to be blacklisted",
-                full_path.display()
+                path_str
             );
-            assert!(Blacklist::validate(&full_path).is_err());
+            assert!(Blacklist::validate_with(path, &host).is_err());
+        }
+    }
+
+    // Windows system roots are drive-letter independent: the same tails are
+    // refused whether the system lives on `C:`, another drive, or the drive the
+    // stated profile happens to use. Nothing here encodes the drive letter or
+    // profile layout of the host that runs the test.
+    let platform = windows_environment(
+        Some(r"Z:\Users\tester"),
+        r"Z:\Users\tester\AppData\Local\Temp",
+    );
+    let environment = BlacklistEnvironment::from_environment(&platform);
+    for drive in ["C:", "D:", "Z:"] {
+        for tail in [
+            r"\Windows",
+            r"\Windows\System32",
+            r"\Program Files",
+            r"\Program Files (x86)",
+            r"\ProgramData",
+            r"\Users",
+        ] {
+            let path_str = format!("{drive}{tail}");
+            let path = Path::new(&path_str);
+            assert!(
+                classify_windows(&path_str, &environment).is_denied(),
+                "Expected {path_str} to be denied on Windows"
+            );
+            assert!(
+                Blacklist::validate_with(path, &platform).is_err(),
+                "Expected {path_str} to be rejected"
+            );
         }
     }
 }
 
 #[test]
-fn test_blacklist_parent_traversal_attacks() {
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = PathBuf::from(&home);
-        // Attempting to escape via ../ into .ssh
-        let attack_path = home_path.join(".cache/foo/../../.ssh");
-        assert!(
-            Blacklist::validate(&attack_path).is_err(),
-            "Expected traversal attack to be rejected"
-        );
+fn test_blacklist_sensitive_user_directories() {
+    let sensitive = [
+        ".ssh",
+        ".ssh/id_rsa",
+        ".gnupg",
+        ".aws",
+        ".aws/credentials",
+        ".azure",
+        ".kube",
+        "Library/Keychains",
+        "Desktop",
+        "Documents",
+        "Pictures",
+        "Movies",
+        "Music",
+    ];
 
-        let attack_root = PathBuf::from("/Users/../System");
-        assert!(Blacklist::validate(&attack_root).is_err());
+    // The home these locations are relative to is stated, so the body always
+    // executes and every assertion can fail.
+    let stated_home = r"D:\Users\tester";
+    let environment = windows_classifier(Some(stated_home), r"D:\Users\tester\AppData\Local\Temp");
+    for rel in &sensitive {
+        let path = format!("{stated_home}/{}", rel.replace('/', "\\"));
+        let verdict = classify_windows(&path, &environment);
+        assert_eq!(
+            verdict,
+            BlacklistVerdict::Denied("sensitive user directory"),
+            "Expected {path} to be denied"
+        );
     }
+    // Only the protected subdirectories are denied; the rest of the profile is
+    // still cleanable.
+    assert_eq!(
+        classify_windows(r"D:\Users\tester\dev\repo\.cache", &environment),
+        BlacklistVerdict::Allowed
+    );
+
+    // POSIX flavor: the provider's own home, asserted unconditionally.
+    let native_home = NativePlatformPaths::new()
+        .home()
+        .expect("a POSIX host exposes a home directory");
+    for rel in &sensitive {
+        let full_path = native_home.join(rel);
+        let host = native_environment();
+        assert!(
+            Blacklist::is_blacklisted_with(&full_path, &host),
+            "Expected {} to be blacklisted",
+            full_path.display()
+        );
+        assert!(Blacklist::validate_with(&full_path, &host).is_err());
+    }
+}
+
+#[test]
+fn test_blacklist_parent_traversal_attacks() {
+    // POSIX flavor: traversal that lands on a protected location is rejected
+    // even though the unresolved spelling looks harmless.
+    let native_home = NativePlatformPaths::new()
+        .home()
+        .expect("a POSIX host exposes a home directory");
+    let attack_path = native_home.join(".cache/foo/../../.ssh");
+    let host = native_environment();
+    assert!(
+        Blacklist::validate_with(&attack_path, &host).is_err(),
+        "Expected traversal attack to be rejected"
+    );
+    // The spelling is POSIX, so the machine this assertion is about is a POSIX
+    // one: the verdict must not depend on the host that runs the test.
+    let posix = PlatformEnvironment::simulated(PathFlavor::Posix).with_home("/Users/zenith-tester");
+    assert!(
+        Blacklist::validate_with(Path::new("/Users/../System"), &posix).is_err(),
+        "a POSIX traversal into /System must be rejected"
+    );
+
+    // Windows flavor, drive-letter independent: the same attacks normalize to a
+    // system directory and are refused, while traversal that stays inside the
+    // stated profile remains cleanable.
+    let environment = windows_environment(
+        Some(r"Z:\Users\tester"),
+        r"Z:\Users\tester\AppData\Local\Temp",
+    );
+    let classifier = BlacklistEnvironment::from_environment(&environment);
+    for attack in [
+        r"Z:\Users\tester\..\..\Windows",
+        r"Z:\Users\tester\Documents\..\..\..\Windows\System32",
+        r"Z:\Users\tester\dev\..\..\..\Program Files\Vendor",
+        // More `..` than the path has components: Windows would clamp this to
+        // the drive root, so the unresolved traversal is refused.
+        r"Z:\Users\tester\dev\..\..\..\..\Program Files\Vendor",
+        r"..\Windows",
+        r"D:\Users\tester\..\..\ProgramData\app",
+        r"D:\Users\tester\AppData\Local\Temp\..\..\..\..\..\Windows",
+    ] {
+        let verdict = classify_windows(attack, &classifier);
+        assert!(
+            verdict.is_denied(),
+            "Expected traversal {attack} to be denied, got {verdict:?}"
+        );
+    }
+    assert_eq!(
+        classify_windows(r"Z:\Users\tester\dev\cache\..\cache\file.tmp", &classifier),
+        BlacklistVerdict::Allowed
+    );
+    assert_eq!(
+        classify_windows(r"Z:\Users\tester\docs\..\..\tester\dev\repo", &classifier),
+        BlacklistVerdict::Allowed
+    );
 }
 
 #[test]
 fn test_blacklist_git_directory_rejection() {
     #[cfg(unix)]
     {
+        let host = native_environment();
         let git_dir = Path::new("/tmp/some-project/.git");
-        assert!(Blacklist::is_blacklisted(git_dir));
-        assert!(Blacklist::validate(git_dir).is_err());
+        assert!(Blacklist::is_blacklisted_with(git_dir, &host));
+        assert!(Blacklist::validate_with(git_dir, &host).is_err());
 
         let git_file = Path::new("/tmp/some-project/.git/config");
-        assert!(Blacklist::is_blacklisted(git_file));
+        assert!(Blacklist::is_blacklisted_with(git_file, &host));
     }
     #[cfg(windows)]
     {
         let dir = tempdir().expect("tempdir");
         let git_dir = dir.path().join("some-project").join(".git");
-        assert!(Blacklist::is_blacklisted(&git_dir));
-        assert!(Blacklist::validate(&git_dir).is_err());
+        let host = native_environment();
+        assert!(Blacklist::is_blacklisted_with(&git_dir, &host));
+        assert!(Blacklist::validate_with(&git_dir, &host).is_err());
     }
 }
 
@@ -177,7 +344,8 @@ fn test_symlink_safety_and_no_escape() {
         assert!(SymlinkGuard::is_symlink(&symlink_path));
 
         // Size calculation on the directory with symlink must only measure the link, not traverse outside
-        let (size, count) = SizeCalculator::measure_path(dir.path(), &[]);
+        let (size, count) =
+            SizeCalculator::measure_path(dir.path(), &[], &PlatformEnvironment::native());
         assert_eq!(count, 1);
         assert!(size.logical > 0);
     }
@@ -298,7 +466,7 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets.len(), 1);
 
-    let clean_res = CleanExecutor::execute(plan, |_| {});
+    let clean_res = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
     assert_eq!(clean_res.items.len(), 1);
     assert!(clean_res.items[0].success);
 
@@ -334,7 +502,7 @@ fn cleaner_removes_user_owned_read_only_cache_trees_without_privilege_escalation
     fs::set_permissions(&nested, fs::Permissions::from_mode(0o555))
         .expect("make app resources read-only");
 
-    let report = SafeTreeDeleter::delete_path(&cache_root, &[]);
+    let report = SafeTreeDeleter::delete_path(&cache_root, &[], &PlatformEnvironment::native());
 
     assert!(
         report.is_success(),
@@ -362,7 +530,7 @@ fn cleaner_restores_read_only_root_after_delete_contents() {
     fs::set_permissions(cache_root.join("nested"), fs::Permissions::from_mode(0o555))
         .expect("make nested directory read-only");
 
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &[]);
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &[], &PlatformEnvironment::native());
 
     assert!(
         report.is_success(),
@@ -399,7 +567,7 @@ fn cleaner_unlinks_symlink_without_changing_target_permissions() {
     let link = cache_root.join("outside-link");
     symlink(outside.path(), &link).expect("create symlink");
 
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &[]);
+    let report = SafeTreeDeleter::delete_contents(&cache_root, &[], &PlatformEnvironment::native());
 
     assert!(
         report.is_success(),
@@ -448,11 +616,23 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
     assert!(matches!(
-        SafetyPlanner::create_plan_from_scan(&scan, "trusted-scan", &forged, &registry),
+        SafetyPlanner::create_plan_from_scan(
+            &scan,
+            "trusted-scan",
+            &forged,
+            &registry,
+            &PlatformEnvironment::native()
+        ),
         Err(ZenithError::InvalidPlan(_))
     ));
     assert!(matches!(
-        SafetyPlanner::create_plan_from_scan(&scan, "stale-scan", &forged, &registry),
+        SafetyPlanner::create_plan_from_scan(
+            &scan,
+            "stale-scan",
+            &forged,
+            &registry,
+            &PlatformEnvironment::native()
+        ),
         Err(ZenithError::InvalidPlan(_))
     ));
 }
@@ -581,7 +761,7 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         exists: true,
     };
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
-    let result = CleanExecutor::execute(plan, |_| {});
+    let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
     assert!(!result.items[0].success);
     assert_eq!(
         result.items[0].failure_reason,
@@ -604,7 +784,8 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     fs::write(&removable, b"cache").unwrap();
 
     let exclusions = vec![excluded.to_string_lossy().into_owned()];
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &exclusions);
+    let report =
+        SafeTreeDeleter::delete_contents(&cache_root, &exclusions, &PlatformEnvironment::native());
     assert!(report.is_success());
 
     assert!(cache_root.exists());
@@ -785,7 +966,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets[0].min_age_days, Some(3));
 
-    let clean_res = CleanExecutor::execute(plan, |_| {});
+    let clean_res = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
     assert_eq!(clean_res.items.len(), 1);
     assert!(!clean_res.items[0].success);
     assert_eq!(
@@ -827,8 +1008,11 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
         .any(|ex| ex == "default_project_id.txt" || ex.ends_with("default_project_id.txt")));
 
     // Measure size with signature exclusions
-    let (measured_size, measured_count) =
-        SizeCalculator::measure_path(&cache_dir, &gemini_sig.exclusions);
+    let (measured_size, measured_count) = SizeCalculator::measure_path(
+        &cache_dir,
+        &gemini_sig.exclusions,
+        &PlatformEnvironment::native(),
+    );
     assert_eq!(
         measured_count, 1,
         "Only transient_cache should be counted as reclaimable"
@@ -839,7 +1023,11 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
     );
 
     // Perform delete_contents
-    let report = SafeTreeDeleter::delete_contents(&cache_dir, &gemini_sig.exclusions);
+    let report = SafeTreeDeleter::delete_contents(
+        &cache_dir,
+        &gemini_sig.exclusions,
+        &PlatformEnvironment::native(),
+    );
     assert!(report.is_success());
     assert_eq!(report.deleted_files, 1);
     assert_eq!(report.skipped_files, 2);
@@ -1081,6 +1269,7 @@ fn unix_parent_replacement_between_validation_and_unlink_leaves_outside_untouche
 mod windows_safety {
     use super::*;
     use std::os::windows::ffi::OsStrExt;
+    use std::path::PathBuf;
 
     #[test]
     fn directory_handle_captures_real_volume_file_identity() {
@@ -1129,28 +1318,52 @@ mod windows_safety {
             .args(["/D", "/C", "mklink", "/J"])
             .arg(&link)
             .arg(outside.path())
-            .output();
-        let Ok(output) = output else {
-            return;
-        };
-        if !output.status.success() {
-            return;
-        }
-        assert!(SymlinkGuard::is_symlink(&link));
-        let report = SafeTreeDeleter::delete_contents(&cache, &[]);
+            .output()
+            .expect("cmd.exe must be runnable to create the junction");
+        assert!(
+            output.status.success(),
+            "mklink /J {} {} failed: {}",
+            link.display(),
+            outside.path().display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            SymlinkGuard::is_symlink(&link),
+            "the created junction must be recognized as a reparse point"
+        );
+        assert!(
+            SymlinkGuard::is_symlink_strict(&link).expect("junction metadata is readable"),
+            "the junction must be classified as an indirection"
+        );
+
+        let report = SafeTreeDeleter::delete_contents(&cache, &[], &PlatformEnvironment::native());
         assert!(report.is_success(), "errors: {:?}", report.errors);
+        // The junction itself is removed, never traversed: its target must be
+        // untouched, and the cache root must be gone.
         assert!(!link.exists() || SymlinkGuard::is_symlink(&link));
         assert!(precious.exists(), "reparse target must remain untouched");
+        assert_eq!(
+            fs::read(&precious).expect("target is readable"),
+            b"precious".to_vec()
+        );
     }
 
     #[test]
     fn case_insensitive_protected_paths_are_rejected() {
-        assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
-        assert!(Blacklist::is_blacklisted(Path::new("c:\\windows")));
-        assert!(Blacklist::is_blacklisted(Path::new(
-            "C:\\WINDOWS\\System32"
-        )));
-        assert!(Blacklist::validate(Path::new("c:\\windows\\system32")).is_err());
+        let host = PlatformEnvironment::native();
+        assert!(Blacklist::is_blacklisted_with(
+            Path::new("C:\\Windows"),
+            &host
+        ));
+        assert!(Blacklist::is_blacklisted_with(
+            Path::new("c:\\windows"),
+            &host
+        ));
+        assert!(Blacklist::is_blacklisted_with(
+            Path::new("C:\\WINDOWS\\System32"),
+            &host
+        ));
+        assert!(Blacklist::validate_with(Path::new("c:\\windows\\system32"), &host).is_err());
     }
 
     #[test]
@@ -1166,8 +1379,11 @@ mod windows_safety {
         let verbatim = format!(r"\\?\{}", payload.display());
         let verbatim_path = PathBuf::from(&verbatim);
         // Blacklist normalization must not mistake the verbatim prefix for ADS.
-        assert!(!Blacklist::is_blacklisted(&verbatim_path));
-        let report = SafeTreeDeleter::delete_contents(&deep, &[]);
+        assert!(!Blacklist::is_blacklisted_with(
+            &verbatim_path,
+            &PlatformEnvironment::native()
+        ));
+        let report = SafeTreeDeleter::delete_contents(&deep, &[], &PlatformEnvironment::native());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
     }

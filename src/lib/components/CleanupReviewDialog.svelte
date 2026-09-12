@@ -51,7 +51,7 @@
   aria-labelledby={id + '-title'}
   aria-describedby={id + '-description'}
   oncancel={(event) => { event.preventDefault(); handleCancel(); }}
-  class="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50 focus:outline-none"
+  class="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto scroll-stable rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50 focus:outline-none"
 >
   <h2 id={id + '-title'} class="text-base font-semibold">Review cleanup</h2>
   <p id={id + '-description'} class="mt-2 text-sm text-muted-foreground">

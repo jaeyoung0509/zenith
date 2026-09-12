@@ -1,23 +1,45 @@
 use crate::models::{DiagnosticsSnapshot, ZenithSettings};
+use crate::platform::path_algebra::PathFlavor as PlatformFlavor;
+use crate::platform::PlatformEnvironment;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
+pub mod doctor;
+
 static LOG_MUTEX: Mutex<()> = Mutex::new(());
 
 const MAX_LOG_BYTES: u64 = 1_000_000; // 1 MB rotation threshold
 
-pub fn log_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        use crate::platform::PlatformPathsProvider;
-        if let Some(local) = crate::platform::NativePlatformPaths::new().local_app_data() {
-            return local.join("Zenith/Logs");
+/// Directory holding the log file, resolved through the described environment:
+/// Windows `LOCAL_APPDATA/Zenith/Logs`, macOS `~/Library/Logs/Zenith`, other
+/// Unix `~/.local/share/zenith/logs`, and the temporary directory when the
+/// platform exposes no usable root. The flavor — not the host — selects the
+/// Windows branch, so a redirected `LOCAL_APPDATA` can be simulated anywhere.
+pub fn log_dir(environment: &PlatformEnvironment) -> PathBuf {
+    if environment.flavor().is_windows() {
+        // The flavor, not the host, decides the spelling: a simulated Windows
+        // environment produces Windows-shaped paths on any runner.
+        // Normalize with the environment's own flavor, exactly as
+        // `expand_placeholder` does, so the Windows branch yields Windows-shaped
+        // paths on any runner instead of the host's separator.
+        let join = |root: &Path, relative: &str| {
+            PathBuf::from(crate::platform::path_algebra::normalize(
+                &root.join(relative).to_string_lossy(),
+                PlatformFlavor::Windows,
+            ))
+        };
+        if let Some(local) = environment.local_app_data() {
+            return join(&local, "Zenith/Logs");
         }
-    }
-    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
+        // No stated application-data root: fall back to the profile-relative
+        // location Windows would use rather than a POSIX-shaped one.
+        if let Some(home) = environment.user_home() {
+            return join(&home, "AppData/Local/Zenith/Logs");
+        }
+    } else if let Some(home) = environment.user_home() {
         #[cfg(target_os = "macos")]
         {
             return home.join("Library/Logs/Zenith");
@@ -27,11 +49,14 @@ pub fn log_dir() -> PathBuf {
             return home.join(".local/share/zenith/logs");
         }
     }
-    std::env::temp_dir().join("zenith_logs")
+    environment.temp_dir().join("zenith_logs")
 }
 
+/// Log file of the running process. The global log sink always follows the real
+/// environment; `--doctor` and the environment-aware entry points take the
+/// environment explicitly.
 pub fn log_file_path() -> PathBuf {
-    log_dir().join("zenith.log")
+    log_dir(&PlatformEnvironment::native()).join("zenith.log")
 }
 
 /// Redacts known credential shapes and masks absolute paths from log messages.
@@ -54,14 +79,16 @@ fn restrict_permissions(_path: &Path, _mode: u32) -> std::io::Result<()> {
 
 pub fn log_error(category: &str, message: &str) {
     let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = log_dir();
+    // The global log sink follows the running environment; resolving it once
+    // keeps the directory and the file from disagreeing.
+    let dir = log_dir(&PlatformEnvironment::native());
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
     // Best effort for the directory; the file below is fail-closed.
     let _ = restrict_permissions(&dir, 0o700);
 
-    let file_path = log_file_path();
+    let file_path = dir.join("zenith.log");
 
     // Check size for rotation
     if let Ok(meta) = fs::metadata(&file_path) {
@@ -122,7 +149,30 @@ pub fn get_recent_errors(limit: usize) -> Vec<String> {
 }
 
 pub fn normalized_log_path() -> String {
-    crate::privacy::paths::display_path(&log_file_path())
+    normalized_log_path_of(&PlatformEnvironment::native())
+}
+
+/// Environment-aware [`normalized_log_path`].
+pub fn normalized_log_path_of(environment: &PlatformEnvironment) -> String {
+    display_log_path(environment, &log_dir(environment).join("zenith.log"))
+}
+
+/// Display form of the directory holding the current log file, with the
+/// profile masked. The interface shows this instead of a platform-specific
+/// literal such as `~/Library/Logs/Zenith`, which is wrong off macOS.
+pub fn log_directory_display() -> String {
+    log_directory_display_of(&PlatformEnvironment::native())
+}
+
+/// Environment-aware [`log_directory_display`].
+pub fn log_directory_display_of(environment: &PlatformEnvironment) -> String {
+    display_log_path(environment, &log_dir(environment))
+}
+
+/// Masks a log location against the environment's own profile, so a redirected
+/// or simulated home is masked with its own spelling.
+fn display_log_path(environment: &PlatformEnvironment, path: &Path) -> String {
+    crate::privacy::paths::display_path_with_home(path, environment.user_home().as_deref())
 }
 
 pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> DiagnosticsSnapshot {
@@ -176,7 +226,7 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
 }
 
 pub fn open_logs_folder() -> Result<(), String> {
-    let dir = log_dir();
+    let dir = log_dir(&PlatformEnvironment::native());
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create log directory: {e}"))?;
 
     use crate::platform::SystemActionProvider;
@@ -186,6 +236,9 @@ pub fn open_logs_folder() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::paths::SimulatedPaths;
+    use std::sync::Arc;
 
     #[test]
     fn secret_sanitizer_redacts_tokens() {
@@ -261,13 +314,93 @@ mod tests {
         assert_eq!(snapshot.app_version, env!("CARGO_PKG_VERSION"));
         assert!(!snapshot.arch.is_empty());
         assert!(!snapshot.enabled_features.is_empty());
-        if std::env::var_os("HOME").is_some() {
-            assert!(
-                snapshot.log_path.starts_with("~/"),
-                "Expected normalized log path starting with ~/, got {}",
-                snapshot.log_path
-            );
-        }
+        // The snapshot's own path is masked on every runner: `~/…` under the
+        // profile, `.../name` for a location outside it. No host is assumed.
+        assert!(
+            snapshot.log_path.starts_with("~/") || snapshot.log_path.starts_with(".../"),
+            "Expected a masked log path, got {}",
+            snapshot.log_path
+        );
+
+        // A stated home makes the normalization assertion unconditional.
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::Posix).with_home("/home/tester");
+        let normalized = normalized_log_path_of(&environment);
+        assert!(
+            normalized.starts_with("~/"),
+            "Expected a profile-masked log path, got {normalized}"
+        );
+        assert!(normalized.ends_with("zenith.log"), "{normalized}");
+        assert!(!normalized.contains("/home/tester"), "{normalized}");
+    }
+
+    #[test]
+    fn log_dir_follows_the_described_environment() {
+        // Windows: the stated LOCAL_APPDATA is authoritative, not the literal
+        // profile spelling, and the flavor (not the host) picks the branch.
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"C:\Users\me")
+                .with_local_app_data(r"D:\AppData\Local"),
+        ));
+        assert_eq!(
+            log_dir(&windows),
+            PathBuf::from(r"D:\AppData\Local\Zenith\Logs")
+        );
+        assert_eq!(
+            log_directory_display_of(&windows),
+            ".../Logs",
+            "a location outside the stated profile is reduced to its basename"
+        );
+
+        // The same environment with application data inside the stated profile
+        // masks with the stated profile's own spelling.
+        let in_profile = PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"D:\Users\me")
+                .with_local_app_data(r"D:\Users\me\AppData\Local"),
+        ));
+        assert_eq!(
+            log_dir(&in_profile),
+            PathBuf::from(r"D:\Users\me\AppData\Local\Zenith\Logs")
+        );
+        assert_eq!(
+            log_directory_display_of(&in_profile),
+            "~/AppData/Local/Zenith/Logs"
+        );
+
+        // A Windows environment with no stated application data still resolves
+        // a Windows-shaped location instead of a POSIX one.
+        let windows_without_appdata =
+            PlatformEnvironment::simulated(PathFlavor::Windows).with_home(r"D:\Users\me");
+        assert_eq!(
+            log_dir(&windows_without_appdata),
+            PathBuf::from(r"D:\Users\me\AppData\Local\Zenith\Logs")
+        );
+
+        // Posix: the profile location, then the temporary directory.
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix).with_home("/home/tester");
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            log_dir(&posix),
+            PathBuf::from("/home/tester/Library/Logs/Zenith")
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            log_dir(&posix),
+            PathBuf::from("/home/tester/.local/share/zenith/logs")
+        );
+
+        let flavor = PathFlavor::Posix;
+        let temp = PathBuf::from("/stated/temp");
+        let no_home = PlatformEnvironment::simulated(flavor).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(flavor)
+                .with_temp_dir(&temp),
+        ));
+        assert_eq!(log_dir(&no_home), temp.join("zenith_logs"));
     }
 
     #[test]
@@ -308,14 +441,15 @@ mod tests {
 
     #[test]
     fn sanitizer_masks_paths_before_they_reach_diagnostics() {
-        let Some(home) = crate::privacy::paths::user_home() else {
-            return;
-        };
-        let message = format!("failed to read {}/.claude/settings.json", home.display());
-        let sanitized = sanitize_log(&message);
-        assert!(!sanitized.contains(&home.to_string_lossy().to_string()));
+        // A stated home keeps the assertion unconditional: the masking rule is
+        // exercised on every runner, not only where a profile is configured.
+        let home = std::path::Path::new("/home/tester");
+        let message = "failed to read /home/tester/.claude/settings.json";
+        let sanitized = crate::privacy::paths::mask_paths_with_home(message, Some(home));
+        assert!(!sanitized.contains("/home/tester"), "{sanitized}");
         assert!(
-            sanitized.contains("~/.claude/settings.json") || sanitized.contains("settings.json")
+            sanitized.contains("~/.claude/settings.json") || sanitized.contains("settings.json"),
+            "{sanitized}"
         );
     }
 

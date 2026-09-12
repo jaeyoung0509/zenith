@@ -3,6 +3,8 @@ use crate::models::{
     DeveloperArtifact, DeveloperArtifactKind, DeveloperArtifactScanEvent,
     DeveloperArtifactScanResult, DeveloperArtifactStatus, DeveloperEcosystem, DeveloperWorkspace,
 };
+use crate::platform::description::PlatformEnvironment;
+use crate::platform::path_algebra;
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -135,6 +137,7 @@ pub struct DeveloperArtifactScanner;
 
 impl DeveloperArtifactScanner {
     pub fn scan<F>(
+        environment: &PlatformEnvironment,
         workspace_ids: &[String],
         workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
         cancel: Arc<AtomicBool>,
@@ -144,10 +147,11 @@ impl DeveloperArtifactScanner {
         F: FnMut(DeveloperArtifactScanEvent),
     {
         let workspaces = workspace_snapshot(workspace_ids, workspaces_store)?;
-        Self::scan_workspaces(&workspaces, cancel, on_event)
+        Self::scan_workspaces(environment, &workspaces, cancel, on_event)
     }
 
     pub fn scan_workspaces<F>(
+        environment: &PlatformEnvironment,
         workspaces: &[DeveloperWorkspaceRecord],
         cancel: Arc<AtomicBool>,
         mut on_event: F,
@@ -192,7 +196,9 @@ impl DeveloperArtifactScanner {
             });
 
             let mut seen_paths = HashSet::new();
-            if let Some(candidate) = global_go_module_candidate(workspace, &mut seen_paths) {
+            if let Some(candidate) =
+                global_go_module_candidate(environment, workspace, &mut seen_paths)
+            {
                 if candidates.len() < MAX_CANDIDATES {
                     on_event(DeveloperArtifactScanEvent::ProjectDiscovered {
                         workspace_id: workspace.workspace.id.clone(),
@@ -207,6 +213,7 @@ impl DeveloperArtifactScanner {
             }
 
             discover_workspace(
+                environment,
                 workspace,
                 &cancel,
                 &mut candidates,
@@ -424,21 +431,23 @@ fn same_workspace_directory_identity(current: &FileIdentity, expected: &FileIden
 }
 
 pub fn pick_workspace(
+    environment: &PlatformEnvironment,
     workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
 ) -> Result<Option<DeveloperWorkspace>, String> {
     let Some(path) = native_pick_workspace_path()? else {
         return Ok(None);
     };
     Ok(Some(
-        register_workspace_path(&path, workspaces_store)?.workspace,
+        register_workspace_path(environment, &path, workspaces_store)?.workspace,
     ))
 }
 
 pub fn register_home_workspace(
+    environment: &PlatformEnvironment,
     workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
 ) -> Result<DeveloperWorkspace, String> {
-    let home = crate::platform::paths::NativePlatformPaths::new()
-        .home()
+    let home = environment
+        .user_home()
         .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
     if SymlinkGuard::is_symlink(&home) {
         return Err("The user home directory must not be a symbolic link or reparse point.".into());
@@ -459,13 +468,11 @@ pub fn register_home_workspace(
 }
 
 pub fn register_workspace_path(
+    environment: &PlatformEnvironment,
     path: &Path,
     workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
 ) -> Result<DeveloperWorkspaceRecord, String> {
-    let home = crate::platform::paths::NativePlatformPaths::new()
-        .home()
-        .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
-    let canonical = validate_workspace_root(path, &home)?;
+    let canonical = validate_workspace_root(environment, path)?;
     let name = canonical
         .file_name()
         .and_then(|value| value.to_str())
@@ -516,7 +523,17 @@ fn store_workspace(
     Ok(record)
 }
 
-pub fn validate_workspace_root(path: &Path, home: &Path) -> Result<PathBuf, String> {
+/// Validates a workspace root against the environment's stated profile.
+///
+/// The location rules are decided by the environment's [`PathFlavor`], so a
+/// `D:\dev` workspace and a UNC profile are decided by the same code that
+/// decides a POSIX profile, and a Windows-shaped refusal is provable on any
+/// runner. Nothing here reads the host's environment: an unstated home simply
+/// has no profile-relative rules.
+pub fn validate_workspace_root(
+    environment: &PlatformEnvironment,
+    path: &Path,
+) -> Result<PathBuf, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| "Choose an existing workspace directory.".to_string())?;
     if !metadata.is_dir() || SymlinkGuard::is_symlink(path) {
@@ -524,69 +541,46 @@ pub fn validate_workspace_root(path: &Path, home: &Path) -> Result<PathBuf, Stri
     }
     let canonical = fs::canonicalize(path)
         .map_err(|_| "Could not resolve the selected workspace".to_string())?;
-    let norm_canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
+    let flavor = environment.flavor();
+    let norm_canonical = PathBuf::from(path_algebra::strip_verbatim(
+        &canonical.to_string_lossy(),
+        flavor,
+    ));
 
-    // Reject drive roots or filesystem root
-    if norm_canonical.parent().is_none() || norm_canonical == Path::new("/") {
-        return Err("Drive root or filesystem root cannot be used as a workspace.".to_string());
-    }
-    #[cfg(windows)]
+    let canonical_home = environment.user_home().map(|home| {
+        fs::canonicalize(&home).unwrap_or_else(|_| {
+            PathBuf::from(path_algebra::strip_verbatim(
+                &home.to_string_lossy(),
+                flavor,
+            ))
+        })
+    });
+    if let Some(reason) =
+        workspace_root_scope_refusal(flavor, &norm_canonical, canonical_home.as_deref())
     {
-        if let Some(s) = norm_canonical.to_str() {
-            let trimmed = s.trim_end_matches(['\\', '/']);
-            if trimmed.len() == 2 && trimmed.ends_with(':') {
-                return Err("Drive root cannot be used as a workspace.".to_string());
-            }
-        }
+        return Err(reason);
     }
 
-    if let Ok(canonical_home) = fs::canonicalize(home) {
-        let norm_home =
-            crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical_home);
-        if norm_canonical == norm_home {
-            return Err(
-                "Your entire home directory cannot be used as a workspace root.".to_string(),
-            );
-        }
-        if norm_canonical.starts_with(&norm_home) {
-            SymlinkGuard::validate_no_symlink_ancestors(path, &canonical_home).map_err(|_| {
+    match &canonical_home {
+        Some(home)
+            if path_algebra::contains(
+                &home.to_string_lossy(),
+                &norm_canonical.to_string_lossy(),
+                flavor,
+            ) =>
+        {
+            SymlinkGuard::validate_no_symlink_ancestors(path, home).map_err(|_| {
                 "The selected workspace contains a symbolic-link component.".to_string()
             })?;
-
-            let protected_workspace_prefixes = [
-                "Library",
-                ".ssh",
-                ".gnupg",
-                ".aws",
-                ".azure",
-                ".kube",
-                ".config",
-                "Desktop",
-                "Documents",
-                "Pictures",
-                "Movies",
-                "Music",
-            ];
-            if protected_workspace_prefixes.iter().any(|prefix| {
-                let protected = norm_home.join(prefix);
-                norm_canonical == protected || norm_canonical.starts_with(&protected)
-            }) {
-                return Err(
-                    "That location is protected and cannot be used as a workspace.".to_string(),
-                );
-            }
-        } else {
+        }
+        _ => {
             SymlinkGuard::validate_anchored_path(&norm_canonical).map_err(|_| {
                 "The selected workspace contains a symbolic-link component.".to_string()
             })?;
         }
-    } else {
-        SymlinkGuard::validate_anchored_path(&norm_canonical).map_err(|_| {
-            "The selected workspace contains a symbolic-link component.".to_string()
-        })?;
     }
 
-    if Blacklist::is_blacklisted(&norm_canonical) {
+    if Blacklist::is_blacklisted_with(&norm_canonical, environment) {
         return Err("That location is protected and cannot be used as a workspace.".to_string());
     }
 
@@ -597,8 +591,59 @@ pub fn validate_workspace_root(path: &Path, home: &Path) -> Result<PathBuf, Stri
     Ok(norm_canonical)
 }
 
+/// Pure location rules for a workspace root, parameterized by path flavor and
+/// by the profile the environment states.
+///
+/// Kept separate from [`validate_workspace_root`] so the rules can be asserted
+/// for a flavor this runner is not: a non-`C:` system drive and a UNC profile
+/// are accepted, their roots and profile-relative protected folders are not.
+fn workspace_root_scope_refusal(
+    flavor: path_algebra::PathFlavor,
+    path: &Path,
+    home: Option<&Path>,
+) -> Option<String> {
+    let text = path.to_string_lossy();
+    if path_algebra::is_root(&text, flavor) {
+        return Some("Drive root or filesystem root cannot be used as a workspace.".to_string());
+    }
+    if path_algebra::is_unsupported_namespace(&text, flavor) {
+        return Some("A device or NT namespace path cannot be used as a workspace.".to_string());
+    }
+    let home = home?;
+    let home_text = home.to_string_lossy();
+    if path_algebra::equal(&text, &home_text, flavor) {
+        return Some("Your entire home directory cannot be used as a workspace root.".to_string());
+    }
+    if path_algebra::contains(&home_text, &text, flavor) {
+        const PROTECTED_WORKSPACE_PREFIXES: [&str; 12] = [
+            "Library",
+            ".ssh",
+            ".gnupg",
+            ".aws",
+            ".azure",
+            ".kube",
+            ".config",
+            "Desktop",
+            "Documents",
+            "Pictures",
+            "Movies",
+            "Music",
+        ];
+        if PROTECTED_WORKSPACE_PREFIXES.iter().any(|prefix| {
+            let protected = home.join(prefix);
+            path_algebra::contains(&protected.to_string_lossy(), &text, flavor)
+        }) {
+            return Some(
+                "That location is protected and cannot be used as a workspace.".to_string(),
+            );
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 fn discover_workspace<F>(
+    environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
     cancel: &AtomicBool,
     candidates: &mut Vec<Candidate>,
@@ -659,7 +704,7 @@ fn discover_workspace<F>(
             if name == ".git" {
                 continue;
             }
-            if should_skip_protected_discovery_path(workspace, &path, &name) {
+            if should_skip_protected_discovery_path(environment, workspace, &path, &name) {
                 *skipped_entries = skipped_entries.saturating_add(1);
                 continue;
             }
@@ -733,10 +778,11 @@ fn recognize_artifact(
 }
 
 fn global_go_module_candidate(
+    environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
     seen_paths: &mut HashSet<PathBuf>,
 ) -> Option<Candidate> {
-    let home = crate::platform::paths::NativePlatformPaths::new().home()?;
+    let home = environment.user_home()?;
     let canonical_home = fs::canonicalize(&home).ok()?;
     let expected_root = fs::canonicalize(home.join("go")).ok()?;
     if workspace.path != expected_root && workspace.path != canonical_home {
@@ -1254,6 +1300,7 @@ fn should_skip_discovery_directory(name: &str) -> bool {
 }
 
 fn should_skip_protected_discovery_path(
+    environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
     path: &Path,
     name: &str,
@@ -1264,7 +1311,7 @@ fn should_skip_protected_discovery_path(
     if !workspace.whole_home {
         return false;
     }
-    if Blacklist::is_blacklisted(path) {
+    if Blacklist::is_blacklisted_with(path, environment) {
         return true;
     }
     let credential_names = [
@@ -1569,6 +1616,11 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// A simulated environment whose profile is the stated directory.
+    fn environment_with_home(home: &Path) -> PlatformEnvironment {
+        PlatformEnvironment::simulated(path_algebra::PathFlavor::current()).with_home(home)
+    }
+
     fn workspace_record(root: &Path) -> DeveloperWorkspaceRecord {
         let identity = FileIdentity::from_path(root).unwrap();
         DeveloperWorkspaceRecord {
@@ -1680,8 +1732,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scanner_streams_measured_candidates_from_an_explicit_workspace() {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
-        let temp = tempfile::tempdir_in(&home).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let environment = environment_with_home(temp.path());
         let workspace_path = temp.path().join("workspace");
         let rust_project = workspace_path.join("rust-app");
         let node_project = workspace_path.join("web-app");
@@ -1694,6 +1746,7 @@ mod tests {
         let workspace = workspace_record(&workspace_path);
         let mut events = Vec::new();
         let inventory = DeveloperArtifactScanner::scan_workspaces(
+            &environment,
             std::slice::from_ref(&workspace),
             Arc::new(AtomicBool::new(false)),
             |event| events.push(event),
@@ -1732,7 +1785,9 @@ mod tests {
 
         let mut workspace = workspace_record(temp.path());
         workspace.whole_home = true;
+        let environment = environment_with_home(temp.path());
         let inventory = DeveloperArtifactScanner::scan_workspaces(
+            &environment,
             std::slice::from_ref(&workspace),
             Arc::new(AtomicBool::new(false)),
             |_| {},
@@ -1856,22 +1911,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn workspace_validation_accepts_profile_children_and_rejects_home_itself() {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
-        let temp = tempfile::tempdir_in(&home).unwrap();
-        let workspace = temp.path().join("src");
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        let workspace = home.join("src");
         fs::create_dir_all(&workspace).unwrap();
+        let home = fs::canonicalize(&home).unwrap();
+        let workspace = home.join("src");
+        let environment = environment_with_home(&home);
+
         assert_eq!(
-            validate_workspace_root(&workspace, &home).unwrap(),
+            validate_workspace_root(&environment, &workspace).unwrap(),
             workspace
         );
-        assert!(validate_workspace_root(&home, &home).is_err());
+        assert!(validate_workspace_root(&environment, &home).is_err());
 
-        #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            let linked = temp.path().join("linked");
+            let linked = home.join("linked");
             symlink(&workspace, &linked).unwrap();
-            assert!(validate_workspace_root(&linked, &home).is_err());
+            assert!(validate_workspace_root(&environment, &linked).is_err());
         }
     }
 
@@ -1881,22 +1939,69 @@ mod tests {
         // The common D:\dev-style layout must register under the remaining
         // safety validation instead of being refused for being outside home.
         let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
         let workspace = temp.path().join("dev");
+        fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&workspace).unwrap();
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/nonexistent-home"));
+        let environment = environment_with_home(&home);
 
-        assert!(validate_workspace_root(&workspace, &home).is_ok());
-        assert!(validate_workspace_root(temp.path(), &home).is_ok());
+        assert!(validate_workspace_root(&environment, &workspace).is_ok());
+        assert!(validate_workspace_root(&environment, temp.path()).is_ok());
+    }
+
+    #[test]
+    fn a_non_system_drive_and_a_unc_profile_are_valid_workspace_scopes() {
+        // The rules are decided by the stated flavor, so a Windows drive that
+        // is not `C:` and a UNC profile are provable on any runner.
+        let flavor = path_algebra::PathFlavor::Windows;
+        let home = Path::new(r"D:\Users\홍 길동");
+
+        assert!(
+            workspace_root_scope_refusal(flavor, Path::new(r"D:\dev\zenith"), Some(home)).is_none()
+        );
+        assert!(workspace_root_scope_refusal(flavor, Path::new(r"D:\"), Some(home)).is_some());
+        assert!(workspace_root_scope_refusal(flavor, home, Some(home)).is_some());
+        assert!(workspace_root_scope_refusal(
+            flavor,
+            Path::new(r"D:\Users\홍 길동\Documents"),
+            Some(home)
+        )
+        .is_some());
+        assert!(
+            workspace_root_scope_refusal(flavor, Path::new(r"C:\Users\other\dev"), Some(home))
+                .is_none()
+        );
+
+        let unc_home = Path::new(r"\\fileserver\profiles\me");
+        assert!(workspace_root_scope_refusal(
+            flavor,
+            Path::new(r"\\fileserver\profiles\me\dev"),
+            Some(unc_home)
+        )
+        .is_none());
+        assert!(workspace_root_scope_refusal(flavor, unc_home, Some(unc_home)).is_some());
+        assert!(workspace_root_scope_refusal(
+            flavor,
+            Path::new(r"\\fileserver\profiles\me\Documents"),
+            Some(unc_home)
+        )
+        .is_some());
+        // `C:` and `C:\` are the drive root under Windows rules.
+        assert!(workspace_root_scope_refusal(flavor, Path::new("C:"), Some(home)).is_some());
+        assert!(workspace_root_scope_refusal(flavor, Path::new(r"C:\"), Some(home)).is_some());
     }
 
     #[cfg(unix)]
     #[test]
     fn backend_owned_home_scope_registers_without_the_folder_picker() {
         let store = Mutex::new(HashMap::new());
-        let workspace = register_home_workspace(&store).unwrap();
-        let canonical_home = fs::canonicalize(std::env::var_os("HOME").unwrap()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        fs::create_dir_all(&home).unwrap();
+        let environment = environment_with_home(&home);
+        let canonical_home = fs::canonicalize(&home).unwrap();
+
+        let workspace = register_home_workspace(&environment, &store).unwrap();
         let workspaces = store.lock().expect("store poisoned");
         let record = workspaces.get(&workspace.id).unwrap();
 

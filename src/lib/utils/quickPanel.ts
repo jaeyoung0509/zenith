@@ -44,8 +44,26 @@ export function reorderOrdered<T>(items: T[], dragged: T, target: T): T[] {
   return next;
 }
 
-export function isQuickPanelDismissShortcut(key: string, metaKey: boolean): boolean {
-  return key === 'Escape' || (metaKey && key.toLowerCase() === 'w');
+export function isQuickPanelDismissShortcut(key: string, acceleratorPressed: boolean): boolean {
+  return key === 'Escape' || (acceleratorPressed && key.toLowerCase() === 'w');
+}
+
+/**
+ * The platform's primary shortcut modifier. Windows and Linux send `ctrl`;
+ * macOS sends `meta`. An unknown context keeps the macOS behavior, which is
+ * also the only modifier a webview preview can exercise.
+ */
+export function platformAccelerator(
+  primaryAccelerator: 'meta' | 'ctrl' | null | undefined
+): 'meta' | 'ctrl' {
+  return primaryAccelerator === 'ctrl' ? 'ctrl' : 'meta';
+}
+
+export function isAcceleratorPressed(
+  event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>,
+  accelerator: 'meta' | 'ctrl'
+): boolean {
+  return accelerator === 'ctrl' ? event.ctrlKey : event.metaKey;
 }
 
 const KNOWN_PROVIDER_NAMES: Record<string, string> = {

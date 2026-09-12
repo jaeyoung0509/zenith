@@ -1,0 +1,10 @@
+{
+  "name": "windows-11-d-drive-redirected-documents",
+  "flavor": "windows",
+  "system_drive": "D:",
+  "profile_shape": "drive_rooted",
+  "known_folder_redirected": true,
+  "temp_inside_profile": true,
+  "volume_identity": true,
+  "missing_tools": []
+}

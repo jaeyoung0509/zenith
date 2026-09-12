@@ -1,5 +1,5 @@
 import { Channel } from '@tauri-apps/api/core';
-import { isTauri } from './index';
+import { dispatchApi } from './index';
 import { commands } from '../bindings/tauri';
 import type {
   AppUninstallInspection,
@@ -32,6 +32,8 @@ export interface StorageManagementApi {
   ): Promise<LargeFileScanResult>;
   cancelLargeFileScan(scanId: string): Promise<void>;
   prepareLargeFileTrash(scanId: string, selectedItemIds: string[]): Promise<TrashPlanPreview>;
+  /** Reveals a scanned file; the backend resolves the path from its inventory. */
+  revealLargeFile(itemId: string): Promise<void>;
   pickDeveloperWorkspace(): Promise<DeveloperWorkspace | null>;
   registerDeveloperHomeWorkspace(): Promise<DeveloperWorkspace>;
   startDeveloperArtifactScan(
@@ -65,6 +67,10 @@ const nativeStorageApi: StorageManagementApi = {
 
   async prepareLargeFileTrash(scanId, selectedItemIds) {
     return await unwrap(commands.prepareLargeFileTrash(scanId, selectedItemIds));
+  },
+
+  async revealLargeFile(itemId) {
+    await unwrap(commands.revealLargeFile(itemId));
   },
 
   async pickDeveloperWorkspace() {
@@ -466,6 +472,22 @@ const mockStorageApi: StorageManagementApi = {
     return preview;
   },
 
+  async revealLargeFile(itemId) {
+    let known = mockLargeFiles.some((item) => item.id === itemId);
+    if (!known) {
+      for (const scan of mockScans.values()) {
+        if (scan.items.some((item) => item.id === itemId)) {
+          known = true;
+          break;
+        }
+      }
+    }
+    if (!known) {
+      throw new Error('Large-file item is no longer in the scan inventory. Scan again.');
+    }
+    // Browser preview has no file manager to open.
+  },
+
   async pickDeveloperWorkspace() {
     return { ...mockDeveloperWorkspaces[0] };
   },
@@ -629,8 +651,9 @@ const mockStorageApi: StorageManagementApi = {
     };
   },
 };
-export const storageApi: StorageManagementApi = isTauri()
-  ? nativeStorageApi
-  : mockStorageApi;
+export const storageApi: StorageManagementApi = dispatchApi(
+  nativeStorageApi,
+  mockStorageApi
+);
 
 export { mockStorageApi, nativeStorageApi };

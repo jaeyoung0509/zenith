@@ -19,6 +19,7 @@ import type {
   CleanResult,
   DevelopmentListener,
   DiagnosticsSnapshot,
+  EnvironmentReport,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -28,6 +29,7 @@ import type {
   MemoryTerminationResult,
   PlanPreview,
   PlatformCapabilities,
+  PlatformContext,
   ProviderDescriptor,
   ProviderId_Deserialize,
   RecommendationPreview,
@@ -279,8 +281,16 @@ export const nativeApi = {
     return await commands.getPlatformCapabilities();
   },
 
+  async getPlatformContext(): Promise<PlatformContext> {
+    return await commands.getPlatformContext();
+  },
+
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {
     return await unwrap(commands.getDiagnostics());
+  },
+
+  async runEnvironmentSelfCheck(): Promise<EnvironmentReport> {
+    return await unwrap(commands.runEnvironmentSelfCheck());
   },
 
   async openLogsFolder(): Promise<void> {

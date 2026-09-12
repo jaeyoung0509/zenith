@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import type { CategoryResult, DiskVolume } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import {
     tauriGetDiskVolumes,
     tauriOpenStorageSettings,
@@ -23,6 +25,7 @@
   let volumes = $state<DiskVolume[]>([]);
   let isLoading = $state(false);
   let error = $state<string | null>(null);
+  let revealError = $state<string | null>(null);
 
   let primary = $derived(volumes.find((volume) => volume.is_primary) ?? volumes[0]);
   let opportunities = $derived.by(() =>
@@ -45,7 +48,10 @@
     }
   }
 
-  onMount(() => void refresh());
+  onMount(() => {
+    void platformContextStore.load();
+    void refresh();
+  });
 </script>
 
 <div class="space-y-6">
@@ -103,6 +109,9 @@
   {#if volumes.length > 0}
     <section class="space-y-3">
       <h3 class="text-sm font-semibold">Mounted Volumes</h3>
+      {#if revealError}
+        <p role="alert" class="text-caption text-destructive">{revealError}</p>
+      {/if}
       <div class="grid grid-cols-2 gap-3">
         {#each volumes as volume (volume.mount_point)}
           <Card class="p-4">
@@ -115,7 +124,19 @@
                 </div>
                 <p class="mt-1 truncate text-micro font-mono text-muted-foreground">{volume.mount_point}</p>
               </div>
-              <Button variant="ghost" size="icon" class="h-7 w-7" ariaLabel="Show volume in file manager" title="Show in File Manager" onclick={() => tauriShowInFileManager(volume.mount_point)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-7 w-7"
+                disabled={!canReveal()}
+                ariaLabel="Show volume in file manager"
+                title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
+                onclick={() =>
+                  void runReveal(
+                    () => tauriShowInFileManager(volume.mount_point),
+                    (message) => (revealError = message)
+                  )}
+              >
                 <FolderOpen size={13} />
               </Button>
             </div>

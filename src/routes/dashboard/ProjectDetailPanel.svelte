@@ -19,7 +19,9 @@
   } from '../../lib/models/types';
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
+  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { formatBytes } from '../../lib/utils/format';
+  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
   import { tauriShowInFileManager } from '../../lib/utils/tauri';
   import Badge from '../../lib/components/Badge.svelte';
   import Button from '../../lib/components/Button.svelte';
@@ -35,6 +37,7 @@
   let isWindows = $derived(platformCapabilitiesStore.capabilities?.platform === 'windows');
   let stoppingSessionIds = $state<Set<string>>(new Set());
   let actionFeedback = $state<string | null>(null);
+  let revealError = $state<string | null>(null);
 
   function evidenceBadge(evidence: AgentEvidence) {
     if (evidence === 'vendor_confirmed' || evidence === 'vendor_event' || evidence === 'vendor_protocol') {
@@ -109,7 +112,8 @@
   }
 
   function handleShowInFileManager(path: string) {
-    void tauriShowInFileManager(path);
+    revealError = null;
+    void runReveal(() => tauriShowInFileManager(path), (message) => (revealError = message));
   }
 
   function handleOpenInTerminal(path: string) {
@@ -134,11 +138,12 @@
       <Button
         variant="outline"
         size="sm"
+        disabled={!canReveal()}
         onclick={() => handleShowInFileManager(project.identity.display_path)}
-        title="Show repository folder in file manager"
+        title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
       >
         <FolderOpen size={13} />
-        Show in File Manager
+        {platformContextStore.revealLabel}
       </Button>
       <Button
         variant="outline"
@@ -208,6 +213,12 @@
   {#if actionFeedback}
     <div role="status" class="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-xs text-primary">
       {actionFeedback}
+    </div>
+  {/if}
+
+  {#if revealError}
+    <div role="alert" class="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+      {revealError}
     </div>
   {/if}
 

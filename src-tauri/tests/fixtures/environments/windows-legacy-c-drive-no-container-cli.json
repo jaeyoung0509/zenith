@@ -1,0 +1,10 @@
+{
+  "name": "windows-legacy-c-drive-no-container-cli",
+  "flavor": "windows",
+  "system_drive": "C:",
+  "profile_shape": "drive_rooted",
+  "known_folder_redirected": false,
+  "temp_inside_profile": false,
+  "volume_identity": true,
+  "missing_tools": ["docker", "podman"]
+}

@@ -76,6 +76,34 @@ safety conventions below when changing Zenith.
   `current()` through it or delete it. Signatures whose paths resolve under a
   platform-specific root must declare `platforms`.
 
+## Platform environment and verification
+
+- Platform facts have one source: `platform::PlatformEnvironment`. It is built
+  once at the composition root, passed through `AppState`, and handed to
+  scanning, cleanup, metrics, container, and storage code as an argument.
+  Modules must not read `std::env` for paths, drives, or tool locations, and
+  must not construct `PlatformEnvironment::native()` themselves.
+- Windows path semantics live in `platform::path_algebra` as pure functions
+  parameterized by `PathFlavor`. Add coverage there, not in a `#[cfg(windows)]`
+  branch: a rule that only compiles on one platform is a rule only one runner
+  checks. Ambiguous input (an 8.3 alias, a trailing dot or space, an
+  alternate-data-stream colon) fails closed.
+- `get_platform_context` is the interface's source for platform vocabulary
+  (reveal label, recoverable-delete name, quick-panel surface, shortcut
+  accelerator, log directory). Do not hardcode another platform's noun.
+- Capability snapshots are exported as `src/lib/bindings/platform-capabilities.golden.json`
+  by the ignored `tests::export_platform_capability_golden` test; frontend
+  tests consume that file instead of a hand-written literal.
+- `Zenith --doctor` prints a de-identified environment fingerprint and a
+  self-check table sharing its assertions with CI, and exits 1 when a check
+  fails. Committed fixtures in `src-tauri/tests/fixtures/environments` are
+  picked up automatically by `tests/environment_fixture_tests.rs`; a pasted
+  report becomes a permanent case for the cost of a commit.
+- A test must not be gated on an environment variable, must not return early in
+  place of asserting, and must not accept every variant of the value it is
+  handed. `src-tauri/tests/test_hygiene.rs` fails new instances and keeps
+  documented exceptions in `tests/hygiene_allowlist.txt`.
+
 ## Svelte conventions
 
 - Use Svelte 5 runes (`$state`, `$derived`) and typed component props. Avoid a
@@ -104,7 +132,9 @@ safety conventions below when changing Zenith.
   succeeds. Do not duplicate the frontend test suite in each platform job.
 - Packaging jobs use `.github/tauri.package-ci.json` to disable Tauri's frontend
   rebuild. Pass the file path to `--config`; do not inline JSON in workflow
-  commands because PowerShell command forwarding strips nested quotes.
+  commands because PowerShell command forwarding strips nested quotes. The
+  machine-wide NSIS variant is built from `.github/tauri.nsis-permachine.json`,
+  which also disables the frontend rebuild.
 - Release jobs fan out from one verified frontend artifact and fan in to one
   GitHub Release publisher. Only that publisher receives `contents: write`.
   Keep public artifact names stable and compute WinGet hashes from the final

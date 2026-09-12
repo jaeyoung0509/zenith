@@ -1,3 +1,4 @@
+use crate::platform::PlatformEnvironment;
 #[cfg(windows)]
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
@@ -296,7 +297,11 @@ impl WindowsDeleteHandle {
 }
 
 impl SafeTreeDeleter {
-    pub fn delete_contents(root: &Path, exclusions: &[String]) -> TreeDeleteReport {
+    pub fn delete_contents(
+        root: &Path,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport::default();
         let root_metadata = match fs::symlink_metadata(root) {
             Ok(metadata) => metadata,
@@ -318,15 +323,15 @@ impl SafeTreeDeleter {
             }
         };
         if root_is_link || !root_metadata.is_dir() {
-            Self::delete_entry(root, root, exclusions, &mut report);
+            Self::delete_entry(root, root, exclusions, environment, &mut report);
             return report;
         }
 
-        if let Err(e) = Blacklist::validate(root) {
+        if let Err(e) = Blacklist::validate_with(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
@@ -347,7 +352,14 @@ impl SafeTreeDeleter {
         #[cfg(unix)]
         {
             if let Some(ref dir_file) = permissions.directory {
-                Self::delete_dir_contents_via_fd(root, dir_file, root, exclusions, &mut report);
+                Self::delete_dir_contents_via_fd(
+                    root,
+                    dir_file,
+                    root,
+                    exclusions,
+                    environment,
+                    &mut report,
+                );
                 Self::restore_directory_permissions(root, permissions, &mut report);
                 return report;
             }
@@ -364,7 +376,9 @@ impl SafeTreeDeleter {
 
         for entry in entries {
             match entry {
-                Ok(ent) => Self::delete_entry(&ent.path(), root, exclusions, &mut report),
+                Ok(ent) => {
+                    Self::delete_entry(&ent.path(), root, exclusions, environment, &mut report)
+                }
                 Err(e) => report.errors.push(e.to_string()),
             }
         }
@@ -372,7 +386,11 @@ impl SafeTreeDeleter {
         report
     }
 
-    pub fn delete_path(root: &Path, exclusions: &[String]) -> TreeDeleteReport {
+    pub fn delete_path(
+        root: &Path,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport::default();
         match fs::symlink_metadata(root) {
             Ok(_) => {}
@@ -384,15 +402,15 @@ impl SafeTreeDeleter {
                 return report;
             }
         }
-        if let Err(e) = Blacklist::validate(root) {
+        if let Err(e) = Blacklist::validate_with(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
-        Self::delete_entry(root, root, exclusions, &mut report);
+        Self::delete_entry(root, root, exclusions, environment, &mut report);
         report
     }
 
@@ -406,6 +424,7 @@ impl SafeTreeDeleter {
         dir_file: &fs::File,
         verified_root: &Path,
         exclusions: &[String],
+        environment: &PlatformEnvironment,
         report: &mut TreeDeleteReport,
     ) {
         let entries = match fs::read_dir(dir_path) {
@@ -433,7 +452,8 @@ impl SafeTreeDeleter {
                 continue;
             };
 
-            if Self::is_excluded(&child_path, exclusions) || Blacklist::is_blacklisted(&child_path)
+            if Self::is_excluded(&child_path, exclusions, environment)
+                || Blacklist::is_blacklisted_with(&child_path, environment)
             {
                 report.skipped_files += 1;
                 continue;
@@ -453,7 +473,9 @@ impl SafeTreeDeleter {
                 report.errors.push(error);
                 continue;
             }
-            if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(&child_path) {
+            if let Err(error) =
+                SymlinkGuard::validate_canonical_blacklist_strict(&child_path, environment)
+            {
                 report
                     .errors
                     .push(format!("{}: {}", child_path.display(), error));
@@ -507,6 +529,7 @@ impl SafeTreeDeleter {
                     child_file,
                     verified_root,
                     exclusions,
+                    environment,
                     report,
                 );
             }
@@ -570,9 +593,12 @@ impl SafeTreeDeleter {
         path: &Path,
         verified_root: &Path,
         exclusions: &[String],
+        environment: &PlatformEnvironment,
         report: &mut TreeDeleteReport,
     ) {
-        if Self::is_excluded(path, exclusions) || Blacklist::is_blacklisted(path) {
+        if Self::is_excluded(path, exclusions, environment)
+            || Blacklist::is_blacklisted_with(path, environment)
+        {
             report.skipped_files += 1;
             return;
         }
@@ -593,7 +619,7 @@ impl SafeTreeDeleter {
         // Re-check the canonical location at every recursive entry before any
         // permission change or deletion. Symlink entries are still removed as
         // links, never traversed. Canonicalization failure fails closed.
-        if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(path) {
+        if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
             report.errors.push(format!("{}: {}", path.display(), error));
             return;
         }
@@ -678,7 +704,14 @@ impl SafeTreeDeleter {
 
         #[cfg(unix)]
         if let Some(ref _dir_file) = permissions.directory {
-            Self::delete_dir_contents_via_fd(path, _dir_file, verified_root, exclusions, report);
+            Self::delete_dir_contents_via_fd(
+                path,
+                _dir_file,
+                verified_root,
+                exclusions,
+                environment,
+                report,
+            );
             if let Err(error) = Self::verify_directory_identity(path, &permissions) {
                 report.errors.push(error);
                 Self::restore_directory_permissions(path, permissions, report);
@@ -713,7 +746,9 @@ impl SafeTreeDeleter {
 
         for entry in entries {
             match entry {
-                Ok(ent) => Self::delete_entry(&ent.path(), verified_root, exclusions, report),
+                Ok(ent) => {
+                    Self::delete_entry(&ent.path(), verified_root, exclusions, environment, report)
+                }
                 Err(e) => report.errors.push(format!("{}: {}", path.display(), e)),
             }
         }
@@ -1153,14 +1188,11 @@ impl SafeTreeDeleter {
         Ok(())
     }
 
-    fn is_excluded(path: &Path, exclusions: &[String]) -> bool {
+    fn is_excluded(path: &Path, exclusions: &[String], environment: &PlatformEnvironment) -> bool {
         exclusions.iter().any(|exclusion| {
-            let exclusion_path = Path::new(exclusion);
-            if (exclusion.starts_with('~') || exclusion_path.is_absolute())
-                && SignatureLoader::expand_path(exclusion).is_some_and(|expanded| {
-                    Self::paths_equal(path, &expanded) || Self::path_starts_with(path, &expanded)
-                })
-            {
+            if SignatureLoader::expand_exclusion(exclusion, environment).is_some_and(|expanded| {
+                Self::paths_equal(path, &expanded) || Self::path_starts_with(path, &expanded)
+            }) {
                 return true;
             }
             path.file_name()
@@ -1219,6 +1251,14 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::PlatformEnvironment;
+
+    /// Deletion tests exercise argument threading, not path resolution: no
+    /// exclusion in these tests needs the environment to expand.
+    fn environment() -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::current())
+    }
 
     #[cfg(windows)]
     #[test]
@@ -1291,7 +1331,7 @@ mod tests {
         let payload = root.join("payload.bin");
         std::fs::write(&payload, b"payload").unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(&root, &[]);
+        let report = SafeTreeDeleter::delete_contents(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
         assert!(root.is_dir());
@@ -1302,7 +1342,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist-link");
         assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
-        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing).is_err());
+        let environment = crate::platform::PlatformEnvironment::native();
+        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment).is_err());
     }
 
     #[test]
@@ -1320,7 +1361,7 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(&file1, perms).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&root, &[]);
+        let report = SafeTreeDeleter::delete_path(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!root.exists());
     }
@@ -1337,7 +1378,7 @@ mod tests {
         std::fs::set_permissions(&target, perms).unwrap();
         assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!target.exists(), "readonly file must be deleted");
     }
@@ -1369,7 +1410,7 @@ mod tests {
         root_p.set_readonly(true);
         std::fs::set_permissions(&root, root_p).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&root, &[]);
+        let report = SafeTreeDeleter::delete_path(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!root.exists(), "readonly directory tree must be deleted");
     }
@@ -1390,7 +1431,7 @@ mod tests {
             .open(&target)
             .unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
         assert!(
             !report.is_success(),
             "deletion must fail while file is exclusively locked"
@@ -1407,7 +1448,7 @@ mod tests {
 
         drop(lock_handle);
 
-        let report2 = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        let report2 = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
         assert!(report2.is_success(), "errors: {:?}", report2.errors);
         assert!(!target.exists());
     }
@@ -1432,7 +1473,7 @@ mod tests {
             drop(lock_handle);
         });
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[]);
+        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
         handle.join().unwrap();
 
         assert!(

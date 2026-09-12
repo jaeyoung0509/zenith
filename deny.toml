@@ -1,0 +1,139 @@
+# cargo-deny configuration for Zenith.
+#
+# CI runs `cargo deny check advisories bans licenses sources` from the
+# repository root (see the `supply-chain` job in .github/workflows/ci.yml and
+# the `supply-chain` recipe in Justfile). Every accepted exception below carries
+# its reason so a reviewer can re-justify or drop it; the triage process is
+# documented in CODE_SIGNING_POLICY.md under "Dependency and supply-chain
+# incidents".
+
+# The dependency graph is evaluated in full across every platform target and
+# feature, the same view `cargo audit` takes, so a duplicate, ban, or advisory
+# cannot hide behind target or feature filtering.
+[graph]
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# A yanked release is an error unless the exact package is accepted below.
+yanked = "deny"
+# Fail on unmaintained or unsound crates anywhere in the graph; the specific
+# advisories that cannot be fixed yet are accepted individually in `ignore`.
+unmaintained = "all"
+unsound = "all"
+# An ignore entry that no longer matches anything is reported, not fatal, so a
+# stale exception is visible during review.
+unused-ignored-advisory = "warn"
+ignore = [
+    # Build-time macro crates reached through tauri/specta. No maintained
+    # replacement is published for these versions; re-evaluate on every
+    # dependency update.
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is a build-time macro dependency of the tauri/specta stack and has no successor release." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 is pulled by tauri's derive stack; replacing it requires an upstream major bump." },
+    # Unicode tables reached through tauri's menu/window stack.
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property 0.9.0 is an unmaintained transitive crate of the tauri dependency tree." },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range 0.9.0 is an unmaintained transitive crate of the tauri dependency tree." },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common 0.9.0 is an unmaintained transitive crate of the tauri dependency tree." },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident 0.9.0 is an unmaintained transitive crate of the tauri dependency tree." },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version 0.9.0 is an unmaintained transitive crate of the tauri dependency tree." },
+    # Platform-specific advisory. Zenith does not ship a Linux artifact; the
+    # crate is present only because tauri's Linux backend is in the lockfile.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 unsoundness is on tauri's Linux GTK path; Zenith publishes macOS and Windows artifacts only." },
+]
+
+[bans]
+# Duplicate versions are denied so a new duplicate is a review decision. The
+# entries below are the duplicates that already exist in the locked graph;
+# each is accepted with its reason instead of being force-consolidated, which
+# would require upstream majors that are not available yet.
+multiple-versions = "deny"
+wildcards = "deny"
+deny = [
+    { crate = "openssl", reason = "Zenith uses rustls; a plaintext-TLS stack must not enter the graph.", use-instead = "rustls" },
+    { crate = "openssl-sys", reason = "Zenith uses rustls; a plaintext-TLS stack must not enter the graph.", use-instead = "rustls" },
+    { crate = "native-tls", reason = "Zenith uses rustls; a platform-TLS shim must not enter the graph.", use-instead = "rustls" },
+    { crate = "git2", reason = "No build or runtime step shells out to libgit2.", use-instead = "gix" },
+]
+skip = [
+    # --- Windows API bindings -------------------------------------------------
+    # These crates are versioned tightly to the specific crate that imports
+    # them, so several generations coexist. Consolidated by nothing below;
+    # accepted individually.
+    #
+    # windows-sys has five locked versions:
+    #   0.45.0 <- jni 0.21.1 (Android/JNI path of a notification dependency)
+    #   0.52.0 <- ring 0.17.14
+    #   0.59.0 <- rfd 0.15.4, window-vibrancy 0.6.0, winreg 0.55.0, zenith-core
+    #   0.60.2 <- tauri-plugin-single-instance 2.4.4
+    #   0.61.2 <- tokio, mio, rustix, schannel, socket2, tray-icon, muda,
+    #             tempfile, zbus and other current-generation dependencies
+    { crate = "windows-sys", reason = "five generations are pulled by unrelated dependencies; see the comment above for each importer." },
+    { crate = "windows", reason = "the umbrella windows crate is pinned per consumer (muda/tray-icon/wry) and moves independently of windows-sys." },
+    { crate = "windows-core", reason = "versioned with the windows umbrella crate generation." },
+    { crate = "windows-implement", reason = "versioned with the windows umbrella crate generation." },
+    { crate = "windows-interface", reason = "versioned with the windows umbrella crate generation." },
+    { crate = "windows-link", reason = "versioned with the windows result/strings generation." },
+    { crate = "windows-result", reason = "versioned with the windows umbrella crate generation." },
+    { crate = "windows-strings", reason = "versioned with the windows umbrella crate generation." },
+    { crate = "windows-targets", reason = "import/arch target shim, one generation per windows-sys generation." },
+    { crate = "windows_aarch64_gnullvm", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_aarch64_msvc", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_i686_gnu", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_i686_gnullvm", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_i686_msvc", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_x86_64_gnu", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_x86_64_gnullvm", reason = "arch import library shim emitted by windows-targets." },
+    { crate = "windows_x86_64_msvc", reason = "arch import library shim emitted by windows-targets." },
+    # --- Macro and serialization generations ----------------------------------
+    { crate = "syn", reason = "1.x is pinned by older proc-macro crates while 2.x/3.x are current; consolidation needs upstream majors." },
+    { crate = "proc-macro-crate", reason = "1.x/2.x/3.x follow the syn/toml generations their consumers use." },
+    { crate = "thiserror", reason = "1.x is pinned by an older transitive crate; 2.x is current." },
+    { crate = "thiserror-impl", reason = "versioned with thiserror." },
+    { crate = "toml", reason = "0.8 is a direct dependency of zenith-core; 0.9/1.x are pulled by newer transitive tooling." },
+    { crate = "toml_datetime", reason = "versioned with the toml/winnow generation." },
+    { crate = "toml_edit", reason = "versioned with the toml/winnow generation." },
+    { crate = "serde_spanned", reason = "versioned with the toml/winnow generation." },
+    { crate = "winnow", reason = "0.5/0.7/1.x follow the toml_edit generation they serve." },
+    { crate = "heck", reason = "0.4 is pinned by proc-macro-crate 1.x while newer macro crates use 0.5." },
+    # --- Randomness and hashing -------------------------------------------------
+    { crate = "getrandom", reason = "0.2/0.3/0.4 are pinned by ring, uuid, tempfile and reqwest's TLS stack; each is an upstream generation." },
+    { crate = "hashbrown", reason = "0.12 is pinned by an older indexmap generation while 0.17 is current." },
+    { crate = "indexmap", reason = "1.x is pinned by an older transitive crate; 2.x is current." },
+    # --- Remaining single-name splits -------------------------------------------
+    { crate = "base64", reason = "0.21 is pinned by an older transitive HTTP stack while 0.22 is used directly by zenith-core." },
+    { crate = "bitflags", reason = "1.x is pinned by an older transitive crate while 2.x is current." },
+    { crate = "core-foundation", reason = "0.9 is pinned by older macOS-only transitive crates while 0.10 is current." },
+    { crate = "png", reason = "0.17 is pinned by an older image consumer while 0.18 is current." },
+    { crate = "r-efi", reason = "5.x and 6.x serve different UEFI target generations." },
+    { crate = "reqwest", reason = "0.12 is used directly by zenith-core; 0.13 is pulled transitively by a newer dependency." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[licenses]
+confidence-threshold = 0.93
+# Zenith is MIT-licensed. These identifiers cover every license expression in
+# the locked graph, either as the chosen license or as the permissive branch of
+# a dual/triple-licensed expression (for example r-efi's
+# "MIT OR Apache-2.0 OR LGPL-2.1-or-later" is satisfied by MIT).
+unused-allowed-license = "warn"
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+exceptions = []

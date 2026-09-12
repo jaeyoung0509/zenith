@@ -5,6 +5,7 @@ use crate::models::{
     CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanStrategy,
     DeletePlan, DeleteTarget,
 };
+use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SafeTreeDeleter, SymlinkGuard, ToctouGuard};
 use std::time::SystemTime;
 
@@ -12,7 +13,15 @@ pub struct CleanExecutor;
 
 impl CleanExecutor {
     /// Executes a verified DeletePlan safely and securely, emitting streaming CleanEvents.
-    pub fn execute<F>(plan: DeletePlan, mut on_event: F) -> CleanResult
+    ///
+    /// The environment is threaded to the deletion and external-command
+    /// boundaries so exclusion expansion and provider resolution follow the
+    /// same environment the plan was built against.
+    pub fn execute<F>(
+        plan: DeletePlan,
+        environment: &PlatformEnvironment,
+        mut on_event: F,
+    ) -> CleanResult
     where
         F: FnMut(CleanEvent),
     {
@@ -21,7 +30,7 @@ impl CleanExecutor {
             .unwrap_or_default()
             .as_secs();
 
-        let initial_disk = DiskMetricsCollector::get_primary_disk().ok();
+        let initial_disk = DiskMetricsCollector::get_primary_disk(environment).ok();
 
         on_event(CleanEvent::Started {
             plan_id: plan.id,
@@ -42,7 +51,7 @@ impl CleanExecutor {
                 total: total_count,
             });
 
-            let result = Self::clean_target(target);
+            let result = Self::clean_target(target, environment);
 
             if result.success {
                 total_reclaimed_bytes += result.bytes_reclaimed;
@@ -72,7 +81,7 @@ impl CleanExecutor {
             .unwrap_or_default()
             .as_secs();
 
-        let final_disk = DiskMetricsCollector::get_primary_disk().ok();
+        let final_disk = DiskMetricsCollector::get_primary_disk(environment).ok();
         let actual_disk_free_delta = match (initial_disk, final_disk) {
             (Some(init), Some(fin)) => Some(fin.free_bytes as i64 - init.free_bytes as i64),
             _ => None,
@@ -95,10 +104,10 @@ impl CleanExecutor {
         clean_result
     }
 
-    fn clean_target(target: &DeleteTarget) -> CleanItemResult {
+    fn clean_target(target: &DeleteTarget, environment: &PlatformEnvironment) -> CleanItemResult {
         // Special case: DockerPrune strategy doesn't operate on standard filesystem paths
         if target.strategy == CleanStrategy::DockerPrune {
-            return match DockerAdapter::prune_category(&target.signature_id) {
+            return match DockerAdapter::prune_category(environment, &target.signature_id) {
                 Ok(reclaimed) => CleanItemResult {
                     item_id: target.item_id.clone(),
                     name: target.name.clone(),
@@ -141,7 +150,7 @@ impl CleanExecutor {
         }
 
         // 1. Blacklist check (lexical & canonical, fail closed on mutation)
-        if let Err(e) = Blacklist::validate(path) {
+        if let Err(e) = Blacklist::validate_with(path, environment) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -153,7 +162,7 @@ impl CleanExecutor {
                 error_message: Some(e.to_string()),
             };
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -214,6 +223,7 @@ impl CleanExecutor {
         if let Some(days) = target.min_age_days {
             if path.is_dir() {
                 let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+                    environment,
                     path,
                     &target.exclusions,
                     0,
@@ -275,10 +285,10 @@ impl CleanExecutor {
         // 4. Perform non-destructive deletion according to strategy
         let report = match target.strategy {
             CleanStrategy::DeleteContents => {
-                SafeTreeDeleter::delete_contents(path, &target.exclusions)
+                SafeTreeDeleter::delete_contents(path, &target.exclusions, environment)
             }
             CleanStrategy::DeleteDirectory => {
-                SafeTreeDeleter::delete_path(path, &target.exclusions)
+                SafeTreeDeleter::delete_path(path, &target.exclusions, environment)
             }
             CleanStrategy::Manual => {
                 return CleanItemResult {
@@ -293,7 +303,7 @@ impl CleanExecutor {
                 };
             }
             CleanStrategy::ExternalCommand => {
-                return match CacheProviderRegistry::prune(&target.signature_id, path) {
+                return match CacheProviderRegistry::prune(&target.signature_id, path, environment) {
                     Ok(reclaimed) => CleanItemResult {
                         item_id: target.item_id.clone(),
                         name: target.name.clone(),

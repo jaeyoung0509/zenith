@@ -2,6 +2,7 @@ use crate::models::{
     CleanStrategy, DeletePlan, DeleteTarget, RiskSummary, RiskTier, ScanItem, ScanResult,
     ZenithError,
 };
+use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
 use crate::signatures::SignatureRegistry;
 use std::collections::HashSet;
@@ -17,6 +18,7 @@ impl SafetyPlanner {
         scan_id: &str,
         selected_item_ids: &[String],
         registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
     ) -> Result<DeletePlan, ZenithError> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -45,15 +47,27 @@ impl SafetyPlanner {
         for item in &mut trusted_items {
             item.is_selected = true;
         }
-        let mut plan = Self::create_plan(&trusted_items, registry)?;
+        let mut plan = Self::create_plan_for(&trusted_items, registry, environment)?;
         plan.scan_id = scan_id.to_string();
         Ok(plan)
     }
 
     /// Creates a verified and locked DeletePlan from a list of candidate ScanItems.
+    ///
+    /// Native convenience for one-line callers and tests; production paths go
+    /// through [`Self::create_plan_from_scan`], which takes the environment the
+    /// scan was produced with.
     pub fn create_plan(
         items: &[ScanItem],
         registry: &SignatureRegistry,
+    ) -> Result<DeletePlan, ZenithError> {
+        Self::create_plan_for(items, registry, &PlatformEnvironment::native())
+    }
+
+    fn create_plan_for(
+        items: &[ScanItem],
+        registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
     ) -> Result<DeletePlan, ZenithError> {
         let mut targets = Vec::new();
         let mut expected_reclaim_bytes = 0u64;
@@ -91,7 +105,7 @@ impl SafetyPlanner {
             } else {
                 // Filesystem strategies: DeleteContents, DeleteDirectory, ExternalCommand
                 if !signature.paths.is_empty() {
-                    let resolved_roots = registry.resolve_paths(signature);
+                    let resolved_roots = registry.resolve_paths(signature, environment);
                     let allowed = resolved_roots.iter().any(|root| {
                         path == *root
                             || (signature.min_age_days.is_some()
@@ -112,11 +126,11 @@ impl SafetyPlanner {
                 }
 
                 // 3. Hard Blacklist check (lexical & canonical)
-                Blacklist::validate(&path)?;
-                SymlinkGuard::validate_canonical_blacklist(&path)?;
+                Blacklist::validate_with(&path, environment)?;
+                SymlinkGuard::validate_canonical_blacklist(&path, environment)?;
 
                 // 4. Symlink Target check
-                SymlinkGuard::validate_symlink_target(&path)?;
+                SymlinkGuard::validate_symlink_target(&path, environment)?;
 
                 // 5. Capture current file identity for TOCTOU protection
                 if path.exists() || SymlinkGuard::is_symlink(&path) {

@@ -1,0 +1,99 @@
+name: Windows bug report
+description: Report a defect in the Windows x64 build (NSIS installer or packaged application).
+title: "[Windows] "
+labels:
+  - bug
+  - windows
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a Windows defect. Two things make a report actionable:
+
+        1. Run the built-in doctor self-check and paste its **complete** output. It
+           prints a de-identified environment fingerprint and a self-check table.
+           It never prints your user name, machine name, drive letters, or profile
+           paths, so the output is safe to share.
+        2. Give the exact application version, Windows build, and install location.
+
+        Do not attach secrets, tokens, or unredacted configuration files.
+  - type: input
+    id: app_version
+    attributes:
+      label: Application version
+      description: The version shown in Zenith (or the installer file name, e.g. 0.3.19).
+      placeholder: "0.3.19"
+    validations:
+      required: true
+  - type: input
+    id: windows_build
+    attributes:
+      label: Windows build
+      description: Run `winver` or `[System.Environment]::OSVersion.Version.ToString()` and paste the result.
+      placeholder: "Windows 11 24H2 (26100.2033)"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_kind
+    attributes:
+      label: How was Zenith installed?
+      options:
+        - Per-user installer (Zenith-windows-x64-setup.exe, installs under %LOCALAPPDATA%)
+        - Machine-wide installer (Zenith-windows-x64-setup-machine.exe, installs under Program Files)
+        - Portable or unpacked build
+        - Not installed / installer itself fails
+    validations:
+      required: true
+  - type: input
+    id: install_location
+    attributes:
+      label: Install location
+      description: The folder that contains Zenith.exe (for example `%LOCALAPPDATA%\Zenith` or `C:\Program Files\Zenith`).
+      placeholder: "%LOCALAPPDATA%\\Zenith"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor_output
+    attributes:
+      label: Doctor self-check output
+      description: |
+        From PowerShell, run the doctor against the installed binary and paste everything it prints:
+
+        ```powershell
+        & "$env:LOCALAPPDATA\Zenith\Zenith.exe" --doctor
+        ```
+
+        Use the Program Files path if you installed the machine-wide build. The
+        command exits 0 when every self-check passes and 1 when one or more fail;
+        paste the output even when the exit code is 0. `--doctor --json` prints the
+        same information as one JSON object if you prefer.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest sequence that reproduces the defect, starting from a fresh launch.
+      placeholder: |
+        1. Install ...
+        2. Open ...
+        3. Click ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Before submitting
+      options:
+        - label: I downloaded Zenith from this repository's GitHub Releases and verified the SHA256 checksum against SHA256SUMS.txt.
+          required: true
+        - label: I understand Zenith has no updater and performs no background network activity, so a fix is learned about only from the GitHub Releases page.
+          required: true

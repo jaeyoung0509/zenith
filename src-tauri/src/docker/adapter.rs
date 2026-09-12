@@ -2,7 +2,52 @@ use crate::models::{
     Category, DockerContainerItem, DockerImageItem, DockerOverview, DockerStatus, DockerVolumeItem,
     FileSize, RiskTier, ScanItem, ZenithError,
 };
+use crate::platform::description::{PlatformEnvironment, ToolResolution};
 use crate::tooling;
+
+/// The container host the adapter may report, stated by the caller.
+///
+/// `PlatformEnvironment` describes path roots and installed tools; it does not
+/// model arbitrary process variables. `DOCKER_HOST` is therefore injected
+/// rather than read by the adapter, so a test can state a host — or state that
+/// there is none — and the message is assertable on any machine. The
+/// composition root builds the real value with [`ContainerHost::from_value`]
+/// fed by the process environment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContainerHost {
+    docker_host: Option<String>,
+}
+
+impl ContainerHost {
+    /// No container host is stated.
+    pub fn unstated() -> Self {
+        Self { docker_host: None }
+    }
+
+    /// A stated container host. An empty or whitespace-only value means the
+    /// caller observed no host.
+    pub fn stated(host: impl Into<String>) -> Self {
+        let host = host.into();
+        if host.trim().is_empty() {
+            return Self::unstated();
+        }
+        Self {
+            docker_host: Some(host),
+        }
+    }
+
+    /// The host observed in the process environment, or [`Self::unstated`].
+    pub fn from_value(host: Option<String>) -> Self {
+        match host {
+            Some(host) => Self::stated(host),
+            None => Self::unstated(),
+        }
+    }
+
+    pub fn docker_host(&self) -> Option<&str> {
+        self.docker_host.as_deref()
+    }
+}
 
 /// A Docker-compatible container CLI. `docker` is preferred; `podman` is a
 /// real fallback, so a machine with a stopped Docker daemon but a running
@@ -27,14 +72,22 @@ impl ContainerCli {
 /// True when a Docker-compatible CLI is installed. Capability reporting uses
 /// this same source of truth so a Podman-only machine is not reported as
 /// unsupported while the adapter can drive Podman.
-pub fn container_cli_detected() -> bool {
-    container_cli_detected_with(|name| tooling::resolve(name).is_some())
-}
-
-fn container_cli_detected_with(resolve: impl Fn(&str) -> bool) -> bool {
+///
+/// A tool the environment states as missing is an answer: it is not
+/// re-discovered from the host, so a simulated environment cannot silently
+/// disagree with the machine the test runs on.
+pub fn container_cli_detected(environment: &PlatformEnvironment) -> bool {
     ContainerCli::ALL
         .iter()
-        .any(|cli| resolve(cli.executable()))
+        .any(|cli| cli_available(environment, *cli))
+}
+
+fn cli_available(environment: &PlatformEnvironment, cli: ContainerCli) -> bool {
+    match environment.tool(cli.executable()) {
+        Some(ToolResolution::Found(_)) => true,
+        Some(ToolResolution::NotFound) => false,
+        None => tooling::resolve_with(cli.executable(), environment).is_some(),
+    }
 }
 
 /// Selects the first installed CLI that can actually reach a daemon.
@@ -48,16 +101,20 @@ fn select_running_cli(
 pub struct DockerAdapter;
 
 impl DockerAdapter {
-    fn installed_clis() -> Vec<ContainerCli> {
+    fn cli_command(environment: &PlatformEnvironment, cli: ContainerCli) -> std::process::Command {
+        tooling::command_with(cli.executable(), environment)
+    }
+
+    fn installed_clis(environment: &PlatformEnvironment) -> Vec<ContainerCli> {
         ContainerCli::ALL
             .iter()
             .copied()
-            .filter(|cli| tooling::resolve(cli.executable()).is_some())
+            .filter(|cli| cli_available(environment, *cli))
             .collect()
     }
 
-    fn cli_reaches_daemon(cli: ContainerCli) -> bool {
-        let mut cmd = tooling::command(cli.executable());
+    fn cli_reaches_daemon(environment: &PlatformEnvironment, cli: ContainerCli) -> bool {
+        let mut cmd = Self::cli_command(environment, cli);
         cmd.args(["info", "--format", "{{.ServerVersion}}"]);
         matches!(
             tooling::run_with_timeout(cmd, std::time::Duration::from_secs(4)),
@@ -65,21 +122,23 @@ impl DockerAdapter {
         )
     }
 
-    fn active_cli() -> Option<ContainerCli> {
-        select_running_cli(&Self::installed_clis(), Self::cli_reaches_daemon)
+    fn active_cli(environment: &PlatformEnvironment) -> Option<ContainerCli> {
+        select_running_cli(&Self::installed_clis(environment), |cli| {
+            Self::cli_reaches_daemon(environment, cli)
+        })
     }
 
     /// The CLI used by operations that were already authorized by a status
     /// check: the running runtime when one exists, otherwise the first
     /// installed CLI so error reporting still names a real executable.
-    fn preferred_cli() -> ContainerCli {
-        Self::active_cli()
-            .or_else(|| Self::installed_clis().first().copied())
+    fn preferred_cli(environment: &PlatformEnvironment) -> ContainerCli {
+        Self::active_cli(environment)
+            .or_else(|| Self::installed_clis(environment).first().copied())
             .unwrap_or(ContainerCli::Docker)
     }
 
-    fn cli_version(cli: ContainerCli) -> Option<String> {
-        let mut cmd = tooling::command(cli.executable());
+    fn cli_version(environment: &PlatformEnvironment, cli: ContainerCli) -> Option<String> {
+        let mut cmd = Self::cli_command(environment, cli);
         cmd.arg("--version");
         tooling::run_with_timeout(cmd, std::time::Duration::from_secs(3))
             .ok()
@@ -88,11 +147,10 @@ impl DockerAdapter {
             .filter(|version| !version.is_empty())
     }
 
-    fn missing_cli_message() -> String {
-        match std::env::var_os("DOCKER_HOST") {
+    fn missing_cli_message(host: &ContainerHost) -> String {
+        match host.docker_host() {
             Some(host) => format!(
-                "DOCKER_HOST={} is set but no docker or podman CLI was detected in PATH or known tool locations.",
-                host.to_string_lossy()
+                "DOCKER_HOST={host} is set but no docker or podman CLI was detected in PATH or known tool locations."
             ),
             None => {
                 "No docker or podman CLI was detected in PATH or known tool locations.".to_string()
@@ -100,11 +158,10 @@ impl DockerAdapter {
         }
     }
 
-    fn daemon_unreachable_message() -> String {
-        match std::env::var_os("DOCKER_HOST") {
+    fn daemon_unreachable_message(host: &ContainerHost) -> String {
+        match host.docker_host() {
             Some(host) => format!(
-                "No container daemon responded at DOCKER_HOST={}. Start the runtime or clear DOCKER_HOST to use the active context.",
-                host.to_string_lossy()
+                "No container daemon responded at DOCKER_HOST={host}. Start the runtime or clear DOCKER_HOST to use the active context."
             ),
             None => {
                 "No container daemon responded for the active context. Start Docker, Podman, or Rancher Desktop.".to_string()
@@ -113,14 +170,14 @@ impl DockerAdapter {
     }
 
     /// Checks installed CLIs and reports the first one whose daemon answers.
-    pub fn get_status() -> DockerStatus {
-        let installed = Self::installed_clis();
+    pub fn get_status(environment: &PlatformEnvironment, host: &ContainerHost) -> DockerStatus {
+        let installed = Self::installed_clis(environment);
         if installed.is_empty() {
             return DockerStatus {
                 is_available: false,
                 is_running: false,
                 version: None,
-                error_message: Some(Self::missing_cli_message()),
+                error_message: Some(Self::missing_cli_message(host)),
                 overview: None,
                 images: Vec::new(),
                 containers: Vec::new(),
@@ -130,14 +187,14 @@ impl DockerAdapter {
 
         // Report the version of the runtime that actually answers, so a dead
         // Docker daemon with a live Podman machine shows the Podman version.
-        let active = Self::active_cli();
-        let version = Self::cli_version(active.unwrap_or(installed[0]));
+        let active = Self::active_cli(environment);
+        let version = Self::cli_version(environment, active.unwrap_or(installed[0]));
         let Some(cli) = active else {
             return DockerStatus {
                 is_available: true,
                 is_running: false,
                 version,
-                error_message: Some(Self::daemon_unreachable_message()),
+                error_message: Some(Self::daemon_unreachable_message(host)),
                 overview: None,
                 images: Vec::new(),
                 containers: Vec::new(),
@@ -145,10 +202,10 @@ impl DockerAdapter {
             };
         };
 
-        let overview = Self::get_overview_with(cli);
-        let containers = Self::get_containers_with(cli);
-        let images = Self::get_images_from_containers_with(cli, &containers);
-        let volumes = Self::get_volumes_with(cli);
+        let overview = Self::get_overview_with(environment, cli);
+        let containers = Self::get_containers_with(environment, cli);
+        let images = Self::get_images_from_containers_with(environment, cli, &containers);
+        let volumes = Self::get_volumes_with(environment, cli);
 
         DockerStatus {
             is_available: true,
@@ -163,13 +220,13 @@ impl DockerAdapter {
     }
 
     /// Generates ScanItems for Docker artifacts when the Docker daemon is active.
-    pub fn scan_items() -> Vec<ScanItem> {
-        let overview = Self::get_overview();
+    pub fn scan_items(environment: &PlatformEnvironment) -> Vec<ScanItem> {
+        let overview = Self::get_overview(environment);
         if overview.total_bytes == 0 && overview.total_reclaimable_bytes == 0 {
             return Vec::new();
         }
 
-        let images = Self::get_images();
+        let images = Self::get_images(environment);
         let mut items = Vec::new();
 
         let dangling_size: u64 = images
@@ -288,28 +345,29 @@ impl DockerAdapter {
 
     /// Queries `docker system df` / `podman system df` and parses image,
     /// container, volume, and build cache usage.
-    pub fn get_overview() -> DockerOverview {
-        Self::get_overview_with(Self::preferred_cli())
+    pub fn get_overview(environment: &PlatformEnvironment) -> DockerOverview {
+        Self::get_overview_with(environment, Self::preferred_cli(environment))
     }
 
-    fn get_overview_with(cli: ContainerCli) -> DockerOverview {
+    fn get_overview_with(environment: &PlatformEnvironment, cli: ContainerCli) -> DockerOverview {
         let args: &[&str] = match cli {
             ContainerCli::Docker => &["system", "df", "--format", "{{json .}}"],
             // Podman emits a single JSON array for `--format json`.
             ContainerCli::Podman => &["system", "df", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_overview_records(&records)
     }
 
     /// Runs a JSON-emitting command and accepts Docker's JSON-lines output,
     /// Podman's single JSON array, or a single JSON object.
     fn run_json_records(
+        environment: &PlatformEnvironment,
         cli: ContainerCli,
         args: &[&str],
         timeout_secs: u64,
     ) -> Vec<serde_json::Value> {
-        let mut cmd = tooling::command(cli.executable());
+        let mut cmd = Self::cli_command(environment, cli);
         cmd.args(args);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(timeout_secs));
         match output {
@@ -454,17 +512,25 @@ impl DockerAdapter {
         Self::parse_docker_size(part)
     }
 
-    pub fn get_images() -> Vec<DockerImageItem> {
-        let cli = Self::preferred_cli();
-        let containers = Self::get_containers_with(cli);
-        Self::get_images_from_containers_with(cli, &containers)
+    pub fn get_images(environment: &PlatformEnvironment) -> Vec<DockerImageItem> {
+        let cli = Self::preferred_cli(environment);
+        let containers = Self::get_containers_with(environment, cli);
+        Self::get_images_from_containers_with(environment, cli, &containers)
     }
 
-    pub fn get_images_from_containers(containers: &[DockerContainerItem]) -> Vec<DockerImageItem> {
-        Self::get_images_from_containers_with(Self::preferred_cli(), containers)
+    pub fn get_images_from_containers(
+        environment: &PlatformEnvironment,
+        containers: &[DockerContainerItem],
+    ) -> Vec<DockerImageItem> {
+        Self::get_images_from_containers_with(
+            environment,
+            Self::preferred_cli(environment),
+            containers,
+        )
     }
 
     fn get_images_from_containers_with(
+        environment: &PlatformEnvironment,
         cli: ContainerCli,
         containers: &[DockerContainerItem],
     ) -> Vec<DockerImageItem> {
@@ -475,7 +541,7 @@ impl DockerAdapter {
             ContainerCli::Docker => &["images", "--format", "{{json .}}"],
             ContainerCli::Podman => &["images", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_images_records(&records, &used_images)
     }
 
@@ -547,16 +613,19 @@ impl DockerAdapter {
         }
     }
 
-    pub fn get_containers() -> Vec<DockerContainerItem> {
-        Self::get_containers_with(Self::preferred_cli())
+    pub fn get_containers(environment: &PlatformEnvironment) -> Vec<DockerContainerItem> {
+        Self::get_containers_with(environment, Self::preferred_cli(environment))
     }
 
-    fn get_containers_with(cli: ContainerCli) -> Vec<DockerContainerItem> {
+    fn get_containers_with(
+        environment: &PlatformEnvironment,
+        cli: ContainerCli,
+    ) -> Vec<DockerContainerItem> {
         let args: &[&str] = match cli {
             ContainerCli::Docker => &["ps", "-a", "--format", "{{json .}}"],
             ContainerCli::Podman => &["ps", "-a", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_containers_records(&records)
     }
 
@@ -601,16 +670,19 @@ impl DockerAdapter {
         containers
     }
 
-    pub fn get_volumes() -> Vec<DockerVolumeItem> {
-        Self::get_volumes_with(Self::preferred_cli())
+    pub fn get_volumes(environment: &PlatformEnvironment) -> Vec<DockerVolumeItem> {
+        Self::get_volumes_with(environment, Self::preferred_cli(environment))
     }
 
-    fn get_volumes_with(cli: ContainerCli) -> Vec<DockerVolumeItem> {
+    fn get_volumes_with(
+        environment: &PlatformEnvironment,
+        cli: ContainerCli,
+    ) -> Vec<DockerVolumeItem> {
         let args: &[&str] = match cli {
             ContainerCli::Docker => &["volume", "ls", "--format", "{{json .}}"],
             ContainerCli::Podman => &["volume", "ls", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_volumes_records(&records)
     }
 
@@ -637,8 +709,11 @@ impl DockerAdapter {
     }
 
     /// Executes targeted Docker prune actions for a given signature.
-    pub fn prune_category(signature_id: &str) -> Result<u64, ZenithError> {
-        let overview_before = Self::get_overview();
+    pub fn prune_category(
+        environment: &PlatformEnvironment,
+        signature_id: &str,
+    ) -> Result<u64, ZenithError> {
+        let overview_before = Self::get_overview(environment);
 
         enum CategoryDelta {
             Images,
@@ -648,11 +723,11 @@ impl DockerAdapter {
         }
 
         let prune_timeout = std::time::Duration::from_secs(30);
-        let cli = Self::preferred_cli().executable();
+        let cli = Self::preferred_cli(environment);
 
         let (res, delta_kind) = match signature_id {
             "container.docker.dangling_images" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["image", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -660,7 +735,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_images" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["image", "prune", "-a", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -668,7 +743,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.builder" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["builder", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -676,7 +751,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.stopped_containers" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["container", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -684,7 +759,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_volumes" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["volume", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -701,7 +776,7 @@ impl DockerAdapter {
 
         match res {
             Ok(output) if output.status.success() => {
-                let overview_after = Self::get_overview();
+                let overview_after = Self::get_overview(environment);
                 let reclaimed = match delta_kind {
                     CategoryDelta::Images => overview_before
                         .images
@@ -742,7 +817,9 @@ impl DockerAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::DockerAdapter;
+    use super::{container_cli_detected, ContainerHost, DockerAdapter};
+    use crate::platform::description::PlatformEnvironment;
+    use crate::platform::path_algebra::PathFlavor;
 
     #[test]
     fn volume_total_is_not_reported_as_reclaimable() {
@@ -809,11 +886,69 @@ mod tests {
 
     #[test]
     fn container_cli_detection_accepts_podman_only() {
-        use super::container_cli_detected_with;
+        let podman_only = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_missing_tool("docker")
+            .with_tool("podman", "/usr/local/bin/podman");
+        assert!(container_cli_detected(&podman_only));
 
-        assert!(!container_cli_detected_with(|_| false));
-        assert!(container_cli_detected_with(|name| name == "docker"));
-        assert!(container_cli_detected_with(|name| name == "podman"));
+        let docker_only = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_tool("docker", "/usr/bin/docker")
+            .with_missing_tool("podman");
+        assert!(container_cli_detected(&docker_only));
+    }
+
+    #[test]
+    fn docker_commands_use_the_cli_path_stated_by_the_environment() {
+        use super::ContainerCli;
+        use std::path::Path;
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_tool("docker", "/opt/zenith-fixtures/bin/docker")
+            .with_missing_tool("podman");
+
+        let command = DockerAdapter::cli_command(&environment, ContainerCli::Docker);
+        assert_eq!(
+            command.get_program(),
+            Path::new("/opt/zenith-fixtures/bin/docker").as_os_str()
+        );
+    }
+
+    #[test]
+    fn a_stated_missing_cli_is_not_re_discovered_from_the_host() {
+        let no_cli = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_missing_tool("docker")
+            .with_missing_tool("podman");
+
+        assert!(!container_cli_detected(&no_cli));
+
+        let status = DockerAdapter::get_status(&no_cli, &ContainerHost::unstated());
+        assert!(!status.is_available);
+        assert!(!status.is_running);
+        let message = status.error_message.expect("absent CLI must be explained");
+        // The reason names the missing CLI and does not borrow a host from the
+        // machine running the test.
+        assert!(message.to_ascii_lowercase().contains("cli"), "{message}");
+        assert!(!message.contains("DOCKER_HOST="), "{message}");
+    }
+
+    #[test]
+    fn a_stated_container_host_is_reported_without_reading_the_process_environment() {
+        let no_cli = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_missing_tool("docker")
+            .with_missing_tool("podman");
+        let host = ContainerHost::stated("tcp://127.0.0.1:2375");
+
+        let status = DockerAdapter::get_status(&no_cli, &host);
+        let message = status.error_message.expect("missing CLI message");
+        assert!(message.contains("DOCKER_HOST=tcp://127.0.0.1:2375"));
+
+        // An unstated host is reported as unstated rather than borrowed from
+        // the machine running the test.
+        let status = DockerAdapter::get_status(&no_cli, &ContainerHost::unstated());
+        assert!(!status
+            .error_message
+            .expect("missing CLI message")
+            .contains("DOCKER_HOST="));
     }
 
     #[test]

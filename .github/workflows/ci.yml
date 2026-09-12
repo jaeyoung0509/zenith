@@ -149,6 +149,62 @@ jobs:
       - name: Rust Cargo Check
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
+  msrv:
+    name: Minimum Supported Rust Version (1.93.0)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (the declared rust-version)
+        uses: dtolnay/rust-toolchain@1.93.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Verify the declared rust-version builds this tree
+        run: just check-msrv
+
+  supply-chain:
+    name: Supply Chain Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Audit locked dependencies for both ecosystems
+        run: just supply-chain
+
   package-macos:
     name: Package Smoke (macOS)
     needs: [frontend, rust-macos]
@@ -208,14 +264,48 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build debug NSIS installer from verified frontend
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      - name: Build debug NSIS installer (per-user default)
         run: pnpm tauri build --debug --bundles nsis --config .github/tauri.package-ci.json
 
-      - name: Upload Windows packaging smoke artifact
+      - name: Smoke-test the per-user installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packaging | Out-Null
+          $installers = @(
+            Get-ChildItem -Path target, src-tauri/target -Filter '*-setup.exe' -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' }
+          )
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one per-user NSIS installer, found $($installers.Count)"
+          }
+          Copy-Item -Path $installers[0].FullName -Destination packaging/Zenith-windows-x64-setup.exe
+          just test-package "$($installers[0].FullName)"
+
+      - name: Clear NSIS output before the machine-wide build
+        shell: pwsh
+        run: Remove-Item -Recurse -Force -ErrorAction SilentlyContinue target/debug/bundle/nsis, src-tauri/target/debug/bundle/nsis
+
+      - name: Build debug NSIS installer (machine-wide)
+        run: pnpm tauri build --debug --bundles nsis --config .github/tauri.nsis-permachine.json
+
+      - name: Stage the machine-wide installer
+        shell: pwsh
+        run: |
+          $installers = @(
+            Get-ChildItem -Path target, src-tauri/target -Filter '*-setup.exe' -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' }
+          )
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one machine-wide NSIS installer, found $($installers.Count)"
+          }
+          Copy-Item -Path $installers[0].FullName -Destination packaging/Zenith-windows-x64-setup-machine.exe
+
+      - name: Upload Windows packaging smoke artifacts
         uses: actions/upload-artifact@v7
         with:
           name: zenith-windows-x64-nsis-debug
-          path: |
-            target/debug/bundle/nsis/*-setup.exe
-            src-tauri/target/debug/bundle/nsis/*-setup.exe
+          path: packaging/*-setup.exe
           if-no-files-found: error

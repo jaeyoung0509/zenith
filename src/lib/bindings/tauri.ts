@@ -74,6 +74,18 @@ export const commands = {
 	openDashboardWindow: () => typedError<null, string>(__TAURI_INVOKE("open_dashboard_window")),
 	getAppVersion: () => __TAURI_INVOKE<string>("get_app_version"),
 	getPlatformCapabilities: () => __TAURI_INVOKE<PlatformCapabilities_Serialize>("get_platform_capabilities"),
+	getPlatformContext: () => __TAURI_INVOKE<PlatformContext>("get_platform_context"),
+	/**
+	 *  Platform vocabulary and locations the interface renders.
+	 * 
+	 *  Copy such as "Move to Trash", "menu bar", or a log directory literal is only
+	 *  true on one platform; the frontend asks for it instead of hardcoding it.
+	 *  Runs the `--doctor` self-check against the running environment.
+	 * 
+	 *  The command line and the interface execute the same assertions: a user who
+	 *  cannot open a terminal can still see which invariant failed.
+	 */
+	runEnvironmentSelfCheck: () => typedError<EnvironmentReport, string>(__TAURI_INVOKE("run_environment_self_check")),
 	toggleQuickPanel: () => typedError<null, string>(__TAURI_INVOKE("toggle_quick_panel")),
 	getDiagnostics: () => typedError<DiagnosticsSnapshot, string>(__TAURI_INVOKE("get_diagnostics")),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
@@ -82,6 +94,15 @@ export const commands = {
 	startLargeFileScan: (request: LargeFileScanRequest_Deserialize, onEvent: Channel<LargeFileScanEvent_Deserialize>) => typedError<LargeFileScanResult_Serialize, string>(__TAURI_INVOKE("start_large_file_scan", { request, onEvent })),
 	cancelLargeFileScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_large_file_scan", { scanId })),
 	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
+	/**
+	 *  Reveals a scanned large file in the platform file manager.
+	 * 
+	 *  The interface submits only the item id: the path is resolved from the
+	 *  backend-owned inventory, so the frontend never has to reassemble a path from
+	 *  display fields (which on Windows produced mixed separators) and a stale id
+	 *  cannot point at a path the scan did not review.
+	 */
+	revealLargeFile: (itemId: string) => typedError<null, string>(__TAURI_INVOKE("reveal_large_file", { itemId })),
 	pickDeveloperWorkspace: () => typedError<{
 	id: string,
 	name: string,
@@ -963,6 +984,13 @@ export type DockerVolumeItem_Serialize = {
 	is_in_use: boolean,
 };
 
+export type EnvironmentReport = {
+	platform: PlatformKind,
+	fingerprint: string[],
+	checks: SelfCheckRow[],
+	failures: number,
+};
+
 export type FileSize = FileSize_Serialize | FileSize_Deserialize;
 
 export type FileSize_Deserialize = {
@@ -1301,6 +1329,12 @@ export type PlanTargetPreview_Serialize = {
 	risk: RiskTier,
 };
 
+/**
+ *  Primary shortcut modifier. A dismissal bound to `meta` only never fires on
+ *  Windows, where the accelerator is `ctrl`.
+ */
+export type PlatformAccelerator = "meta" | "ctrl";
+
 export type PlatformCapabilities = PlatformCapabilities_Serialize | PlatformCapabilities_Deserialize;
 
 export type PlatformCapabilities_Deserialize = {
@@ -1337,6 +1371,43 @@ export type PlatformCapabilities_Serialize = {
 	local_models: PlatformFeatureCapability_Serialize,
 	docker: PlatformFeatureCapability_Serialize,
 	ai_integrations: PlatformFeatureCapability_Serialize,
+};
+
+/**
+ *  Platform vocabulary and locations the interface must not hardcode.
+ * 
+ *  Copy such as "Move to Trash", "Menu Bar Quick Panel", or
+ *  `~/Library/Logs/Zenith` is only true on one platform. Deriving it from the
+ *  running backend keeps the Windows and Linux builds from describing
+ *  themselves with macOS nouns, and keeps a mocked browser preview from
+ *  inventing paths the native build would never produce.
+ */
+export type PlatformContext = {
+	platform: PlatformKind,
+	/**  Directory holding the current log file, with the profile masked. */
+	log_directory: string,
+	/**  Label for revealing a path in the file manager. */
+	reveal_label: string,
+	/**  What this platform calls the recoverable-delete location. */
+	trash_label: string,
+	/**  What this platform calls per-application support data. */
+	app_data_label: string,
+	/**  Surface that hosts the quick panel. */
+	quick_panel_surface_label: string,
+	/**  Container runtime the empty state may suggest, when one exists. */
+	container_runtime_hint: string | null,
+	/**  True when the platform draws the main window caption bar. */
+	native_caption_bar: boolean,
+	/**  True when the application draws an overlay title bar over the webview. */
+	overlay_title_bar: boolean,
+	/**  Primary shortcut modifier for this platform (`meta` or `ctrl`). */
+	primary_accelerator: PlatformAccelerator,
+	/**  What this platform calls the identity of an installed application. */
+	app_identity_label: string,
+	/**  Terminal application the user is sent to. */
+	terminal_label: string,
+	/**  Release page a user can open manually when a fix is published. */
+	releases_url: string,
 };
 
 export type PlatformFeatureCapability = PlatformFeatureCapability_Serialize | PlatformFeatureCapability_Deserialize;
@@ -1770,6 +1841,18 @@ export type SelectedApplication = {
 	name: string,
 	executable_pattern: string,
 	path: string,
+};
+
+export type SelfCheckOutcome = "pass" | "fail";
+
+/**
+ *  One self-check result. `name` is the invariant, `detail` is a shape or
+ *  boolean summary of what was checked.
+ */
+export type SelfCheckRow = {
+	name: string,
+	outcome: SelfCheckOutcome,
+	detail: string,
 };
 
 export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";

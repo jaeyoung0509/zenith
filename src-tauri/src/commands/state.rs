@@ -10,6 +10,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 pub struct AppState {
+    /// Platform facts the backend may depend on. Tests inject a simulated
+    /// environment here instead of reading the host's.
+    pub environment: Arc<crate::platform::PlatformEnvironment>,
+    /// Container host observed at startup, so no adapter reads the process
+    /// environment on its own.
+    pub container_host: crate::docker::adapter::ContainerHost,
     pub registry: Arc<SignatureRegistry>,
     pub awake_manager: Arc<KeepAwakeManager>,
     pub settings: Arc<Mutex<ZenithSettings>>,
