@@ -577,11 +577,12 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(super::safe_scan_root_metadata(&link).is_none());
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::Windows).with_home(dir.path().to_path_buf());
+        assert!(super::safe_scan_root_metadata(&link, &environment).is_none());
         std::fs::create_dir(target.join("문서")).unwrap();
-        assert!(super::safe_scan_root_metadata(&link.join("문서")).is_none());
+        assert!(super::safe_scan_root_metadata(&link.join("문서"), &environment).is_none());
         assert!(super::FileIdentity::from_path(&link).is_none());
-        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(dir.path());
         assert!(crate::developer_artifacts::validate_workspace_root(&environment, &link).is_err());
     }
     use crate::models::LargeFileFilter;

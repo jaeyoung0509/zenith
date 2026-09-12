@@ -293,6 +293,10 @@ impl NativePlatformPaths {
     /// caller is describing. Discovery convenience only: this list is not an
     /// execution trust boundary.
     pub fn tool_search_locations(home: Option<&Path>) -> Vec<PathBuf> {
+        // Only the macOS branch consults the profile: the Windows branch reads
+        // the machine's own Program Files and package-manager roots, and the
+        // remaining hosts have fixed tool paths. One signature covers all three.
+        let _ = home;
         #[cfg(target_os = "windows")]
         {
             let mut roots = Vec::new();
@@ -388,6 +392,9 @@ impl NativePlatformPaths {
     /// `%APPDATA%`, `%ProgramData%` themselves) are excluded; only their
     /// documented tool/package-manager children are trusted.
     pub fn trusted_tool_roots(home: Option<&Path>) -> Vec<PathBuf> {
+        // Only the macOS branch consults the profile; see
+        // [`Self::tool_search_locations`].
+        let _ = home;
         #[cfg(target_os = "windows")]
         {
             let mut roots = Vec::new();
