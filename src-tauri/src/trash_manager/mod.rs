@@ -290,7 +290,13 @@ impl TrashExecutor {
                         result.items.push(TrashItemResult {
                             item_id: target.item_id,
                             success: false,
-                            message,
+                            // A refused move reads as a generic OS error; when
+                            // the policy explains it, the text says so.
+                            message: crate::platform::environment::describe_access_refusal(
+                                environment,
+                                Path::new(&target.path),
+                                &message,
+                            ),
                         });
                     }
                 },

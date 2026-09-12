@@ -7,6 +7,9 @@
 //! Optional newer APIs are only reached when they exist; a failure to read a
 //! value is reported as unknown rather than synthesized.
 
+use crate::platform::description::PlatformEnvironment;
+use crate::platform::path_algebra::{self, PathFlavor};
+use std::path::Path;
 use std::sync::OnceLock;
 
 static PROBE: OnceLock<RuntimeEnvironment> = OnceLock::new();
@@ -40,6 +43,63 @@ impl SecurityPolicyState {
     }
 }
 
+/// The remedy shown when Windows refuses access to user content.
+///
+/// Controlled Folder Access is on by default on consumer Windows 11 and is not
+/// affected by code signing, so a refusal there is not something the user can
+/// solve from inside Zenith: the text names the one setting that allows it.
+pub const CONTROLLED_FOLDER_ACCESS_REMEDY: &str = "Allow Zenith in Windows Security > Virus & threat protection > Ransomware protection > Controlled folder access, or move the item out of the protected folder.";
+
+/// Whether an access refusal on `path` should be attributed to Controlled
+/// Folder Access.
+///
+/// Windows denies access for many reasons, so this narrows the guess to the
+/// case where the machine reports the policy as enabled and the path is inside
+/// the stated profile but outside the application-data directories the policy
+/// leaves alone by default. The policy state is a parameter so a simulated
+/// environment can exercise both answers on any host.
+pub fn refusal_may_be_controlled_folder_access(
+    environment: &PlatformEnvironment,
+    policy: SecurityPolicyState,
+    path: &Path,
+) -> bool {
+    if environment.flavor() != PathFlavor::Windows || policy != SecurityPolicyState::Enabled {
+        return false;
+    }
+    let Some(home) = environment.user_home() else {
+        return false;
+    };
+    let path = path.to_string_lossy().into_owned();
+    if !path_algebra::contains(&home.to_string_lossy(), &path, PathFlavor::Windows) {
+        return false;
+    }
+    let app_dirs = [environment.local_app_data(), environment.roaming_app_data()];
+    !app_dirs
+        .iter()
+        .flatten()
+        .any(|dir| path_algebra::contains(&dir.to_string_lossy(), &path, PathFlavor::Windows))
+}
+
+/// The text a user sees for a refusal: the OS error, plus the setting that
+/// explains it when Controlled Folder Access is the likely cause.
+pub fn describe_access_refusal(
+    environment: &PlatformEnvironment,
+    path: &Path,
+    error: &str,
+) -> String {
+    if refusal_may_be_controlled_folder_access(
+        environment,
+        current().controlled_folder_access,
+        path,
+    ) {
+        format!(
+            "{error} Controlled Folder Access is enabled on this machine and this location is inside your profile, so it is the likely cause. {CONTROLLED_FOLDER_ACCESS_REMEDY}"
+        )
+    } else {
+        error.to_string()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEnvironment {
     pub os: String,
@@ -52,6 +112,9 @@ pub struct RuntimeEnvironment {
     pub elevated: Option<bool>,
     pub long_paths_enabled: Option<bool>,
     pub webview_version: Option<String>,
+    /// Interface locale, so a report from a machine whose language is not the
+    /// maintainers' is not mistaken for a formatting bug.
+    pub locale: Option<String>,
     pub controlled_folder_access: SecurityPolicyState,
     pub application_control_policy: SecurityPolicyState,
 }
@@ -86,6 +149,7 @@ impl RuntimeEnvironment {
                 elevated,
                 long_paths_enabled: None,
                 webview_version,
+                locale: probe_locale(),
                 controlled_folder_access: SecurityPolicyState::Unknown,
                 application_control_policy: SecurityPolicyState::Unknown,
             }
@@ -148,6 +212,9 @@ impl RuntimeEnvironment {
         }
         if let Some(version) = &self.webview_version {
             lines.push(format!("webview_runtime: {version}"));
+        }
+        if let Some(locale) = &self.locale {
+            lines.push(format!("locale: {locale}"));
         }
         lines.push(format!(
             "controlled_folder_access: {}",
@@ -221,6 +288,7 @@ impl RuntimeEnvironment {
             elevated: Some(elevated),
             long_paths_enabled,
             webview_version,
+            locale: probe_locale(),
             controlled_folder_access,
             application_control_policy,
         }
@@ -261,6 +329,52 @@ fn read_registry_u32(subkey: &str, value: &str, view: u32) -> Option<u32> {
         return None;
     }
     Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// The interface locale, or `None` when the platform exposes no answer.
+///
+/// A diagnostics report comes from a machine whose language the maintainer
+/// cannot guess, and "the numbers look wrong" is often a locale difference
+/// rather than a defect, so the value travels with the rest of the fingerprint.
+fn probe_locale() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
+        // LOCALE_NAME_MAX_LENGTH is 85.
+        let mut buffer = [0u16; 85];
+        let length = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
+        if length <= 1 {
+            return None;
+        }
+        // The returned length includes the terminating null.
+        let name = String::from_utf16_lossy(&buffer[..(length as usize - 1)]);
+        (!name.is_empty()).then_some(name)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("defaults");
+        cmd.args(["read", "-g", "AppleLocale"]);
+        if let Ok(output) = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(2))
+        {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+        None
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+            if let Ok(value) = std::env::var(key) {
+                let value = value.trim().to_string();
+                if !value.is_empty() {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -399,7 +513,7 @@ fn probe_elevation() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeEnvironment, SecurityPolicyState};
+    use super::{refusal_may_be_controlled_folder_access, RuntimeEnvironment, SecurityPolicyState};
 
     #[test]
     fn probe_reports_the_compiled_os_and_architecture() {
@@ -411,6 +525,70 @@ mod tests {
             Some("test-runtime 1.0")
         );
         assert!(!environment.diagnostics_lines().is_empty());
+        // The locale is best effort; a host that answers must not report an
+        // empty string, and one that cannot must report nothing at all.
+        assert!(
+            environment.locale.as_deref() != Some(""),
+            "an unset locale must be None, not an empty string"
+        );
+    }
+
+    /// The refusal attribution is a decision, so both answers are exercised for
+    /// a stated Windows environment on any host.
+    #[test]
+    fn access_refusal_attribution_follows_the_policy_and_the_profile() {
+        use crate::platform::description::{KnownFolder, PlatformEnvironment};
+        use crate::platform::path_algebra::PathFlavor;
+        use crate::platform::paths::SimulatedPaths;
+        use std::path::Path;
+        use std::sync::Arc;
+        // The roots provider states where the app-data folders live; the
+        // builder states the profile and the known folder. The attribution has
+        // to follow the stated paths, not the host's.
+        let roots = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Windows)
+            .with_home(r"D:\Users\tester")
+            .with_local_app_data(r"D:\Users\tester\AppData\Local")
+            .with_roaming_app_data(r"D:\Users\tester\AppData\Roaming");
+        // `with_home` replaces the roots provider, so the app-data folders are
+        // stated after the profile, the way a committed fixture states them.
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows)
+            .with_home(r"D:\Users\tester")
+            .with_roots(Arc::new(roots))
+            .with_known_folder(KnownFolder::Documents, r"D:\Users\tester\Documents");
+
+        // A document inside the profile with the policy enabled: the setting is
+        // the likely cause.
+        assert!(refusal_may_be_controlled_folder_access(
+            &environment,
+            SecurityPolicyState::Enabled,
+            Path::new(r"D:\Users\tester\Documents\large.mov")
+        ));
+        // The same path with the policy off or unknown: a refusal there is an
+        // ordinary permission problem and must not be blamed on the setting.
+        assert!(!refusal_may_be_controlled_folder_access(
+            &environment,
+            SecurityPolicyState::Disabled,
+            Path::new(r"D:\Users\tester\Documents\large.mov")
+        ));
+        assert!(!refusal_may_be_controlled_folder_access(
+            &environment,
+            SecurityPolicyState::Unknown,
+            Path::new(r"D:\Users\tester\Documents\large.mov")
+        ));
+        // Application data is out of scope for the policy.
+        assert!(!refusal_may_be_controlled_folder_access(
+            &environment,
+            SecurityPolicyState::Enabled,
+            Path::new(r"D:\Users\tester\AppData\Local\Zenith\Logs\zenith.log")
+        ));
+        // A non-Windows flavor has no Controlled Folder Access at all.
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix).with_home("/home/tester");
+        assert!(!refusal_may_be_controlled_folder_access(
+            &posix,
+            SecurityPolicyState::Enabled,
+            Path::new("/home/tester/Documents/large.mov")
+        ));
     }
 
     #[test]

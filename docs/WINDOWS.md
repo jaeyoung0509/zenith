@@ -62,6 +62,11 @@ just doctor                          # builds and runs the source tree
 & "C:\Program Files\Zenith\Zenith.exe" --doctor --json
 ```
 
+`Zenith --doctor` also appends a runtime row, `log_writable`, which appends a
+line to the diagnostics log in the directory the application uses: a report that
+cannot be written is the failure that would hide every other one. The
+diagnostics panel shows the same fact as a warning next to the log path.
+
 CI runs the packaging gate through `just test-package <installer> <scope>`,
 which installs silently, asserts the application landed under the base
 directory the scope requires (`%LOCALAPPDATA%` for `perUser`, `%ProgramFiles%`
@@ -201,8 +206,12 @@ opening the community-repository PR.
 Do not add an antivirus exclusion, and do not document one. The only Windows
 security setting a Zenith feature may ask the user to change is **Controlled
 Folder Access**: the Large Files inspector and Trash plans operate inside
-folders that Controlled Folder Access protects, and the application explains
-that single setting when an operation is denied. Excluding the install
+folders that Controlled Folder Access protects. When Windows denies access to a
+location inside your profile while the policy is enabled, the failure text names
+that setting and how to allow Zenith there, instead of reporting a bare
+permission error. Locations outside the profile, and application-data
+directories (which the policy leaves alone by default), keep the plain OS
+error. Excluding the install
 directory, the executable, or the user profile from antivirus scanning is not
 an acceptable workaround.
 

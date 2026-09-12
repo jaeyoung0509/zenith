@@ -1388,8 +1388,15 @@ export const mockApi = {
     return {
       app_version: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.4',
       os_version: 'Browser Preview',
+      os_build: null,
       arch: 'aarch64',
-      log_path: '/Users/mock/Library/Logs/Zenith/zenith.log',
+      native_arch: 'aarch64',
+      emulated: false,
+      webview_version: 'preview',
+      elevated: false,
+      locale: 'en-US',
+      log_failure: null,
+      log_path: '~/Library/Logs/Zenith/zenith.log',
       enabled_features: [
         'dashboard_tabs: Storage, Docker, LocalModel, Memory, Projects, DevelopmentServers, AiUsage, Awake',
         'quick_panel_sections: Storage, Cleanup, AiUsage, Categories, Memory',

@@ -84,6 +84,47 @@ pub fn log_error(category: &str, message: &str) {
     write_log_line(&dir, category, message, restrict_permissions);
 }
 
+/// The first reason this process could not write its diagnostics log.
+///
+/// A logger that disables itself silently removes the only evidence of what
+/// disabled it — and under Controlled Folder Access that is exactly the
+/// failure a user needs named. The first reason is kept and reported through
+/// `DiagnosticsSnapshot::log_failure` and the `--doctor` self-check.
+static LOG_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+fn record_log_failure(reason: impl Into<String>) {
+    let mut guard = LOG_FAILURE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if guard.is_none() {
+        *guard = Some(reason.into());
+    }
+}
+
+/// Records a failure against the directory it happened in, naming Controlled
+/// Folder Access when the policy explains the refusal — the log directory is
+/// the one place a user cannot be told about a refusal otherwise.
+fn record_log_failure_in(dir: &Path, reason: impl Into<String>) {
+    let reason = reason.into();
+    record_log_failure(crate::platform::environment::describe_access_refusal(
+        &PlatformEnvironment::native(),
+        dir,
+        &reason,
+    ));
+}
+
+/// Why diagnostics are not being written, sanitized for the interface.
+///
+/// The reason can name a path, so it is masked and redacted on the way out the
+/// same way a log line is.
+pub fn log_failure() -> Option<String> {
+    let reason = LOG_FAILURE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    reason.map(|reason| sanitize_log(&reason))
+}
+
 /// Mode repair of the log file, injected so the fail-closed path can be
 /// exercised without a platform that refuses `chmod`.
 type RestrictPermissions = fn(&Path, u32) -> std::io::Result<()>;
@@ -91,7 +132,11 @@ type RestrictPermissions = fn(&Path, u32) -> std::io::Result<()>;
 /// Appends one sanitized line, repairing permissions and rotating first.
 fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictPermissions) {
     let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    if fs::create_dir_all(dir).is_err() {
+    if let Err(error) = fs::create_dir_all(dir) {
+        record_log_failure_in(
+            dir,
+            format!("the log directory could not be created: {error}"),
+        );
         return;
     }
     // Best effort for the directory; the files below are fail-closed.
@@ -103,10 +148,15 @@ fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictP
     // otherwise stay readable until the next rotation, possibly for months. A
     // failure means a log is not known to be owner-only, so the line is dropped
     // rather than written insecurely.
-    if repair_log_permissions(dir, restrict).is_err() {
+    if let Err(error) = repair_log_permissions(dir, restrict) {
+        record_log_failure_in(
+            dir,
+            format!("the log file mode could not be restricted to the owner: {error}"),
+        );
         return;
     }
-    if rotate_log_if_needed(dir, &file_path).is_err() {
+    if let Err(error) = rotate_log_if_needed(dir, &file_path) {
+        record_log_failure_in(dir, format!("the log file could not be rotated: {error}"));
         return;
     }
 
@@ -126,14 +176,139 @@ fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictP
         // Create owner-only from the first byte instead of chmod-after-write.
         options.mode(0o600);
     }
-    if let Ok(mut file) = options.open(&file_path) {
-        // A pre-existing wider mode must be repaired before anything is
-        // written; if it cannot be, drop the line rather than leak it.
-        if restrict(&file_path, 0o600).is_err() {
-            return;
+    match options.open(&file_path) {
+        Ok(mut file) => {
+            // A pre-existing wider mode must be repaired before anything is
+            // written; if it cannot be, drop the line rather than leak it.
+            if let Err(error) = restrict(&file_path, 0o600) {
+                record_log_failure_in(
+                    dir,
+                    format!("the log file mode could not be restricted to the owner: {error}"),
+                );
+                return;
+            }
+            if let Err(error) = file.write_all(line.as_bytes()) {
+                record_log_failure_in(dir, format!("the log line could not be written: {error}"));
+            }
         }
-        let _ = file.write_all(line.as_bytes());
+        Err(error) => record_log_failure_in(
+            dir,
+            format!("the log file could not be opened for writing: {error}"),
+        ),
     }
+}
+
+/// The contexts whose startup failure has already been reported.
+///
+/// A tray click or a repeated single-instance launch can fail the same way many
+/// times; the user needs to be told once, not once per click.
+static REPORTED_STARTUP_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Reports a failure the user cannot see otherwise.
+///
+/// Release builds run with `windows_subsystem = "windows"` and no console, so a
+/// failure that prevents a window from being created leaves a tray icon and
+/// nothing else: the log line that records it is invisible because the
+/// interface that would show it never opened. The same text is therefore raised
+/// in a native dialog, once per context, and it names `--doctor` and the log
+/// path so the diagnostics stay reachable without a window.
+pub fn report_startup_failure(context: &str, error: &str) {
+    let detail = format!(
+        "{context}: {error}\n\nRun `Zenith --doctor` for a self-check, or open the log at {}.",
+        normalized_log_path()
+    );
+    log_error("startup", &detail);
+
+    if !mark_startup_failure_reported(context) {
+        return;
+    }
+
+    // The dialog is raised off the calling thread: the failure may have
+    // happened on the main thread, and a modal dialog there would block the
+    // event loop that is trying to finish starting.
+    let title = "Zenith could not open its window".to_string();
+    let detail = sanitize_log(&detail);
+    std::thread::spawn(move || show_native_error_dialog(&title, &detail));
+}
+
+/// Records that a context was reported, answering whether this is the first
+/// time. The dialog must not stack when a user clicks the tray repeatedly.
+fn mark_startup_failure_reported(context: &str) -> bool {
+    let mut reported = REPORTED_STARTUP_FAILURES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if reported.iter().any(|entry| entry == context) {
+        return false;
+    }
+    reported.push(context.to_string());
+    true
+}
+
+/// Shows a native error dialog, or writes to stderr where no dialog exists.
+///
+/// Windows uses `MessageBoxW` because it is available before the event loop
+/// starts; macOS uses AppleScript for the same reason. Neither call needs the
+/// interface that just failed to open.
+fn show_native_error_dialog(title: &str, detail: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND,
+        };
+        let title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+        let detail: Vec<u16> = detail.encode_utf16().chain([0]).collect();
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                detail.as_ptr(),
+                title.as_ptr(),
+                MB_ICONERROR | MB_OK | MB_SETFOREGROUND,
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        fn quoted(value: &str) -> String {
+            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+        let script = format!(
+            "display dialog {} with title {} buttons {{\"OK\"}} default button \"OK\" with icon stop",
+            quoted(detail),
+            quoted(title)
+        );
+        let mut cmd = std::process::Command::new("osascript");
+        cmd.args(["-e", &script]);
+        let _ = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(30));
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        eprintln!("{title}: {detail}");
+    }
+}
+
+/// Whether a line could be appended right now, creating the directory and the
+/// file if they do not exist, exactly as a real write would.
+///
+/// `--doctor` runs this against the machine's own log directory: a report that
+/// cannot be written is the failure that hides every other failure.
+pub(crate) fn probe_log_writability(dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dir)
+        .map_err(|error| format!("the log directory could not be created: {error}"))?;
+    repair_log_permissions(dir, restrict_permissions)
+        .map_err(|error| format!("the log file mode could not be repaired: {error}"))?;
+    let file_path = dir.join("zenith.log");
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Create owner-only from the first byte, as the write path does.
+        options.mode(0o600);
+    }
+    options
+        .open(&file_path)
+        .map(|_| ())
+        .map_err(|error| format!("the log file could not be opened for writing: {error}"))
 }
 
 /// Repairs the mode of every diagnostics log file, existing or not.
@@ -274,7 +449,14 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
     DiagnosticsSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         os_version,
+        os_build: environment.os_build.clone(),
         arch: environment.process_architecture.clone(),
+        native_arch: environment.native_architecture.clone(),
+        emulated: environment.emulated,
+        webview_version: environment.webview_version.clone(),
+        elevated: environment.elevated,
+        locale: environment.locale.clone(),
+        log_failure: log_failure(),
         log_path: normalized_log_path(),
         enabled_features: features,
         recent_errors: get_recent_errors(20),
@@ -390,6 +572,16 @@ mod tests {
         assert_eq!(snapshot.app_version, env!("CARGO_PKG_VERSION"));
         assert!(!snapshot.arch.is_empty());
         assert!(!snapshot.enabled_features.is_empty());
+        // Emulation is exactly "the process architecture differs from the
+        // native one", so the two fields cannot contradict each other.
+        assert_eq!(
+            snapshot.emulated,
+            snapshot
+                .native_arch
+                .as_deref()
+                .is_some_and(|native| native != snapshot.arch)
+        );
+        assert_ne!(snapshot.log_failure.as_deref(), Some(""));
         // The snapshot's own path is masked on every runner: `~/…` under the
         // profile, `.../name` for a location outside it. No host is assumed.
         assert!(
@@ -532,6 +724,60 @@ mod tests {
         assert!(
             sanitized.contains("~/.claude/settings.json") || sanitized.contains("settings.json"),
             "{sanitized}"
+        );
+    }
+
+    fn refuse_permissions(_path: &Path, _mode: u32) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "fixture refuses the repair",
+        ))
+    }
+
+    /// A logger that cannot write must say so: the interface shows this text
+    /// next to the log path, and `--doctor` reports the probe.
+    #[test]
+    fn a_log_write_failure_is_recorded_instead_of_being_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        std::fs::write(&log, b"line\n").unwrap();
+
+        write_log_line(dir.path(), "test", "must be dropped", refuse_permissions);
+
+        let failure = log_failure().expect("a refused repair must be recorded");
+        assert!(
+            failure.contains("mode could not be restricted"),
+            "{failure}"
+        );
+    }
+
+    #[test]
+    fn the_log_writability_probe_reports_what_a_write_would_find() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        assert!(probe_log_writability(&logs).is_ok());
+        assert!(
+            logs.join("zenith.log").exists(),
+            "the probe creates the file a write would create"
+        );
+
+        // A path that cannot be a directory is reported, not ignored.
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        assert!(probe_log_writability(&blocked).is_err());
+    }
+
+    #[test]
+    fn a_startup_failure_is_reported_once_per_context() {
+        let context = "the quick panel could not be created (test fixture)";
+        assert!(mark_startup_failure_reported(context));
+        assert!(
+            !mark_startup_failure_reported(context),
+            "a repeated failure must not stack dialogs"
+        );
+        assert!(
+            mark_startup_failure_reported("the main window could not be created (test fixture)"),
+            "a different context is still reported"
         );
     }
 
