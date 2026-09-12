@@ -230,7 +230,13 @@ fn test_blacklist_parent_traversal_attacks() {
         Blacklist::validate_with(&attack_path, &host).is_err(),
         "Expected traversal attack to be rejected"
     );
-    assert!(Blacklist::validate_with(Path::new("/Users/../System"), &host).is_err());
+    // The spelling is POSIX, so the machine this assertion is about is a POSIX
+    // one: the verdict must not depend on the host that runs the test.
+    let posix = PlatformEnvironment::simulated(PathFlavor::Posix).with_home("/Users/zenith-tester");
+    assert!(
+        Blacklist::validate_with(Path::new("/Users/../System"), &posix).is_err(),
+        "a POSIX traversal into /System must be rejected"
+    );
 
     // Windows flavor, drive-letter independent: the same attacks normalize to a
     // system directory and are refused, while traversal that stays inside the
