@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { AiProviderUsage } from '../models/types';
   import { formatResetDate, formatTimeUntil } from '../utils/format';
-  import { Bot, Terminal, Zap } from 'lucide-svelte';
+  import { Bot, Terminal, Zap } from '@lucide/svelte';
   import Button from './Button.svelte';
   import Card from './Card.svelte';
   import ProgressBar from './ProgressBar.svelte';

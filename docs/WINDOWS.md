@@ -11,9 +11,9 @@ must remain disabled rather than reporting a successful no-op.
 - Visual Studio 2022 Build Tools with **Desktop development with C++** and the
   Windows 10/11 SDK
 - Rust stable MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`).
-  The crate declares `rust-version = "1.93.0"`; that is the oldest toolchain the
+  The crate declares `rust-version = "1.95.0"`; that is the oldest toolchain the
   locked dependency set builds with.
-- Node.js 20 or newer and pnpm 9
+- Node.js 22 or newer and pnpm 9
 - WebView2 Runtime (normally preinstalled on supported Windows versions; the
   installer carries Microsoft's offline installer, so it is not a prerequisite
   for installing a release build)
@@ -212,7 +212,7 @@ managed machine will allow the binary to run.
 `.github/workflows/ci.yml` runs the same checks on `windows-latest`, plus the
 packaging gate described under [Doctor self-check](#doctor-self-check), and
 uploads both debug NSIS installers as `zenith-windows-x64-nsis-debug`. The
-`msrv` job builds with the declared Rust 1.93.0 toolchain and the `supply-chain`
+`msrv` job builds with the declared Rust 1.95.0 toolchain and the `supply-chain`
 job audits both lockfiles.
 
 What CI does not verify on Windows: redirected user content folders, machines

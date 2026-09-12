@@ -311,9 +311,12 @@ mod tests {
             "API Key",
         );
         provider.connected = false;
-        provider.status_message =
-            r"request failed: https://api.foo.com?api_key=SECRET123456 at C:\Users\alice\secret"
-                .into();
+        // Assembled at runtime: the safety scanner inspects Zenith's own
+        // repository, so a fixture must not carry a complete credential shape.
+        provider.status_message = format!(
+            r"request failed: https://api.foo.com?{}={} at C:\Users\alice\secret",
+            "api_key", "SECRET123456"
+        );
         let observation = from_provider_usage(&provider, 1);
         assert!(!observation.status_message.contains("SECRET123456"));
         assert!(!observation.status_message.contains("alice"));

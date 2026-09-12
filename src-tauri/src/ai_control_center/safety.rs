@@ -504,7 +504,7 @@ fn push_finding(
     if let Some(line) = line {
         hash.update(line.to_le_bytes());
     }
-    let id = format!("finding-{}", &format!("{:x}", hash.finalize())[..20]);
+    let id = format!("finding-{}", &crate::hash::hex(&hash.finalize())[..20]);
     target.push(SafetyFinding {
         dismissed: dismissed.contains(&id),
         id,
@@ -719,12 +719,81 @@ mod tests {
         PlatformEnvironment::simulated(PathFlavor::current())
     }
 
+    /// Joins credential parts at runtime. The scanner runs over Zenith's own
+    /// repository, so a fixture must not carry the complete signature in source
+    /// text, while the scanned file still contains the real shape.
+    fn joined(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
+    /// Scanning Zenith's own sources must not report Zenith's own fixtures as
+    /// exposed credentials.
+    ///
+    /// The scanner is pointed at the repository that contains it, using the
+    /// same selection and decoding rules as [`inspect`]. A fixture that carries
+    /// a complete credential shape makes every real finding indistinguishable
+    /// from test data, so fixtures are assembled at runtime and the scanner's
+    /// detectors are kept narrow enough not to fire on ordinary source.
+    #[test]
+    fn zeniths_own_sources_are_scanner_clean() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate lives inside the repository");
+        let mut scanned_files = 0usize;
+        let mut hits = Vec::new();
+        for source_dir in ["src-tauri/src", "src-tauri/tests", "src"] {
+            let walker = WalkDir::new(root.join(source_dir))
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(safe_entry);
+            for entry in walker.filter_map(Result::ok) {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map(|path| {
+                        crate::privacy::paths::normalize_separators(&path.to_string_lossy())
+                    })
+                    .unwrap_or_default();
+                if !is_scannable_file(entry.path(), &relative) {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(entry.path()) else {
+                    continue;
+                };
+                let Some(text) = decode_scannable_text(&bytes) else {
+                    continue;
+                };
+                scanned_files += 1;
+                for (line_index, line) in text.lines().enumerate() {
+                    if let Some(category) = secrets::match_category(line) {
+                        hits.push(format!("{relative}:{}: {category}", line_index + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned_files > 100,
+            "the self-scan must inspect the repository, saw {scanned_files} files"
+        );
+        assert!(
+            hits.is_empty(),
+            "Zenith's own sources must not look like exposed credentials:\n{}",
+            hits.join("\n")
+        );
+    }
+
     #[test]
     fn reports_secret_category_and_line_without_value() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("main.ts"),
-            "const token = 'sk-abcdefghijklmnop1234';\n",
+            format!(
+                "const token = '{}';\n",
+                joined(&["sk-", "abcdefghijklmnop1234"])
+            ),
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
@@ -749,11 +818,19 @@ mod tests {
     fn symlinked_files_are_not_followed() {
         let temp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secret.txt"), "sk-abcdefghijklmnop1234").unwrap();
+        std::fs::write(
+            outside.path().join("secret.txt"),
+            joined(&["sk-", "abcdefghijklmnop1234"]),
+        )
+        .unwrap();
         // The ordinary file inside the scanned root must always be reported, so
         // this assertion is meaningful on every platform, not only where a
         // symlink can be created.
-        std::fs::write(temp.path().join("ordinary.txt"), "sk-abcdefghijklmnop1234").unwrap();
+        std::fs::write(
+            temp.path().join("ordinary.txt"),
+            joined(&["sk-", "abcdefghijklmnop1234"]),
+        )
+        .unwrap();
         let outside_file = outside.path().join("secret.txt");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside_file, temp.path().join("linked.txt")).unwrap();
@@ -814,17 +891,20 @@ mod tests {
         .unwrap();
         std::fs::write(
             temp.path().join(".env.production"),
-            "API_KEY=abcdef123456\n",
+            format!("API_KEY={}\n", "abcdef123456"),
         )
         .unwrap();
         std::fs::write(
             temp.path().join(".npmrc"),
-            "//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwx\n",
+            format!(
+                "//registry.npmjs.org/:_authToken={}\n",
+                joined(&["npm_", "abcdefghijklmnopqrstuvwx"])
+            ),
         )
         .unwrap();
         std::fs::write(
             temp.path().join("id_rsa"),
-            "-----BEGIN OPENSSH PRIVATE KEY-----\n",
+            format!("{}\n", joined(&["-----BEGIN OPENSSH ", "PRIVATE KEY-----"])),
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
@@ -917,7 +997,10 @@ mod tests {
         }
         std::fs::write(
             secret_root.join("main.ts"),
-            "const key = 'sk-abcdefghijklmnop1234';\n",
+            format!(
+                "const key = '{}';\n",
+                joined(&["sk-", "abcdefghijklmnop1234"])
+            ),
         )
         .unwrap();
 

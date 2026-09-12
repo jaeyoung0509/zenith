@@ -63,15 +63,17 @@ skip = [
     # windows-sys has five locked versions:
     #   0.45.0 <- jni 0.21.1 (Android/JNI path of a notification dependency)
     #   0.52.0 <- ring 0.17.14
-    #   0.59.0 <- rfd 0.15.4, window-vibrancy 0.6.0, winreg 0.55.0, zenith-core
+    #   0.59.0 <- window-vibrancy 0.6.0, winreg 0.55.0
     #   0.60.2 <- tauri-plugin-single-instance 2.4.4
-    #   0.61.2 <- tokio, mio, rustix, schannel, socket2, tray-icon, muda,
-    #             tempfile, zbus and other current-generation dependencies
+    #   0.61.2 <- zenith-core, tokio, mio, rustix, schannel, socket2, tray-icon,
+    #             muda, tempfile, zbus and other current-generation dependencies
     { crate = "windows-sys", reason = "five generations are pulled by unrelated dependencies; see the comment above for each importer." },
-    { crate = "windows", reason = "the umbrella windows crate is pinned per consumer (muda/tray-icon/wry) and moves independently of windows-sys." },
+    { crate = "windows", reason = "the umbrella windows crate is pinned per consumer (muda/tray-icon/wry, sysinfo, trash) and moves independently of windows-sys." },
     { crate = "windows-core", reason = "versioned with the windows umbrella crate generation." },
-    { crate = "windows-implement", reason = "versioned with the windows umbrella crate generation." },
-    { crate = "windows-interface", reason = "versioned with the windows umbrella crate generation." },
+    { crate = "windows-collections", reason = "part of the windows 0.61/0.62 umbrella split; each generation is pinned by its own consumer." },
+    { crate = "windows-future", reason = "part of the windows 0.61/0.62 umbrella split; each generation is pinned by its own consumer." },
+    { crate = "windows-numerics", reason = "part of the windows 0.61/0.62 umbrella split; each generation is pinned by its own consumer." },
+    { crate = "windows-threading", reason = "part of the windows 0.61/0.62 umbrella split; each generation is pinned by its own consumer." },
     { crate = "windows-link", reason = "versioned with the windows result/strings generation." },
     { crate = "windows-result", reason = "versioned with the windows umbrella crate generation." },
     { crate = "windows-strings", reason = "versioned with the windows umbrella crate generation." },
@@ -89,7 +91,7 @@ skip = [
     { crate = "proc-macro-crate", reason = "1.x/2.x/3.x follow the syn/toml generations their consumers use." },
     { crate = "thiserror", reason = "1.x is pinned by an older transitive crate; 2.x is current." },
     { crate = "thiserror-impl", reason = "versioned with thiserror." },
-    { crate = "toml", reason = "0.8 is a direct dependency of zenith-core; 0.9/1.x are pulled by newer transitive tooling." },
+    { crate = "toml", reason = "1.1 is a direct dependency of zenith-core; 0.8/0.9 remain pinned by tauri/specta tooling." },
     { crate = "toml_datetime", reason = "versioned with the toml/winnow generation." },
     { crate = "toml_edit", reason = "versioned with the toml/winnow generation." },
     { crate = "serde_spanned", reason = "versioned with the toml/winnow generation." },
@@ -99,11 +101,17 @@ skip = [
     { crate = "getrandom", reason = "0.2/0.3/0.4 are pinned by ring, uuid, tempfile and reqwest's TLS stack; each is an upstream generation." },
     { crate = "hashbrown", reason = "0.12 is pinned by an older indexmap generation while 0.17 is current." },
     { crate = "indexmap", reason = "1.x is pinned by an older transitive crate; 2.x is current." },
+    { crate = "sha2", reason = "0.11 is used directly by zenith-core; tauri-codegen and wry still pin 0.10." },
+    { crate = "digest", reason = "versioned with the sha2 generation its consumers use." },
+    { crate = "block-buffer", reason = "versioned with the sha2/digest generation its consumers use." },
+    { crate = "crypto-common", reason = "versioned with the sha2/digest generation its consumers use." },
+    { crate = "cpufeatures", reason = "versioned with the sha2 generation that enables it." },
     # --- Remaining single-name splits -------------------------------------------
-    { crate = "base64", reason = "0.21 is pinned by an older transitive HTTP stack while 0.22 is used directly by zenith-core." },
+    { crate = "base64", reason = "0.21/0.22 are pinned by older transitive stacks while 0.23 is used directly by zenith-core." },
     { crate = "bitflags", reason = "1.x is pinned by an older transitive crate while 2.x is current." },
     { crate = "core-foundation", reason = "0.9 is pinned by older macOS-only transitive crates while 0.10 is current." },
     { crate = "png", reason = "0.17 is pinned by an older image consumer while 0.18 is current." },
+    { crate = "quick-xml", reason = "0.41 is pinned by wayland-scanner (rfd's Linux backend) while plist 1.10 uses 0.42." },
     { crate = "r-efi", reason = "5.x and 6.x serve different UEFI target generations." },
     { crate = "reqwest", reason = "0.12 is used directly by zenith-core; 0.13 is pulled transitively by a newer dependency." },
 ]

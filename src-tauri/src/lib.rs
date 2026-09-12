@@ -13,6 +13,7 @@ pub mod developer_artifacts;
 pub mod diagnostics;
 pub mod docker;
 pub mod execution_budget;
+pub mod hash;
 pub mod ipc_numeric;
 pub mod large_files;
 pub mod metrics;

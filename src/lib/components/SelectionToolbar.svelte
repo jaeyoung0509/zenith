@@ -2,7 +2,7 @@
   import type { Snippet } from "svelte";
   import Button from "./Button.svelte";
   import ByteValue from "./ByteValue.svelte";
-  import { CheckSquare, Square, Trash2 } from "lucide-svelte";
+  import { CheckSquare, Square, Trash2 } from "@lucide/svelte";
 
   interface Props {
     selectedCount: number;

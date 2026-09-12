@@ -1,3 +1,4 @@
+use super::credentials::CredentialStore;
 use super::registry::ProviderRegistry;
 use super::support::base_provider;
 use super::{CollectionContext, ProviderAdapter, ProviderDescriptor, ProviderError};
@@ -154,6 +155,25 @@ fn read_callback_line(
     let mut limited = (&mut reader).take(MAX_CALLBACK_BYTES);
     limited.read_line(&mut request_line)?;
     Ok(request_line)
+}
+
+/// Starts the OpenRouter OAuth flow only when the credential store can persist
+/// the key it returns.
+///
+/// OpenRouter's key-deletion API requires a management key that Zenith never
+/// holds, so a key issued by a flow whose result cannot be stored would have to
+/// be revoked by hand in the dashboard. The store's availability is therefore
+/// checked before the browser is opened, and the authorization step is a
+/// parameter so that contract is exercised directly.
+pub fn authorize_openrouter(
+    store: &dyn CredentialStore,
+    start_authorization: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    store
+        .availability()
+        .require_available()
+        .map_err(|error| format!("OpenRouter sign-in was not started. {error}"))?;
+    start_authorization()
 }
 
 pub fn connect_openrouter() -> Result<String, String> {
@@ -326,6 +346,9 @@ fn open_browser(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_providers::{
+        CredentialError, CredentialStoreAvailability, InMemoryCredentialStore, SecretString,
+    };
 
     #[test]
     fn callback_requires_a_matching_state() {
@@ -420,5 +443,54 @@ mod tests {
             parse_callback(&line, "expected"),
             CallbackOutcome::Authorized(code) if code == "ok"
         ));
+    }
+
+    /// A store that reports the platform has no secure persistence.
+    struct UnsupportedStore;
+
+    impl CredentialStore for UnsupportedStore {
+        fn availability(&self) -> CredentialStoreAvailability {
+            CredentialStoreAvailability::Unsupported
+        }
+
+        fn get(&self, _provider: ProviderId) -> Result<Option<SecretString>, CredentialError> {
+            Err(CredentialError::StorageUnavailable("fixture".into()))
+        }
+
+        fn set(&self, _provider: ProviderId, _secret: SecretString) -> Result<(), CredentialError> {
+            Err(CredentialError::StorageUnavailable("fixture".into()))
+        }
+
+        fn remove(&self, _provider: ProviderId) -> Result<(), CredentialError> {
+            Err(CredentialError::StorageUnavailable("fixture".into()))
+        }
+    }
+
+    #[test]
+    fn an_unavailable_credential_store_never_starts_provider_authorization() {
+        let mut authorization_started = false;
+        let result = authorize_openrouter(&UnsupportedStore, || {
+            authorization_started = true;
+            Ok("k".to_string())
+        });
+        assert!(result.is_err(), "an unsupported store must fail closed");
+        assert!(
+            !authorization_started,
+            "provider authorization must not be started when the key cannot be stored"
+        );
+
+        // The supported path still starts the authorization step.
+        let store = InMemoryCredentialStore::new();
+        let mut authorization_started = false;
+        let key = authorize_openrouter(&store, || {
+            authorization_started = true;
+            Ok("k".to_string())
+        })
+        .unwrap();
+        assert!(
+            authorization_started,
+            "available storage must not block OAuth"
+        );
+        assert_eq!(key, "k");
     }
 }

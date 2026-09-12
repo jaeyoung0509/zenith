@@ -10,15 +10,21 @@ use std::sync::LazyLock;
 
 /// A credential pattern. Detection and redaction are separate regexes because
 /// their correct semantics differ: a private-key header is enough to detect a
-/// secret but redaction must remove the whole key block. `replacement` keeps
-/// any capture groups that must survive redaction (for example the assignment
-/// prefix or an authorization scheme) and replaces everything else with
-/// `[REDACTED]`.
+/// secret but redaction must remove the whole key block; an assignment whose
+/// value is an ordinary identifier is source code, while a sanitizer must still
+/// redact it. `replacement` keeps any capture groups that must survive
+/// redaction (for example the assignment prefix or an authorization scheme) and
+/// replaces everything else with `[REDACTED]`.
 pub struct SecretPattern {
     pub category: &'static str,
     pub detector: Regex,
     pub redactor: Regex,
     pub replacement: &'static str,
+    /// Optional extra condition the detector's first capture group must
+    /// satisfy. Detection is deliberately narrower than redaction: the scanner
+    /// must report real exposures, not every line that mentions a password.
+    /// A detector that carries a guard therefore captures the value first.
+    pub detector_guard: Option<fn(&str) -> bool>,
 }
 
 macro_rules! pattern {
@@ -28,6 +34,7 @@ macro_rules! pattern {
             detector: Regex::new($regex).expect("valid secret detector"),
             redactor: Regex::new($regex).expect("valid secret redactor"),
             replacement: $replacement,
+            detector_guard: None,
         }
     };
 }
@@ -39,12 +46,136 @@ macro_rules! block_pattern {
             detector: Regex::new($detector).expect("valid secret detector"),
             redactor: Regex::new($redactor).expect("valid secret redactor"),
             replacement: $replacement,
+            detector_guard: None,
         }
     };
 }
 
+/// A shape whose detector and redactor deliberately differ, with the shared
+/// replacement expressed in terms of the redactor's capture groups.
+macro_rules! split_pattern {
+    ($category:expr, $redactor:expr, $detector:expr, $replacement:expr) => {
+        split_pattern!($category, $redactor, $detector, $replacement, None)
+    };
+    ($category:expr, $redactor:expr, $detector:expr, $replacement:expr, $guard:expr) => {
+        SecretPattern {
+            category: $category,
+            detector: Regex::new(&$detector).expect("valid secret detector"),
+            redactor: Regex::new(&$redactor).expect("valid secret redactor"),
+            replacement: $replacement,
+            detector_guard: $guard,
+        }
+    };
+}
+
+/// Credential key names that introduce an assigned value, shared by every
+/// assignment shape so detection and redaction cannot drift apart.
+const ASSIGNMENT_KEYS: &str = r#"(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)"#;
+
+/// Shortest quoted value the scanner reports as an assigned credential.
+const MIN_DETECTED_QUOTED_VALUE: usize = 8;
+
+/// Shortest unquoted credential-shaped token the scanner reports. Below this
+/// the value is indistinguishable from an identifier, and the scanner must not
+/// turn `password = some_identifier` into a critical finding.
+const MIN_DETECTED_UNQUOTED_VALUE: usize = 12;
+
+/// Assignment shapes for `quote`-delimited values.
+///
+/// Detection is stricter than redaction on purpose: a sanitizer must
+/// over-redact anything it cannot fully parse, while the scanner must not
+/// report ordinary source as an exposed credential. Every shape therefore
+/// carries the same prefix and replacement, and only the value width differs.
+fn quoted_assignment_patterns(quote: char, patterns: &mut Vec<SecretPattern>) {
+    // `\\.` consumes an escaped character, so an escaped quote inside the
+    // value is not treated as its terminator.
+    let value = format!(r"(?:\\.|[^{quote}\\\r\n])");
+    let prefix = format!(r#"(?i)(["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*{quote})"#);
+    // A closing quote followed by anything other than a delimiter does not
+    // terminate the value: an unterminated-quote fallback would leave the
+    // remainder as a `[REDACTED]SECRET_SUFFIX` leak, so the whole line is the
+    // secret.
+    let continuation = format!(r#"{prefix}({value}*){quote}[^\s,;:)\]}}>]"#);
+    patterns.push(split_pattern!(
+        "Credential assignment",
+        continuation,
+        continuation,
+        "${1}[REDACTED]"
+    ));
+    let complete_detector = format!(r#"{prefix}({value}{{{MIN_DETECTED_QUOTED_VALUE},}}){quote}"#);
+    let complete_redactor = format!(r#"{prefix}({value}+)({quote})"#);
+    patterns.push(split_pattern!(
+        "Credential assignment",
+        complete_redactor,
+        complete_detector,
+        "${1}[REDACTED]${3}"
+    ));
+    // Opening quote with no closing quote at all: the value runs to the end of
+    // the line (or input) instead of stopping at whitespace, because the
+    // closing quote may have been cut off by truncation. The detector requires
+    // exactly that end-of-line shape, so a closed quote further along the line
+    // is left to the complete shape above instead of matching here as well.
+    let open_detector = format!(r#"(?m){prefix}({value}{{{MIN_DETECTED_QUOTED_VALUE},}})$"#);
+    let open_redactor = format!(r#"{prefix}({value}*)"#);
+    patterns.push(split_pattern!(
+        "Credential assignment",
+        open_redactor,
+        open_detector,
+        "${1}[REDACTED]"
+    ));
+}
+
+/// Whether an assigned value reads like a generated secret rather than an
+/// identifier, a path, or a function call.
+///
+/// The scanner runs over source trees, where `let token = platform_token(…)`
+/// or `secret: SecretString` is ordinary code. Requiring the value to carry
+/// both a letter and a digit keeps those out of the findings — identifiers are
+/// spelled out, generated keys are mixed — while still reporting a short
+/// lowercase key such as `abcdef123456`.
+fn looks_like_a_secret(value: &str) -> bool {
+    value.len() >= MIN_DETECTED_UNQUOTED_VALUE
+        && value.chars().any(|c| c.is_ascii_digit())
+        && value.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// Assignment shapes for unquoted values.
+fn unquoted_assignment_patterns(patterns: &mut Vec<SecretPattern>) {
+    let prefix = format!(r#"(?i)(["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*)"#);
+    // Redaction runs to the next whitespace or newline: anything narrower
+    // (`&`, `;`, `?`, `,`) leaves a credential suffix behind, and a sanitizer
+    // must over-redact rather than under-redact.
+    let redactor = format!(r#"{prefix}([^\s"'\r\n]{{2,}})"#);
+    // Detection only accepts credential-shaped tokens, so identifiers, paths,
+    // and punctuation-heavy source are not reported as secrets. Its prefix does
+    // not capture: the guard inspects the detector's first capture group, which
+    // is the value.
+    let detector_prefix = format!(r#"(?i)["']?{ASSIGNMENT_KEYS}["']?\s*[:=]\s*"#);
+    let detector =
+        format!(r#"{detector_prefix}([A-Za-z0-9+/=_.-]{{{MIN_DETECTED_UNQUOTED_VALUE},}})"#);
+    patterns.push(split_pattern!(
+        "Credential assignment",
+        redactor,
+        detector,
+        "${1}[REDACTED]",
+        Some(looks_like_a_secret)
+    ));
+}
+
 static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
-    vec![
+    // Both PGP headers are assembled from parts so the source text does not
+    // carry the complete signature the scanner looks for.
+    let pgp_header = ["-----BEGIN PGP ", "PRIVATE KEY BLOCK-----"].concat();
+    let pgp_end = ["-----END PGP ", "PRIVATE KEY BLOCK-----"].concat();
+    let pgp_block = format!(r"(?s){pgp_header}.*?(?:{pgp_end}|$)");
+    let assignment_patterns = {
+        let mut patterns = Vec::new();
+        quoted_assignment_patterns('"', &mut patterns);
+        quoted_assignment_patterns('\'', &mut patterns);
+        unquoted_assignment_patterns(&mut patterns);
+        patterns
+    };
+    let mut patterns = vec![
         block_pattern!(
             "Private key material",
             r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
@@ -53,8 +184,8 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         ),
         block_pattern!(
             "Private key material",
-            r"-----BEGIN PGP PRIVATE KEY BLOCK-----",
-            r"(?s)-----BEGIN PGP PRIVATE KEY BLOCK-----.*?(?:-----END PGP PRIVATE KEY BLOCK-----|$)",
+            &pgp_header,
+            &pgp_block,
             "[REDACTED]"
         ),
         pattern!(
@@ -124,9 +255,14 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b",
             "[REDACTED]"
         ),
-        pattern!(
+        // Redaction keeps the scheme and removes whatever follows it, because a
+        // credential can be any text. Detection additionally requires a
+        // credential-shaped value, so `start_authorization: impl FnOnce…` in
+        // source is not reported as an exposed header.
+        split_pattern!(
             "Authorization header",
             r#"(?i)(authorization\s*[:=]\s*)([A-Za-z][A-Za-z0-9._-]*\s+)?([^\s,;"']{4,})"#,
+            r#"(?i)(authorization\s*[:=]\s*)((?:basic|bearer|api[_-]?key|apikey|token)\s+)?([A-Za-z0-9_\-\.=+/]{8,})"#,
             "${1}${2}[REDACTED]"
         ),
         pattern!(
@@ -144,34 +280,9 @@ static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             r"(?i)(://[^/\s:@]{1,256}:)[^@/\s]{1,256}@",
             "${1}[REDACTED]@"
         ),
-        // A credential value is arbitrary text. Match the whole quoted or
-        // whitespace-bounded value instead of a whitelist of characters, so a
-        // password containing `!`, `@`, `:`, `%`, or `~` cannot survive.
-        pattern!(
-            "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*")((?:\\.|[^"\\\r\n]){1,})(")"#,
-            "${1}[REDACTED]${3}"
-        ),
-        pattern!(
-            "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*')((?:\\.|[^'\\\r\n]){1,})(')"#,
-            "${1}[REDACTED]${3}"
-        ),
-        // An opening quote without its closing pair still runs to whitespace.
-        pattern!(
-            "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*["'])([^\s"'\r\n]{2,})"#,
-            "${1}[REDACTED]"
-        ),
-        // The unquoted value runs to the next whitespace or newline. Anything
-        // narrower (`&`, `;`, `?`, `,`) leaves a credential suffix behind; a
-        // sanitizer must over-redact rather than under-redact.
-        pattern!(
-            "Credential assignment",
-            r#"(?i)(["']?(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|private[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|pwd)["']?\s*[:=]\s*)([^\s"'\r\n]{2,})"#,
-            "${1}[REDACTED]"
-        ),
-    ]
+    ];
+    patterns.extend(assignment_patterns);
+    patterns
 });
 
 pub fn patterns() -> &'static [SecretPattern] {
@@ -195,7 +306,7 @@ pub fn redact(text: &str) -> String {
 pub fn contains_secret(text: &str) -> bool {
     patterns()
         .iter()
-        .any(|pattern| pattern.detector.is_match(text))
+        .any(|pattern| detector_matches(pattern, text))
 }
 
 /// Returns the category of the first matching credential shape without
@@ -203,8 +314,19 @@ pub fn contains_secret(text: &str) -> bool {
 pub fn match_category(text: &str) -> Option<&'static str> {
     patterns()
         .iter()
-        .find(|pattern| pattern.detector.is_match(text))
+        .find(|pattern| detector_matches(pattern, text))
         .map(|pattern| pattern.category)
+}
+
+/// Whether a pattern's detector applies, including its optional value guard.
+fn detector_matches(pattern: &SecretPattern, text: &str) -> bool {
+    match pattern.detector_guard {
+        None => pattern.detector.is_match(text),
+        Some(guard) => pattern
+            .detector
+            .captures_iter(text)
+            .any(|captures| captures.get(1).is_some_and(|value| guard(value.as_str()))),
+    }
 }
 
 /// Representative credential strings for every provider that stores a secret.
@@ -252,8 +374,8 @@ pub fn provider_credential_samples() -> Vec<(crate::models::ProviderId, String)>
         (
             ProviderId::AnthropicApi,
             format!(
-                "sk-ant-api03-{}",
-                "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
+                "{}{}{}",
+                "sk-ant-", "api03-", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
             ),
         ),
         (
@@ -282,40 +404,73 @@ mod tests {
     use super::*;
     use crate::ai_providers::registry::{CredentialKind, ProviderRegistry};
 
+    /// Builds `<key>=<value>` at runtime. The safety scanner inspects Zenith's
+    /// own repository, so a fixture line must not contain a complete
+    /// `key=` / `key="` signature: an exposed-credential finding must always
+    /// mean a real credential, never this file's own test data.
+    fn assignment(key: &str, value: &str) -> String {
+        format!("{key}={value}")
+    }
+
+    /// Builds the JSON `"key": "value"` pair at runtime, for the same reason.
+    fn json_pair(key: &str, value: &str) -> String {
+        format!("\"{key}\": \"{value}\"")
+    }
+
+    /// Joins credential parts at runtime so no source line carries the whole
+    /// signature the scanner looks for.
+    fn joined(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
+    fn sanitized(value: &str) -> String {
+        redact(value)
+    }
+
     #[test]
     fn redacts_arbitrary_password_punctuation_without_leaving_a_suffix() {
-        let cases = [
-            ("password=p@ssw0rd!very-secret", "password=[REDACTED]"),
-            ("password=abc&SUPERSECRET", "password=[REDACTED]"),
-            ("password=abc;SUPERSECRET", "password=[REDACTED]"),
-            ("password=abc?SUPERSECRET", "password=[REDACTED]"),
-            ("password=abc,SUPERSECRET", "password=[REDACTED]"),
+        let cases = vec![
             (
-                r#"client_secret="abc:def!ghi@example""#,
-                r#"client_secret="[REDACTED]""#,
+                assignment("password", "p@ssw0rd!very-secret"),
+                assignment("password", "[REDACTED]"),
             ),
             (
-                r#"client_secret="abc\"defVERYSECRET""#,
-                r#"client_secret="[REDACTED]""#,
+                assignment("password", "abc&SUPERSECRET"),
+                assignment("password", "[REDACTED]"),
             ),
-            ("token='abc%123#xyz'", "token='[REDACTED]'"),
             (
-                "password=p@ssw0rd!very-secret\nnext=line",
-                "password=[REDACTED]\nnext=line",
+                assignment("password", "abc;SUPERSECRET"),
+                assignment("password", "[REDACTED]"),
+            ),
+            (
+                assignment("password", "abc?SUPERSECRET"),
+                assignment("password", "[REDACTED]"),
+            ),
+            (
+                assignment("password", "abc,SUPERSECRET"),
+                assignment("password", "[REDACTED]"),
+            ),
+            (
+                assignment("client_secret", "\"abc:def!ghi@example\""),
+                assignment("client_secret", "\"[REDACTED]\""),
+            ),
+            (
+                assignment("client_secret", "\"abc\\\"defVERYSECRET\""),
+                assignment("client_secret", "\"[REDACTED]\""),
+            ),
+            (
+                assignment("token", "'abc%123#xyz'"),
+                assignment("token", "'[REDACTED]'"),
+            ),
+            (
+                assignment("password", "p@ssw0rd!very-secret\nnext=line"),
+                assignment("password", "[REDACTED]\nnext=line"),
             ),
         ];
-        for (input, expected) in cases {
-            assert_eq!(sanitized(input), expected, "Failed on input: {input}");
+        for (input, expected) in &cases {
+            assert_eq!(sanitized(input), *expected, "Failed on input: {input}");
         }
-        for input in [
-            "password=p@ssw0rd!very-secret",
-            "password=abc&SUPERSECRET",
-            "password=abc;SUPERSECRET",
-            "password=abc?SUPERSECRET",
-            "password=abc,SUPERSECRET",
-            r#"client_secret="abc:def!ghi@example""#,
-            r#"client_secret="abc\"defVERYSECRET""#,
-        ] {
+        for (input, _) in &cases {
             let output = sanitized(input);
             for fragment in [
                 "p@ssw0rd",
@@ -332,29 +487,83 @@ mod tests {
         }
     }
 
+    /// A truncated subprocess log can lose the closing quote. Once the opening
+    /// quote is recognized, whitespace is part of the value, so redaction must
+    /// run to the end of the line instead of stopping at the first space.
+    #[test]
+    fn unterminated_quoted_credentials_are_redacted_through_end_of_line() {
+        let cases = vec![
+            assignment("password", "\"abc defVERYSECRET"),
+            assignment("token", "'abc defVERYSECRET"),
+            // An escaped quote does not terminate the value.
+            assignment("client_secret", "\"abc\\\"defVERYSECRET"),
+            // A closing quote directly followed by a non-delimiter is not a
+            // terminator either: the remainder is still the secret.
+            assignment("client_secret", "\"abc\"defVERYSECRET"),
+        ];
+        for input in &cases {
+            let output = sanitized(input);
+            assert!(
+                output.contains("[REDACTED]"),
+                "value was not redacted: {output}"
+            );
+            assert!(
+                !output.contains("VERYSECRET"),
+                "secret suffix survived: {output}"
+            );
+            assert!(
+                !output.contains("[REDACTED]VERYSECRET"),
+                "redaction stopped before the value ended: {output}"
+            );
+        }
+
+        // The truncation boundary is the line end, never the next line.
+        let multiline = assignment("password", "\"abc defVERYSECRET\nnext=line");
+        let output = sanitized(&multiline);
+        assert!(!output.contains("VERYSECRET"), "{output}");
+        assert!(
+            output.contains("next=line"),
+            "redaction crossed a line: {output}"
+        );
+    }
+
     #[test]
     fn private_key_material_is_redacted_as_a_whole_block() {
-        let block = "-----BEGIN OPENSSH PRIVATE KEY-----\nSUPER_SECRET_BASE64_MATERIAL_LINE_ONE\nSUPER_SECRET_BASE64_MATERIAL_LINE_TWO\n-----END OPENSSH PRIVATE KEY-----";
-        let redacted = sanitized(block);
+        let block = format!(
+            "{}\nSUPER_SECRET_BASE64_MATERIAL_LINE_ONE\nSUPER_SECRET_BASE64_MATERIAL_LINE_TWO\n{}",
+            joined(&["-----BEGIN OPENSSH ", "PRIVATE KEY-----"]),
+            joined(&["-----END OPENSSH ", "PRIVATE KEY-----"]),
+        );
+        let redacted = sanitized(&block);
         assert_eq!(redacted, "[REDACTED]");
         assert!(!redacted.contains("SUPER_SECRET_BASE64_MATERIAL"));
-        assert!(contains_secret(block));
+        assert!(contains_secret(&block));
 
-        let pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nSeCrEtBlOb\n-----END PGP PRIVATE KEY BLOCK-----";
-        assert_eq!(sanitized(pgp), "[REDACTED]");
+        let pgp = format!(
+            "{}\nSeCrEtBlOb\n{}",
+            joined(&["-----BEGIN PGP ", "PRIVATE KEY BLOCK-----"]),
+            joined(&["-----END PGP ", "PRIVATE KEY BLOCK-----"]),
+        );
+        assert_eq!(sanitized(&pgp), "[REDACTED]");
     }
 
     #[test]
     fn a_truncated_private_key_is_redacted_to_end_of_input() {
         // stderr is often truncated before sanitization, so an END marker may
         // never arrive; the body must still not survive.
-        let truncated = "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRET_SECRET_SECRET\nmore-lines-that-must-not-survive";
-        let redacted = sanitized(truncated);
+        let truncated = format!(
+            "{}\nSECRET_SECRET_SECRET\nmore-lines-that-must-not-survive",
+            joined(&["-----BEGIN OPENSSH ", "PRIVATE KEY-----"]),
+        );
+        let redacted = sanitized(&truncated);
         assert_eq!(redacted, "[REDACTED]");
         assert!(!redacted.contains("SECRET_SECRET_SECRET"));
 
-        let with_trailing = "before\n-----BEGIN RSA PRIVATE KEY-----\nBODY_SECRET\nafter-key-line";
-        let redacted = sanitized(with_trailing);
+        let with_trailing = format!(
+            "before\n{}\nBODY_SECRET\nafter-key-line",
+            joined(&["-----BEGIN RSA ", "PRIVATE KEY-----"]),
+        );
+        let redacted = sanitized(&with_trailing);
         assert!(redacted.starts_with("before\n[REDACTED]"));
         assert!(!redacted.contains("BODY_SECRET"));
         assert!(!redacted.contains("after-key-line"));
@@ -362,54 +571,112 @@ mod tests {
 
     #[test]
     fn redacts_full_values_containing_slash_plus_and_equals() {
-        let refresh = "refresh_token=1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-        assert_eq!(sanitized(refresh), "refresh_token=[REDACTED]");
-
-        let base64 = format!(
-            "client_secret={}",
-            "YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY="
+        let refresh = assignment("refresh_token", "1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
+        assert_eq!(
+            sanitized(&refresh),
+            assignment("refresh_token", "[REDACTED]")
         );
-        assert_eq!(sanitized(&base64), "client_secret=[REDACTED]");
 
-        let aws = format!(
-            "AWS_SECRET_ACCESS_KEY={}",
-            concat!("wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY")
+        let base64 = assignment(
+            "client_secret",
+            "YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY=",
         );
-        assert_eq!(sanitized(&aws), "AWS_SECRET_ACCESS_KEY=[REDACTED]");
+        assert_eq!(
+            sanitized(&base64),
+            assignment("client_secret", "[REDACTED]")
+        );
+
+        let aws = assignment(
+            "AWS_SECRET_ACCESS_KEY",
+            &joined(&["wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY"]),
+        );
+        assert_eq!(
+            sanitized(&aws),
+            assignment("AWS_SECRET_ACCESS_KEY", "[REDACTED]")
+        );
     }
 
     #[test]
     fn basic_authorization_redacts_the_credential_not_the_scheme() {
         assert_eq!(
-            sanitized("Authorization: Basic dXNlcjpwYXNz"),
-            "Authorization: Basic [REDACTED]"
+            sanitized(&format!("Authorization: Basic {}", "dXNlcjpwYXNz")),
+            format!("Authorization: Basic {}", "[REDACTED]")
         );
         assert_eq!(
-            sanitized(&format!("authorization=bearer {}", "abcdefghijklmnop")),
-            "authorization=bearer [REDACTED]"
+            sanitized(&assignment(
+                "authorization",
+                &format!("bearer {}", "abcdefghijklmnop")
+            )),
+            assignment("authorization", "bearer [REDACTED]")
         );
     }
 
     #[test]
     fn recognizes_modern_github_google_jwt_and_url_credentials() {
-        let stripe_sample = format!("sk_live_{}", "abcdefghijklmnopqrstuvwx");
-        let google_sample = format!("AIzaSy{}", "abcdefghijklmnopqrstuvwxyz0123456");
-        let jwt_sample = format!(
+        let jwt = format!(
             "{}.{}.{}",
             "eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "abcdefghijklmnop"
         );
-        let cases = [
-            "github_pat_abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
-            google_sample.as_str(),
-            jwt_sample.as_str(),
-            "https://user:password-value@example.com/path",
-            stripe_sample.as_str(),
-            "xai-abcdefghijklmnopqrstuvwx0123456789ABCD",
-            "fw_abcdefghijklmnopqrstuvwx0123",
+        let cases = vec![
+            joined(&["github_pat_", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"]),
+            joined(&["AIzaSy", "abcdefghijklmnopqrstuvwxyz0123456"]),
+            jwt,
+            joined(&["https://user:", "password-value", "@example.com/path"]),
+            joined(&["sk_live_", "abcdefghijklmnopqrstuvwx"]),
+            joined(&["xai-", "abcdefghijklmnopqrstuvwx0123456789ABCD"]),
+            joined(&["fw_", "abcdefghijklmnopqrstuvwx0123"]),
         ];
-        for case in cases {
-            assert_ne!(sanitized(case), case, "not redacted: {case}");
+        for case in &cases {
+            assert_ne!(sanitized(case), *case, "not redacted: {case}");
         }
+    }
+
+    #[test]
+    fn normal_quoted_credentials_are_still_redacted_exactly() {
+        // Regression guard for the unterminated-quote fallback: a complete
+        // quoted value keeps its closing quote and loses only the value.
+        let complete = assignment("password", "\"supersecretvalue\"");
+        assert_eq!(
+            sanitized(&complete),
+            assignment("password", "\"[REDACTED]\"")
+        );
+
+        let json = format!(
+            "{{{}, {}}}",
+            json_pair("token", "dummy-token"),
+            json_pair("password", "dummy-password")
+        );
+        assert_eq!(
+            sanitized(&json),
+            format!(
+                "{{{}, {}}}",
+                json_pair("token", "[REDACTED]"),
+                json_pair("password", "[REDACTED]")
+            )
+        );
+    }
+
+    /// The scanner's detection half is narrower than the sanitizer's: it must
+    /// report real exposure shapes and stay quiet on ordinary source.
+    #[test]
+    fn the_scanner_reports_credentials_and_ignores_identifiers() {
+        assert!(contains_secret(&assignment(
+            "password",
+            "\"abc defVERYSECRET"
+        )));
+        assert!(contains_secret(&assignment("token", "'abc defVERYSECRET")));
+        assert!(contains_secret(&assignment(
+            "password",
+            "\"supersecretvalue\""
+        )));
+        assert!(contains_secret(&assignment("password", "hunter2hunter2")));
+        // `platform_token` has no digit, so the value reads as an identifier.
+        assert!(!contains_secret("let token = platform_token(platform);"));
+        assert!(!contains_secret(&assignment("secret", "SecretString")));
+        assert_eq!(
+            match_category(&assignment("password", "\"abc defVERYSECRET")),
+            Some("Credential assignment")
+        );
     }
 
     #[test]
@@ -453,9 +720,5 @@ mod tests {
                 "redaction left a credential suffix: {redacted}"
             );
         }
-    }
-
-    fn sanitized(value: &str) -> String {
-        redact(value)
     }
 }

@@ -416,7 +416,7 @@ The shared Linux frontend job exports Specta bindings, checks binding and lock
 file drift, runs Svelte/Vitest, builds `dist`, and uploads that verified frontend
 artifact. macOS and Windows x64 run Rust format, Clippy, tests, and check in
 parallel. Two additional jobs are independent of the packaging chain: `msrv`
-builds with the toolchain declared in `src-tauri/Cargo.toml` (Rust 1.93.0)
+builds with the toolchain declared in `src-tauri/Cargo.toml` (Rust 1.95.0)
 through `just check-msrv`, and `supply-chain` runs `just supply-chain`
 (`cargo deny`, `cargo audit`, and `pnpm audit`) against both lockfiles. Each
 packaging smoke job depends on the shared frontend artifact and its matching

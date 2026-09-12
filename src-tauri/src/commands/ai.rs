@@ -866,9 +866,14 @@ pub async fn get_ai_control_git_diff(
 #[specta::specta]
 pub async fn connect_openrouter_oauth(state: State<'_, AppState>) -> Result<(), String> {
     let credentials = state.credentials.clone();
-    let key = tauri::async_runtime::spawn_blocking(connect_openrouter)
-        .await
-        .map_err(|error| error.to_string())??;
+    let store = credentials.clone();
+    let key = tauri::async_runtime::spawn_blocking(move || {
+        // The credential store answers before the provider flow starts: an
+        // OAuth key that cannot be persisted would have to be revoked by hand.
+        crate::ai_providers::authorize_openrouter(store.as_ref(), connect_openrouter)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     let secret = crate::ai_providers::SecretString::new(key);
     if let Err(error) = credentials.set(crate::models::ProviderId::OpenRouter, secret) {
         // OpenRouter's documented key-deletion API requires a management key,

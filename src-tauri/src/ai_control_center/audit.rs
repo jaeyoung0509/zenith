@@ -114,6 +114,13 @@ fn safe_label(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Joins credential parts at runtime: the safety scanner inspects Zenith's
+    /// own repository, so a fixture must not carry the complete signature.
+    fn joined(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
     #[test]
     fn audit_is_redacted_bounded_and_persisted() {
         let temp = tempfile::tempdir().unwrap();
@@ -124,7 +131,7 @@ mod tests {
                 "scan",
                 "ok",
                 Some("project-opaque".into()),
-                "token sk-abcdefghijklmnop1234",
+                &joined(&["token sk-", "abcdefghijklmnop1234"]),
                 30,
             );
         }
@@ -170,7 +177,7 @@ mod tests {
             "scan",
             "ok",
             None,
-            "token=abcdef123456 at /Users/example/secret-project",
+            &format!("token={} at /Users/example/secret-project", "abcdef123456"),
             30,
         );
         let serialized = serde_json::to_string(&store.entries()).unwrap();
@@ -188,7 +195,7 @@ mod tests {
                 event_kind: "scan<script>".into(),
                 outcome: "ok<script>".into(),
                 project_ref: Some("project/<unsafe>".into()),
-                message: "token sk-abcdefghijklmnop1234".into(),
+                message: joined(&["token sk-", "abcdefghijklmnop1234"]),
             })
             .collect::<VecDeque<_>>();
         std::fs::write(

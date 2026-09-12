@@ -41,7 +41,7 @@
     Trash2,
     X,
     Zap,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   type EditorMode = 'basic' | 'advanced';
 

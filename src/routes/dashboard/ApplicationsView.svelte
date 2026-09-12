@@ -37,7 +37,7 @@
     ShieldAlert,
     ShieldCheck,
     Trash2,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   interface Props {
     onBack: () => void;

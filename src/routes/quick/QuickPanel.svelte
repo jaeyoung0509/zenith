@@ -48,7 +48,7 @@
     Container,
     Boxes,
     ArrowRight,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   let panelActive = false;
   let showResultModal = $state(false);

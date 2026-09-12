@@ -9,7 +9,7 @@
     Server,
     Square,
     Terminal,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
   import type {
     AgentActivityStatus,
     AgentEvidence,

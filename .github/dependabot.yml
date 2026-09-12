@@ -57,3 +57,13 @@ updates:
           - "*"
         update-types:
           - major
+    ignore:
+      # The typecheck gate runs svelte-check, which type-checks against
+      # TypeScript 6. TypeScript 7 is only reachable through its `--tsgo` flag,
+      # which additionally requires the aliased native compiler and documents
+      # the same limitations as `--incremental`. Keep the major out of the
+      # group until svelte-check supports TypeScript 7 without that flag; the
+      # 6.x line stays eligible for fixes above.
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"

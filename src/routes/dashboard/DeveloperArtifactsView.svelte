@@ -35,7 +35,7 @@
     Square,
     Trash2,
     X,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   interface Props {
     onBack: () => void;

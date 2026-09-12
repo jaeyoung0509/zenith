@@ -41,7 +41,7 @@
     Settings,
     Shield,
     Sparkles,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   type Tab = DashboardRoute | 'large-files' | 'applications' | 'developer-artifacts' | 'disks';
 

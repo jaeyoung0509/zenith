@@ -1,7 +1,7 @@
 <script lang="ts">
   import Button from '../../lib/components/Button.svelte';
   import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
-  import { AppWindow, ChevronRight, FileSearch, FolderSearch, RotateCw } from 'lucide-svelte';
+  import { AppWindow, ChevronRight, FileSearch, FolderSearch, RotateCw } from '@lucide/svelte';
 
   interface Props {
     onOpenLargeFiles: () => void;

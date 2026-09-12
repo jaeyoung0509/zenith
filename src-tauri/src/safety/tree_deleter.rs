@@ -277,7 +277,7 @@ impl WindowsDeleteHandle {
             FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
         };
 
-        let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
         retry_on_sharing_violation(|| {
             let ok = unsafe {
                 SetFileInformationByHandle(

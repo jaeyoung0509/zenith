@@ -23,7 +23,7 @@
     TriangleAlert,
     Search,
     X,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   onMount(() => {
     let subscribed = false;
