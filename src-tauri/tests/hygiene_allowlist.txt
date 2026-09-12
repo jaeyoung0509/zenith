@@ -1,0 +1,10 @@
+# Exceptions to the silent-skip guard in test_hygiene.rs.
+#
+# Every entry is `src-tauri/tests/<file>::<test id> # reason`. The id includes a
+# line number, so an entry stops matching as soon as the file shifts and the
+# guard fails until it is re-reviewed. An entry without a reason is refused, and
+# an entry that matches nothing is refused as well: an exception is a decision
+# that has to be re-justified, not a place to park a violation.
+
+tests/dev_ports_tests.rs::platform-gated module (line 7) # The suite spawns a real helper process and signals it, which needs POSIX process groups and lsof; the module is Unix-only by necessity, and the file header records that.
+tests/safety_tests.rs::platform-gated module (line 1445) # The suite asserts Windows volume and file-identity semantics through native handles, so it can only run on Windows; the macOS and POSIX equivalents live in the modules above it.

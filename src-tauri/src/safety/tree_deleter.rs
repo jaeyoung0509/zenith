@@ -1201,39 +1201,23 @@ impl SafeTreeDeleter {
         })
     }
 
+    /// The shared flavor-parameterized rules, so exclusion matching cannot
+    /// drift from the path algebra the rest of the tree uses and the Windows
+    /// semantics are covered on every runner.
     fn paths_equal(left: &Path, right: &Path) -> bool {
-        #[cfg(windows)]
-        {
-            Self::windows_path_key(left) == Self::windows_path_key(right)
-        }
-        #[cfg(not(windows))]
-        {
-            left == right
-        }
+        crate::platform::path_algebra::equal(
+            &left.to_string_lossy(),
+            &right.to_string_lossy(),
+            crate::platform::path_algebra::PathFlavor::current(),
+        )
     }
 
     fn path_starts_with(path: &Path, base: &Path) -> bool {
-        #[cfg(windows)]
-        {
-            let path_key = Self::windows_path_key(path);
-            let base_key = Self::windows_path_key(base);
-            path_key
-                .strip_prefix(&base_key)
-                .is_some_and(|suffix| suffix.starts_with('/'))
-        }
-        #[cfg(not(windows))]
-        {
-            path.starts_with(base)
-        }
-    }
-
-    #[cfg(windows)]
-    fn windows_path_key(path: &Path) -> String {
-        Blacklist::normalize_path(path)
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_ascii_lowercase()
+        crate::platform::path_algebra::contains(
+            &base.to_string_lossy(),
+            &path.to_string_lossy(),
+            crate::platform::path_algebra::PathFlavor::current(),
+        )
     }
 }
 

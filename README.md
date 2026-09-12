@@ -283,7 +283,7 @@ smoke builds for macOS and Windows; the declared MSRV build with Rust 1.95.0;
 and locked-dependency audits for both ecosystems. On Windows it also silently
 installs the per-user installer, runs `Zenith --doctor`, requires every
 self-check to pass, silently uninstalls, and fails if the install directory
-survives. The same job builds the machine-wide installer to prove it packages.
+survives, and the machine-wide installer runs the same gate with its install scope asserted. The same job builds both installers.
 
 CI does **not** verify redirected user folders, machines whose system drive is
 not `C:`, UNC or domain-joined profiles, non-NTFS volumes, non-UTF-8 code pages,

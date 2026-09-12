@@ -751,7 +751,8 @@ mod tests {
     ///
     /// The frontend consumes this file instead of a hand-written literal, so
     /// its idea of what Windows can do cannot drift from the backend's. The
-    /// binding drift gate in CI covers this file at no additional cost.
+    /// frontend CI job runs this test and fails on a diff of the exported file,
+    /// next to the TypeScript binding export.
     #[test]
     #[ignore = "code generation"]
     fn export_platform_capability_golden() {
