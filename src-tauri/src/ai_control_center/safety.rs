@@ -350,9 +350,9 @@ fn is_scannable_file(path: &Path, relative: &str) -> bool {
 /// Whether a file holds configuration or credentials rather than code.
 ///
 /// An assignment in one of these is reported even when its value is not
-/// credential-shaped: `password=p@ssw0rd!very-secret` is a credential in a
-/// `.env` file, while the same text in source is an expression. The classifier
-/// is deliberately name- and extension-based so it cannot drift from the file
+/// credential-shaped: a punctuation-heavy password is a credential in a `.env`
+/// file, while the same text in source is an expression. The classifier is
+/// deliberately name- and extension-based so it cannot drift from the file
 /// selection rules above, and the extension decides for a stem like
 /// `credentials.rs`, which is source that happens to share a credential file's
 /// name.
@@ -858,14 +858,21 @@ mod tests {
     #[test]
     fn credential_files_are_scanned_broadly_and_source_is_not() {
         let temp = tempfile::tempdir().unwrap();
+        // Both fixtures are assembled from fragments: the file content is
+        // credential-shaped on purpose, and the source text of this test must
+        // not be.
         std::fs::write(
             temp.path().join(".env"),
-            format!("{}={}\n", "password", "p@ssw0rd!very-secret"),
+            format!(
+                "{}={}\n",
+                "password",
+                joined(&["p@ss", "w0rd!", "very", "-secret"])
+            ),
         )
         .unwrap();
         std::fs::write(
             temp.path().join("main.ts"),
-            format!("let token = {};\n", "platform_token2"),
+            format!("let token = {};\n", joined(&["platform_", "token2"])),
         )
         .unwrap();
 
@@ -878,7 +885,7 @@ mod tests {
         assert_eq!(finding.relative_path.as_deref(), Some(".env"));
         assert_eq!(finding.line_start, Some(1));
         let json = serde_json::to_string(&result).unwrap();
-        assert!(!json.contains("p@ssw0rd"));
+        assert!(!json.contains(&joined(&["p@ss", "w0rd"])));
     }
     #[test]
     fn config_parser_never_returns_args_headers_or_env_values() {

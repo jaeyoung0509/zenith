@@ -190,12 +190,12 @@ const LONG_DETECTED_UNQUOTED_VALUE: usize = 32;
 /// Whether an assigned value reads like a generated secret rather than an
 /// identifier, a path, or a function call.
 ///
-/// The scanner runs over source trees, where `let token = platform_token2`,
-/// `secret: SecretString`, or `tokens.get('ring')` is ordinary code. A
-/// generated key carries a digit together with a mixed case, or is long enough
-/// that an identifier is implausible, so those are the shapes source reports.
-/// A credential file is scanned broadly instead, because a password there may
-/// be lower case, short, or full of punctuation.
+/// The scanner runs over source trees, where an assigned identifier, a field
+/// like `secret: SecretString`, or a lookup such as `tokens.get('ring')` is
+/// ordinary code. A generated key carries a digit together with a mixed case,
+/// or is long enough that an identifier is implausible, so those are the shapes
+/// source reports. A credential file is scanned broadly instead, because a
+/// password there may be lower case, short, or full of punctuation.
 fn looks_like_a_secret(value: &str) -> bool {
     let has_digit = value.chars().any(|c| c.is_ascii_digit());
     let has_lowercase = value.chars().any(|c| c.is_ascii_lowercase());
@@ -220,8 +220,8 @@ fn unquoted_assignment_patterns(patterns: &mut Vec<SecretPattern>) {
     let detector =
         format!(r#"{detector_prefix}([A-Za-z0-9+/=_.-]{{{MIN_DETECTED_UNQUOTED_VALUE},}})"#);
     // A credential file holds exactly this shape, so punctuation is part of the
-    // value: `password=p@ssw0rd!very-secret` is a credential there while the
-    // same text in source is an expression.
+    // value — a password with symbols and spaces is a credential there, while
+    // the same text in source is an expression.
     let credential_file_detector = format!(r#"{prefix}([^\s"'\r\n]+)"#);
     patterns.push(split_pattern!(
         "Credential assignment",
@@ -393,8 +393,8 @@ pub fn match_category(text: &str) -> Option<&'static str> {
 
 /// Context-aware [`match_category`].
 ///
-/// A credential-bearing file reports an assigned value that source would not:
-/// `password=p@ssw0rd!very-secret` is a credential there, while the same text in
+/// A credential-bearing file reports an assigned value that source would not: a
+/// punctuation-heavy password is a credential there, while the same text in
 /// source is an expression.
 pub fn match_category_in(text: &str, context: ScanContext) -> Option<&'static str> {
     patterns()
@@ -512,9 +512,16 @@ mod tests {
     }
 
     /// Joins credential parts at runtime so no source line carries the whole
-    /// signature the scanner looks for.
+    /// signature the scanner looks for. Both Zenith's own scanner and the
+    /// external secret scanners that read this repository scan these lines, so
+    /// a password-shaped value is assembled from fragments here as well.
     fn joined(parts: &[&str]) -> String {
         parts.concat()
+    }
+
+    /// A fragment of a password-shaped fixture value.
+    fn password_fixture() -> String {
+        joined(&["p@ss", "w0rd!", "very", "-secret"])
     }
 
     fn sanitized(value: &str) -> String {
@@ -525,7 +532,7 @@ mod tests {
     fn redacts_arbitrary_password_punctuation_without_leaving_a_suffix() {
         let cases = vec![
             (
-                assignment("password", "p@ssw0rd!very-secret"),
+                assignment("password", &password_fixture()),
                 assignment("password", "[REDACTED]"),
             ),
             (
@@ -557,17 +564,20 @@ mod tests {
                 assignment("token", "'[REDACTED]'"),
             ),
             (
-                assignment("password", "p@ssw0rd!very-secret\nnext=line"),
+                assignment("password", &format!("{}\nnext=line", password_fixture())),
                 assignment("password", "[REDACTED]\nnext=line"),
             ),
         ];
         for (input, expected) in &cases {
             assert_eq!(sanitized(input), *expected, "Failed on input: {input}");
         }
+        // The fixture prefix is assembled too, so the source text of this
+        // module never carries a password-shaped literal.
+        let password_prefix = joined(&["p@ss", "w0rd"]);
         for (input, _) in &cases {
             let output = sanitized(input);
             for fragment in [
-                "p@ssw0rd",
+                password_prefix.as_str(),
                 "very-secret",
                 "SUPERSECRET",
                 "abc:def!ghi@example",
@@ -801,9 +811,15 @@ mod tests {
             "\"supersecretvalue\""
         )));
         // A generated value in source: mixed case plus a digit.
-        assert!(contains_secret(&assignment("password", "Abc123XyZ456")));
+        assert!(contains_secret(&assignment(
+            "password",
+            &joined(&["Abc", "123", "XyZ", "456"])
+        )));
         // `platform_token2` is an identifier, not a generated key.
-        assert!(!contains_secret(&assignment("token", "platform_token2")));
+        assert!(!contains_secret(&assignment(
+            "token",
+            &joined(&["platform_", "token2"])
+        )));
         assert!(!contains_secret("let token = platform_token(platform);"));
         assert!(!contains_secret(&assignment("secret", "SecretString")));
         assert_eq!(
@@ -816,7 +832,7 @@ mod tests {
     /// missed password costs more there than a finding for a literal one.
     #[test]
     fn credential_files_report_assigned_values_source_would_not() {
-        let punctuation = assignment("password", "p@ssw0rd!very-secret");
+        let punctuation = assignment("password", &password_fixture());
         assert!(
             !contains_secret(&punctuation),
             "source must not read an expression as a credential"
@@ -826,7 +842,7 @@ mod tests {
             ScanContext::CredentialFile
         ));
 
-        let identifier = assignment("token", "platform_token2");
+        let identifier = assignment("token", &joined(&["platform_", "token2"]));
         assert!(!contains_secret(&identifier));
         assert!(contains_secret_in(&identifier, ScanContext::CredentialFile));
 
@@ -837,7 +853,7 @@ mod tests {
             ScanContext::CredentialFile
         ));
 
-        let lowercase = assignment("api_key", "abcdef123456");
+        let lowercase = assignment("api_key", &joined(&["abcdef", "123456"]));
         assert!(!contains_secret(&lowercase));
         assert!(contains_secret_in(&lowercase, ScanContext::CredentialFile));
 
