@@ -331,7 +331,10 @@ mod tests {
     #[test]
     fn every_model_root_is_resolved_from_the_stated_environment() {
         let home = fixture_home();
-        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(home.path());
+        // The fixture comes from `tempfile`, so it follows the host's path
+        // rules; the test is about which profile answers, not about spelling.
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
 
         let ollama = LocalModelScanner::scan_ollama(&environment);
         assert_eq!(ollama.len(), 1, "the stated home holds one Ollama manifest");

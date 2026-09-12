@@ -182,7 +182,7 @@ mod tests {
 
         // The scope root is the stated profile's `.cache/mlx`, not the host's.
         let environment =
-            PlatformEnvironment::simulated(PathFlavor::Posix).with_home(stated_home.path());
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(stated_home.path());
         let reclaimed =
             LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
                 .expect("a model under the stated root is deletable");
@@ -206,7 +206,7 @@ mod tests {
             .into_owned();
 
         let environment =
-            PlatformEnvironment::simulated(PathFlavor::Posix).with_home(stated_home.path());
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(stated_home.path());
         let error = LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
             .expect_err("a path outside the adapter root must be refused");
         assert!(matches!(error, ZenithError::PathNotAllowed(_)));
