@@ -1,9 +1,21 @@
-# Zenith - macOS AI & Developer System Manager Justfile
+# Zenith task runner
 # https://github.com/casey/just
+#
+# Cross-platform recipes run on macOS, Linux, and Windows. Recipes that only
+# work on one platform are scoped with a platform attribute ([macos] /
+# [windows]) so `just --list` shows only what the current host can run.
+# CI invokes these recipes instead of repeating command lines.
+
+set shell := ["bash", "-uc"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 # Default recipe: Show available commands
 default:
     @just --list
+
+# Create the Tauri frontend output directory required by cargo/tauri builds
+ensure-dist:
+    @node -e "require('fs').mkdirSync('dist', { recursive: true })"
 
 # ------------------------------------------------------------------------------
 # 🚀 Development & Fast Run
@@ -18,12 +30,14 @@ dev-web:
     pnpm dev
 
 # Build a debug macOS app bundle so Finder and Dock use Zenith branding.
+[macos]
 build-fast:
     pnpm tauri build --debug --bundles app
     @echo ""
     @echo "⚡ Debug app built at: target/debug/bundle/macos/Zenith.app"
 
-# Run fast debug binary directly
+# Run fast debug binary directly (macOS app bundle)
+[macos]
 run-fast:
     @if [ -d "target/debug/bundle/macos/Zenith.app" ]; then \
         open "target/debug/bundle/macos/Zenith.app"; \
@@ -40,6 +54,7 @@ run-fast:
 # ------------------------------------------------------------------------------
 
 # Package-only build: clean existing artifacts and create fresh .app and .dmg outputs.
+[macos]
 distribute: stop clean-bin
     ./scripts/tauri_release_build.sh
     @echo ""
@@ -49,18 +64,22 @@ distribute: stop clean-bin
     @echo "👉 Run directly with: just run-bin"
 
 # Build, validate, and safely replace the installed /Applications/Zenith.app.
+[macos]
 release: distribute install-release
 
 # Install an already-built release bundle with rollback on replacement failure.
+[macos]
 install-release:
     ./scripts/install_release_app.sh
 
 # Build, replace the installed app, and launch that installed copy.
+[macos]
 release-and-run: release
     @echo "🚀 Launching installed release..."
     @open "/Applications/Zenith.app"
 
 # Clean existing binaries and build fresh standalone release macOS App bundle
+[macos]
 release-app: stop clean-bin
     ./scripts/tauri_release_build.sh --bundles app
     @echo ""
@@ -68,15 +87,17 @@ release-app: stop clean-bin
     @echo "👉 Run directly with: just run-bin"
 
 # Build fresh standalone release app and launch immediately
+[macos]
 release-app-and-run: release-app
     @echo "🚀 Launching fresh release build..."
     @just run-bin
 
-# Build production macOS App bundle & DMG installer (.app / .dmg)
+# Build production App bundle & DMG installer (.app / .dmg)
 build:
     pnpm tauri build
 
 # Build standalone release macOS App bundle with full Dock/Finder branding
+[macos]
 build-bin:
     pnpm tauri build --bundles app
     @echo ""
@@ -92,32 +113,68 @@ build-front:
 # ------------------------------------------------------------------------------
 
 # Generate TypeScript bindings from Rust via Tauri Specta
-generate-bindings:
-    mkdir -p dist
+generate-bindings: ensure-dist
     cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
     @echo "✨ Generated TypeScript bindings at: src/lib/bindings/tauri.ts"
 
-# Run all test suites (Backend Rust Safety + Frontend Vitest)
+# Run all test suites (backend Rust, frontend Vitest, release-installer regression)
 test: test-rust test-front test-release-installer
     @echo "🎉 All Rust & Frontend tests passed!"
 
 # Run Rust safety invariants & unit tests
 test-rust:
-    cargo test
+    cargo test --manifest-path src-tauri/Cargo.toml
 
 # Run frontend Vitest unit tests
 test-front:
     pnpm test
 
+# The platform-specific recipes that follow keep `just test` working on every host.
+#
 # Exercise release replacement and rollback using temporary fixture bundles only.
+[macos]
 test-release-installer:
     ./scripts/test_install_release_app.sh
 
+[linux]
+test-release-installer:
+    @echo "The release-replacement regression test uses macOS bundle semantics; nothing to run on Linux."
+
+[windows]
+test-release-installer:
+    @echo "The release-replacement regression test uses macOS bundle semantics; Windows packaging is covered by 'just test-package <installer>'."
+
+# Install NSIS silently, run --doctor, assert self-checks pass, then uninstall
+[windows]
+test-package installer:
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows_packaging_smoke.ps1 -InstallerPath "{{installer}}"
+
+# Run the doctor self-check against a binary built from this source tree.
+doctor: ensure-dist
+    cargo run --manifest-path src-tauri/Cargo.toml --bin Zenith -- --doctor
+
+# Lint and format gate (the same commands CI runs).
+lint:
+    cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+    cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+    pnpm check
+
 # Check code types & compile check
-check:
-    cargo check
+check: ensure-dist
+    cargo check --manifest-path src-tauri/Cargo.toml
     pnpm check
     pnpm build
+
+# Build with the exact rust-version declared in src-tauri/Cargo.toml
+check-msrv: ensure-dist
+    node scripts/check_rust_version.cjs
+    cargo check --manifest-path src-tauri/Cargo.toml --locked
+
+# Fail on locked-dependency vulnerabilities, license drift, and duplicate bans
+supply-chain:
+    cargo deny check advisories bans licenses sources
+    cargo audit
+    pnpm audit --audit-level=high
 
 # Check version consistency across package.json, Cargo.toml, and tauri.conf.json
 check-version:
@@ -147,6 +204,7 @@ set-version version_str:
 # ------------------------------------------------------------------------------
 
 # Run the release app bundle directly (with full macOS Dock icon)
+[macos]
 run-bin:
     @if [ -d "target/release/bundle/macos/Zenith.app" ]; then \
         open "target/release/bundle/macos/Zenith.app"; \
@@ -165,8 +223,17 @@ run-bin:
 # ------------------------------------------------------------------------------
 
 # Stop running Zenith desktop application instances
+[macos]
 stop:
     @-killall Zenith 2>/dev/null || true
+
+[windows]
+stop:
+    -taskkill /IM Zenith.exe /F
+
+[linux]
+stop:
+    -pkill -x Zenith
 
 # Install all project dependencies
 install:
@@ -174,11 +241,11 @@ install:
 
 # Clean previous built binary, app bundles, dmg packages, and dist frontend
 clean-bin:
-    rm -rf dist target/release/bundle target/release/Zenith target/debug/bundle target/debug/Zenith src-tauri/target/release/bundle src-tauri/target/release/Zenith src-tauri/target/debug/bundle src-tauri/target/debug/Zenith
+    @node -e "for (const p of ['dist','target/release/bundle','target/release/Zenith','target/debug/bundle','target/debug/Zenith','src-tauri/target/release/bundle','src-tauri/target/release/Zenith','src-tauri/target/debug/bundle','src-tauri/target/debug/Zenith']) require('fs').rmSync(p, { recursive: true, force: true })"
     @echo "🗑️ Existing binary and bundle artifacts removed."
 
 # Clean all build artifacts, Cargo target, and node_modules
 clean:
     cargo clean
-    rm -rf dist node_modules
+    @node -e "for (const p of ['dist','node_modules']) require('fs').rmSync(p, { recursive: true, force: true })"
     @echo "✨ Cleaned build artifacts and cache."

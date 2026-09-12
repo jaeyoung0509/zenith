@@ -1,9 +1,17 @@
 [package]
 name = "zenith-core"
-version = "0.3.18"
+version = "0.3.19"
 description = "Zenith - cross-platform AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
+# Lowest toolchain that builds the locked dependency set, verified by bisecting
+# `cargo check --locked`: specta 2.0.0-rc.25 (pinned by tauri-specta) uses
+# `core::fmt::from_fn`, which stabilized in 1.93.0; 1.92.0 and older fail with
+# E0658 in that crate. notify-rust 4.18.0 also requires 1.89.0, above the
+# 1.77.2 floor that fixes CVE-2024-24576 (batch-file argument escaping on
+# Windows, relevant because Zenith spawns .cmd/.bat shims there). The CI `msrv`
+# job installs exactly this toolchain and runs `just check-msrv`.
+rust-version = "1.93.0"
 license = "MIT"
 repository = "https://github.com/jaeyoung0509/zenith"
 

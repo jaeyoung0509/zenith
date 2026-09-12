@@ -20,6 +20,7 @@ import type {
   DeveloperArtifactScanResult,
   DeveloperWorkspace,
   DiagnosticsSnapshot,
+  EnvironmentReport,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -273,6 +274,10 @@ export function tauriGetPlatformContext(): Promise<PlatformContext> {
 
 export function tauriGetDiagnostics(): Promise<DiagnosticsSnapshot> {
   return api.getDiagnostics();
+}
+
+export function tauriRunEnvironmentSelfCheck(): Promise<EnvironmentReport> {
+  return api.runEnvironmentSelfCheck();
 }
 
 export function tauriOpenLogsFolder(): Promise<void> {

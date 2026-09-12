@@ -1,7 +1,8 @@
 use crate::models::{
     LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
 };
-use crate::platform::PlatformPathsProvider;
+use crate::platform::description::PlatformEnvironment;
+use crate::platform::path_algebra;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,8 +122,8 @@ impl FileIdentity {
     }
 }
 
-pub fn is_allowed_large_file_path(path: &Path) -> bool {
-    if allowed_large_file_root(path).is_none() {
+pub fn is_allowed_large_file_path(environment: &PlatformEnvironment, path: &Path) -> bool {
+    if allowed_large_file_root(environment, path).is_none() {
         return false;
     }
     !path.components().any(|component| {
@@ -133,19 +134,25 @@ pub fn is_allowed_large_file_path(path: &Path) -> bool {
     })
 }
 
-pub fn allowed_large_file_root(path: &Path) -> Option<PathBuf> {
-    let paths = crate::platform::NativePlatformPaths::new();
-    let normalized = crate::safety::Blacklist::normalize_path(path);
+/// The approved Large Files root containing `path`, when one does.
+///
+/// The approved scope is exactly what the environment states: a folder the
+/// platform moved (Known Folder Move, administrator redirection, a UNC profile)
+/// is the authority, and its literal profile spelling is not a scope at all.
+pub fn allowed_large_file_root(environment: &PlatformEnvironment, path: &Path) -> Option<PathBuf> {
+    let flavor = environment.flavor();
+    let candidate = path.to_string_lossy();
     LARGE_FILE_ROOTS
         .iter()
-        .filter_map(|token| paths.content_dir(token))
-        .find(|root| normalized.starts_with(crate::safety::Blacklist::normalize_path(root)))
+        .filter_map(|token| environment.content_dir(token))
+        .find(|root| path_algebra::contains(&root.to_string_lossy(), &candidate, flavor))
 }
 
 pub struct LargeFileScanner;
 
 impl LargeFileScanner {
     pub fn scan<F>(
+        environment: &PlatformEnvironment,
         request: &LargeFileScanRequest,
         cancel: Arc<AtomicBool>,
         mut on_event: F,
@@ -156,7 +163,7 @@ impl LargeFileScanner {
         let threshold = request
             .min_size_bytes
             .clamp(request.filter.minimum_threshold(), MAX_THRESHOLD);
-        let roots = resolve_roots(&request.roots)?;
+        let roots = resolve_roots(environment, &request.roots)?;
         let approved_roots = roots.clone();
         let scan_id = Uuid::new_v4().to_string();
         on_event(LargeFileScanEvent::Started {
@@ -404,23 +411,11 @@ fn inventory_from_retained(
     }
 }
 
-fn resolve_roots(tokens: &[String]) -> Result<Vec<PathBuf>, String> {
-    let paths = crate::platform::NativePlatformPaths::new();
-    resolve_roots_with(tokens, |token| paths.content_dir(token))
-}
-
-#[cfg(test)]
-fn resolve_roots_for_home(tokens: &[String], home: &Path) -> Result<Vec<PathBuf>, String> {
-    resolve_roots_with(tokens, |token| {
-        let name = match token {
-            "downloads" => "Downloads",
-            "desktop" => "Desktop",
-            "documents" => "Documents",
-            "movies" => "Movies",
-            _ => return None,
-        };
-        Some(home.join(name))
-    })
+fn resolve_roots(
+    environment: &PlatformEnvironment,
+    tokens: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    resolve_roots_with(tokens, |token| environment.content_dir(token))
 }
 
 fn resolve_roots_with(
@@ -504,6 +499,23 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::platform::description::KnownFolder;
+    use crate::platform::path_algebra::PathFlavor;
+
+    /// A simulated environment stating exactly the folders the test means.
+    fn environment_with_folders(
+        base: &Path,
+        folders: &[(KnownFolder, &str)],
+    ) -> PlatformEnvironment {
+        let mut environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(base.join("profile"));
+        for (folder, relative) in folders {
+            environment = environment.with_known_folder(*folder, base.join(relative));
+        }
+        environment
+    }
+
     #[test]
     fn redirected_korean_content_roots_remain_token_scoped() {
         let dir = tempfile::tempdir().unwrap();
@@ -559,9 +571,9 @@ mod tests {
         std::fs::create_dir(target.join("문서")).unwrap();
         assert!(super::safe_scan_root_metadata(&link.join("문서")).is_none());
         assert!(super::FileIdentity::from_path(&link).is_none());
-        assert!(crate::developer_artifacts::validate_workspace_root(&link, dir.path()).is_err());
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(dir.path());
+        assert!(crate::developer_artifacts::validate_workspace_root(&environment, &link).is_err());
     }
-    use super::*;
     use crate::models::LargeFileFilter;
 
     #[test]
@@ -604,20 +616,80 @@ mod tests {
 
     #[test]
     fn dedicated_scope_allows_reviewed_user_content_but_protects_git() {
-        if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
-            assert!(is_allowed_large_file_path(
-                &home.join("Documents/video.mov")
-            ));
-            assert!(is_allowed_large_file_path(
-                &home.join("Desktop/archive.zip")
-            ));
-            assert!(!is_allowed_large_file_path(
-                &home.join("Documents/project/.git/objects/pack.bin")
-            ));
-            assert!(!is_allowed_large_file_path(
-                &home.join("Library/Caches/cache.bin")
-            ));
-        }
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        std::fs::create_dir_all(base.join("profile")).unwrap();
+        let environment = environment_with_folders(
+            base,
+            &[
+                (KnownFolder::Documents, "profile/Documents"),
+                (KnownFolder::Desktop, "profile/Desktop"),
+            ],
+        );
+
+        assert!(is_allowed_large_file_path(
+            &environment,
+            &base.join("profile/Documents/video.mov")
+        ));
+        assert!(is_allowed_large_file_path(
+            &environment,
+            &base.join("profile/Desktop/archive.zip")
+        ));
+        assert!(!is_allowed_large_file_path(
+            &environment,
+            &base.join("profile/Documents/project/.git/objects/pack.bin")
+        ));
+        assert!(!is_allowed_large_file_path(
+            &environment,
+            &base.join("profile/Library/Caches/cache.bin")
+        ));
+    }
+
+    #[test]
+    fn a_redirected_known_folder_outside_the_profile_is_the_approved_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        let redirected = base.join("OneDrive/문서");
+        std::fs::create_dir_all(&redirected).unwrap();
+        std::fs::create_dir_all(base.join("profile/Documents")).unwrap();
+        let environment =
+            environment_with_folders(base, &[(KnownFolder::Documents, "OneDrive/문서")]);
+
+        let reviewed = redirected.join("video.mov");
+        assert_eq!(
+            allowed_large_file_root(&environment, &reviewed),
+            Some(redirected.clone())
+        );
+        assert!(is_allowed_large_file_path(&environment, &reviewed));
+        // The literal profile spelling is not an approved scope once the
+        // platform states the real folder.
+        assert!(!is_allowed_large_file_path(
+            &environment,
+            &base.join("profile/Documents/video.mov")
+        ));
+    }
+
+    #[test]
+    fn a_known_folder_on_a_non_system_drive_is_the_approved_scope() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows)
+            .with_home(r"D:\Users\홍 길동")
+            .with_known_folder(KnownFolder::Documents, r"D:\Users\홍 길동\Documents");
+        let reviewed = Path::new(r"D:\Users\홍 길동\Documents\video.mov");
+
+        assert_eq!(
+            allowed_large_file_root(&environment, reviewed),
+            Some(PathBuf::from(r"D:\Users\홍 길동\Documents"))
+        );
+        assert!(is_allowed_large_file_path(&environment, reviewed));
+        // Windows compares paths case-insensitively.
+        assert!(is_allowed_large_file_path(
+            &environment,
+            Path::new(r"d:\users\홍 길동\documents\video.mov")
+        ));
+        assert!(!is_allowed_large_file_path(
+            &environment,
+            Path::new(r"C:\Users\홍 길동\Documents\video.mov")
+        ));
     }
 
     #[cfg(unix)]
@@ -636,8 +708,26 @@ mod tests {
     #[test]
     fn root_resolution_rejects_an_empty_or_missing_selection() {
         let temp = tempfile::tempdir().unwrap();
-        let error = resolve_roots_for_home(&["movies".to_string()], temp.path()).unwrap_err();
+        let environment = environment_with_folders(temp.path(), &[]);
+        let error = resolve_roots(&environment, &["movies".to_string()]).unwrap_err();
         assert!(error.contains("None of the selected"));
+    }
+
+    #[test]
+    fn scan_roots_come_from_the_stated_environment() {
+        let temp = tempfile::tempdir().unwrap();
+        let documents = temp.path().join("OneDrive/문서");
+        std::fs::create_dir_all(&documents).unwrap();
+        let environment =
+            environment_with_folders(temp.path(), &[(KnownFolder::Documents, "OneDrive/문서")]);
+
+        assert_eq!(
+            resolve_roots(&environment, &["documents".to_string()]).unwrap(),
+            vec![documents.clone()]
+        );
+        // A folder the environment does not state is not reachable by spelling
+        // its literal path.
+        assert!(resolve_roots(&environment, &[documents.display().to_string()]).is_err());
     }
 
     #[test]

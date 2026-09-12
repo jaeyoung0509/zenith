@@ -605,20 +605,35 @@ mod tests {
             registry.snapshot.projects[0].sessions[0].evidence,
             AgentEvidence::ProcessObserved
         );
-        assert!(matches!(
+        // Both processes were observed with activity one instant before the
+        // snapshot, so each session is Working rather than possibly inactive.
+        assert_eq!(
             registry.snapshot.projects[0].sessions[0].status,
-            AgentActivityStatus::Working | AgentActivityStatus::Active
-        ));
-        assert_eq!(
-            registry.snapshot.projects[0].sessions[0].can_stop,
-            cfg!(unix)
+            AgentActivityStatus::Working
         );
-        assert_eq!(
-            registry.snapshot.projects[0].sessions[0]
-                .stop_lease_id
-                .is_some(),
-            cfg!(unix)
-        );
+
+        // A stop lease is minted per observed process and identifies exactly
+        // that process: same PID, start time, executable owner. Consuming it
+        // here is the outcome a caller depends on when it offers "stop".
+        let mut leased_processes = Vec::new();
+        for project in &registry.snapshot.projects {
+            for session in &project.sessions {
+                assert!(session.can_stop, "an observed process must be stoppable");
+                let lease_id = session
+                    .stop_lease_id
+                    .clone()
+                    .expect("can_stop requires a lease id");
+                let lease = store
+                    .stop_leases
+                    .consume_lease(&session.id, &lease_id, 100)
+                    .expect("minted lease must be consumable");
+                assert_eq!(lease.pid, 4242);
+                assert_eq!(lease.owner, crate::process_owner::ProcessOwner::Unix(501));
+                leased_processes.push(lease.start_time);
+            }
+        }
+        leased_processes.sort_unstable();
+        assert_eq!(leased_processes, vec![10, 11]);
     }
 
     #[cfg(unix)]

@@ -1,6 +1,7 @@
 use crate::models::*;
+use crate::platform::description::PlatformEnvironment;
+use crate::platform::path_algebra;
 use crate::privacy::secrets;
-use crate::safety::Blacklist;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,7 @@ fn decode_utf16(bytes: &[u8], to_unit: fn([u8; 2]) -> u16) -> Option<String> {
 }
 
 pub fn inspect(
+    environment: &PlatformEnvironment,
     projects: &std::collections::HashMap<String, PathBuf>,
     dismissed: &[String],
     now: u64,
@@ -60,7 +62,7 @@ pub fn inspect(
     let mut boundary_reasons = Vec::new();
 
     for (project_id, root) in ordered.iter() {
-        if !is_eligible_safety_root(root) {
+        if !is_eligible_safety_root(environment, root) {
             partial = true;
             unreached_roots.push(root_label(root));
             boundary_reasons.push(format!(
@@ -479,97 +481,93 @@ fn sanitize_label(value: &str) -> String {
         .collect()
 }
 
-fn is_eligible_safety_root(root: &Path) -> bool {
+/// Whether a project root may be walked by the automatic safety inspection.
+///
+/// The rules are the environment's own path rules, not the host's: a Windows
+/// drive that is not `C:`, a UNC profile, and a POSIX profile are all decided
+/// by the same flavor-parameterized algebra, so the refusal is provable on any
+/// runner. The profile comes from the environment, never from the host.
+fn is_eligible_safety_root(environment: &PlatformEnvironment, root: &Path) -> bool {
     if !root.is_dir() {
         return false;
     }
-    let canonical = match root.canonicalize() {
-        Ok(value) => Blacklist::normalize_path(&value),
-        Err(_) => return false,
+    let flavor = environment.flavor();
+    let Ok(canonical) = root.canonicalize() else {
+        return false;
     };
-    if canonical.parent().is_none() {
-        return false;
-    }
-    let home = crate::platform::NativePlatformPaths::new().home();
-    if let Some(home) = home {
-        let normalized_home = home
-            .canonicalize()
-            .map(|value| Blacklist::normalize_path(&value))
-            .unwrap_or_else(|_| Blacklist::normalize_path(&home));
-        if paths_equal_for_safety(&canonical, &normalized_home) {
-            return false;
-        }
-    }
-    let canonical_str = canonical.to_string_lossy().replace('\\', "/");
-    let canonical_str = canonical_str.trim_end_matches('/');
-
-    #[cfg(target_os = "windows")]
-    if canonical_str.len() == 2
-        && canonical_str.as_bytes()[0].is_ascii_alphabetic()
-        && canonical_str.ends_with(':')
-    {
-        return false;
-    }
-
-    #[cfg(target_os = "windows")]
-    if canonical_str.len() >= 3
-        && canonical_str.as_bytes()[0].is_ascii_alphabetic()
-        && canonical_str.as_bytes()[1] == b':'
-        && [
-            "/Users",
-            "/Windows",
-            "/Program Files",
-            "/Program Files (x86)",
-            "/ProgramData",
-        ]
-        .iter()
-        .any(|denied| canonical_str[2..].eq_ignore_ascii_case(denied))
-    {
-        return false;
-    }
-
-    let broad_denylist = [
-        "/",
-        "/Users",
-        "/home",
-        "/System",
-        "/Library",
-        "/Applications",
-        "/private",
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/etc",
-        "/var",
-        "/Volumes",
-        "/tmp",
-        "/opt",
-    ];
-    for denied in broad_denylist {
-        #[cfg(target_os = "windows")]
-        let matches = canonical_str.eq_ignore_ascii_case(denied);
-        #[cfg(not(target_os = "windows"))]
-        let matches = canonical_str == denied;
-        if matches {
-            return false;
-        }
-    }
-    if canonical.components().count() <= 2 {
-        return false;
-    }
-    true
+    let canonical_text = path_algebra::normalize(&canonical.to_string_lossy(), flavor);
+    let home_text = environment.user_home().map(|home| {
+        home.canonicalize()
+            .map(|value| path_algebra::normalize(&value.to_string_lossy(), flavor))
+            .unwrap_or_else(|_| path_algebra::normalize(&home.to_string_lossy(), flavor))
+    });
+    !safety_root_is_ineligible(flavor, &canonical_text, home_text.as_deref())
 }
 
-fn paths_equal_for_safety(left: &Path, right: &Path) -> bool {
-    #[cfg(target_os = "windows")]
+/// True when a canonical location is too broad to scan as one project.
+///
+/// Pure and flavor-parameterized so a Windows drive that is not `C:`, a UNC
+/// profile, and a POSIX profile are all decided by the same rules on any
+/// runner.
+fn safety_root_is_ineligible(
+    flavor: path_algebra::PathFlavor,
+    canonical_text: &str,
+    home_text: Option<&str>,
+) -> bool {
+    if path_algebra::is_root(canonical_text, flavor)
+        || path_algebra::is_unsupported_namespace(canonical_text, flavor)
     {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy())
+        return true;
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        left == right
+    // An 8.3 alias cannot be resolved without the volume, so a root whose
+    // component might be one is refused rather than assumed harmless.
+    if path_algebra::contains_short_name(canonical_text, flavor) {
+        return true;
     }
+    // A system directory (and everything below it on Windows: Windows,
+    // Program Files, ProgramData, the users container) is never a project.
+    // POSIX system prefixes are owned by the broad-root rule below, which
+    // deliberately still allows a project inside e.g. `/private/var`.
+    let protected = path_algebra::protected_root(canonical_text, flavor);
+    if protected.is_some_and(|rule| rule != path_algebra::ProtectedRoot::PosixSystemPrefix) {
+        return true;
+    }
+    // A POSIX location directly under the root (`/Users`, `/home`, `/tmp`,
+    // `/Volumes`, `/opt`) is too broad to be one project's root.
+    if !flavor.is_windows() && components_below_root(canonical_text, flavor).len() <= 1 {
+        return true;
+    }
+    match home_text {
+        Some(home_text) => path_algebra::equal(canonical_text, home_text, flavor),
+        None => false,
+    }
+}
+
+/// Path components below the flavor's root prefix: `C:\a\b` and
+/// `\\server\share\a\b` yield `["a", "b"]`, `/a/b` yields `["a", "b"]`.
+fn components_below_root(path: &str, flavor: path_algebra::PathFlavor) -> Vec<String> {
+    let canonical =
+        path_algebra::canonical_separators(&path_algebra::strip_verbatim(path, flavor), flavor);
+    let remainder = if flavor.is_windows() {
+        if canonical.starts_with(r"\\") {
+            canonical
+                .trim_start_matches('\\')
+                .splitn(3, '\\')
+                .nth(2)
+                .unwrap_or_default()
+        } else if canonical.len() >= 2 && canonical.as_bytes()[1] == b':' {
+            canonical[2..].trim_start_matches('\\')
+        } else {
+            canonical.as_str()
+        }
+    } else {
+        canonical.trim_start_matches('/')
+    };
+    remainder
+        .split(flavor.separator())
+        .filter(|component| !component.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn strip_jsonc_comments(value: &str) -> String {
@@ -663,6 +661,14 @@ fn device(_path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::path_algebra::PathFlavor;
+
+    /// An environment that states no profile, so the host's home never decides
+    /// whether a temporary project root is eligible.
+    fn simulated() -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::current())
+    }
+
     #[test]
     fn reports_secret_category_and_line_without_value() {
         let temp = tempfile::tempdir().unwrap();
@@ -672,7 +678,7 @@ mod tests {
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(result.findings.len(), 1);
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("abcdefghijklmnop1234"));
@@ -683,7 +689,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join(".mcp.json"), r#"{"mcpServers":{"demo":{"type":"stdio","command":"/usr/bin/node","args":["SECRET"],"env":{"TOKEN":"hidden"},"headers":{"Authorization":"hidden"}}}}"#).unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("SECRET"));
         assert!(!json.contains("hidden"));
@@ -692,12 +698,40 @@ mod tests {
     #[test]
     fn symlinked_files_are_not_followed() {
         let temp = tempfile::tempdir().unwrap();
-        let outside = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(outside.path(), "sk-abcdefghijklmnop1234").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "sk-abcdefghijklmnop1234").unwrap();
+        // The ordinary file inside the scanned root must always be reported, so
+        // this assertion is meaningful on every platform, not only where a
+        // symlink can be created.
+        std::fs::write(temp.path().join("ordinary.txt"), "sk-abcdefghijklmnop1234").unwrap();
+        let outside_file = outside.path().join("secret.txt");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(outside.path(), temp.path().join("linked.txt")).unwrap();
+        std::os::unix::fs::symlink(&outside_file, temp.path().join("linked.txt")).unwrap();
+        #[cfg(windows)]
+        {
+            // Creating a file symlink may require Developer Mode; the assertion
+            // below still runs when it cannot be created.
+            let _ =
+                std::os::windows::fs::symlink_file(&outside_file, temp.path().join("linked.txt"));
+        }
+
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        assert!(inspect(&roots, &[], 10).findings.is_empty());
+        let result = inspect(&simulated(), &roots, &[], 10);
+        assert_eq!(
+            result.findings.len(),
+            1,
+            "only the file inside the root may be reported, never a link target"
+        );
+
+        // A root that does not exist is not reported as a clean inspection.
+        let missing = std::collections::HashMap::from([(
+            "missing".into(),
+            temp.path().join("does-not-exist"),
+        )]);
+        let result = inspect(&simulated(), &missing, &[], 10);
+        assert!(result.findings.is_empty());
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert_eq!(result.scanned_files, 0);
     }
 
     #[test]
@@ -711,7 +745,7 @@ mod tests {
             .unwrap();
         }
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
         assert!(result.status_message.contains("boundary"));
         assert!(result.status_message.contains("budget"));
@@ -744,7 +778,7 @@ mod tests {
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert!(
             result.scanned_files >= 4,
             "expected dotfiles to be scanned, got {}",
@@ -767,7 +801,7 @@ mod tests {
         }
         std::fs::write(temp.path().join(".env"), bytes).unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert!(!result.findings.is_empty(), "UTF-16 .env was not inspected");
         assert_eq!(result.quality, ObservationQuality::Fresh);
     }
@@ -781,7 +815,7 @@ mod tests {
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
         assert!(result.status_message.contains("could not be decoded"));
     }
@@ -797,7 +831,7 @@ mod tests {
         );
         std::fs::write(temp.path().join("main.ts"), content).unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(
             result.findings.len(),
             3,
@@ -841,7 +875,7 @@ mod tests {
             ("heavy".to_string(), heavy.clone()),
             ("secret".to_string(), secret_root.clone()),
         ]);
-        let result = inspect(&roots, &[], 10);
+        let result = inspect(&simulated(), &roots, &[], 10);
         assert_eq!(result.quality, ObservationQuality::Partial);
         assert!(result.status_message.contains("budget"));
         // The heavy root is truncated, but the later root is still scanned: a
@@ -887,23 +921,86 @@ mod tests {
 
     #[test]
     fn broad_roots_such_as_home_or_root_are_rejected_from_automatic_scan() {
-        assert!(!is_eligible_safety_root(Path::new("/")));
+        let environment = simulated();
+        let flavor = environment.flavor();
+
+        assert!(safety_root_is_ineligible(flavor, "/", None));
         #[cfg(unix)]
         {
-            assert!(!is_eligible_safety_root(Path::new("/Users")));
-            assert!(!is_eligible_safety_root(Path::new("/System")));
-        }
-        let home = crate::platform::NativePlatformPaths::new().home();
-        if let Some(home) = home {
-            assert!(!is_eligible_safety_root(&home));
-
-            #[cfg(target_os = "windows")]
-            {
-                let users_root = home.parent().expect("user profile has a parent");
-                assert!(!is_eligible_safety_root(users_root));
-                let drive_root = home.ancestors().last().expect("user profile has a root");
-                assert!(!is_eligible_safety_root(drive_root));
+            for denied in [
+                "/Users",
+                "/System",
+                "/Volumes",
+                "/tmp",
+                "/opt",
+                "/Applications",
+            ] {
+                assert!(
+                    safety_root_is_ineligible(flavor, denied, None),
+                    "{denied} must not be an eligible scan root"
+                );
             }
+            assert!(!safety_root_is_ineligible(
+                flavor,
+                "/Users/me/dev/project",
+                None
+            ));
+            // Temporary trees are legitimate project locations.
+            assert!(!safety_root_is_ineligible(
+                flavor,
+                "/private/var/folders/t/abc/T/project",
+                None
+            ));
         }
+
+        // The stated profile is never an eligible root, and neither is a
+        // stated profile that happens to live outside the host's home.
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        std::fs::create_dir_all(home.join("dev/project")).unwrap();
+        let stated = PlatformEnvironment::simulated(PathFlavor::current()).with_home(&home);
+        assert!(!is_eligible_safety_root(&stated, &home));
+        assert!(is_eligible_safety_root(&stated, &home.join("dev/project")));
+    }
+
+    #[test]
+    fn windows_flavor_rules_accept_a_non_system_drive_and_refuse_system_tails() {
+        let flavor = PathFlavor::Windows;
+        let home = r"C:\Users\me";
+
+        assert!(!safety_root_is_ineligible(
+            flavor,
+            r"D:\dev\project",
+            Some(home)
+        ));
+        assert!(!safety_root_is_ineligible(
+            flavor,
+            r"C:\Users\me\dev\project",
+            Some(home)
+        ));
+        for denied in [
+            r"C:\",
+            r"D:\",
+            r"C:\Users",
+            r"D:\Windows\System32",
+            r"D:\Program Files\App",
+            r"D:\ProgramData",
+            home,
+        ] {
+            assert!(
+                safety_root_is_ineligible(flavor, denied, Some(home)),
+                "{denied} must not be an eligible scan root"
+            );
+        }
+
+        // A UNC profile is refused as the profile itself, but a project below
+        // it is accepted.
+        let unc_home = r"\\fileserver\profiles\me";
+        assert!(safety_root_is_ineligible(flavor, unc_home, Some(unc_home)));
+        assert!(!safety_root_is_ineligible(
+            flavor,
+            r"\\fileserver\profiles\me\dev",
+            Some(unc_home)
+        ));
     }
 }

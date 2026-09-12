@@ -1,0 +1,10 @@
+{
+  "name": "macos-apfs-network-volume",
+  "flavor": "posix",
+  "system_drive": null,
+  "profile_shape": "posix_home",
+  "known_folder_redirected": false,
+  "temp_inside_profile": false,
+  "volume_identity": false,
+  "missing_tools": []
+}

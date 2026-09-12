@@ -354,9 +354,25 @@ impl EnvironmentFixture {
             } else {
                 format!(r"{drive}\Temp")
             };
-            let mut environment = environment
-                .with_home(home)
-                .with_temp_dir(temp)
+            let mut roots = super::paths::SimulatedPaths::new()
+                .with_flavor(flavor)
+                .with_home(home.clone())
+                .with_temp_dir(temp);
+            // App-data and program roots are stated only when the profile
+            // names a drive: a UNC profile does not, and inventing a drive
+            // there would misreport the machine's system drive.
+            if matches!(
+                self.shape.profile_shape,
+                ProfileShape::DriveRooted | ProfileShape::Unresolved
+            ) {
+                roots = roots
+                    .with_local_app_data(format!(r"{home}\AppData\Local"))
+                    .with_roaming_app_data(format!(r"{home}\AppData\Roaming"))
+                    .with_program_files(format!(r"{drive}\Program Files"))
+                    .with_program_data(format!(r"{drive}\ProgramData"));
+            }
+            let mut environment = super::description::PlatformEnvironment::simulated(flavor)
+                .with_roots(Arc::new(roots))
                 .with_known_folder(KnownFolder::Documents, documents)
                 .with_path_entry(format!(r"{drive}\Windows\System32"));
             environment = self.apply_volumes(
@@ -388,9 +404,14 @@ impl EnvironmentFixture {
         } else {
             "/var/tmp".to_string()
         };
-        let environment = environment
-            .with_home(home)
+        let roots = super::paths::SimulatedPaths::new()
+            .with_flavor(flavor)
+            .with_home(home.clone())
             .with_temp_dir(temp)
+            .with_local_app_data(format!("{home}/.local/share"))
+            .with_roaming_app_data(format!("{home}/.config"));
+        let environment = environment
+            .with_roots(Arc::new(roots))
             .with_known_folder(KnownFolder::Documents, documents)
             .with_path_entry("/usr/local/bin");
         let environment = self.apply_volumes(
@@ -456,16 +477,16 @@ impl PlatformEnvironment {
                 .flatten()
                 .find_map(|root| profile_shape_drive(root.to_str(), flavor))
         });
-        let known_folder_redirected = self.known_folders.iter().any(|(_, folder)| {
-            match home_text.as_deref() {
-                Some(home) => !crate::platform::path_algebra::contains(home, &folder.to_string_lossy(), flavor),
-                None => true,
+        let known_folder_redirected = self.known_folders.iter().any(|(_, folder)| match home_text
+            .as_deref()
+        {
+            Some(home) => {
+                !crate::platform::path_algebra::contains(home, &folder.to_string_lossy(), flavor)
             }
+            None => true,
         });
         let temp_inside_profile = match (self.temp_dir().to_str(), home_text.as_deref()) {
-            (Some(temp), Some(home)) => {
-                crate::platform::path_algebra::contains(home, temp, flavor)
-            }
+            (Some(temp), Some(home)) => crate::platform::path_algebra::contains(home, temp, flavor),
             _ => false,
         };
         let volume_identity = self
@@ -673,13 +694,7 @@ mod tests {
     #[test]
     fn a_committed_fixture_round_trips_through_its_shape() {
         for fixture in [
-            shape_fixture(
-                "windows",
-                Some("D:"),
-                ProfileShape::DriveRooted,
-                true,
-                true,
-            ),
+            shape_fixture("windows", Some("D:"), ProfileShape::DriveRooted, true, true),
             // A UNC profile names no drive, and the fixture states none.
             shape_fixture("windows", None, ProfileShape::Unc, false, false),
             shape_fixture("posix", None, ProfileShape::PosixHome, false, true),
@@ -713,13 +728,10 @@ mod tests {
         assert!(serialized.contains("D:"));
         assert!(serialized.contains("docker"));
         // And the environment the fixture built really does carry the facts.
-        assert_eq!(
-            environment.tool("docker"),
-            Some(&ToolResolution::NotFound)
-        );
-        assert!(environment.volumes().is_some_and(|volumes| volumes
-            .iter()
-            .all(|volume| volume.id.is_none())));
+        assert_eq!(environment.tool("docker"), Some(&ToolResolution::NotFound));
+        assert!(environment
+            .volumes()
+            .is_some_and(|volumes| volumes.iter().all(|volume| volume.id.is_none())));
     }
 
     #[test]

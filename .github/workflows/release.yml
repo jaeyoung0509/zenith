@@ -58,6 +58,24 @@ jobs:
           RELEASE_REF: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: node scripts/bump_version.cjs check "$RELEASE_REF"
 
+      - name: Stage locked dependency manifests for the SBOM
+        run: |
+          mkdir -p sbom-input artifacts
+          cp Cargo.lock package.json pnpm-lock.yaml sbom-input/
+
+      - name: Generate release SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          # Scan only the resolved lockfiles so the SBOM describes the exact
+          # dependency set the release was built from, without walking the
+          # multi-gigabyte build tree.
+          path: sbom-input
+          format: spdx-json
+          output-file: artifacts/SBOM-zenith.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
       - name: Generate Tauri bindings
         run: |
           mkdir -p dist
@@ -77,6 +95,13 @@ jobs:
         with:
           name: release-frontend-dist
           path: dist
+          if-no-files-found: error
+
+      - name: Upload release SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: zenith-release-sbom
+          path: artifacts/SBOM-*.spdx.json
           if-no-files-found: error
 
   release-mac:
@@ -214,30 +239,52 @@ jobs:
           cargo test --manifest-path src-tauri/Cargo.toml
           cargo check --manifest-path src-tauri/Cargo.toml
 
-      - name: Build Windows NSIS bundle (x64 current user)
+      - name: Create release artifact directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+
+      - name: Build Windows NSIS bundle (x64 per-user default)
         run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --config .github/tauri.package-ci.json
 
-      - name: Prepare Windows release artifacts and WinGet manifests
+      - name: Stage the per-user installer
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           $searchRoots = @('target', 'src-tauri/target') | Where-Object { Test-Path $_ }
-          $installers = @(Get-ChildItem -Path $searchRoots -Filter '*.exe' -File -Recurse |
+          $installers = @(Get-ChildItem -Path $searchRoots -Filter '*-setup.exe' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match '[\\/]release[\\/]bundle[\\/]nsis[\\/]' })
           if ($installers.Count -ne 1) {
-            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+            throw "Expected exactly one per-user NSIS installer, found $($installers.Count)"
           }
+          Copy-Item -Path $installers[0].FullName -Destination artifacts/Zenith-windows-x64-setup.exe
 
-          $artifactName = 'Zenith-windows-x64-setup.exe'
-          $artifactPath = Join-Path artifacts $artifactName
-          Copy-Item -Path $installers[0].FullName -Destination $artifactPath
+      - name: Clear NSIS output before the machine-wide build
+        shell: pwsh
+        run: Remove-Item -Recurse -Force -ErrorAction SilentlyContinue target/release/bundle/nsis, src-tauri/target/release/bundle/nsis
+
+      - name: Build Windows NSIS bundle (x64 machine-wide)
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --config .github/tauri.nsis-permachine.json
+
+      - name: Stage the machine-wide installer
+        shell: pwsh
+        run: |
+          $searchRoots = @('target', 'src-tauri/target') | Where-Object { Test-Path $_ }
+          $installers = @(Get-ChildItem -Path $searchRoots -Filter '*-setup.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]release[\\/]bundle[\\/]nsis[\\/]' })
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one machine-wide NSIS installer, found $($installers.Count)"
+          }
+          Copy-Item -Path $installers[0].FullName -Destination artifacts/Zenith-windows-x64-setup-machine.exe
+
+      - name: Write build metadata, checksums, and WinGet manifests
+        shell: pwsh
+        run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
           $buildDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
           @"
           Zenith Windows Public Beta
           Target: x86_64-pc-windows-msvc
-          Package: NSIS current-user installer
-          WebView2: download bootstrapper
+          Package: NSIS per-user installer (default) + NSIS machine-wide installer
+          WebView2: embedded offline installer, no network required
           Version: $version
           Commit: $env:GITHUB_SHA
           Ref: $env:GITHUB_REF_NAME
@@ -245,12 +292,13 @@ jobs:
           Build Date: $buildDate
           "@ | Set-Content -Path artifacts/BUILD_INFO-windows-x64.txt -Encoding utf8
 
-          node scripts/release_checksums.cjs write `
-            --file $artifactPath `
-            --output artifacts/SHA256SUMS-windows-x64.txt
+          node scripts/release_checksums.cjs write-many `
+            --output artifacts/SHA256SUMS-windows-x64.txt `
+            artifacts/Zenith-windows-x64-setup.exe `
+            artifacts/Zenith-windows-x64-setup-machine.exe
           node scripts/generate_winget_manifest.cjs `
             --version $version `
-            --installer $artifactPath `
+            --installer artifacts/Zenith-windows-x64-setup.exe `
             --output artifacts/winget
 
       - name: Upload Windows release artifacts
@@ -259,16 +307,50 @@ jobs:
           name: zenith-release-windows-x64
           path: |
             artifacts/Zenith-windows-x64-setup.exe
+            artifacts/Zenith-windows-x64-setup-machine.exe
             artifacts/SHA256SUMS-windows-x64.txt
             artifacts/BUILD_INFO-windows-x64.txt
             artifacts/winget/**
           if-no-files-found: error
 
-  publish-release:
-    name: Publish Combined GitHub Release
+  attest-provenance:
+    name: Attest Build Provenance
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [release-mac, release-windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: zenith-release-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attest build provenance for the release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/Zenith-macos-arm64.dmg
+            artifacts/Zenith-windows-x64-setup.exe
+            artifacts/Zenith-windows-x64-setup-machine.exe
+            artifacts/SBOM-zenith.spdx.json
+
+  publish-release:
+    name: Publish Combined GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-mac, release-windows, attest-provenance]
+    runs-on: ubuntu-latest
+    # Manual approval gate. The maintainer submits the built installers to
+    # Microsoft's endpoint-protection analysis, then records the result in this
+    # environment's variables (ENDPOINT_REVIEW_STATUS, ENDPOINT_REVIEW_REFERENCE,
+    # ENDPOINT_REVIEW_REVIEWER, ENDPOINT_REVIEW_DATE) and approves the gate. A
+    # detection, or a missing or mismatched record, blocks publication.
+    environment:
+      name: release-approval
     permissions:
       contents: write
     steps:
@@ -282,13 +364,46 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Record endpoint-protection submission result
+        env:
+          ENDPOINT_REVIEW_STATUS: ${{ vars.ENDPOINT_REVIEW_STATUS }}
+          ENDPOINT_REVIEW_REFERENCE: ${{ vars.ENDPOINT_REVIEW_REFERENCE }}
+          ENDPOINT_REVIEW_REVIEWER: ${{ vars.ENDPOINT_REVIEW_REVIEWER }}
+          ENDPOINT_REVIEW_DATE: ${{ vars.ENDPOINT_REVIEW_DATE }}
+        run: |
+          node scripts/endpoint_review.cjs record \
+            --output artifacts/endpoint-review.json \
+            --version "$(node -p "require('./package.json').version")" \
+            --commit "${GITHUB_SHA}" \
+            --status "${ENDPOINT_REVIEW_STATUS}" \
+            --reference "${ENDPOINT_REVIEW_REFERENCE}" \
+            --reviewer "${ENDPOINT_REVIEW_REVIEWER}" \
+            --reviewed-at "${ENDPOINT_REVIEW_DATE}" \
+            artifacts/Zenith-macos-arm64.dmg \
+            artifacts/Zenith-windows-x64-setup.exe \
+            artifacts/Zenith-windows-x64-setup-machine.exe
+
       - name: Combine platform checksums
         run: |
+          node scripts/release_checksums.cjs write \
+            --file artifacts/SBOM-zenith.spdx.json \
+            --output artifacts/SHA256SUMS-sbom.txt
           node scripts/release_checksums.cjs combine \
             --output artifacts/SHA256SUMS.txt \
             artifacts/SHA256SUMS-macos-arm64.txt \
-            artifacts/SHA256SUMS-windows-x64.txt
+            artifacts/SHA256SUMS-windows-x64.txt \
+            artifacts/SHA256SUMS-sbom.txt
           (cd artifacts && shasum -a 256 -c SHA256SUMS.txt)
+
+      - name: Verify endpoint-protection review before publishing
+        run: |
+          node scripts/endpoint_review.cjs verify \
+            --review artifacts/endpoint-review.json \
+            --version "$(node -p "require('./package.json').version")" \
+            --commit "${GITHUB_SHA}" \
+            artifacts/Zenith-macos-arm64.dmg \
+            artifacts/Zenith-windows-x64-setup.exe \
+            artifacts/Zenith-windows-x64-setup-machine.exe
 
       - name: Create one prerelease with macOS and Windows assets
         uses: softprops/action-gh-release@v2
@@ -296,17 +411,28 @@ jobs:
           files: |
             artifacts/Zenith-macos-arm64.dmg
             artifacts/Zenith-windows-x64-setup.exe
+            artifacts/Zenith-windows-x64-setup-machine.exe
             artifacts/SHA256SUMS.txt
             artifacts/SHA256SUMS-macos-arm64.txt
             artifacts/SHA256SUMS-windows-x64.txt
             artifacts/BUILD_INFO-macos-arm64.txt
             artifacts/BUILD_INFO-windows-x64.txt
+            artifacts/SBOM-zenith.spdx.json
+            artifacts/endpoint-review.json
             artifacts/winget/**/*.yaml
           prerelease: true
           generate_release_notes: true
           body: |
-            ## Public beta signing notice
+            ## Public beta trust notice
 
-            The macOS ARM64 build is not notarized and the Windows x64 NSIS installer is not yet code signed. Windows users should expect Microsoft Defender SmartScreen to show an unknown-publisher warning. Verify the published SHA256 checksum before running the installer.
+            The macOS ARM64 build is not notarized with an Apple Developer ID, and the Windows x64 NSIS installers are not yet code signed. macOS Gatekeeper blocks the first launch until the user explicitly opens the app. Windows users should expect Microsoft Defender SmartScreen to show an unknown-publisher warning; verify the published SHA256 checksum before running either installer.
 
-            Zenith is applying for SignPath Foundation open-source code signing after this first Windows release. A future release will replace the transition build with a verified, timestamped signature; installer binaries for this version will not be overwritten.
+            SignPath Foundation issues organization-validated certificates. That establishes a verifiable publisher identity, but it does not transfer SmartScreen reputation, so the unknown-publisher warning is expected to persist after the first signed release until the certificate builds reputation on its own.
+
+            Each installer was submitted to Microsoft's endpoint-protection analysis before publication. `endpoint-review.json` records the reviewed outcome for these exact bytes, and a detection blocks publication.
+
+            Release artifacts carry GitHub build provenance attestation (`gh attestation verify <file> --repo jaeyoung0509/zenith`) binding them to this repository, workflow, and commit, alongside SHA256SUMS.txt and an SPDX SBOM for each platform.
+
+            Zenith has no updater and performs no background network activity. Open https://github.com/jaeyoung0509/zenith/releases to check whether a corrected release exists.
+
+            The per-user installer (`Zenith-windows-x64-setup.exe`) installs under `%LOCALAPPDATA%` without elevation. The machine-wide installer (`Zenith-windows-x64-setup-machine.exe`) installs under Program Files, requires elevation, and exists for managed machines whose application-control policy refuses to execute binaries from user-writable locations; it does not make the binary trusted. Both installers embed the WebView2 offline installer, so installation needs no network access.

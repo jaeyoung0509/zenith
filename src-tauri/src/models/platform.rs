@@ -45,7 +45,9 @@ impl PlatformFeatureCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, specta::Type,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PlatformKind {
     Macos,
@@ -295,29 +297,117 @@ impl Default for PlatformCapabilities {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlatformCapabilities, PlatformFeatureStatus, PlatformKind};
+    use super::{
+        CapabilityAccess, PlatformCapabilities, PlatformCapabilityError, PlatformFeature,
+        PlatformFeatureStatus, PlatformKind,
+    };
+
+    const EVERY_FEATURE: [PlatformFeature; 14] = [
+        PlatformFeature::SystemActions,
+        PlatformFeature::Cleanup,
+        PlatformFeature::IntensiveCleanup,
+        PlatformFeature::LargeFiles,
+        PlatformFeature::DeveloperArtifacts,
+        PlatformFeature::InstalledApps,
+        PlatformFeature::AppUninstall,
+        PlatformFeature::MemoryMetrics,
+        PlatformFeature::ProcessTermination,
+        PlatformFeature::DevelopmentPorts,
+        PlatformFeature::KeepAwake,
+        PlatformFeature::LocalModels,
+        PlatformFeature::Docker,
+        PlatformFeature::AiIntegrations,
+    ];
 
     #[test]
-    fn windows_capabilities_are_honest() {
+    fn windows_features_without_an_adapter_are_refused_with_their_reason() {
         let capabilities = PlatformCapabilities::windows();
 
-        assert_eq!(capabilities.platform, PlatformKind::Windows);
-        assert_eq!(
-            capabilities.cleanup.status,
-            PlatformFeatureStatus::Available
-        );
-        assert_eq!(
-            capabilities.installed_apps.status,
-            PlatformFeatureStatus::Unavailable
-        );
-        assert_eq!(
-            capabilities.app_uninstall.status,
-            PlatformFeatureStatus::Unavailable
-        );
-        assert_eq!(
-            capabilities.intensive_cleanup.status,
-            PlatformFeatureStatus::Unavailable
-        );
+        for feature in [
+            PlatformFeature::InstalledApps,
+            PlatformFeature::AppUninstall,
+            PlatformFeature::IntensiveCleanup,
+        ] {
+            let declared = capabilities.feature(feature);
+            assert_eq!(
+                declared.status,
+                PlatformFeatureStatus::Unavailable,
+                "{feature:?} has no Windows adapter"
+            );
+            let reason = declared
+                .reason
+                .as_deref()
+                .unwrap_or_else(|| panic!("{feature:?} must explain why it is unavailable"));
+            assert!(
+                reason.contains("Zenith") || reason.contains("Windows"),
+                "{feature:?} reason must name what is missing: {reason}"
+            );
+
+            // The refusal a caller actually observes carries that same reason.
+            let error = capabilities
+                .require(feature, CapabilityAccess::Mutate)
+                .expect_err("unavailable feature must refuse mutation");
+            match error {
+                PlatformCapabilityError::Unavailable {
+                    feature: refused,
+                    reason: carried,
+                } => {
+                    assert_eq!(refused, feature);
+                    assert_eq!(carried.as_deref(), declared.reason.as_deref());
+                }
+                other => panic!("{feature:?} should be Unavailable, got {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_non_available_status_carries_a_reason() {
+        let snapshots = [
+            PlatformCapabilities::macos(),
+            PlatformCapabilities::windows(),
+            PlatformCapabilities::unsupported(PlatformKind::Linux),
+            PlatformCapabilities::unsupported(PlatformKind::Other),
+        ];
+        for capabilities in snapshots {
+            for feature in EVERY_FEATURE {
+                let declared = capabilities.feature(feature);
+                match declared.status {
+                    PlatformFeatureStatus::Available => assert!(
+                        declared.reason.is_none(),
+                        "{feature:?} is available and must not carry a reason"
+                    ),
+                    PlatformFeatureStatus::ReadOnly | PlatformFeatureStatus::Unavailable => {
+                        assert!(
+                            declared
+                                .reason
+                                .as_deref()
+                                .is_some_and(|reason| !reason.trim().is_empty()),
+                            "{feature:?} is {} without a reason on {:?}",
+                            declared.status == PlatformFeatureStatus::ReadOnly,
+                            capabilities.platform
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_platforms_refuse_every_feature_for_both_accesses() {
+        for kind in [PlatformKind::Linux, PlatformKind::Other] {
+            let capabilities = PlatformCapabilities::unsupported(kind);
+            for feature in EVERY_FEATURE {
+                for access in [CapabilityAccess::Inspect, CapabilityAccess::Mutate] {
+                    let error = capabilities
+                        .require(feature, access)
+                        .expect_err("no adapter exists on an unsupported platform");
+                    assert!(
+                        matches!(error, PlatformCapabilityError::Unavailable { .. }),
+                        "{feature:?} must be Unavailable, got {error}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -336,19 +426,26 @@ mod tests {
     }
 
     #[test]
-    fn default_uses_the_compiled_platform_contract() {
-        assert_eq!(
-            PlatformCapabilities::default().platform,
-            PlatformCapabilities::current().platform
-        );
+    fn the_default_snapshot_describes_the_compiled_platform() {
+        let capabilities = PlatformCapabilities::default();
+        assert_eq!(capabilities.platform, PlatformKind::current());
+
+        if cfg!(target_os = "macos") {
+            // macOS is the supported desktop target: its adapters exist.
+            assert!(capabilities.cleanup.is_available());
+            assert!(capabilities.process_termination.is_available());
+        } else if !cfg!(target_os = "windows") {
+            // Only macOS and Windows ship desktop adapters; every other target
+            // must refuse everything instead of offering a no-op.
+            assert_eq!(
+                capabilities,
+                PlatformCapabilities::unsupported(PlatformKind::current())
+            );
+        }
     }
 
     #[test]
     fn require_enforces_platform_feature_and_access() {
-        use super::{
-            CapabilityAccess, PlatformCapabilityError, PlatformFeature, PlatformFeatureCapability,
-        };
-
         let windows = PlatformCapabilities::windows();
 
         // Available feature permits both Inspect and Mutate
@@ -370,9 +467,9 @@ mod tests {
             .require(PlatformFeature::IntensiveCleanup, CapabilityAccess::Inspect)
             .is_err());
 
-        // ReadOnly capability test
+        // ReadOnly permits inspection and refuses mutation with the reason kept
         let mut readonly_caps = PlatformCapabilities::macos();
-        readonly_caps.cleanup = PlatformFeatureCapability::read_only("Disk is read-only.");
+        readonly_caps.cleanup = super::PlatformFeatureCapability::read_only("Disk is read-only.");
         assert!(readonly_caps
             .require(PlatformFeature::Cleanup, CapabilityAccess::Inspect)
             .is_ok());
@@ -382,6 +479,15 @@ mod tests {
         assert_eq!(
             err,
             PlatformCapabilityError::ReadOnly(PlatformFeature::Cleanup)
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("Cleanup"),
+            "refusal must name the feature: {message}"
+        );
+        assert!(
+            message.contains("read-only"),
+            "refusal must state the access: {message}"
         );
     }
 }

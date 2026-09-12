@@ -182,17 +182,18 @@ pub async fn start_large_file_scan(
             let mut emitted_result: Option<LargeFileScanResult> = None;
             let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
-            let inventory_result = LargeFileScanner::scan(&environment, &request, cancel_for_worker, |event| {
-                if let LargeFileScanEvent::Started { scan_id } = &event {
-                    active_scan_id = Some(scan_id.clone());
-                    worker_storage_state
-                        .register_large_file_cancel(scan_id.clone(), cancel_for_event.clone());
-                }
-                if let LargeFileScanEvent::Finished { result } = &event {
-                    emitted_result = Some(result.clone());
-                }
-                let _ = on_event.send(event);
-            });
+            let inventory_result =
+                LargeFileScanner::scan(&environment, &request, cancel_for_worker, |event| {
+                    if let LargeFileScanEvent::Started { scan_id } = &event {
+                        active_scan_id = Some(scan_id.clone());
+                        worker_storage_state
+                            .register_large_file_cancel(scan_id.clone(), cancel_for_event.clone());
+                    }
+                    if let LargeFileScanEvent::Finished { result } = &event {
+                        emitted_result = Some(result.clone());
+                    }
+                    let _ = on_event.send(event);
+                });
             if let Some(scan_id) = active_scan_id.as_deref() {
                 worker_storage_state.remove_large_file_cancel(scan_id);
             }
@@ -559,11 +560,8 @@ pub fn prepare_app_uninstall(
             is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
         })
         .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
-    let plan = TrashPlanner::from_app_inspection(
-        &state.environment,
-        &inspection,
-        &selected_related_ids,
-    )?;
+    let plan =
+        TrashPlanner::from_app_inspection(&state.environment, &inspection, &selected_related_ids)?;
     let preview = plan.preview();
     state.storage_state.store_plan(plan);
     Ok(preview)

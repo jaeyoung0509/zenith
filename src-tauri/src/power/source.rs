@@ -153,24 +153,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mock_power_source_returns_configured_source() {
+    fn mock_power_source_reports_the_injected_source_on_every_query() {
         let mut mock = MockPowerSource::new(PowerSourceType::Battery);
         assert_eq!(mock.current_power_source(), PowerSourceType::Battery);
+        assert_eq!(mock.current_power_source(), PowerSourceType::Battery);
+        assert_eq!(mock.query_count(), 2, "each query must reach the provider");
 
         mock.set_source(PowerSourceType::Ac);
         assert_eq!(mock.current_power_source(), PowerSourceType::Ac);
+
+        // An unidentifiable power source is a real answer, not a panic or a
+        // silently assumed AC.
+        mock.set_source(PowerSourceType::Unknown);
+        assert_eq!(mock.current_power_source(), PowerSourceType::Unknown);
+        assert_eq!(mock.query_count(), 4);
     }
 
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
-    fn system_power_source_returns_valid_variant() {
-        let provider = SystemPowerSource::new();
-        let source = provider.current_power_source();
-        assert!(matches!(
-            source,
-            PowerSourceType::Ac | PowerSourceType::Battery | PowerSourceType::Unknown
-        ));
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert_eq!(source, PowerSourceType::Unknown);
+    fn system_power_source_is_unknown_without_a_native_adapter() {
+        assert_eq!(
+            SystemPowerSource::new().current_power_source(),
+            PowerSourceType::Unknown
+        );
     }
 }

@@ -17,6 +17,7 @@ import type {
   AgentQuickSummary,
   IngestedAgentEvent,
   DiagnosticsSnapshot,
+  EnvironmentReport,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -1397,6 +1398,34 @@ export const mockApi = {
       ],
       recent_errors: [],
       settings_corrupt_recovered: false,
+    };
+  },
+
+  /**
+   * Preview data for the environment self-check.
+   *
+   * The preview runs on the browser's platform, not on a machine with a
+   * Windows drive layout, so this reports what the preview session actually
+   * is instead of inventing a native fingerprint. The shape matches the
+   * backend response; the values are preview-only.
+   */
+  async runEnvironmentSelfCheck(): Promise<EnvironmentReport> {
+    return {
+      platform: 'macos',
+      fingerprint: [
+        'flavor: posix',
+        'profile_shape: posix_home',
+        'known_folder_redirected: false',
+        'temp_inside_profile: false',
+        'volume_identity: false',
+        'missing_tools: none',
+      ],
+      checks: [
+        { name: 'normalize_is_idempotent', outcome: 'pass', detail: '14 fixtures' },
+        { name: 'home_resolves', outcome: 'pass', detail: 'absolute, not a root' },
+        { name: 'signature_catalog_platforms', outcome: 'pass', detail: '0 findings' },
+      ],
+      failures: 0,
     };
   },
 

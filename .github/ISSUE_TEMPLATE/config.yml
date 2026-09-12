@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability or signing concern
+    url: https://github.com/jaeyoung0509/zenith/security/advisories/new
+    about: Report privately through GitHub Security Advisories. Do not open a public issue for a suspected vulnerability.
+  - name: Release artifacts, checksums, and code-signing policy
+    url: https://github.com/jaeyoung0509/zenith/blob/main/CODE_SIGNING_POLICY.md
+    about: How release artifacts are built, verified, and signed, and how a user learns a corrected release exists.

@@ -67,9 +67,22 @@ local inspection surface. Cleanup trust boundaries live in
 - **Same-user process inspection is cooperative.** Agent activity and memory
   features rely on OS process metadata. They do not provide an isolation
   boundary against code already running as the same user.
-- **Unsigned distribution.** Authentication, notarization, and auto-update
-  integrity are tracked outside this document; until signing lands, do not
-  assume operating-system attestation of the binary.
+- **Unsigned and unnotarized distribution.** Windows artifacts are unsigned and
+  macOS artifacts are not notarized, which is a dated decision recorded in
+  [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md). Do not assume
+  operating-system attestation of the binary. Release trust currently rests on
+  published SHA256 checksums, GitHub build provenance attestation, SPDX SBOMs,
+  and a recorded Microsoft endpoint-protection review. Those bind an artifact
+  to this repository, workflow, and commit, but none of them make the binary's
+  behavior trustworthy to the operating system, and none of them confer
+  SmartScreen reputation.
+- **No updater and no background network activity.** Zenith never polls for
+  updates, so a corrected release reaches a user only when the user opens the
+  [releases page](https://github.com/jaeyoung0509/zenith/releases); the
+  application exposes that URL through `PlatformContext.releases_url` and links
+  to it. A compromised or vulnerable installation can therefore persist
+  indefinitely after a fix exists, and no automatic remediation channel can be
+  attacked or relied upon.
 
 ## Out of scope
 

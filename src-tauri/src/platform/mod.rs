@@ -14,8 +14,8 @@ pub use description::{
     EnvironmentFixture, EnvironmentShape, KnownFolder, PlatformEnvironment, ProfileShape,
     ToolResolution, VolumeIdentity,
 };
-pub use path_algebra::PathFlavor;
 pub use environment::{RuntimeEnvironment, SecurityPolicyState};
+pub use path_algebra::PathFlavor;
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
 pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};

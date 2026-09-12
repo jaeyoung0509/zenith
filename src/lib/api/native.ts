@@ -19,6 +19,7 @@ import type {
   CleanResult,
   DevelopmentListener,
   DiagnosticsSnapshot,
+  EnvironmentReport,
   DiskMetrics,
   DiskVolume,
   DockerStatus,
@@ -286,6 +287,10 @@ export const nativeApi = {
 
   async getDiagnostics(): Promise<DiagnosticsSnapshot> {
     return await unwrap(commands.getDiagnostics());
+  },
+
+  async runEnvironmentSelfCheck(): Promise<EnvironmentReport> {
+    return await unwrap(commands.runEnvironmentSelfCheck());
   },
 
   async openLogsFolder(): Promise<void> {

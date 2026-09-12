@@ -1,4 +1,5 @@
 use crate::models::FileSize;
+use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::{Scope, ThreadPool};
 use std::fs;
@@ -59,14 +60,22 @@ pub struct SizeCalculator;
 
 impl SizeCalculator {
     /// Calculates the FileSize (logical size and allocated size on disk) for a single file or directory.
-    pub fn measure_path<P: AsRef<Path>>(path: P, exclusions: &[String]) -> (FileSize, usize) {
-        Self::measure_path_with_pool(path, exclusions, None)
+    ///
+    /// Exclusions are expanded through the described environment, so a
+    /// path-shaped exclusion resolves exactly as the environment states.
+    pub fn measure_path<P: AsRef<Path>>(
+        path: P,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> (FileSize, usize) {
+        Self::measure_path_with_pool(path, exclusions, None, environment)
     }
 
     pub(crate) fn measure_path_with_pool<P: AsRef<Path>>(
         path: P,
         exclusions: &[String],
         pool: Option<&ThreadPool>,
+        environment: &PlatformEnvironment,
     ) -> (FileSize, usize) {
         let path = path.as_ref();
         if !path.exists() && !SymlinkGuard::is_symlink(path) {
@@ -103,9 +112,9 @@ impl SizeCalculator {
 
         if meta.is_dir() {
             if let Some(pool) = pool {
-                return Self::measure_dir_parallel(path, exclusions, pool);
+                return Self::measure_dir_parallel(path, exclusions, pool, environment);
             }
-            return Self::measure_dir_recursive(path, exclusions, 0, 32);
+            return Self::measure_dir_recursive(path, exclusions, 0, 32, environment);
         }
 
         (FileSize::default(), 0)
@@ -115,6 +124,7 @@ impl SizeCalculator {
         path: &Path,
         exclusions: &[String],
         pool: &ThreadPool,
+        environment: &PlatformEnvironment,
     ) -> (FileSize, usize) {
         let logical = AtomicU64::new(0);
         let allocated = AtomicU64::new(0);
@@ -129,6 +139,7 @@ impl SizeCalculator {
                 &logical,
                 &allocated,
                 &file_count,
+                environment,
             );
         });
 
@@ -151,6 +162,7 @@ impl SizeCalculator {
         logical: &'scope AtomicU64,
         allocated: &'scope AtomicU64,
         file_count: &'scope AtomicUsize,
+        environment: &'scope PlatformEnvironment,
     ) {
         scope.spawn(move |scope| {
             if current_depth > max_depth {
@@ -168,7 +180,7 @@ impl SizeCalculator {
 
             for entry in entries.flatten() {
                 let child_path = entry.path();
-                if Self::is_excluded(&child_path, exclusions)
+                if Self::is_excluded(&child_path, exclusions, environment)
                     || Blacklist::is_blacklisted(&child_path)
                 {
                     continue;
@@ -223,6 +235,7 @@ impl SizeCalculator {
                             logical,
                             allocated,
                             file_count,
+                            environment,
                         );
                     }
                 }
@@ -234,13 +247,18 @@ impl SizeCalculator {
         });
     }
 
-    fn is_excluded(child_path: &Path, exclusions: &[String]) -> bool {
+    fn is_excluded(
+        child_path: &Path,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> bool {
         let child_str = child_path.to_string_lossy();
         exclusions.iter().any(|exclusion| {
             if (exclusion.starts_with('~') || exclusion.starts_with('/'))
-                && crate::signatures::SignatureLoader::expand_path(exclusion).is_some_and(
-                    |expanded| child_path == expanded || child_path.starts_with(expanded),
-                )
+                && crate::signatures::SignatureLoader::expand_path(exclusion, environment)
+                    .is_some_and(|expanded| {
+                        child_path == expanded || child_path.starts_with(expanded)
+                    })
             {
                 return true;
             }
@@ -257,6 +275,7 @@ impl SizeCalculator {
         exclusions: &[String],
         current_depth: usize,
         max_depth: usize,
+        environment: &PlatformEnvironment,
     ) -> (FileSize, usize) {
         if current_depth > max_depth {
             return (FileSize::default(), 0);
@@ -274,7 +293,7 @@ impl SizeCalculator {
         for entry in entries.flatten() {
             let child_path = entry.path();
 
-            if Self::is_excluded(&child_path, exclusions) {
+            if Self::is_excluded(&child_path, exclusions, environment) {
                 continue;
             }
 
@@ -328,6 +347,7 @@ impl SizeCalculator {
                         exclusions,
                         current_depth + 1,
                         max_depth,
+                        environment,
                     );
                     total_logical += sub_size.logical;
                     total_allocated += sub_size.allocated.unwrap_or(sub_size.logical);
@@ -343,11 +363,12 @@ impl SizeCalculator {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::SizeCalculator;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::PlatformEnvironment;
     use rayon::ThreadPoolBuilder;
-    use std::os::unix::fs::symlink;
 
     #[test]
     fn parallel_measurement_matches_sequential_safety_semantics() {
@@ -364,15 +385,82 @@ mod tests {
         std::fs::write(excluded.join("ignored.bin"), vec![3u8; 16_384]).unwrap();
         std::fs::write(git.join("protected.bin"), vec![4u8; 32_768]).unwrap();
         std::fs::write(outside.path().join("escape.bin"), vec![5u8; 65_536]).unwrap();
-        symlink(outside.path(), root.path().join("outside-link")).unwrap();
 
+        // Only a POSIX host can create the untraversed symlink; the rest of the
+        // safety semantics (exclusion, blacklist) hold on every platform.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(outside.path(), root.path().join("outside-link")).unwrap();
+        }
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
         let exclusions = vec!["excluded".to_string()];
-        let sequential = SizeCalculator::measure_path(root.path(), &exclusions);
+        let sequential = SizeCalculator::measure_path(root.path(), &exclusions, &environment);
         let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
-        let parallel =
-            SizeCalculator::measure_path_with_pool(root.path(), &exclusions, Some(&pool));
+        let parallel = SizeCalculator::measure_path_with_pool(
+            root.path(),
+            &exclusions,
+            Some(&pool),
+            &environment,
+        );
 
         assert_eq!(parallel, sequential);
-        assert_eq!(parallel.1, 3, "two files plus one untraversed symlink");
+        let expected_files = 2 + usize::from(cfg!(unix));
+        assert_eq!(
+            parallel.1, expected_files,
+            "two files plus (on unix) one untraversed symlink"
+        );
+    }
+
+    #[test]
+    fn exclusions_resolve_through_the_stated_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let kept = home.join("Documents/keep");
+        let scanned = home.join("Library/Caches/scanned");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::create_dir_all(&scanned).unwrap();
+        std::fs::write(kept.join("keep.bin"), vec![1u8; 4_096]).unwrap();
+        std::fs::write(scanned.join("cache.bin"), vec![2u8; 8_192]).unwrap();
+
+        // The environment states a redirected Documents folder outside the
+        // literal profile, so `~/Documents/keep` inside the scanned tree is
+        // only excluded when the stated folder is consulted.
+        let redirected = root.path().join("redirected/Documents");
+        std::fs::create_dir_all(&redirected).unwrap();
+        let simulated = |redirect: bool| {
+            let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_roots(
+                std::sync::Arc::new(
+                    crate::platform::paths::SimulatedPaths::new()
+                        .with_flavor(PathFlavor::current())
+                        .with_home(&home),
+                ),
+            );
+            if redirect {
+                environment.with_known_folder(crate::platform::KnownFolder::Documents, &redirected)
+            } else {
+                environment
+            }
+        };
+
+        let exclusions = vec!["~/Documents/keep".to_string()];
+        let redirected_environment = simulated(true);
+        let (_, scanned_files) =
+            SizeCalculator::measure_path(&scanned, &exclusions, &redirected_environment);
+        assert_eq!(scanned_files, 1, "the scanned tree is measured");
+        let (_, files) = SizeCalculator::measure_path(&home, &exclusions, &redirected_environment);
+        // `~/Documents/keep` resolves to the redirected folder, which is not in
+        // this tree, so nothing here is excluded: home holds both files.
+        assert_eq!(files, 2);
+
+        // Without the redirect the literal profile spelling is excluded.
+        let literal_environment = simulated(false);
+        let (_, literal_files) =
+            SizeCalculator::measure_path(&home, &exclusions, &literal_environment);
+        assert_eq!(
+            literal_files, 1,
+            "the literal profile spelling excludes `~/Documents/keep`"
+        );
     }
 }

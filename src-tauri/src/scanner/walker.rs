@@ -1,4 +1,5 @@
 use crate::models::{FileSize, ScanItem, Signature};
+use crate::platform::PlatformEnvironment;
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
 use rayon::ThreadPool;
@@ -13,13 +14,17 @@ pub struct DirectoryScanner;
 
 impl DirectoryScanner {
     /// Scans all configured paths for a given signature and returns discovered ScanItems.
-    pub fn scan_signature(signature: &Signature) -> Vec<ScanItem> {
-        Self::scan_signature_with_pool(signature, None)
+    pub fn scan_signature(
+        signature: &Signature,
+        environment: &PlatformEnvironment,
+    ) -> Vec<ScanItem> {
+        Self::scan_signature_with_pool(signature, None, environment)
     }
 
     pub(crate) fn scan_signature_with_pool(
         signature: &Signature,
         pool: Option<&ThreadPool>,
+        environment: &PlatformEnvironment,
     ) -> Vec<ScanItem> {
         let mut items = Vec::new();
 
@@ -29,7 +34,7 @@ impl DirectoryScanner {
         }
 
         for (idx, pattern) in signature.paths.iter().enumerate() {
-            let path_buf = match SignatureLoader::expand_path(pattern) {
+            let path_buf = match SignatureLoader::expand_path(pattern, environment) {
                 Some(p) => p,
                 None => continue,
             };
@@ -47,7 +52,12 @@ impl DirectoryScanner {
             }
 
             let (size, file_count) = if exists {
-                SizeCalculator::measure_path_with_pool(&path_buf, &signature.exclusions, pool)
+                SizeCalculator::measure_path_with_pool(
+                    &path_buf,
+                    &signature.exclusions,
+                    pool,
+                    environment,
+                )
             } else {
                 (FileSize::default(), 0)
             };
@@ -322,23 +332,35 @@ pub struct TreeStats {
     pub complete: bool,
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::DirectoryScanner;
     use crate::models::{Category, CleanStrategy, RiskTier, Signature};
-    use std::os::unix::fs::symlink;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::PlatformEnvironment;
+
+    fn environment() -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::current())
+    }
 
     #[test]
     fn aged_child_scan_excludes_protected_prefixes_and_symlinks() {
         let root = tempfile::tempdir().unwrap();
         let eligible = root.path().join("third.party.cache");
         let protected = root.path().join("com.apple.protected");
-        let link = root.path().join("linked-cache");
         std::fs::create_dir(&eligible).unwrap();
         std::fs::create_dir(&protected).unwrap();
         std::fs::write(eligible.join("data.bin"), vec![1u8; 4096]).unwrap();
         std::fs::write(protected.join("data.bin"), vec![1u8; 4096]).unwrap();
-        symlink(&eligible, &link).unwrap();
+
+        // Only a POSIX host can create the symlink; the prefix exclusion below
+        // is asserted on every platform.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = root.path().join("linked-cache");
+            symlink(&eligible, &link).unwrap();
+        }
 
         let signature = Signature {
             id: "system.test.intensive".into(),
@@ -361,7 +383,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature);
+        let items = DirectoryScanner::scan_signature(&signature, &environment());
         let names = items
             .iter()
             .map(|item| item.name.as_str())
@@ -408,7 +430,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature);
+        let items = DirectoryScanner::scan_signature(&signature, &environment());
         let names = items
             .iter()
             .map(|item| item.name.as_str())

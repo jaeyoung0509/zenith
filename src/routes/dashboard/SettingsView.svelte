@@ -9,10 +9,15 @@
     AiProviderId,
     DashboardTab,
     DiagnosticsSnapshot,
+    EnvironmentReport,
     ProviderId,
     QuickPanelSection,
   } from '../../lib/models/types';
-  import { tauriGetDiagnostics, tauriOpenLogsFolder } from '../../lib/utils/tauri';
+  import {
+    tauriGetDiagnostics,
+    tauriOpenLogsFolder,
+    tauriRunEnvironmentSelfCheck,
+  } from '../../lib/utils/tauri';
   import { LOG_DIRECTORY_FALLBACK, titleCaseLabel } from '../../lib/utils/platformCopy';
   import Card from '../../lib/components/Card.svelte';
   import Badge from '../../lib/components/Badge.svelte';
@@ -35,6 +40,7 @@
     FolderOpen,
     FileText,
     AlertTriangle,
+    ShieldCheck,
     Bell,
     Users,
   } from 'lucide-svelte';
@@ -164,6 +170,11 @@
 
   let diagnosticsData = $state<DiagnosticsSnapshot | null>(null);
   let copiedDiagnostics = $state(false);
+  // The same self-check the `--doctor` command line runs, so a user who cannot
+  // open a terminal can still see which invariant failed on their machine.
+  let selfCheck = $state<EnvironmentReport | null>(null);
+  let selfCheckRunning = $state(false);
+  let selfCheckError = $state<string | null>(null);
 
   onMount(() => {
     void platformContextStore.load();
@@ -199,6 +210,19 @@
       }
     } catch (e: any) {
       settingsStore.error = e?.toString() || 'Failed to export diagnostics';
+    }
+  }
+
+  async function handleRunSelfCheck() {
+    selfCheckRunning = true;
+    selfCheckError = null;
+    try {
+      selfCheck = await tauriRunEnvironmentSelfCheck();
+    } catch (e: any) {
+      selfCheck = null;
+      selfCheckError = e?.toString() || 'Environment self-check did not complete';
+    } finally {
+      selfCheckRunning = false;
     }
   }
 
@@ -815,7 +839,75 @@
           <FileText size={14} />
           <span>{copiedDiagnostics ? 'Copied Diagnostics JSON' : 'Export Diagnostics'}</span>
         </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onclick={handleRunSelfCheck}
+          disabled={selfCheckRunning}
+        >
+          <ShieldCheck size={14} />
+          <span>{selfCheckRunning ? 'Running Self-Check…' : 'Run Environment Self-Check'}</span>
+        </Button>
       </div>
+
+      {#if selfCheckError}
+        <div
+          class="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          role="alert"
+        >
+          <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+          <span>{selfCheckError}</span>
+        </div>
+      {/if}
+
+      {#if selfCheck}
+        <div class="mt-3 space-y-2">
+          {#if selfCheck.failures > 0}
+            <div
+              class="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              role="alert"
+            >
+              <AlertTriangle size={14} class="shrink-0" />
+              <span>
+                {selfCheck.failures} self-check
+                {selfCheck.failures === 1 ? 'invariant failed' : 'invariants failed'} on this
+                machine. Report it with the Windows bug report template.
+              </span>
+            </div>
+          {:else}
+            <div
+              class="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+            >
+              <ShieldCheck size={14} class="shrink-0" />
+              <span>All {selfCheck.checks.length} environment self-checks passed.</span>
+            </div>
+          {/if}
+
+          <div class="rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta font-mono text-muted-foreground space-y-1">
+            <div class="text-foreground font-semibold">Environment fingerprint</div>
+            {#each selfCheck.fingerprint as line}
+              <div class="truncate">{line}</div>
+            {/each}
+          </div>
+
+          <div
+            class="rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta space-y-1"
+            aria-label="Environment self-check results"
+          >
+            {#each selfCheck.checks as row}
+              <div class="flex items-start gap-2">
+                <span
+                  class={row.outcome === 'pass' ? 'text-success font-semibold' : 'text-destructive font-semibold'}
+                >
+                  {row.outcome === 'pass' ? 'PASS' : 'FAIL'}
+                </span>
+                <span class="font-mono text-foreground">{row.name}</span>
+                <span class="text-muted-foreground truncate">{row.detail}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       {#if diagnosticsData}
         <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto scroll-stable">

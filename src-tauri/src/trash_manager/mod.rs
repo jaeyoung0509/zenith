@@ -6,6 +6,7 @@ use crate::large_files::{
 use crate::models::{
     DeveloperArtifactKind, DeveloperArtifactStatus, TrashItemResult, TrashPlanPreview, TrashResult,
 };
+use crate::platform::description::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -116,52 +117,48 @@ impl TrashPlanner {
     }
 
     pub fn from_app_inspection(
+        environment: &PlatformEnvironment,
         inspection: &AppInspectionRecord,
         selected_related_ids: &[String],
     ) -> Result<TrashPlan, String> {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = (inspection, selected_related_ids);
-            Err("Application uninstallation is not supported on Windows.".to_string())
+        if environment.flavor().is_windows() {
+            return Err("Application uninstallation is not supported on Windows.".to_string());
         }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let mut targets = Vec::new();
-            let app_size = &inspection.inspection.app;
-            targets.push(TrashTarget {
-                item_id: inspection.inspection.app.id.clone(),
-                path: inspection.app_path.clone(),
-                identity: inspection.app_identity.clone(),
-                logical_size: app_size.logical_size,
-                allocated_size: app_size.allocated_size,
-                scope: TrashScope::AppBundle,
-            });
+        let mut targets = Vec::new();
+        let app_size = &inspection.inspection.app;
+        targets.push(TrashTarget {
+            item_id: inspection.inspection.app.id.clone(),
+            path: inspection.app_path.clone(),
+            identity: inspection.app_identity.clone(),
+            logical_size: app_size.logical_size,
+            allocated_size: app_size.allocated_size,
+            scope: TrashScope::AppBundle,
+        });
 
-            let mut seen = HashSet::with_capacity(selected_related_ids.len());
-            for id in selected_related_ids {
-                if !seen.insert(id) {
-                    continue;
-                }
-                let record = inspection.related.get(id).ok_or_else(|| {
-                    "The app inspection changed. Review the uninstall again.".to_string()
-                })?;
-                targets.push(TrashTarget {
-                    item_id: id.clone(),
-                    path: record.path.clone(),
-                    identity: record.identity.clone(),
-                    logical_size: record.item.logical_size,
-                    allocated_size: record.item.allocated_size,
-                    scope: TrashScope::AppRelated,
-                });
+        let mut seen = HashSet::with_capacity(selected_related_ids.len());
+        for id in selected_related_ids {
+            if !seen.insert(id) {
+                continue;
             }
-
-            Ok(TrashPlan {
-                id: Uuid::new_v4(),
-                created_at: unix_timestamp(),
-                inventory_id: inspection.inspection.inspection_id.clone(),
-                targets,
-            })
+            let record = inspection.related.get(id).ok_or_else(|| {
+                "The app inspection changed. Review the uninstall again.".to_string()
+            })?;
+            targets.push(TrashTarget {
+                item_id: id.clone(),
+                path: record.path.clone(),
+                identity: record.identity.clone(),
+                logical_size: record.item.logical_size,
+                allocated_size: record.item.allocated_size,
+                scope: TrashScope::AppRelated,
+            });
         }
+
+        Ok(TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: inspection.inspection.inspection_id.clone(),
+            targets,
+        })
     }
 
     pub fn from_developer_artifacts(
@@ -233,13 +230,17 @@ impl TrashPlanner {
 pub struct TrashExecutor;
 
 impl TrashExecutor {
-    pub fn execute(plan: TrashPlan) -> TrashResult {
-        Self::execute_with(plan, |path| {
+    pub fn execute(environment: &PlatformEnvironment, plan: TrashPlan) -> TrashResult {
+        Self::execute_with(environment, plan, |path| {
             trash::delete(path).map_err(|error| format!("Could not move to Trash: {error}"))
         })
     }
 
-    fn execute_with<F>(plan: TrashPlan, mut move_to_trash: F) -> TrashResult
+    fn execute_with<F>(
+        environment: &PlatformEnvironment,
+        plan: TrashPlan,
+        mut move_to_trash: F,
+    ) -> TrashResult
     where
         F: FnMut(&Path) -> Result<(), String>,
     {
@@ -268,7 +269,7 @@ impl TrashExecutor {
                 });
                 continue;
             }
-            match validate_target(&target) {
+            match validate_target(environment, &target) {
                 Ok(()) => match move_to_trash(&target.path) {
                     Ok(()) => {
                         if matches!(target.scope, TrashScope::AppBundle) {
@@ -307,22 +308,22 @@ impl TrashExecutor {
     }
 }
 
-fn validate_target(target: &TrashTarget) -> Result<(), String> {
+fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> Result<(), String> {
     match &target.scope {
         TrashScope::LargeFile { .. } => {
-            if !is_allowed_large_file_path(&target.path) {
+            if !is_allowed_large_file_path(environment, &target.path) {
                 return Err(
                     "Skipped because the file moved outside the approved Large Files scope."
                         .to_string(),
                 );
             }
-            let root = allowed_large_file_root(&target.path).ok_or_else(|| {
+            let root = allowed_large_file_root(environment, &target.path).ok_or_else(|| {
                 "Skipped because the file has no approved Large Files root.".to_string()
             })?;
             validate_no_symlink_components(&target.path, &root)?;
         }
         TrashScope::AppBundle => {
-            let Some(root) = application_root_for_path(&target.path) else {
+            let Some(root) = application_root_for_path(environment, &target.path) else {
                 return Err("Skipped because the app moved outside Applications.".to_string());
             };
             validate_no_symlink_components(&target.path, &root)?;
@@ -334,7 +335,7 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
             if Blacklist::is_blacklisted(&target.path) {
                 return Err("Skipped because the path is protected by Zenith.".to_string());
             }
-            let root = app_data_root_for_path(&target.path).ok_or_else(|| {
+            let root = app_data_root_for_path(environment, &target.path).ok_or_else(|| {
                 "Skipped because related data moved outside the approved Library scope.".to_string()
             })?;
             validate_no_symlink_components(&target.path, &root)?;
@@ -389,7 +390,7 @@ fn validate_target(target: &TrashTarget) -> Result<(), String> {
             }
         }
         TrashScope::AppRelated => {
-            if !is_allowed_app_data_path(&target.path) {
+            if !is_allowed_app_data_path(environment, &target.path) {
                 return Err(
                     "Skipped because related data moved outside the approved Library scope."
                         .to_string(),
@@ -510,55 +511,61 @@ fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) ->
     relative == Path::new(expected)
 }
 
-fn application_root_for_path(path: &Path) -> Option<PathBuf> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        None
+/// The reviewed macOS application root containing `path`, when one does.
+///
+/// macOS keeps bundles in the environment's reviewed system root and in the
+/// stated profile's own `Applications` folder; `/System/Applications` is not a
+/// reviewed location. The literals stay macOS-only: another platform has no
+/// application bundles to uninstall here.
+fn application_root_for_path(environment: &PlatformEnvironment, path: &Path) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let parent = path.parent()?;
-        if parent == Path::new("/Applications") {
-            return Some(PathBuf::from("/Applications"));
-        }
-        crate::platform::NativePlatformPaths::new()
-            .home()
-            .map(|home| home.join("Applications"))
-            .filter(|root| parent == root)
-    }
+    let parent = path.parent()?;
+    application_roots(environment)
+        .into_iter()
+        .find(|root| parent == root.as_path())
 }
 
-fn is_allowed_app_data_path(path: &Path) -> bool {
-    app_data_root_for_path(path).is_some()
+fn application_roots(environment: &PlatformEnvironment) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(system_root) = environment.program_files() {
+        roots.push(system_root);
+    }
+    if let Some(home) = environment.user_home() {
+        roots.push(home.join("Applications"));
+    }
+    roots
 }
 
-fn app_data_root_for_path(path: &Path) -> Option<PathBuf> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        None
+fn is_allowed_app_data_path(environment: &PlatformEnvironment, path: &Path) -> bool {
+    app_data_root_for_path(environment, path).is_some()
+}
+
+/// The reviewed macOS profile-relative data root containing `path`, when one
+/// does. The `Library/...` literals are macOS-only, and the profile they hang
+/// off comes from the environment rather than the host.
+fn app_data_root_for_path(environment: &PlatformEnvironment, path: &Path) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let home = crate::platform::NativePlatformPaths::new().home()?;
-        const ROOTS: [&str; 10] = [
-            "Library/Application Support",
-            "Library/Caches",
-            "Library/Logs",
-            "Library/Preferences",
-            "Library/Saved Application State",
-            "Library/Containers",
-            "Library/Group Containers",
-            "Library/Application Scripts",
-            "Library/HTTPStorages",
-            "Library/WebKit",
-        ];
-        ROOTS
-            .iter()
-            .map(|root| home.join(root))
-            .find(|root| path.parent() == Some(root.as_path()))
-    }
+    let home = environment.user_home()?;
+    const ROOTS: [&str; 10] = [
+        "Library/Application Support",
+        "Library/Caches",
+        "Library/Logs",
+        "Library/Preferences",
+        "Library/Saved Application State",
+        "Library/Containers",
+        "Library/Group Containers",
+        "Library/Application Scripts",
+        "Library/HTTPStorages",
+        "Library/WebKit",
+    ];
+    ROOTS
+        .iter()
+        .map(|root| home.join(root))
+        .find(|root| path.parent() == Some(root.as_path()))
 }
 
 fn validate_no_symlink_components(path: &Path, root: &Path) -> Result<(), String> {
@@ -603,7 +610,21 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::description::KnownFolder;
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::paths::SimulatedPaths;
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// A POSIX environment stating exactly the profile the test means.
+    fn posix_environment(home: &Path) -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::Posix).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Posix)
+                .with_home(home)
+                .with_program_files("/Applications"),
+        ))
+    }
 
     #[test]
     fn running_check_fails_closed_for_unresolvable_app_paths() {
@@ -617,57 +638,118 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn personal_documents_are_not_app_data_scope() {
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            assert!(!is_allowed_app_data_path(
-                &home.join("Documents/App Project")
-            ));
-            assert!(is_allowed_app_data_path(
-                &home.join("Library/Caches/com.example.app")
-            ));
-        }
+        let temp = tempfile::tempdir().unwrap();
+        let environment = posix_environment(temp.path());
+
+        assert!(!is_allowed_app_data_path(
+            &environment,
+            &temp.path().join("Documents/App Project")
+        ));
+        assert!(is_allowed_app_data_path(
+            &environment,
+            &temp.path().join("Library/Caches/com.example.app")
+        ));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn app_bundle_must_be_a_direct_child_of_an_application_root() {
-        assert!(application_root_for_path(Path::new("/Applications/Example.app")).is_some());
-        assert!(application_root_for_path(Path::new("/Applications/Nested/Example.app")).is_none());
-        assert!(application_root_for_path(Path::new("/System/Applications/Mail.app")).is_none());
+        let temp = tempfile::tempdir().unwrap();
+        let environment = posix_environment(temp.path());
+        assert!(
+            application_root_for_path(&environment, Path::new("/Applications/Example.app"))
+                .is_some()
+        );
+        assert!(application_root_for_path(
+            &environment,
+            Path::new("/Applications/Nested/Example.app")
+        )
+        .is_none());
+        assert!(application_root_for_path(
+            &environment,
+            Path::new("/System/Applications/Mail.app")
+        )
+        .is_none());
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn macos_application_scopes_are_rejected_on_other_platforms() {
+        let temp = tempfile::tempdir().unwrap();
+        let environment = posix_environment(temp.path());
         for path in [
             "/Applications/Example.app",
             "/Applications/Nested/Example.app",
             "/System/Applications/Mail.app",
             "C:\\Program Files\\Example",
         ] {
-            assert!(application_root_for_path(Path::new(path)).is_none());
-            assert!(!is_allowed_app_data_path(Path::new(path)));
+            assert!(application_root_for_path(&environment, Path::new(path)).is_none());
+            assert!(!is_allowed_app_data_path(&environment, Path::new(path)));
         }
 
-        // HOME may be set by a shell on Windows; it must not enable macOS scopes.
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/Users/example"));
-        assert!(application_root_for_path(&home.join("Applications/Example.app")).is_none());
+        // A stated profile must not enable macOS scopes on another platform.
+        assert!(application_root_for_path(
+            &environment,
+            &temp.path().join("Applications/Example.app")
+        )
+        .is_none());
         assert!(!is_allowed_app_data_path(
-            &home.join("Library/Caches/com.example.app")
+            &environment,
+            &temp.path().join("Library/Caches/com.example.app")
         ));
         assert!(!is_allowed_app_data_path(
-            &home.join("Documents/App Project")
+            &environment,
+            &temp.path().join("Documents/App Project")
         ));
     }
 
     #[test]
     fn application_root_rejects_windows_paths() {
-        assert!(application_root_for_path(Path::new("C:\\Program Files\\App")).is_none());
-        assert!(application_root_for_path(Path::new(
-            "C:\\Users\\test\\AppData\\Local\\Programs\\App"
-        ))
+        let temp = tempfile::tempdir().unwrap();
+        let environment = posix_environment(temp.path());
+        assert!(
+            application_root_for_path(&environment, Path::new("C:\\Program Files\\App")).is_none()
+        );
+        assert!(application_root_for_path(
+            &environment,
+            Path::new("C:\\Users\\test\\AppData\\Local\\Programs\\App")
+        )
         .is_none());
+    }
+
+    #[test]
+    fn windows_flavor_refuses_app_uninstall_with_a_reason() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let inspection = AppInspectionRecord {
+            inspection: crate::models::AppUninstallInspection {
+                inspection_id: "inspection".to_string(),
+                app: crate::models::InstalledApp {
+                    id: "app".to_string(),
+                    name: "Example".to_string(),
+                    bundle_id: Some("com.example.Editor".to_string()),
+                    version: None,
+                    display_path: "C:\\Program Files\\Example.app".to_string(),
+                    executable_name: None,
+                    logical_size: 0,
+                    allocated_size: 0,
+                    modified_at: None,
+                    install_source: crate::models::AppInstallSource::ApplicationBundle,
+                    is_running: false,
+                    is_system_protected: false,
+                },
+                related_items: Vec::new(),
+                incomplete: false,
+                warnings: Vec::new(),
+            },
+            app_path: PathBuf::from("C:\\Program Files\\Example.app"),
+            app_identity: FileIdentity::for_test(1, 1, 0, None),
+            related: HashMap::new(),
+            created_at: unix_timestamp(),
+        };
+
+        let error = TrashPlanner::from_app_inspection(&environment, &inspection, &[])
+            .expect_err("Windows has no app uninstall path");
+        assert!(error.contains("not supported on Windows"));
     }
 
     #[test]
@@ -867,7 +949,8 @@ mod tests {
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
         std::fs::remove_file(marker).unwrap();
         let mut move_attempts = 0;
-        let result = TrashExecutor::execute_with(plan, |_| {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let result = TrashExecutor::execute_with(&environment, plan, |_| {
             move_attempts += 1;
             Ok(())
         });
@@ -930,7 +1013,8 @@ mod tests {
         };
         let plan =
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
-        let result = TrashExecutor::execute_with(plan, |path| {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let result = TrashExecutor::execute_with(&environment, plan, |path| {
             assert_eq!(path, target);
             std::fs::rename(path, &trashed).map_err(|error| error.to_string())
         });
@@ -944,15 +1028,40 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_large_file_scope_intentionally_differs_from_generic_blacklist() {
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            let document = home.join("Documents/large-video.mov");
-            assert!(Blacklist::is_blacklisted(&document));
-            assert!(is_allowed_large_file_path(&document));
-            assert!(!is_allowed_large_file_path(
-                &home.join("Documents/project/.git/objects/pack.bin")
-            ));
-        }
+    fn large_file_trash_scope_comes_from_the_stated_environment() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        let documents = home.join("Documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let file = documents.join("large-video.mov");
+        std::fs::write(&file, b"video").unwrap();
+        let target = TrashTarget {
+            item_id: "item".to_string(),
+            path: file.clone(),
+            identity: FileIdentity::from_path(&file).unwrap(),
+            logical_size: 5,
+            allocated_size: 5,
+            scope: TrashScope::LargeFile {
+                approved_parent: documents.clone(),
+            },
+        };
+
+        let stated = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_home(&home)
+            .with_known_folder(KnownFolder::Documents, documents.clone());
+        assert!(is_allowed_large_file_path(&stated, &file));
+        assert!(!is_allowed_large_file_path(
+            &stated,
+            &documents.join("project/.git/objects/pack.bin")
+        ));
+        assert!(validate_target(&stated, &target).is_ok());
+
+        // The literal profile spelling is not an approved scope once the
+        // platform states the real folder, and then nothing may be deleted.
+        let unstated = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(&home);
+        assert!(!is_allowed_large_file_path(&unstated, &file));
+        let error = validate_target(&unstated, &target).unwrap_err();
+        assert!(error.contains("Large Files scope"), "{error}");
     }
 
     #[cfg(unix)]
@@ -997,8 +1106,9 @@ mod tests {
                 },
             ],
         };
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
         let mut move_attempts = 0;
-        let result = TrashExecutor::execute_with(plan, |_| {
+        let result = TrashExecutor::execute_with(&environment, plan, |_| {
             move_attempts += 1;
             Ok(())
         });
@@ -1038,7 +1148,8 @@ mod tests {
                 kind: DeveloperArtifactKind::CargoTarget,
             },
         };
-        let err = validate_target(&target_item).unwrap_err();
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let err = validate_target(&environment, &target_item).unwrap_err();
         assert!(
             err.contains("zero identity"),
             "Expected zero identity rejection, got: {}",

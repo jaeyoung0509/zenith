@@ -20,11 +20,13 @@
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 const RULE_ENV_GATE: &str = "env_gate";
 const RULE_EARLY_RETURN: &str = "early_return";
 const RULE_IDENTITY_CFG: &str = "identity_cfg";
 const RULE_EXHAUSTIVE_MATCHES: &str = "exhaustive_matches";
+const RULE_PLATFORM_GATED_MODULE: &str = "platform_gated_module";
 
 struct Violation {
     location: String,
@@ -103,6 +105,24 @@ fn code_only(line: &str) -> String {
     result
 }
 
+static TEST_ATTRIBUTE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^#\[(?:tokio::)?test(?:\([^)]*\))?\]$").expect("static regex"));
+static FUNCTION_NAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"fn\s+([A-Za-z0-9_]+)").expect("static regex"));
+static ASSERTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"assert(_eq|_ne)?!|panic!|unreachable!").expect("static regex"));
+static ENV_GATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(?:\}\s*)?if\s+(?:let\s+)?[^\n]*env::var").expect("static regex")
+});
+static BARE_RETURN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*return;\s*$").expect("static regex"));
+static CFG_IDENTITY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"cfg!\((?:unix|windows|target_os)\s*[=),]").expect("static regex")
+});
+static EXHAUSTIVE_MATCHES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)assert!\s*\(\s*matches!\s*\([^;]*?\|[^;]*?\)\s*\)").expect("static regex")
+});
+
 struct TestBody {
     name: String,
     cfg: String,
@@ -118,12 +138,7 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
     let mut index = 0;
     while index < lines.len() {
         let line = lines[index].trim();
-        if !(line == "#[test]"
-            || line.starts_with("#[test ")
-            || line == "#[tokio::test]"
-            || line.starts_with("#[tokio::test")
-            || line == "#[test]")
-        {
+        if !TEST_ATTRIBUTE.is_match(line) {
             index += 1;
             continue;
         }
@@ -158,8 +173,7 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
             continue;
         };
 
-        let name = Regex::new(r"fn\s+([A-Za-z0-9_]+)")
-            .expect("static regex")
+        let name = FUNCTION_NAME
             .captures(&signature)
             .map(|captures| captures[1].to_string())
             .unwrap_or_else(|| "<anonymous>".to_string());
@@ -198,8 +212,7 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
 }
 
 fn assertion_marker(text: &str) -> Option<usize> {
-    let regex = Regex::new(r"assert(_eq|_ne)?!|panic!|unreachable!").expect("static regex");
-    regex.find(text).map(|found| found.start())
+    ASSERTION.find(text).map(|found| found.start())
 }
 
 fn inspect_test(location: &str, body: &TestBody) -> Vec<Violation> {
@@ -212,22 +225,18 @@ fn inspect_test(location: &str, body: &TestBody) -> Vec<Violation> {
         });
     };
 
-    let env_gate = Regex::new(r"(?m)^\s*(?:\}\s*)?if\s+(?:let\s+)?[^\n]*env::var")
-        .expect("static regex");
-    if env_gate.is_match(&body.text) {
+    if ENV_GATE.is_match(&body.text) {
         record(RULE_ENV_GATE);
     }
 
-    let return_regex = Regex::new(r"(?m)^\s*return;\s*$").expect("static regex");
-    if let Some(early) = return_regex.find(&body.text) {
+    if let Some(early) = BARE_RETURN.find(&body.text) {
         let asserted = assertion_marker(&body.text);
         if asserted.is_none_or(|asserted| early.start() < asserted) {
             record(RULE_EARLY_RETURN);
         }
     }
 
-    let cfg_identity = Regex::new(r"cfg!\((?:unix|windows|target_os)\s*[=),]").expect("static regex");
-    if cfg_identity.is_match(&body.text)
+    if CFG_IDENTITY.is_match(&body.text)
         && (body.cfg.contains("unix")
             || body.cfg.contains("windows")
             || body.cfg.contains("target_os"))
@@ -235,24 +244,42 @@ fn inspect_test(location: &str, body: &TestBody) -> Vec<Violation> {
         record(RULE_IDENTITY_CFG);
     }
 
-    let exhaustive = Regex::new(r"(?s)assert!\s*\(\s*matches!\s*\([^;]*?\|[^;]*?\)\s*\)")
-        .expect("static regex");
-    if exhaustive.is_match(&body.text) {
+    if EXHAUSTIVE_MATCHES.is_match(&body.text) {
         record(RULE_EXHAUSTIVE_MATCHES);
     }
 
     violations
 }
 
+/// A whole file or a whole test module gated on one platform cannot run
+/// anywhere else, which is how the size measurer and directory scanner suites
+/// lost their Windows coverage. Gating on a *selection* of platforms
+/// (`any(...)`, `not(...)`, `all(...)`) is a deliberate choice and is allowed.
+fn is_platform_specific_gate(trimmed: &str) -> bool {
+    if !trimmed.starts_with("#![cfg(") && !trimmed.starts_with("#[cfg(all(test,") {
+        return false;
+    }
+    // `any(..)`/`not(..)` select a set of platforms deliberately; a bare
+    // `unix`, `windows`, or single `target_os` gate is the shape that hides a
+    // whole suite from every other runner.
+    if trimmed.contains("any(") || trimmed.contains("not(") {
+        return false;
+    }
+    let Some(end) = trimmed.find(")]") else {
+        return false;
+    };
+    let inner = &trimmed[..end];
+    inner.contains("unix") || inner.contains("windows") || inner.contains("target_os")
+}
+
 fn file_level_violations(location: &str, source: &str) -> Vec<Violation> {
     let mut violations = Vec::new();
     for (index, line) in source.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("#![cfg(") || trimmed.starts_with("#[cfg(all(test,") {
+        if is_platform_specific_gate(line.trim()) {
             violations.push(Violation {
                 location: location.to_string(),
-                rule: RULE_ENV_GATE,
-                test: format!("whole-file gate (line {})", index + 1),
+                rule: RULE_PLATFORM_GATED_MODULE,
+                test: format!("platform-gated module (line {})", index + 1),
             });
         }
     }
@@ -281,7 +308,10 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         source_files(Path::new("tests"))
             .into_iter()
             // This guard's own source contains the patterns it looks for.
-            .filter(|path| path.file_name().is_some_and(|name| name != "test_hygiene.rs")),
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name != "test_hygiene.rs")
+            }),
     ) {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
@@ -325,19 +355,56 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         );
     }
 
-    // The guard itself must be able to fail: a synthetic offender has to be
-    // reported, otherwise this test would pass on a broken detector.
-    let synthetic = "#[test]\nfn skipped() {\n    if std::env::var(\"HOME\").is_ok() {\n        assert!(true);\n    } else {\n        return;\n    }\n}\n";
-    let detected = test_bodies(synthetic)
-        .iter()
-        .flat_map(|body| inspect_test("<synthetic>", body))
-        .collect::<Vec<_>>();
-    let rules = detected
-        .iter()
-        .map(|violation| violation.rule)
-        .collect::<BTreeSet<_>>();
+    // The guard itself must be able to fail: otherwise a broken detector
+    // would report a clean tree forever.
+    let env_gated = "#[test]\nfn skipped() {\n    if std::env::var(\"HOME\").is_ok() {\n        assert!(true);\n    }\n}\n";
+    let early_return = "#[test]\nfn skipped_early() {\n    let Some(value) = precondition() else {\n        return;\n    };\n    assert!(value);\n}\n";
+    let exhaustive = "#[test]\nfn accepts_everything() {\n    assert!(matches!(source, Ac | Battery | Unknown));\n}\n";
+
+    let rules_for = |source: &str| -> BTreeSet<&'static str> {
+        test_bodies(source)
+            .iter()
+            .flat_map(|body| inspect_test("<synthetic>", body))
+            .map(|violation| violation.rule)
+            .collect()
+    };
+
+    let env_rules = rules_for(env_gated);
     assert!(
-        rules.contains(RULE_ENV_GATE) && rules.contains(RULE_EARLY_RETURN),
-        "the guard did not detect a synthetic skip: {rules:?}"
+        env_rules.contains(RULE_ENV_GATE),
+        "the guard did not detect an environment-gated test body: {env_rules:?}"
     );
+    let return_rules = rules_for(early_return);
+    assert!(
+        return_rules.contains(RULE_EARLY_RETURN),
+        "the guard did not detect an early return standing in for an assertion: {return_rules:?}"
+    );
+    let exhaustive_rules = rules_for(exhaustive);
+    assert!(
+        exhaustive_rules.contains(RULE_EXHAUSTIVE_MATCHES),
+        "the guard did not detect a matches! assertion over every variant: {exhaustive_rules:?}"
+    );
+
+    // And it must not fire on the shapes that are legitimate.
+    let allowed_shapes = "#[test]\nfn legit() {\n    let value = compute();\n    assert_eq!(value, 4);\n    if value > 2 {\n        return;\n    }\n    assert!(value < 100);\n}\n";
+    assert!(
+        rules_for(allowed_shapes).is_empty(),
+        "the guard flagged a test that asserts before returning: {:?}",
+        rules_for(allowed_shapes)
+    );
+    assert!(
+        !is_platform_specific_gate(
+            "#[cfg(all(test, not(any(target_os = \"macos\", target_os = \"windows\"))))]"
+        ),
+        "a platform selection gate is not a platform-specific suite"
+    );
+    assert!(is_platform_specific_gate(
+        "#[cfg(all(test, unix))] mod tests {"
+    ));
+    assert!(is_platform_specific_gate(
+        "#[cfg(all(test, windows))] mod tests {"
+    ));
+    assert!(is_platform_specific_gate(
+        "#![cfg(target_os = \"windows\")]"
+    ));
 }

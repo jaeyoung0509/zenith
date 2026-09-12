@@ -1,5 +1,6 @@
 use crate::models::{LocalModelItem, ModelSource, ZenithError};
 use crate::models_inventory::LocalModelScanner;
+use crate::platform::PlatformEnvironment;
 use crate::safety::SafeTreeDeleter;
 use crate::signatures::SignatureLoader;
 use crate::tooling;
@@ -8,18 +9,21 @@ use std::path::{Path, PathBuf};
 pub struct LocalModelManager;
 
 impl LocalModelManager {
-    pub fn delete_by_id(model_id: &str) -> Result<u64, ZenithError> {
-        let models = LocalModelScanner::scan_all_models();
+    pub fn delete_by_id(
+        environment: &PlatformEnvironment,
+        model_id: &str,
+    ) -> Result<u64, ZenithError> {
+        let models = LocalModelScanner::scan_all_models(environment);
         let model = Self::resolve_by_id(&models, model_id)?;
         match model.source {
-            ModelSource::Ollama => Self::delete_ollama(model),
+            ModelSource::Ollama => Self::delete_ollama(environment, model),
             ModelSource::HuggingFace => {
-                Self::delete_filesystem_model(model, "~/.cache/huggingface/hub")
+                Self::delete_filesystem_model(environment, model, "~/.cache/huggingface/hub")
             }
             ModelSource::LmStudio => {
-                Self::delete_filesystem_model(model, "~/.cache/lm-studio/models")
+                Self::delete_filesystem_model(environment, model, "~/.cache/lm-studio/models")
             }
-            ModelSource::Mlx => Self::delete_filesystem_model(model, "~/.cache/mlx"),
+            ModelSource::Mlx => Self::delete_filesystem_model(environment, model, "~/.cache/mlx"),
         }
     }
 
@@ -33,12 +37,15 @@ impl LocalModelManager {
             .ok_or_else(|| ZenithError::PathNotAllowed(format!("unknown model id: {model_id}")))
     }
 
-    fn delete_ollama(model: &LocalModelItem) -> Result<u64, ZenithError> {
-        let blobs_dir = SignatureLoader::expand_path("~/.ollama/models/blobs");
+    fn delete_ollama(
+        environment: &PlatformEnvironment,
+        model: &LocalModelItem,
+    ) -> Result<u64, ZenithError> {
+        let blobs_dir = SignatureLoader::expand_path("~/.ollama/models/blobs", environment);
         let before_bytes = blobs_dir
             .as_ref()
             .map(|p| {
-                crate::scanner::SizeCalculator::measure_path(p, &[])
+                crate::scanner::SizeCalculator::measure_path(p, &[], environment)
                     .0
                     .reclaimable()
             })
@@ -67,7 +74,7 @@ impl LocalModelManager {
         let after_bytes = blobs_dir
             .as_ref()
             .map(|p| {
-                crate::scanner::SizeCalculator::measure_path(p, &[])
+                crate::scanner::SizeCalculator::measure_path(p, &[], environment)
                     .0
                     .reclaimable()
             })
@@ -82,10 +89,11 @@ impl LocalModelManager {
     }
 
     fn delete_filesystem_model(
+        environment: &PlatformEnvironment,
         model: &LocalModelItem,
         allowed_root: &str,
     ) -> Result<u64, ZenithError> {
-        let root = SignatureLoader::expand_path(allowed_root)
+        let root = SignatureLoader::expand_path(allowed_root, environment)
             .ok_or_else(|| ZenithError::PathNotAllowed(allowed_root.into()))?;
         let path = PathBuf::from(&model.path);
         if !Self::is_directly_scoped(&path, &root) {
@@ -95,7 +103,7 @@ impl LocalModelManager {
         // Ancestor symlink protection
         crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root)?;
 
-        let report = SafeTreeDeleter::delete_path(&path, &[]);
+        let report = SafeTreeDeleter::delete_path(&path, &[], environment);
         if report.is_success() || report.reclaimed_bytes > 0 {
             Ok(report.reclaimed_bytes)
         } else {
@@ -111,7 +119,9 @@ impl LocalModelManager {
 #[cfg(test)]
 mod tests {
     use super::LocalModelManager;
-    use crate::models::{LocalModelItem, ModelSource};
+    use crate::models::{LocalModelItem, ModelSource, ZenithError};
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::PlatformEnvironment;
     use std::path::Path;
 
     fn model(id: &str, name: &str, path: &str) -> LocalModelItem {
@@ -157,5 +167,49 @@ mod tests {
             Path::new("/Users/me/Documents"),
             Path::new("/Users/me/.cache/mlx")
         ));
+    }
+
+    #[test]
+    fn the_adapter_root_comes_from_the_stated_environment() {
+        let stated_home = tempfile::tempdir().unwrap();
+        let model_dir = stated_home.path().join(".cache/mlx/zenith-probe");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("weights.npz"), vec![7u8; 2_048]).unwrap();
+
+        let mut item = model("mlx.zenith-probe", "zenith-probe", "");
+        item.source = ModelSource::Mlx;
+        item.path = model_dir.to_string_lossy().into_owned();
+
+        // The scope root is the stated profile's `.cache/mlx`, not the host's.
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::Posix).with_home(stated_home.path());
+        let reclaimed =
+            LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
+                .expect("a model under the stated root is deletable");
+        assert!(reclaimed > 0, "the deleted file's bytes are reported");
+        assert!(
+            !model_dir.exists(),
+            "the model under the stated root is removed"
+        );
+    }
+
+    #[test]
+    fn a_model_outside_the_stated_root_is_refused() {
+        let stated_home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut item = model("mlx.outside", "outside", "");
+        item.source = ModelSource::Mlx;
+        item.path = outside
+            .path()
+            .join(".cache/mlx/zeenith-probe")
+            .to_string_lossy()
+            .into_owned();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::Posix).with_home(stated_home.path());
+        let error = LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
+            .expect_err("a path outside the adapter root must be refused");
+        assert!(matches!(error, ZenithError::PathNotAllowed(_)));
+        assert!(outside.path().exists());
     }
 }

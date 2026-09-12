@@ -1,0 +1,59 @@
+version: 2
+updates:
+  # Rust dependencies. The workspace manifest lives in src-tauri/ but
+  # Cargo.lock is at the repository root, so Dependabot watches the root.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Routine minor/patch updates land as one reviewable pull request.
+      cargo-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      # Major upgrades stay separate so each one gets its own CI run and review.
+      cargo-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+
+  # Frontend dependencies. pnpm reads the npm ecosystem and the pnpm-lock.yaml
+  # lockfile at the repository root.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - javascript
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      npm-major:
+        patterns:
+          - "*"
+        update-types:
+          - major

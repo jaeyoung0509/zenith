@@ -54,6 +54,8 @@ export type {
   DeveloperEcosystem,
   DeveloperWorkspace,
   DiagnosticsSnapshot,
+  EnvironmentReport,
+  SelfCheckRow,
   DiskMetrics,
   DiskVolume,
   DockerContainerItem,

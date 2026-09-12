@@ -1,20 +1,6 @@
 use crate::models::*;
 use std::collections::HashMap;
 
-pub trait ProviderAdapter: Send + Sync {
-    fn collect(&self, now: u64) -> ProviderObservation;
-}
-
-pub fn collect_adapters(
-    adapters: &[Box<dyn ProviderAdapter>],
-    now: u64,
-) -> Vec<ProviderObservation> {
-    adapters
-        .iter()
-        .map(|adapter| adapter.collect(now))
-        .collect()
-}
-
 pub fn retain_last_success(
     current: Vec<ProviderObservation>,
     last: &mut HashMap<String, ProviderObservation>,
@@ -472,87 +458,89 @@ mod tests {
         assert_eq!(manual.observed_at, 9);
     }
 
-    struct FakeAdapter(ObservationQuality, ObservationSourceKind);
-    impl ProviderAdapter for FakeAdapter {
-        fn collect(&self, now: u64) -> ProviderObservation {
-            ProviderObservation {
-                provider_id: "fake".into(),
-                display_name: "Fake".into(),
-                source_kind: self.1,
-                source_id: format!("fake.{:?}", self.1),
-                scope: ObservationScope::Project,
-                observed_at: now,
-                period: ObservationPeriod {
-                    starts_at: None,
-                    ends_at: None,
-                    resets_at: None,
-                    label: "Test".into(),
-                },
-                fresh_for_seconds: 60,
-                quality: self.0,
-                installed: true,
-                connected: true,
-                status_message: "fake".into(),
-                metrics: vec![],
-                action_url: None,
-                partial_error: (self.0 == ObservationQuality::Partial).then(|| "partial".into()),
-                model_vendor: None,
-                model_identity: None,
-            }
+    fn observation(
+        quality: ObservationQuality,
+        source_kind: ObservationSourceKind,
+        now: u64,
+    ) -> ProviderObservation {
+        ProviderObservation {
+            provider_id: "fake".into(),
+            display_name: "Fake".into(),
+            source_kind,
+            source_id: format!("fake.{source_kind:?}"),
+            scope: ObservationScope::Project,
+            observed_at: now,
+            period: ObservationPeriod {
+                starts_at: None,
+                ends_at: None,
+                resets_at: None,
+                label: "Test".into(),
+            },
+            fresh_for_seconds: 60,
+            quality,
+            installed: true,
+            connected: true,
+            status_message: "fake".into(),
+            metrics: vec![],
+            action_url: None,
+            partial_error: (quality == ObservationQuality::Partial).then(|| "partial".into()),
+            model_vendor: None,
+            model_identity: None,
         }
     }
 
     #[test]
-    fn adapter_contract_preserves_live_local_manual_unavailable_and_partial_provenance() {
-        let adapters: Vec<Box<dyn ProviderAdapter>> = vec![
-            Box::new(FakeAdapter(
-                ObservationQuality::Fresh,
-                ObservationSourceKind::LiveAuthoritative,
-            )),
-            Box::new(FakeAdapter(
-                ObservationQuality::Fresh,
-                ObservationSourceKind::LocalEstimate,
-            )),
-            Box::new(FakeAdapter(
-                ObservationQuality::Fresh,
-                ObservationSourceKind::Manual,
-            )),
-            Box::new(FakeAdapter(
-                ObservationQuality::Unavailable,
-                ObservationSourceKind::LiveQuota,
-            )),
-            Box::new(FakeAdapter(
-                ObservationQuality::Partial,
-                ObservationSourceKind::LiveAuthoritative,
-            )),
-        ];
-        let rows = collect_adapters(&adapters, 42);
-        assert_eq!(rows.len(), 5);
-        assert!(rows.iter().all(|row| row.observed_at == 42));
-        assert!(rows
-            .iter()
-            .any(|row| row.quality == ObservationQuality::Unavailable));
-        assert!(rows
-            .iter()
-            .any(|row| row.quality == ObservationQuality::Partial));
+    fn a_failed_refresh_keeps_the_last_success_as_stale_with_the_failure_reason() {
+        let mut cache = HashMap::new();
+        let good = observation(
+            ObservationQuality::Fresh,
+            ObservationSourceKind::LiveAuthoritative,
+            1,
+        );
+        let kept = retain_last_success(vec![good], &mut cache);
+        assert_eq!(kept[0].quality, ObservationQuality::Fresh);
+
+        let mut failed = observation(
+            ObservationQuality::Unavailable,
+            ObservationSourceKind::LiveAuthoritative,
+            2,
+        );
+        failed.status_message = "provider timed out".into();
+        let rows = retain_last_success(vec![failed], &mut cache);
+
+        // The previous measurement is retained instead of being replaced by
+        // "unavailable", and the row says so.
+        assert_eq!(rows[0].quality, ObservationQuality::Stale);
+        assert_eq!(rows[0].observed_at, 1);
+        assert_eq!(rows[0].partial_error.as_deref(), Some("provider timed out"));
+        assert_eq!(
+            rows[0].status_message,
+            "Last successful observation retained after refresh failure."
+        );
     }
 
     #[test]
-    fn last_success_becomes_stale_after_adapter_failure() {
+    fn a_partial_refresh_is_treated_as_a_failure_and_never_cached() {
         let mut cache = HashMap::new();
-        let good = FakeAdapter(
+        let partial = observation(
+            ObservationQuality::Partial,
+            ObservationSourceKind::LiveQuota,
+            5,
+        );
+        let rows = retain_last_success(vec![partial], &mut cache);
+
+        // Nothing succeeded yet, so the partial row is passed through as-is
+        // rather than being remembered as a success.
+        assert_eq!(rows[0].quality, ObservationQuality::Partial);
+        assert!(cache.is_empty());
+
+        let fresh = observation(
             ObservationQuality::Fresh,
-            ObservationSourceKind::LiveAuthoritative,
-        )
-        .collect(1);
-        retain_last_success(vec![good], &mut cache);
-        let failed = FakeAdapter(
-            ObservationQuality::Unavailable,
-            ObservationSourceKind::LiveAuthoritative,
-        )
-        .collect(2);
-        let rows = retain_last_success(vec![failed], &mut cache);
-        assert_eq!(rows[0].quality, ObservationQuality::Stale);
-        assert!(rows[0].partial_error.is_some());
+            ObservationSourceKind::LiveQuota,
+            6,
+        );
+        retain_last_success(vec![fresh], &mut cache);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache["fake.LiveQuota"].observed_at, 6);
     }
 }

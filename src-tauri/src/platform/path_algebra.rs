@@ -382,10 +382,11 @@ pub fn is_reserved_device_name(component: &str) -> bool {
     if bytes.len() == 4 {
         let prefix = bytes[0];
         let digit = bytes[3];
-        if (prefix == 'C' || prefix == 'L') && (bytes[1], bytes[2]) == ('O', 'M') {
-            if digit.is_ascii_digit() {
-                return true;
-            }
+        if (prefix == 'C' || prefix == 'L')
+            && (bytes[1], bytes[2]) == ('O', 'M')
+            && digit.is_ascii_digit()
+        {
+            return true;
         }
         if (prefix, bytes[1]) == ('L', 'P') && bytes[2] == 'T' && digit.is_ascii_digit() {
             return true;
@@ -485,10 +486,7 @@ pub fn protected_root(path: &str, flavor: PathFlavor) -> Option<ProtectedRoot> {
         return None;
     }
     let mut components = remainder.split('\\').filter(|part| !part.is_empty());
-    let first = match components.next() {
-        Some(first) => first,
-        None => return None,
-    };
+    let first = components.next()?;
     let tail_is_only_component = components.next().is_none();
 
     let tail_class = if first.eq_ignore_ascii_case("Windows") {

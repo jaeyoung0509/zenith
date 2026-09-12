@@ -95,14 +95,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn unix_owner_parses_candidate_uid() {
+    fn unix_owner_verification_maps_the_candidate_uid_and_fails_closed_without_one() {
         let uid: Uid = "501".parse().expect("uid parses");
-        let own: Uid = "501".parse().expect("uid parses");
+        let own: Uid = "999".parse().expect("uid parses");
+
+        // The Unix identity is the candidate's own euid; whether that euid is
+        // authorized is decided by the caller comparing whole owners.
         assert_eq!(
             ProcessOwner::verified(Some(&uid), Some(&own)),
             Some(ProcessOwner::Unix(501))
         );
+        assert_eq!(
+            ProcessOwner::verified(Some(&uid), None),
+            Some(ProcessOwner::Unix(501))
+        );
         assert_eq!(ProcessOwner::verified(None, Some(&own)), None);
+        assert_eq!(ProcessOwner::verified(None, None), None);
     }
 
     #[cfg(unix)]
@@ -110,6 +118,11 @@ mod tests {
     fn unix_current_owner_matches_euid() {
         let expected = unsafe { libc::geteuid() };
         assert_eq!(ProcessOwner::current(), ProcessOwner::Unix(expected));
+        assert_eq!(
+            ProcessOwner::current().as_unix_uid(),
+            Some(expected),
+            "a Unix owner must expose its UID"
+        );
     }
 
     #[cfg(windows)]
@@ -126,19 +139,17 @@ mod tests {
         assert_eq!(ProcessOwner::verified(Some(&own), None), None);
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_unavailable_sid_fails_closed() {
-        let empty = ProcessOwner::Windows(String::new());
-        assert!(empty.is_privileged());
-        assert_ne!(empty, ProcessOwner::Windows("S-1-5-21-100".to_string()));
-    }
-
-    #[test]
-    fn privileged_detection_covers_root_and_empty_sentinel() {
-        assert!(ProcessOwner::Unix(0).is_privileged());
+    fn an_unavailable_windows_sid_is_never_verified_and_is_privileged() {
+        // `current()` returns this sentinel when the process SID cannot be
+        // read. Callers must treat it as "no verified identity": it compares
+        // equal to no real SID and is refused as a privileged owner rather
+        // than being accepted as the current user.
+        let unavailable = ProcessOwner::Windows(String::new());
+        assert!(unavailable.is_privileged());
+        assert_ne!(unavailable, ProcessOwner::Windows("S-1-5-21-100".into()));
+        assert_eq!(unavailable.as_unix_uid(), None);
         assert!(!ProcessOwner::Unix(501).is_privileged());
-        assert!(ProcessOwner::Windows(String::new()).is_privileged());
-        assert!(!ProcessOwner::Windows("S-1-5-21-100".to_string()).is_privileged());
+        assert!(ProcessOwner::Unix(0).is_privileged());
     }
 }

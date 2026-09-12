@@ -2,6 +2,8 @@ use crate::models::{
     CacheArtifactKind, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category, RiskTier,
     ScanItem,
 };
+use crate::platform::path_algebra::{self, PathFlavor};
+use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard};
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureRegistry;
@@ -81,20 +83,32 @@ impl ProviderKind {
 pub struct CacheProviderRegistry;
 
 impl CacheProviderRegistry {
-    pub fn scan_items(registry: &SignatureRegistry) -> Vec<ScanItem> {
+    /// Scans every external cache provider through the described environment.
+    /// The provider executables are resolved with the environment's stated tool
+    /// facts and the discovered caches are approved against the environment's
+    /// home, so a redirected or simulated environment cannot be answered by the
+    /// runner's own profile.
+    pub fn scan_items(
+        registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
+    ) -> Vec<ScanItem> {
         // Three tiny provider lookups; route through the shared bounded scan
         // pool intentionally instead of the unbounded global Rayon pool.
         crate::execution_budget::install_shared(
             || {
                 [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
                     .into_par_iter()
-                    .filter_map(|provider| Self::scan_provider_logged(provider, registry))
+                    .filter_map(|provider| {
+                        Self::scan_provider_logged(provider, registry, environment)
+                    })
                     .collect()
             },
             || {
                 [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
                     .into_iter()
-                    .filter_map(|provider| Self::scan_provider_logged(provider, registry))
+                    .filter_map(|provider| {
+                        Self::scan_provider_logged(provider, registry, environment)
+                    })
                     .collect()
             },
         )
@@ -103,8 +117,9 @@ impl CacheProviderRegistry {
     fn scan_provider_logged(
         provider: ProviderKind,
         registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
     ) -> Option<ScanItem> {
-        match Self::scan_provider(provider, registry) {
+        match Self::scan_provider(provider, registry, environment) {
             Ok(item) => item,
             Err(error) => {
                 // A rejected provider must be visible in diagnostics instead of
@@ -121,6 +136,7 @@ impl CacheProviderRegistry {
     fn scan_provider(
         provider: ProviderKind,
         registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
     ) -> Result<Option<ScanItem>, String> {
         let signature_id = match provider {
             ProviderKind::Uv => "dev.uv.cache",
@@ -133,8 +149,8 @@ impl CacheProviderRegistry {
         if !signature.supports_current_platform() {
             return Ok(None);
         }
-        let path = discover_path(provider)?;
-        let (size, file_count) = SizeCalculator::measure_path(&path, &[]);
+        let path = discover_path(provider, environment)?;
+        let (size, file_count) = SizeCalculator::measure_path(&path, &[], environment);
         if size.reclaimable() == 0 {
             return Ok(None);
         }
@@ -167,7 +183,11 @@ impl CacheProviderRegistry {
         }))
     }
 
-    pub fn prune(signature_id: &str, planned_path: &Path) -> Result<u64, String> {
+    pub fn prune(
+        signature_id: &str,
+        planned_path: &Path,
+        environment: &PlatformEnvironment,
+    ) -> Result<u64, String> {
         let provider = ProviderKind::for_signature(signature_id)
             .ok_or_else(|| "Unknown external cache provider".to_string())?;
         if matching_process_is_active(provider) {
@@ -176,16 +196,16 @@ impl CacheProviderRegistry {
                 provider.executable()
             ));
         }
-        let fresh_path = discover_path(provider)?;
+        let fresh_path = discover_path(provider, environment)?;
         if !paths_match(&fresh_path, planned_path) {
             return Err(
                 "The provider cache location changed since the scan. Scan again.".to_string(),
             );
         }
-        let before = SizeCalculator::measure_path(&fresh_path, &[])
+        let before = SizeCalculator::measure_path(&fresh_path, &[], environment)
             .0
             .reclaimable();
-        let output = run_provider(provider, provider.prune_args())?;
+        let output = run_provider(provider, provider.prune_args(), environment)?;
         if !output.status.success() {
             return Err(format!(
                 "{} prune failed: {}",
@@ -193,11 +213,11 @@ impl CacheProviderRegistry {
                 bounded_message(&output.stderr)
             ));
         }
-        let rediscovered = discover_path(provider)?;
+        let rediscovered = discover_path(provider, environment)?;
         if !paths_match(&rediscovered, &fresh_path) {
             return Err("The provider cache location changed during cleanup.".to_string());
         }
-        let after = SizeCalculator::measure_path(&rediscovered, &[])
+        let after = SizeCalculator::measure_path(&rediscovered, &[], environment)
             .0
             .reclaimable();
         Ok(before.saturating_sub(after))
@@ -229,21 +249,29 @@ pub fn mutation_blocked_by_active_runtime(signature_id: &str) -> bool {
     })
 }
 
-fn run_provider(provider: ProviderKind, args: &[&str]) -> Result<std::process::Output, String> {
-    let executable = tooling::resolve(provider.executable()).ok_or_else(|| {
-        format!(
-            "{} was not detected in PATH or known tool locations",
-            provider.executable()
-        )
-    })?;
-    validate_executable(&executable)?;
+fn run_provider(
+    provider: ProviderKind,
+    args: &[&str],
+    environment: &PlatformEnvironment,
+) -> Result<std::process::Output, String> {
+    let executable =
+        tooling::resolve_with(provider.executable(), environment).ok_or_else(|| {
+            format!(
+                "{} was not detected in PATH or known tool locations",
+                provider.executable()
+            )
+        })?;
+    validate_executable(&executable, environment)?;
     let mut command = Command::new(executable);
     command.args(args);
     tooling::run_with_timeout(command, PROVIDER_TIMEOUT).map_err(|error| error.to_string())
 }
 
-fn discover_path(provider: ProviderKind) -> Result<PathBuf, String> {
-    let output = run_provider(provider, provider.discovery_args())?;
+fn discover_path(
+    provider: ProviderKind,
+    environment: &PlatformEnvironment,
+) -> Result<PathBuf, String> {
+    let output = run_provider(provider, provider.discovery_args(), environment)?;
     if !output.status.success() {
         return Err(format!(
             "{} cache discovery failed: {}",
@@ -251,7 +279,7 @@ fn discover_path(provider: ProviderKind) -> Result<PathBuf, String> {
             bounded_message(&output.stderr)
         ));
     }
-    parse_discovered_path(&output.stdout).and_then(validate_cache_path)
+    parse_discovered_path(&output.stdout).and_then(|path| validate_cache_path(path, environment))
 }
 
 fn parse_discovered_path(output: &[u8]) -> Result<PathBuf, String> {
@@ -275,27 +303,34 @@ fn parse_discovered_path(output: &[u8]) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn validate_cache_path(path: PathBuf) -> Result<PathBuf, String> {
+fn validate_cache_path(
+    path: PathBuf,
+    environment: &PlatformEnvironment,
+) -> Result<PathBuf, String> {
     let metadata = std::fs::symlink_metadata(&path)
         .map_err(|_| "The discovered cache directory is unavailable".to_string())?;
     if !metadata.is_dir() || SymlinkGuard::is_symlink(&path) {
         return Err("The discovered cache must be a real directory".to_string());
     }
-    let home = crate::platform::paths::NativePlatformPaths::new()
-        .home()
+    // The stated profile is the authority: the runner's own home must not
+    // decide whether a cache belongs to this user.
+    let home = environment
+        .user_home()
         .ok_or_else(|| "Could not resolve the current user profile".to_string())?;
     let canonical_home = std::fs::canonicalize(home)
         .map_err(|_| "Could not validate the current user profile".to_string())?;
     let canonical = std::fs::canonicalize(&path)
         .map_err(|_| "Could not canonicalize the discovered cache".to_string())?;
 
-    let in_profile = path_is_within(&canonical, &canonical_home);
-    let mut approved = in_profile && cache_location_approved(&canonical, &canonical_home);
+    let flavor = environment.flavor();
+    let in_profile = path_is_within(&canonical, &canonical_home, flavor);
+    let mut approved = in_profile && cache_location_approved(&canonical, &canonical_home, flavor);
     // Relocated caches (PNPM_HOME, UV_CACHE_DIR, a configured npm cache) stay
     // supported under the same blacklist and symlink validation as in-profile
     // locations instead of being refused for being outside the profile.
-    for root in relocated_cache_roots() {
-        approved |= path_is_same(&canonical, &root) || path_is_within(&canonical, &root);
+    for root in relocated_cache_roots(environment) {
+        approved |=
+            path_is_same(&canonical, &root, flavor) || path_is_within(&canonical, &root, flavor);
     }
 
     if !approved {
@@ -313,47 +348,42 @@ fn validate_cache_path(path: PathBuf) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn relocated_cache_roots() -> Vec<PathBuf> {
-    [
-        "LOCALAPPDATA",
-        "APPDATA",
-        "UV_CACHE_DIR",
-        "PNPM_HOME",
-        "NPM_CONFIG_CACHE",
-    ]
-    .into_iter()
-    .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from))
-    .filter_map(|root| std::fs::canonicalize(root).ok())
-    .map(|root| crate::platform::NativePlatformPaths::normalize_verbatim_path(&root))
-    .collect()
+fn relocated_cache_roots(environment: &PlatformEnvironment) -> Vec<PathBuf> {
+    // The application-data containers come from the described environment;
+    // the per-tool overrides (`UV_CACHE_DIR`, `PNPM_HOME`, `NPM_CONFIG_CACHE`)
+    // are process environment variables with no environment representation, so
+    // they stay host-derived like the tool search itself.
+    let stated = [environment.local_app_data(), environment.roaming_app_data()];
+    let overrides = ["UV_CACHE_DIR", "PNPM_HOME", "NPM_CONFIG_CACHE"]
+        .into_iter()
+        .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from));
+    stated
+        .into_iter()
+        .flatten()
+        .chain(overrides)
+        .filter_map(|root| std::fs::canonicalize(root).ok())
+        .map(|root| crate::platform::NativePlatformPaths::normalize_verbatim_path(&root))
+        .collect()
 }
 
-#[cfg(windows)]
-fn path_is_same(left: &Path, right: &Path) -> bool {
-    crate::platform::NativePlatformPaths::windows_path_eq(left, right)
+/// Same location under the environment's own flavor: case folded and
+/// separator-agnostic on Windows, byte exact on POSIX. Using the flavor rather
+/// than the host keeps a simulated Windows environment comparable on any
+/// runner.
+fn path_is_same(left: &Path, right: &Path, flavor: PathFlavor) -> bool {
+    path_algebra::equal(&left.to_string_lossy(), &right.to_string_lossy(), flavor)
 }
 
-#[cfg(not(windows))]
-fn path_is_same(left: &Path, right: &Path) -> bool {
-    left == right
-}
-
-#[cfg(windows)]
-fn path_is_within(path: &Path, base: &Path) -> bool {
-    !path_is_same(path, base)
-        && crate::platform::NativePlatformPaths::windows_path_starts_with(path, base)
-}
-
-#[cfg(not(windows))]
-fn path_is_within(path: &Path, base: &Path) -> bool {
-    path != base && path.starts_with(base)
+fn path_is_within(path: &Path, base: &Path, flavor: PathFlavor) -> bool {
+    !path_is_same(path, base, flavor)
+        && path_algebra::contains(&base.to_string_lossy(), &path.to_string_lossy(), flavor)
 }
 
 /// Pure approval check over already-canonicalized paths (no filesystem access),
 /// so the trust boundary is directly unit-testable. Broad cache roots match
 /// strict subdirectories; specific store roots (including the npm home
 /// directory) match themselves and their contents.
-fn cache_location_approved(canonical: &Path, canonical_home: &Path) -> bool {
+fn cache_location_approved(canonical: &Path, canonical_home: &Path, flavor: PathFlavor) -> bool {
     let broad_cache_roots = [
         canonical_home.join(".cache"),
         canonical_home.join("Library/Caches"),
@@ -364,12 +394,11 @@ fn cache_location_approved(canonical: &Path, canonical_home: &Path) -> bool {
         canonical_home.join(".pnpm-store"),
         canonical_home.join(".npm"),
     ];
-    broad_cache_roots
-        .iter()
-        .any(|root| canonical != *root && canonical.starts_with(root))
-        || specific_store_roots
-            .iter()
-            .any(|root| canonical == *root || canonical.starts_with(root))
+    broad_cache_roots.iter().any(|root| {
+        !path_is_same(canonical, root, flavor) && path_is_within(canonical, root, flavor)
+    }) || specific_store_roots.iter().any(|root| {
+        path_is_same(canonical, root, flavor) || path_is_within(canonical, root, flavor)
+    })
 }
 
 /// Home-relative install locations of version-manager-owned toolchains
@@ -383,7 +412,7 @@ fn node_manager_roots(home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn validate_executable(path: &Path) -> Result<(), String> {
+fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result<(), String> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|_| "Could not validate the provider executable".to_string())?;
     let canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
@@ -393,7 +422,7 @@ fn validate_executable(path: &Path) -> Result<(), String> {
         PathBuf::from("/opt/homebrew"),
     ];
     roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots());
-    if let Some(home) = crate::platform::NativePlatformPaths::new().home() {
+    if let Some(home) = environment.user_home() {
         roots.extend([
             home.join(".local/bin"),
             home.join(".local/share/uv"),
@@ -474,7 +503,11 @@ fn bounded_message(bytes: &[u8]) -> String {
 mod tests {
     use super::ProviderKind;
     use super::{cache_location_approved, node_manager_roots, parse_discovered_path};
+    use crate::platform::path_algebra::PathFlavor;
+    use crate::platform::paths::SimulatedPaths;
+    use crate::platform::PlatformEnvironment;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     #[test]
     fn npm_provider_is_wired_to_its_signature_and_commands() {
@@ -502,19 +535,114 @@ mod tests {
             PathBuf::from("/Users/tester")
         };
         // The default npm cache directory and the npm home itself.
-        assert!(cache_location_approved(&home.join(".npm/_cacache"), &home));
-        assert!(cache_location_approved(&home.join(".npm"), &home));
+        let flavor = if cfg!(target_os = "windows") {
+            PathFlavor::Windows
+        } else {
+            PathFlavor::Posix
+        };
+        assert!(cache_location_approved(
+            &home.join(".npm/_cacache"),
+            &home,
+            flavor
+        ));
+        assert!(cache_location_approved(&home.join(".npm"), &home, flavor));
         // Broad roots still match strict subdirectories only.
         assert!(cache_location_approved(
             &home.join(".cache/npm/_cacache"),
-            &home
+            &home,
+            flavor
         ));
         // Unrelated home children and the home root itself stay rejected.
         assert!(!cache_location_approved(
             &home.join("random-override"),
-            &home
+            &home,
+            flavor
         ));
-        assert!(!cache_location_approved(&home, &home));
+        assert!(!cache_location_approved(&home, &home, flavor));
+    }
+
+    #[test]
+    fn approved_cache_roots_follow_the_stated_profile() {
+        // A cache on a stated non-system drive is approved against that stated
+        // home, while a cache under the runner's literal profile is not: the
+        // provider's approval boundary is the environment's, not the host's.
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"D:\Cache"),
+        ));
+        let stated_home = environment.user_home().unwrap();
+
+        assert!(cache_location_approved(
+            &PathBuf::from(r"D:\Cache\.npm\_cacache"),
+            &stated_home,
+            PathFlavor::Windows
+        ));
+        assert!(cache_location_approved(
+            &PathBuf::from(r"D:\Cache\Library\Caches\uv"),
+            &stated_home,
+            PathFlavor::Windows
+        ));
+        // The literal profile spelling of another account is not the profile.
+        assert!(!cache_location_approved(
+            &PathBuf::from(r"C:\Users\other\.npm\_cacache"),
+            &stated_home,
+            PathFlavor::Windows
+        ));
+
+        // Relocated roots come from the stated application-data container, and
+        // relocation is only trusted once the root resolves.
+        let local_app_data = tempfile::tempdir().unwrap();
+        let environment = environment.with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"D:\Cache")
+                .with_local_app_data(local_app_data.path()),
+        ));
+        let relocated = super::relocated_cache_roots(&environment);
+        assert_eq!(
+            relocated,
+            vec![local_app_data.path().canonicalize().unwrap()],
+            "the stated application-data container is the only relocated root"
+        );
+    }
+
+    #[test]
+    fn validate_cache_path_approves_the_stated_home_and_refuses_elsewhere() {
+        let stated_home = tempfile::tempdir().unwrap();
+        let cache = stated_home.path().join("Library/Caches/npm/_cacache");
+        std::fs::create_dir_all(&cache).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_roots(Arc::new(
+                SimulatedPaths::new()
+                    .with_flavor(PathFlavor::current())
+                    .with_home(stated_home.path()),
+            ));
+        assert!(super::validate_cache_path(cache.clone(), &environment).is_ok());
+
+        // An in-profile directory that is not an approved cache root is refused
+        // even though it exists, so the approval step still does work.
+        let unapproved = stated_home.path().join("random-override");
+        std::fs::create_dir_all(&unapproved).unwrap();
+        assert!(super::validate_cache_path(unapproved, &environment).is_err());
+    }
+
+    #[test]
+    fn a_provider_with_a_stated_missing_tool_is_skipped() {
+        use crate::signatures::SignatureRegistry;
+
+        // npm/pnpm/uv may be installed on this host; the environment states
+        // they are absent, and a stated absence is never re-discovered.
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_missing_tool("npm")
+            .with_missing_tool("pnpm")
+            .with_missing_tool("uv");
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        assert!(
+            super::CacheProviderRegistry::scan_items(&registry, &environment).is_empty(),
+            "a stated missing tool must not be re-discovered from the host"
+        );
     }
 
     #[test]
@@ -523,11 +651,12 @@ mod tests {
         {
             use super::validate_executable;
             use std::path::Path;
-            assert!(validate_executable(Path::new("/usr/bin/env")).is_ok());
+            let environment = PlatformEnvironment::native();
+            assert!(validate_executable(Path::new("/usr/bin/env"), &environment).is_ok());
             let dir = tempfile::tempdir().unwrap();
             let stray = dir.path().join("npm");
             std::fs::write(&stray, b"#!/bin/sh\n").unwrap();
-            assert!(validate_executable(&stray).is_err());
+            assert!(validate_executable(&stray, &environment).is_err());
         }
     }
 
@@ -565,30 +694,39 @@ mod tests {
     #[test]
     fn trusted_tool_roots_exclude_bare_user_writable_containers() {
         use crate::platform::NativePlatformPaths;
-        use std::path::PathBuf;
 
         let roots = NativePlatformPaths::trusted_tool_roots();
-        for variable in ["LOCALAPPDATA", "APPDATA", "ProgramData"] {
-            let Some(root) = std::env::var_os(variable).map(PathBuf::from) else {
-                continue;
-            };
-            let normalized = NativePlatformPaths::normalize_verbatim_path(&root);
-            assert!(
-                !roots
-                    .iter()
-                    .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &normalized)),
-                "bare {variable} must not be a trusted executable root"
-            );
+
+        // A bare user-writable container is never a trusted executable root:
+        // trust comes from a named install directory below it, so no root may be
+        // the container itself.
+        for root in &roots {
+            let text = root
+                .to_string_lossy()
+                .replace('/', "\\")
+                .to_ascii_lowercase();
+            let bare = [
+                r"\appdata",
+                r"\appdata\local",
+                r"\appdata\roaming",
+                r"\programdata",
+            ]
+            .iter()
+            .any(|tail| text.ends_with(tail));
+            assert!(!bare, "bare user-writable container is trusted: {root:?}");
         }
-        if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
-            let npm = app_data.join("npm");
-            assert!(
-                roots
-                    .iter()
-                    .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &npm)),
-                "the documented %APPDATA%\\npm install root must stay trusted"
-            );
-        }
+
+        // The documented %APPDATA%\npm install root stays trusted.
+        let app_data = crate::platform::PlatformEnvironment::native()
+            .roaming_app_data()
+            .expect("a Windows session exposes the roaming application data root");
+        let npm = app_data.join("npm");
+        assert!(
+            roots
+                .iter()
+                .any(|candidate| NativePlatformPaths::windows_path_eq(candidate, &npm)),
+            "the documented %APPDATA%\\npm install root must stay trusted"
+        );
     }
 
     #[test]

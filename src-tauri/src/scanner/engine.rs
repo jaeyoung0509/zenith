@@ -3,6 +3,7 @@ use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{Category, CategoryResult, RiskTier, ScanEvent, ScanItem, ScanResult};
 use crate::orbstack::OrbStackAdapter;
+use crate::platform::PlatformEnvironment;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
 use std::time::SystemTime;
@@ -12,11 +13,16 @@ pub struct ScanEngine;
 
 impl ScanEngine {
     /// Executes a full or filtered scan across all categories, emitting streaming events.
+    ///
+    /// The environment is threaded explicitly: signature paths, size
+    /// exclusions, and external provider caches all resolve through it, so a
+    /// scan cannot silently fall back to the running process's own profile.
     pub fn scan<F>(
         registry: &SignatureRegistry,
         categories_filter: Option<&[Category]>,
         excluded_signatures: &[String],
         intensive_cleanup: bool,
+        environment: &PlatformEnvironment,
         mut on_event: F,
     ) -> ScanResult
     where
@@ -63,7 +69,8 @@ impl ScanEngine {
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
                 }
-                let items = DirectoryScanner::scan_signature_with_pool(sig, directory_pool);
+                let items =
+                    DirectoryScanner::scan_signature_with_pool(sig, directory_pool, environment);
                 for item in items {
                     let bytes = item.size.reclaimable();
                     if !item.exists || bytes == 0 {
@@ -84,7 +91,7 @@ impl ScanEngine {
 
             // 2. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Developer {
-                for item in CacheProviderRegistry::scan_items(registry) {
+                for item in CacheProviderRegistry::scan_items(registry, environment) {
                     let bytes = item.size.reclaimable();
                     category_total_bytes += bytes;
                     cat_rebuild += bytes;
@@ -95,9 +102,9 @@ impl ScanEngine {
 
             // 3. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Container {
-                let adapter_items = DockerAdapter::scan_items()
+                let adapter_items = DockerAdapter::scan_items(environment)
                     .into_iter()
-                    .chain(OrbStackAdapter::scan_items());
+                    .chain(OrbStackAdapter::scan_items(environment));
                 for item in adapter_items {
                     let bytes = item.size.reclaimable();
                     category_total_bytes += bytes;

@@ -65,6 +65,21 @@ function writeChecksum(options, positional) {
   fs.writeFileSync(outputPath, `${hash}  ${path.basename(filePath)}\n`, 'ascii');
 }
 
+function writeChecksums(options, positional) {
+  if (!options.output || positional.length === 0) {
+    fail('write-many expects --output followed by one or more files');
+  }
+
+  const outputPath = path.resolve(options.output);
+  const lines = positional.map((artifactPath) => {
+    const filePath = requireFile(artifactPath, 'release artifact');
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    return `${hash}  ${path.basename(filePath)}`;
+  });
+
+  fs.writeFileSync(outputPath, `${lines.join('\n')}\n`, 'ascii');
+}
+
 function combineChecksums(options, positional) {
   if (!options.output || positional.length === 0) {
     fail('combine expects --output followed by one or more checksum manifests');
@@ -85,8 +100,10 @@ const { options, positional } = parseOptions(process.argv.slice(3));
 
 if (command === 'write') {
   writeChecksum(options, positional);
+} else if (command === 'write-many') {
+  writeChecksums(options, positional);
 } else if (command === 'combine') {
   combineChecksums(options, positional);
 } else {
-  fail('expected write or combine command');
+  fail('expected write, write-many, or combine command');
 }

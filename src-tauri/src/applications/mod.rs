@@ -4,6 +4,7 @@ use crate::models::AppInstallSource;
 use crate::models::{
     AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
 };
+use crate::platform::description::PlatformEnvironment;
 use crate::safety::Blacklist;
 #[cfg(not(target_os = "windows"))]
 use plist::Value;
@@ -51,23 +52,32 @@ pub struct AppInspectionRecord {
 pub struct ApplicationScanner;
 
 impl ApplicationScanner {
-    pub fn scan() -> AppInventory {
+    pub fn scan(environment: &PlatformEnvironment) -> AppInventory {
+        // Windows has no reviewed application-bundle inventory: bundles,
+        // their related data, and the uninstall review that consumes them are
+        // macOS concepts. The refusal is stated by the environment's flavor so
+        // it is provable on any runner, and a native Windows process states
+        // Windows.
+        if environment.flavor().is_windows() {
+            return empty_inventory();
+        }
+
         #[cfg(target_os = "windows")]
         {
-            AppInventory {
-                inventory_id: Uuid::new_v4().to_string(),
-                records: HashMap::new(),
-                created_at: unix_timestamp(),
-            }
+            empty_inventory()
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let mut records = HashMap::new();
-            let home = crate::platform::paths::NativePlatformPaths::new().home();
 
-            let mut roots = vec![PathBuf::from("/Applications")];
-            if let Some(home) = &home {
+            // The reviewed system root and the stated profile's own folder are
+            // the only places an application bundle is inventoried from.
+            let mut roots = Vec::new();
+            if let Some(system_root) = environment.program_files() {
+                roots.push(system_root);
+            }
+            if let Some(home) = environment.user_home() {
                 roots.push(home.join("Applications"));
             }
 
@@ -168,7 +178,11 @@ impl ApplicationScanner {
         }
     }
 
-    pub fn inspect(inventory: &AppInventory, app_id: &str) -> Result<AppInspectionRecord, String> {
+    pub fn inspect(
+        environment: &PlatformEnvironment,
+        inventory: &AppInventory,
+        app_id: &str,
+    ) -> Result<AppInspectionRecord, String> {
         let record = inventory
             .records
             .get(app_id)
@@ -188,8 +202,8 @@ impl ApplicationScanner {
             );
         }
 
-        let home = crate::platform::paths::NativePlatformPaths::new()
-            .home()
+        let home = environment
+            .user_home()
             .ok_or_else(|| "Could not resolve the user home directory".to_string())?;
         let bundle_id = record.app.bundle_id.clone();
         let normalized_name = record.app.name.trim().to_string();
@@ -197,8 +211,11 @@ impl ApplicationScanner {
         let mut incomplete = false;
         let mut warnings = Vec::new();
 
+        // Profile-relative data roots. The profile comes from the environment,
+        // and Windows uses the stated AppData folders when the platform
+        // resolves them instead of guessing them from the profile spelling.
         #[cfg(not(target_os = "windows"))]
-        let roots = [
+        let roots: Vec<(PathBuf, AppRelatedKind)> = [
             (
                 "Library/Application Support",
                 AppRelatedKind::ApplicationSupport,
@@ -218,16 +235,28 @@ impl ApplicationScanner {
             ),
             ("Library/HTTPStorages", AppRelatedKind::HttpStorage),
             ("Library/WebKit", AppRelatedKind::WebKit),
-        ];
+        ]
+        .into_iter()
+        .map(|(relative, kind)| (home.join(relative), kind))
+        .collect();
 
         #[cfg(target_os = "windows")]
-        let roots = [
-            ("AppData/Local", AppRelatedKind::Cache),
-            ("AppData/Roaming", AppRelatedKind::ApplicationSupport),
+        let roots: Vec<(PathBuf, AppRelatedKind)> = vec![
+            (
+                environment
+                    .local_app_data()
+                    .unwrap_or_else(|| home.join("AppData/Local")),
+                AppRelatedKind::Cache,
+            ),
+            (
+                environment
+                    .roaming_app_data()
+                    .unwrap_or_else(|| home.join("AppData/Roaming")),
+                AppRelatedKind::ApplicationSupport,
+            ),
         ];
 
-        for (relative, kind) in roots {
-            let root = home.join(relative);
+        for (root, kind) in roots {
             if fs::symlink_metadata(&root)
                 .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
                 .unwrap_or(true)
@@ -325,6 +354,16 @@ impl ApplicationScanner {
 
 fn is_zenith_app(app: &InstalledApp) -> bool {
     app.is_system_protected || is_zenith_identity(&app.name, app.bundle_id.as_deref())
+}
+
+/// The inventory a platform without bundle support reports: empty, with a
+/// fresh id so callers cannot mistake it for a populated one.
+fn empty_inventory() -> AppInventory {
+    AppInventory {
+        inventory_id: Uuid::new_v4().to_string(),
+        records: HashMap::new(),
+        created_at: unix_timestamp(),
+    }
 }
 
 fn is_zenith_identity(name: &str, bundle_id: Option<&str>) -> bool {
@@ -469,7 +508,69 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use crate::models::AppInstallSource;
+    use crate::platform::path_algebra::PathFlavor;
+    #[cfg(not(target_os = "windows"))]
+    use crate::platform::paths::SimulatedPaths;
     use std::io::Write;
+    #[cfg(not(target_os = "windows"))]
+    use std::sync::Arc;
+
+    /// A POSIX environment stating the reviewed system root and the profile.
+    #[cfg(not(target_os = "windows"))]
+    fn environment_with_roots(system_root: &Path, home: &Path) -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(home)
+                .with_program_files(system_root),
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn scan_uses_the_stated_application_roots_and_nothing_else() {
+        let temp = tempfile::tempdir().unwrap();
+        let system_root = temp.path().join("reviewed-applications");
+        let profile = temp.path().join("profile");
+        fs::create_dir_all(system_root.join("Reviewed.app")).unwrap();
+        fs::create_dir_all(profile.join("Applications/Profile.app")).unwrap();
+        fs::create_dir_all(temp.path().join("elsewhere/Unstated.app")).unwrap();
+
+        let environment = environment_with_roots(&system_root, &profile);
+        let inventory = ApplicationScanner::scan(&environment);
+        let mut names = inventory
+            .records
+            .values()
+            .map(|record| record.app.name.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["Profile".to_string(), "Reviewed".to_string()]);
+
+        // Without a stated system root, a bundle elsewhere is not inventoried
+        // even though the host has one.
+        let profile_only =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_roots(Arc::new(
+                SimulatedPaths::new()
+                    .with_flavor(PathFlavor::current())
+                    .with_home(&profile),
+            ));
+        let inventory = ApplicationScanner::scan(&profile_only);
+        let names = inventory
+            .records
+            .values()
+            .map(|record| record.app.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["Profile".to_string()]);
+    }
+
+    #[test]
+    fn windows_flavor_reports_an_empty_inventory() {
+        let inventory =
+            ApplicationScanner::scan(&PlatformEnvironment::simulated(PathFlavor::Windows));
+
+        assert!(inventory.records.is_empty());
+        assert!(!inventory.inventory_id.is_empty());
+    }
 
     #[test]
     fn exact_bundle_identifier_is_high_confidence() {
@@ -533,12 +634,23 @@ mod tests {
         let mut file = fs::File::create(bundle.join("Contents/payload.bin")).unwrap();
         file.write_all(&[7; 4096]).unwrap();
         drop(file);
+        // A second real file proves the walk descends the bundle on every
+        // platform, so the assertion below is never vacuous.
+        let mut nested = fs::File::create(bundle.join("Contents/nested.bin")).unwrap();
+        nested.write_all(&[9; 1024]).unwrap();
+        drop(nested);
+        // A directory outside the bundle whose contents must never be counted.
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let mut escape = fs::File::create(outside.join("secret.bin")).unwrap();
+        escape.write_all(&[1; 8192]).unwrap();
+        drop(escape);
 
         #[cfg(unix)]
-        std::os::unix::fs::symlink(temp.path(), bundle.join("Contents/escape")).unwrap();
+        std::os::unix::fs::symlink(&outside, bundle.join("Contents/escape")).unwrap();
 
         let (logical, allocated) = measure_path_without_symlinks(&bundle);
-        assert_eq!(logical, 4096);
+        assert_eq!(logical, 4096 + 1024);
         assert!(allocated > 0);
     }
 }

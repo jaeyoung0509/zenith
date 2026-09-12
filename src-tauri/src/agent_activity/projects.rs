@@ -1,4 +1,5 @@
 use crate::models::ProjectIdentity;
+use crate::platform::path_algebra::{self, PathFlavor};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -21,13 +22,8 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
     let is_worktree = marker.is_file();
 
     let display_name = root.file_name()?.to_string_lossy().to_string();
-    let parent_name = root
-        .parent()
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().to_string());
-    let location_hint = parent_name
-        .map(|parent| format!("{parent}/{display_name}"))
-        .unwrap_or_else(|| display_name.clone());
+    let location_hint =
+        location_hint(&root, PathFlavor::current()).unwrap_or_else(|| display_name.clone());
 
     let display_path = crate::privacy::paths::display_path(&root);
 
@@ -70,6 +66,30 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
             is_detached,
         },
     ))
+}
+
+/// The last two components of a project root, used as a low-information hint.
+///
+/// Computed through the path algebra so a Windows root is reduced to its own
+/// components (`D:\Users\me\projects\app` -> `projects/app`) even when the
+/// check runs on another host, and so the hint can never contain a drive
+/// letter, a UNC server, or an absolute prefix.
+fn location_hint(root: &Path, flavor: PathFlavor) -> Option<String> {
+    let normalized = path_algebra::normalize(&root.to_string_lossy(), flavor);
+    let components = normalized
+        .split(flavor.separator())
+        .filter(|component| !component.is_empty())
+        // The drive prefix is not a directory name.
+        .filter(|component| {
+            !(flavor.is_windows() && component.len() == 2 && component.ends_with(':'))
+        })
+        .collect::<Vec<_>>();
+    let display_name = components.last()?.to_string();
+    let hint = match components.len() {
+        0 | 1 => display_name.clone(),
+        len => format!("{}/{}", components[len - 2], display_name),
+    };
+    Some(hint)
 }
 
 /// Finds the nearest repository root, ignoring a dotfiles repository that
@@ -213,8 +233,67 @@ mod tests {
         assert_eq!(resolved, root.canonicalize().unwrap());
         assert_eq!(identity.display_name, "repo-name");
         assert_eq!(identity.branch.as_deref(), Some("feature/test"));
-        assert!(!identity.location_hint.starts_with('/'));
+
+        // The hint is exactly the last two components, so the absolute prefix
+        // of the root can never appear in it.
+        let parent_name = root
+            .parent()
+            .and_then(Path::file_name)
+            .expect("temporary root has a parent")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(identity.location_hint, format!("{parent_name}/repo-name"));
+        assert!(!identity.location_hint.contains("repo-name/src"));
+        assert!(!identity.location_hint.contains(&root.display().to_string()));
         assert!(!identity.id.contains("repo-name"));
+    }
+
+    #[test]
+    fn location_hint_masks_absolute_locations_in_both_flavors() {
+        use crate::platform::path_algebra::PathFlavor::{Posix, Windows};
+
+        // Components only: no drive letter, no UNC server, no leading separator.
+        assert_eq!(
+            location_hint(Path::new(r"D:\Users\me\projects\app"), Windows).as_deref(),
+            Some("projects/app")
+        );
+        assert_eq!(
+            location_hint(Path::new(r"\\?\Z:\Users\me\app"), Windows).as_deref(),
+            Some("me/app")
+        );
+        assert_eq!(
+            location_hint(Path::new(r"\\server\share\me\app"), Windows).as_deref(),
+            Some("me/app")
+        );
+        assert_eq!(
+            location_hint(Path::new("/Users/me/projects/app"), Posix).as_deref(),
+            Some("projects/app")
+        );
+
+        let hint = location_hint(Path::new(r"Z:\Users\me\secret-project"), Windows)
+            .expect("a drive-rooted project has a hint");
+        assert_eq!(hint, "me/secret-project");
+        assert!(!hint.contains("Z:"), "drive letter leaked: {hint}");
+        assert!(!hint.contains('\\'), "separator leaked: {hint}");
+        assert!(!hint.starts_with('/'), "absolute path leaked: {hint}");
+    }
+
+    #[test]
+    fn a_project_under_a_stated_home_renders_the_same_hint_on_every_flavor() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("projects/app");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let native_hint = location_hint(&project, PathFlavor::current()).unwrap();
+        assert_eq!(native_hint, "projects/app");
+        assert!(!native_hint.contains(home.path().to_str().unwrap()));
+
+        // The same shape under a stated Windows home renders identically, so
+        // the hint never falls back to whatever layout the host happens to use.
+        assert_eq!(
+            location_hint(Path::new(r"D:\Users\me\projects\app"), PathFlavor::Windows).unwrap(),
+            native_hint
+        );
     }
 
     #[test]

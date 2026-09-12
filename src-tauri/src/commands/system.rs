@@ -69,8 +69,7 @@ pub async fn get_disk_metrics(state: State<'_, AppState>) -> Result<DiskMetrics,
     let environment = state.environment.clone();
     run_blocking(
         move || {
-            DiskMetricsCollector::get_primary_disk(&environment)
-                .map_err(|error| error.to_string())
+            DiskMetricsCollector::get_primary_disk(&environment).map_err(|error| error.to_string())
         },
         "Disk metrics worker panicked",
     )
@@ -199,9 +198,7 @@ pub async fn get_local_models(state: State<'_, AppState>) -> Result<Vec<LocalMod
     let operation_gate = state.storage_operation_gate.clone();
     let environment = state.environment.clone();
     run_blocking(
-        move || {
-            operation_gate.run_read(|| Ok(LocalModelScanner::scan_all_models(&environment)))
-        },
+        move || operation_gate.run_read(|| Ok(LocalModelScanner::scan_all_models(&environment))),
         "Local model scan worker panicked",
     )
     .await
