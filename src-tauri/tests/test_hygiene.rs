@@ -220,6 +220,13 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
     bodies
 }
 
+/// The stable id a violation and an allowlist entry are matched on. Separators
+/// are normalized so the same exception text describes the same file on a
+/// Windows runner, which reports paths with a backslash.
+fn location_of(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn assertion_marker(text: &str) -> Option<usize> {
     ASSERTION.find(text).map(|found| found.start())
 }
@@ -371,7 +378,7 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
             continue;
         };
         scanned += 1;
-        let location = file.to_string_lossy().to_string();
+        let location = location_of(&file);
         violations.extend(file_level_violations(&location, &source));
         for body in test_bodies(&source) {
             violations.extend(inspect_test(&location, &body));
@@ -553,6 +560,13 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         )
         .is_empty(),
         "a platform-gated function is not a suite"
+    );
+
+    // A violation id is platform-independent, so one allowlist entry describes
+    // the same exception on every runner.
+    assert_eq!(
+        location_of(Path::new("tests\\dev_ports_tests.rs")),
+        "tests/dev_ports_tests.rs"
     );
 
     // An exception carries its reason, and a bare path is refused.
