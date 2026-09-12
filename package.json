@@ -25,7 +25,7 @@
     "@tauri-apps/cli": "^2.2.0",
     "@types/node": "^22.13.4",
     "jsdom": "^26.1.0",
-    "svelte": "^5.20.2",
+    "svelte": "^5.57.0",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.7.3",
