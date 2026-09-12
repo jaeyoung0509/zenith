@@ -839,8 +839,8 @@ export type DiagnosticsSnapshot = {
 	elevated: boolean | null,
 	locale: string | null,
 	/**
-	 *  `None` while the log is writable; otherwise why it is not. A logger that
-	 *  disables itself silently removes the only evidence of what disabled it.
+	 *  The first write failure observed by this process, if any. A later
+	 *  successful write does not erase evidence that may explain a log gap.
 	 */
 	log_failure: string | null,
 	log_path: string,
