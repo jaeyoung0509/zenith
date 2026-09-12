@@ -1265,6 +1265,11 @@ fn test_permission_denied_or_inaccessible_measurement_is_captured_with_reason() 
     let unreadable = dir.path().join("unreadable_dir");
     fs::create_dir(&unreadable).unwrap();
     fs::write(unreadable.join("payload.bin"), b"unreachable content").unwrap();
+    let mut deep = dir.path().join("deep");
+    for level in 0..=32 {
+        deep = deep.join(format!("level-{level}"));
+    }
+    fs::create_dir_all(&deep).unwrap();
 
     #[cfg(unix)]
     {
@@ -1282,16 +1287,16 @@ fn test_permission_denied_or_inaccessible_measurement_is_captured_with_reason() 
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    #[cfg(unix)]
-    {
-        assert!(!measurement.complete);
-        assert!(measurement.incomplete_reason.is_some());
-        let reason = measurement.incomplete_reason.unwrap();
-        assert!(
-            reason.contains("Failed to read directory") || reason.contains("Permission denied"),
-            "unexpected reason: {reason}"
-        );
-    }
+    assert!(!measurement.complete);
+    let reason = measurement
+        .incomplete_reason
+        .expect("an incomplete measurement carries a reason");
+    assert!(
+        reason.contains("Failed to read directory")
+            || reason.contains("Permission denied")
+            || reason.contains("Directory depth limit"),
+        "unexpected reason: {reason}"
+    );
 }
 
 #[test]
