@@ -1004,7 +1004,10 @@ mod tests {
 
         // The same input under the POSIX flavor is a different executable, so
         // the release refuses to signal it.
-        let stated_posix = FakeDevPortSystem::new();
+        // The contrast is about POSIX rules, which must be stated: the runner's
+        // own flavor is Windows here.
+        let mut stated_posix = FakeDevPortSystem::new();
+        stated_posix.flavor = PathFlavor::Posix;
         let posix_snapshot = |exe: &str| ProcessSnapshot {
             pid: 43000,
             owner: Some(ProcessOwner::Unix(501)),

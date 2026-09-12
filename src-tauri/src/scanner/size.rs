@@ -791,8 +791,13 @@ mod tests {
         let cache = root.path().join("_cacache");
         std::fs::create_dir_all(cache.join(".git")).unwrap();
         std::fs::write(cache.join(".git/objects"), vec![1u8; 1_024]).unwrap();
-        std::fs::create_dir_all(cache.join("con")).unwrap();
-        std::fs::write(cache.join("con/payload"), vec![2u8; 2_048]).unwrap();
+        // A reserved device name is a Windows boundary, but Windows itself
+        // cannot create every one of them, so the fixture states it only where
+        // the host can hold it and the expectation follows.
+        let reserved_created = std::fs::create_dir_all(cache.join("con")).is_ok();
+        if reserved_created {
+            std::fs::write(cache.join("con/payload"), vec![2u8; 2_048]).unwrap();
+        }
         std::fs::create_dir_all(cache.join("keep")).unwrap();
         std::fs::write(cache.join("keep/payload"), vec![3u8; 512]).unwrap();
         std::fs::write(cache.join("content.bin"), vec![4u8; 4_096]).unwrap();
@@ -808,16 +813,23 @@ mod tests {
             "a protected name is a deliberate boundary, not a read failure"
         );
         assert_eq!(
-            measured.skipped_entries, 3,
-            "the exclusion, `.git`, and the reserved device name are not measured"
+            measured.skipped_entries,
+            2 + u64::from(reserved_created),
+            "the exclusion, `.git`, and, where the host holds one, the reserved device name are not measured"
         );
 
         // The same tree on a POSIX machine has no reserved-device rule, so the
         // stated flavor is what decided the third boundary.
         let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
         let measured = SizeCalculator::measure_path_full(&cache, &exclusions, &posix);
-        assert_eq!(measured.skipped_entries, 2);
-        assert_eq!(measured.size.logical, 4_096 + 2_048);
+        assert_eq!(
+            measured.skipped_entries, 2,
+            "POSIX protects the exclusion and `.git` only"
+        );
+        assert_eq!(
+            measured.size.logical,
+            4_096 + if reserved_created { 2_048 } else { 0 }
+        );
     }
 
     #[test]

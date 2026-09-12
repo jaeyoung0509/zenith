@@ -686,8 +686,13 @@ mod tests {
         let candidate = root.path().join("candidate.cache");
         std::fs::create_dir_all(candidate.join(".git")).unwrap();
         std::fs::write(candidate.join(".git/objects"), vec![1u8; 1_024]).unwrap();
-        std::fs::create_dir_all(candidate.join("nul")).unwrap();
-        std::fs::write(candidate.join("nul/payload"), vec![2u8; 2_048]).unwrap();
+        // A reserved device name is a Windows boundary, but Windows itself
+        // cannot create every one of them, so the fixture states it only where
+        // the host can hold it and the expectation follows.
+        let reserved_created = std::fs::create_dir_all(candidate.join("nul")).is_ok();
+        if reserved_created {
+            std::fs::write(candidate.join("nul/payload"), vec![2u8; 2_048]).unwrap();
+        }
         std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
 
         let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
@@ -700,14 +705,18 @@ mod tests {
             "a protected name is a deliberate boundary, not a read failure"
         );
         assert_eq!(
-            stats.skipped_entries, 2,
-            "`.git` and the reserved device name are not measured"
+            stats.skipped_entries,
+            1 + u64::from(reserved_created),
+            "`.git` and, where the host holds one, the reserved device name are not measured"
         );
 
         let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
         let stats = DirectoryScanner::measure_tree_stats(&posix, &candidate, &[], 0, 32);
-        assert_eq!(stats.skipped_entries, 1);
-        assert_eq!(stats.logical, 4_096 + 2_048);
+        assert_eq!(stats.skipped_entries, 1, "only `.git` is a POSIX boundary");
+        assert_eq!(
+            stats.logical,
+            4_096 + if reserved_created { 2_048 } else { 0 }
+        );
     }
 
     #[test]

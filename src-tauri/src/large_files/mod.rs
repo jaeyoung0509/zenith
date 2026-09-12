@@ -512,8 +512,12 @@ mod tests {
         base: &Path,
         folders: &[(KnownFolder, &str)],
     ) -> PlatformEnvironment {
-        let mut environment =
-            PlatformEnvironment::simulated(PathFlavor::current()).with_home(base.join("profile"));
+        // The fixture lives in the temporary directory, and the anchored
+        // symlink validation starts from a stated root: without this the
+        // temporary tree would be validated from the drive root.
+        let mut environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(base.join("profile"))
+            .with_temp_dir(base);
         for (folder, relative) in folders {
             environment = environment.with_known_folder(*folder, base.join(relative));
         }
@@ -528,7 +532,8 @@ mod tests {
         std::fs::create_dir_all(&documents).unwrap();
         std::fs::create_dir_all(&other).unwrap();
         let resolve = |token: &str| (token == "documents").then(|| documents.clone());
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(dir.path());
         assert_eq!(
             super::resolve_roots_with(&["documents".into()], &environment, resolve).unwrap(),
             vec![documents.clone()]

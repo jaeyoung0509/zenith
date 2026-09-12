@@ -968,7 +968,12 @@ mod tests {
 
     #[test]
     fn an_unstated_root_is_absent_rather_than_invented() {
-        let environment = SimulatedPaths::new().with_home(r"D:\Users\me");
+        // A POSIX machine documents no install roots, so nothing is invented
+        // for one. Windows does document them, which
+        // `stated_platforms_resolve_their_own_install_roots` asserts.
+        let environment = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Posix)
+            .with_home("/home/me");
 
         assert_eq!(environment.program_files(), None);
         assert_eq!(environment.program_data(), None);
@@ -978,7 +983,7 @@ mod tests {
             None
         );
         // An unstated home is also absent, so expansion fails closed.
-        let empty = SimulatedPaths::new();
+        let empty = SimulatedPaths::new().with_flavor(PathFlavor::Posix);
         assert_eq!(empty.user_home(), None);
         assert_eq!(empty.expand_placeholder("~/Downloads"), None);
     }

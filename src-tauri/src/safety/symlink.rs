@@ -406,7 +406,11 @@ mod tests {
         let environment = crate::platform::PlatformEnvironment::simulated(
             crate::platform::path_algebra::PathFlavor::Windows,
         )
-        .with_home(profile.clone());
+        .with_home(profile.clone())
+        // The fixture lives in the temporary directory, which is the root the
+        // relocated workspace is anchored at; the profile above is the selected
+        // one, not the containing one.
+        .with_temp_dir(dir.path());
         assert!(crate::developer_artifacts::validate_workspace_root(
             &environment,
             &plain_workspace
