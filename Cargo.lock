@@ -5905,7 +5905,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-core"
-version = "0.3.22"
+version = "0.3.23"
 dependencies = [
  "base64 0.23.1",
  "libc",

@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.3.22"
+version = "0.3.23"
 description = "Zenith - cross-platform AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
