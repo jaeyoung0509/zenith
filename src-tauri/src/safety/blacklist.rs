@@ -153,6 +153,13 @@ pub fn classify_windows(path: &str, environment: &BlacklistEnvironment) -> Black
         return BlacklistVerdict::Denied("unsupported Windows namespace");
     }
 
+    if path.starts_with('\\') && !path.starts_with(r"\\") && !path_algebra::is_root(path, WINDOWS) {
+        // `\Windows` and `\cache` are rooted on whichever drive is current for
+        // the process. Their identity cannot be established from the spelling,
+        // so never let them reach a cleanup operation.
+        return BlacklistVerdict::Denied("root-relative Windows path");
+    }
+
     let normalized = path_algebra::normalize(path, WINDOWS);
     if normalized.is_empty() {
         return BlacklistVerdict::Allowed;
@@ -286,7 +293,11 @@ fn has_unsupported_windows_namespace(path: &str) -> bool {
     let chars: Vec<char> = remainder.chars().collect();
     let is_drive =
         chars.len() >= 3 && chars[0].is_ascii_alphabetic() && chars[1] == ':' && chars[2] == '\\';
-    let is_unc = remainder.to_ascii_uppercase().starts_with(r"UNC\");
+    let upper = remainder.to_ascii_uppercase();
+    let is_unc = upper.strip_prefix(r"UNC\").is_some_and(|tail| {
+        let mut components = tail.split('\\').filter(|part| !part.is_empty());
+        components.next().is_some() && components.next().is_some()
+    });
     !is_drive && !is_unc
 }
 
@@ -614,7 +625,9 @@ mod tests {
             r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1",
             r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\Windows",
             r"\\.\PhysicalDrive0",
+            r"//./PhysicalDrive0",
             r"\??\C:\Windows",
+            r"\\?\UNC\server",
         ] {
             let verdict = classify_windows(path, &environment);
             assert!(
@@ -727,6 +740,7 @@ mod tests {
         );
         allowed(r"\\?\D:\Users\me\projects\repo");
         allowed(r"\\?\UNC\server\share\projects\repo");
+        allowed(r"//?/uNc/server/share/projects/repo");
         allowed(r"\\server\share\projects\repo");
 
         // Device and NT namespaces, and verbatim prefixes that wrap neither a
@@ -744,6 +758,15 @@ mod tests {
             "unsupported Windows namespace"
         );
         assert_eq!(denied(r"//?/GLOBALROOT/x"), "unsupported Windows namespace");
+        assert_eq!(
+            denied(r"//./PhysicalDrive0"),
+            "unsupported Windows namespace"
+        );
+        assert_eq!(denied(r"\Windows\System32"), "root-relative Windows path");
+        assert_eq!(denied(r"\Users\me\cache"), "root-relative Windows path");
+        for root in [r"\\server", r"\\server\share", r"\\?\UNC\server\share"] {
+            assert_eq!(denied(root), "filesystem root", "UNC root {root}");
+        }
     }
 
     #[test]

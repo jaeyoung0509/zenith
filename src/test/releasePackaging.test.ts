@@ -127,6 +127,100 @@ describe('release packaging contracts', () => {
     expect(combined).toMatch(/Zenith-windows-x64-setup\.exe\n$/);
   });
 
+  it('binds endpoint review records to one exact, unique artifact set', () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'zenith-endpoint-review-'));
+    temporaryDirectories.push(fixtureRoot);
+    const macArtifact = join(fixtureRoot, 'Zenith-macos-arm64.dmg');
+    const windowsArtifact = join(fixtureRoot, 'Zenith-windows-x64-setup.exe');
+    const reviewPath = join(fixtureRoot, 'endpoint-review.json');
+    writeFileSync(macArtifact, 'reviewed mac bytes');
+    writeFileSync(windowsArtifact, 'reviewed windows bytes');
+
+    const common = [
+      '--version',
+      '0.3.19',
+      '--commit',
+      '0123456789abcdef',
+    ];
+    execFileSync(
+      process.execPath,
+      [
+        'scripts/endpoint_review.cjs',
+        'record',
+        '--output',
+        reviewPath,
+        ...common,
+        '--status',
+        'clear',
+        '--reference',
+        'submission-123',
+        '--reviewer',
+        'release-maintainer',
+        '--reviewed-at',
+        '2026-09-12',
+        macArtifact,
+        windowsArtifact,
+      ],
+      { cwd: repositoryRoot, stdio: 'pipe' },
+    );
+
+    const verify = () =>
+      execFileSync(
+        process.execPath,
+        [
+          'scripts/endpoint_review.cjs',
+          'verify',
+          '--review',
+          reviewPath,
+          ...common,
+          macArtifact,
+          windowsArtifact,
+        ],
+        { cwd: repositoryRoot, stdio: 'pipe' },
+      );
+    expect(verify).not.toThrow();
+
+    const review = JSON.parse(readFileSync(reviewPath, 'utf8'));
+    review.artifacts[1] = { ...review.artifacts[0] };
+    writeFileSync(reviewPath, `${JSON.stringify(review, null, 2)}\n`);
+    expect(verify).toThrow(/duplicate artifact name/);
+
+    execFileSync(
+      process.execPath,
+      [
+        'scripts/endpoint_review.cjs',
+        'record',
+        '--output',
+        reviewPath,
+        ...common,
+        '--status',
+        'clear',
+        '--reference',
+        'submission-123',
+        '--reviewer',
+        'release-maintainer',
+        '--reviewed-at',
+        '2026-09-12',
+        macArtifact,
+        windowsArtifact,
+      ],
+      { cwd: repositoryRoot, stdio: 'pipe' },
+    );
+    const sizeTamperedReview = JSON.parse(readFileSync(reviewPath, 'utf8'));
+    sizeTamperedReview.artifacts[1].bytes += 1;
+    writeFileSync(reviewPath, `${JSON.stringify(sizeTamperedReview, null, 2)}\n`);
+    expect(verify).toThrow(/size does not match the reviewed bytes/);
+  });
+
+  it('matches only explicit failed doctor rows in the Windows packaging smoke test', () => {
+    const smokeTest = readFileSync(
+      join(repositoryRoot, 'scripts/windows_packaging_smoke.ps1'),
+      'utf8',
+    );
+    expect(smokeTest).toContain("$doctor.Output -match '^\\s*\\[FAIL\\](?:\\s|$)'");
+    expect(smokeTest).not.toContain("$doctor.Output -match '(?m)\\bFAIL\\b'");
+  });
+
   it('uses Node 24-based artifact actions in CI and release workflows', () => {
     const workflows = ['.github/workflows/ci.yml', '.github/workflows/release.yml']
       .map((workflow) => readFileSync(join(repositoryRoot, workflow), 'utf8'))

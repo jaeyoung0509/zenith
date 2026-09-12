@@ -86,7 +86,7 @@ fn cli_available(environment: &PlatformEnvironment, cli: ContainerCli) -> bool {
     match environment.tool(cli.executable()) {
         Some(ToolResolution::Found(_)) => true,
         Some(ToolResolution::NotFound) => false,
-        None => tooling::resolve(cli.executable()).is_some(),
+        None => tooling::resolve_with(cli.executable(), environment).is_some(),
     }
 }
 
@@ -101,6 +101,10 @@ fn select_running_cli(
 pub struct DockerAdapter;
 
 impl DockerAdapter {
+    fn cli_command(environment: &PlatformEnvironment, cli: ContainerCli) -> std::process::Command {
+        tooling::command_with(cli.executable(), environment)
+    }
+
     fn installed_clis(environment: &PlatformEnvironment) -> Vec<ContainerCli> {
         ContainerCli::ALL
             .iter()
@@ -109,8 +113,8 @@ impl DockerAdapter {
             .collect()
     }
 
-    fn cli_reaches_daemon(cli: ContainerCli) -> bool {
-        let mut cmd = tooling::command(cli.executable());
+    fn cli_reaches_daemon(environment: &PlatformEnvironment, cli: ContainerCli) -> bool {
+        let mut cmd = Self::cli_command(environment, cli);
         cmd.args(["info", "--format", "{{.ServerVersion}}"]);
         matches!(
             tooling::run_with_timeout(cmd, std::time::Duration::from_secs(4)),
@@ -119,7 +123,9 @@ impl DockerAdapter {
     }
 
     fn active_cli(environment: &PlatformEnvironment) -> Option<ContainerCli> {
-        select_running_cli(&Self::installed_clis(environment), Self::cli_reaches_daemon)
+        select_running_cli(&Self::installed_clis(environment), |cli| {
+            Self::cli_reaches_daemon(environment, cli)
+        })
     }
 
     /// The CLI used by operations that were already authorized by a status
@@ -131,8 +137,8 @@ impl DockerAdapter {
             .unwrap_or(ContainerCli::Docker)
     }
 
-    fn cli_version(cli: ContainerCli) -> Option<String> {
-        let mut cmd = tooling::command(cli.executable());
+    fn cli_version(environment: &PlatformEnvironment, cli: ContainerCli) -> Option<String> {
+        let mut cmd = Self::cli_command(environment, cli);
         cmd.arg("--version");
         tooling::run_with_timeout(cmd, std::time::Duration::from_secs(3))
             .ok()
@@ -182,7 +188,7 @@ impl DockerAdapter {
         // Report the version of the runtime that actually answers, so a dead
         // Docker daemon with a live Podman machine shows the Podman version.
         let active = Self::active_cli(environment);
-        let version = Self::cli_version(active.unwrap_or(installed[0]));
+        let version = Self::cli_version(environment, active.unwrap_or(installed[0]));
         let Some(cli) = active else {
             return DockerStatus {
                 is_available: true,
@@ -196,10 +202,10 @@ impl DockerAdapter {
             };
         };
 
-        let overview = Self::get_overview_with(cli);
-        let containers = Self::get_containers_with(cli);
-        let images = Self::get_images_from_containers_with(cli, &containers);
-        let volumes = Self::get_volumes_with(cli);
+        let overview = Self::get_overview_with(environment, cli);
+        let containers = Self::get_containers_with(environment, cli);
+        let images = Self::get_images_from_containers_with(environment, cli, &containers);
+        let volumes = Self::get_volumes_with(environment, cli);
 
         DockerStatus {
             is_available: true,
@@ -340,27 +346,28 @@ impl DockerAdapter {
     /// Queries `docker system df` / `podman system df` and parses image,
     /// container, volume, and build cache usage.
     pub fn get_overview(environment: &PlatformEnvironment) -> DockerOverview {
-        Self::get_overview_with(Self::preferred_cli(environment))
+        Self::get_overview_with(environment, Self::preferred_cli(environment))
     }
 
-    fn get_overview_with(cli: ContainerCli) -> DockerOverview {
+    fn get_overview_with(environment: &PlatformEnvironment, cli: ContainerCli) -> DockerOverview {
         let args: &[&str] = match cli {
             ContainerCli::Docker => &["system", "df", "--format", "{{json .}}"],
             // Podman emits a single JSON array for `--format json`.
             ContainerCli::Podman => &["system", "df", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_overview_records(&records)
     }
 
     /// Runs a JSON-emitting command and accepts Docker's JSON-lines output,
     /// Podman's single JSON array, or a single JSON object.
     fn run_json_records(
+        environment: &PlatformEnvironment,
         cli: ContainerCli,
         args: &[&str],
         timeout_secs: u64,
     ) -> Vec<serde_json::Value> {
-        let mut cmd = tooling::command(cli.executable());
+        let mut cmd = Self::cli_command(environment, cli);
         cmd.args(args);
         let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(timeout_secs));
         match output {
@@ -507,18 +514,23 @@ impl DockerAdapter {
 
     pub fn get_images(environment: &PlatformEnvironment) -> Vec<DockerImageItem> {
         let cli = Self::preferred_cli(environment);
-        let containers = Self::get_containers_with(cli);
-        Self::get_images_from_containers_with(cli, &containers)
+        let containers = Self::get_containers_with(environment, cli);
+        Self::get_images_from_containers_with(environment, cli, &containers)
     }
 
     pub fn get_images_from_containers(
         environment: &PlatformEnvironment,
         containers: &[DockerContainerItem],
     ) -> Vec<DockerImageItem> {
-        Self::get_images_from_containers_with(Self::preferred_cli(environment), containers)
+        Self::get_images_from_containers_with(
+            environment,
+            Self::preferred_cli(environment),
+            containers,
+        )
     }
 
     fn get_images_from_containers_with(
+        environment: &PlatformEnvironment,
         cli: ContainerCli,
         containers: &[DockerContainerItem],
     ) -> Vec<DockerImageItem> {
@@ -529,7 +541,7 @@ impl DockerAdapter {
             ContainerCli::Docker => &["images", "--format", "{{json .}}"],
             ContainerCli::Podman => &["images", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_images_records(&records, &used_images)
     }
 
@@ -602,15 +614,18 @@ impl DockerAdapter {
     }
 
     pub fn get_containers(environment: &PlatformEnvironment) -> Vec<DockerContainerItem> {
-        Self::get_containers_with(Self::preferred_cli(environment))
+        Self::get_containers_with(environment, Self::preferred_cli(environment))
     }
 
-    fn get_containers_with(cli: ContainerCli) -> Vec<DockerContainerItem> {
+    fn get_containers_with(
+        environment: &PlatformEnvironment,
+        cli: ContainerCli,
+    ) -> Vec<DockerContainerItem> {
         let args: &[&str] = match cli {
             ContainerCli::Docker => &["ps", "-a", "--format", "{{json .}}"],
             ContainerCli::Podman => &["ps", "-a", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_containers_records(&records)
     }
 
@@ -656,15 +671,18 @@ impl DockerAdapter {
     }
 
     pub fn get_volumes(environment: &PlatformEnvironment) -> Vec<DockerVolumeItem> {
-        Self::get_volumes_with(Self::preferred_cli(environment))
+        Self::get_volumes_with(environment, Self::preferred_cli(environment))
     }
 
-    fn get_volumes_with(cli: ContainerCli) -> Vec<DockerVolumeItem> {
+    fn get_volumes_with(
+        environment: &PlatformEnvironment,
+        cli: ContainerCli,
+    ) -> Vec<DockerVolumeItem> {
         let args: &[&str] = match cli {
             ContainerCli::Docker => &["volume", "ls", "--format", "{{json .}}"],
             ContainerCli::Podman => &["volume", "ls", "--format", "json"],
         };
-        let records = Self::run_json_records(cli, args, 5);
+        let records = Self::run_json_records(environment, cli, args, 5);
         Self::parse_volumes_records(&records)
     }
 
@@ -705,11 +723,11 @@ impl DockerAdapter {
         }
 
         let prune_timeout = std::time::Duration::from_secs(30);
-        let cli = Self::preferred_cli(environment).executable();
+        let cli = Self::preferred_cli(environment);
 
         let (res, delta_kind) = match signature_id {
             "container.docker.dangling_images" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["image", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -717,7 +735,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_images" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["image", "prune", "-a", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -725,7 +743,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.builder" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["builder", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -733,7 +751,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.stopped_containers" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["container", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -741,7 +759,7 @@ impl DockerAdapter {
                 )
             }
             "container.docker.unused_volumes" => {
-                let mut cmd = tooling::command(cli);
+                let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["volume", "prune", "-f"]);
                 (
                     tooling::run_with_timeout(cmd, prune_timeout),
@@ -877,6 +895,22 @@ mod tests {
             .with_tool("docker", "/usr/bin/docker")
             .with_missing_tool("podman");
         assert!(container_cli_detected(&docker_only));
+    }
+
+    #[test]
+    fn docker_commands_use_the_cli_path_stated_by_the_environment() {
+        use super::ContainerCli;
+        use std::path::Path;
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_tool("docker", "/opt/zenith-fixtures/bin/docker")
+            .with_missing_tool("podman");
+
+        let command = DockerAdapter::cli_command(&environment, ContainerCli::Docker);
+        assert_eq!(
+            command.get_program(),
+            Path::new("/opt/zenith-fixtures/bin/docker").as_os_str()
+        );
     }
 
     #[test]

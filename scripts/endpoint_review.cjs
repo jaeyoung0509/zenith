@@ -126,6 +126,38 @@ function requireClearStatus(status) {
   }
 }
 
+function validateReviewedArtifacts(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail('endpoint-protection review must list at least one artifact');
+  }
+
+  const names = new Set();
+  for (const artifact of value) {
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      fail('endpoint-protection review contains an invalid artifact entry');
+    }
+    if (
+      typeof artifact.name !== 'string' ||
+      artifact.name.trim() === '' ||
+      path.basename(artifact.name) !== artifact.name
+    ) {
+      fail('endpoint-protection review contains an invalid artifact name');
+    }
+    if (names.has(artifact.name)) {
+      fail(`endpoint-protection review contains duplicate artifact name: ${artifact.name}`);
+    }
+    names.add(artifact.name);
+    if (typeof artifact.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(artifact.sha256)) {
+      fail(`endpoint-protection review contains an invalid sha256 for ${artifact.name}`);
+    }
+    if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 0) {
+      fail(`endpoint-protection review contains an invalid byte count for ${artifact.name}`);
+    }
+  }
+
+  return value;
+}
+
 function writeJson(filePath, document) {
   const resolved = path.resolve(filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
@@ -141,7 +173,7 @@ function record(options, positional) {
     fail(`--status must be one of: ${KNOWN_STATUSES.join(', ')}`);
   }
 
-  const artifacts = describeArtifacts(positional);
+  const artifacts = validateReviewedArtifacts(describeArtifacts(positional));
   const submission = {
     reviewer: requireField(options, 'reviewer'),
     reviewed_at: requireField(options, 'reviewed-at'),
@@ -213,7 +245,7 @@ function verify(options, positional) {
     fail(`endpoint-protection review covers commit ${review.commit}, not ${commit}`);
   }
 
-  const expected = Array.isArray(review.artifacts) ? review.artifacts : [];
+  const expected = validateReviewedArtifacts(review.artifacts);
   const actual = describeArtifacts(positional);
   const actualByName = new Map(actual.map((artifact) => [artifact.name, artifact]));
 
@@ -226,6 +258,12 @@ function verify(options, positional) {
       fail(
         `${artifact.name} does not match the reviewed bytes: reviewed ` +
           `${artifact.sha256}, publishing ${current.sha256}`,
+      );
+    }
+    if (current.bytes !== artifact.bytes) {
+      fail(
+        `${artifact.name} size does not match the reviewed bytes: reviewed ` +
+          `${artifact.bytes}, publishing ${current.bytes}`,
       );
     }
   }

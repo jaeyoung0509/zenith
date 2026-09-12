@@ -386,9 +386,7 @@ pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Re
 /// cannot point at a path the scan did not review.
 #[tauri::command]
 #[specta::specta]
-pub fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    use crate::platform::SystemActionProvider;
-
+pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<(), String> {
     state
         .platform_capabilities
         .capabilities()
@@ -407,16 +405,23 @@ pub fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<
         .filter(|inventory| is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp()))
         .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
 
-    let record = inventory
+    let path = inventory
         .records
         .get(&item_id)
-        .ok_or_else(|| "That item is no longer part of the current scan.".to_string())?;
+        .ok_or_else(|| "That item is no longer part of the current scan.".to_string())?
+        .path
+        .clone();
 
-    if !crate::large_files::is_allowed_large_file_path(&state.environment, &record.path) {
+    if !crate::large_files::is_allowed_large_file_path(&state.environment, &path) {
         return Err("That path is no longer inside an approved folder.".to_string());
     }
 
-    crate::platform::NativeSystemActions::new().reveal_path(&record.path)
+    tauri::async_runtime::spawn_blocking(move || {
+        use crate::platform::SystemActionProvider;
+        crate::platform::NativeSystemActions::new().reveal_path(&path)
+    })
+    .await
+    .map_err(|_| "File manager worker panicked".to_string())?
 }
 
 #[tauri::command]

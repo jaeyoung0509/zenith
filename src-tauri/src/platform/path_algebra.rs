@@ -117,12 +117,17 @@ pub fn strip_verbatim(path: &str, flavor: PathFlavor) -> String {
     if !flavor.is_windows() {
         return path.to_string();
     }
-    let trimmed = trim_trailing_separators(path, flavor);
-    if let Some(rest) = trimmed.strip_prefix(r"\\?\UNC\").or_else(|| {
-        trimmed
-            .strip_prefix(r"\\?\unc\")
-            .or_else(|| trimmed.strip_prefix(r"\\?\Unc\"))
-    }) {
+    // Windows accepts both separator spellings, including in namespace
+    // prefixes. Canonicalize before inspecting the prefix so `//?/UNC/...`
+    // cannot take a different path through the safety rules.
+    let canonical = path.replace('/', r"\");
+    let trimmed = trim_trailing_separators(&canonical, flavor);
+    const VERBATIM_UNC_PREFIX: &str = r"\\?\UNC\";
+    if trimmed
+        .get(..VERBATIM_UNC_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(VERBATIM_UNC_PREFIX))
+    {
+        let rest = &trimmed[VERBATIM_UNC_PREFIX.len()..];
         return format!(r"\\{rest}");
     }
     if let Some(rest) = trimmed.strip_prefix(r"\\?\") {
@@ -365,10 +370,13 @@ pub fn contains(parent: &str, child: &str, flavor: PathFlavor) -> bool {
         .is_some_and(|suffix| suffix.starts_with(separator))
 }
 
-/// True when the path denotes a filesystem root (`/`, `\`, `C:`, `C:\`).
+/// True when the path denotes a filesystem root (`/`, `\`, `C:`, `C:\`) or
+/// a UNC share root (`\\server\share`). Incomplete UNC prefixes are treated as
+/// broad roots too: callers must fail closed rather than act on an ambiguous
+/// server-level spelling.
 pub fn is_root(path: &str, flavor: PathFlavor) -> bool {
-    let stripped = strip_verbatim(path, flavor);
-    let trimmed = stripped.trim_end_matches(|ch| flavor.is_separator(ch));
+    let normalized = normalize(path, flavor);
+    let trimmed = normalized.trim_end_matches(|ch| flavor.is_separator(ch));
     if trimmed.is_empty() {
         return !path.is_empty();
     }
@@ -382,6 +390,9 @@ pub fn is_root(path: &str, flavor: PathFlavor) -> bool {
     if chars.len() == 1 && flavor.is_separator(chars[0]) {
         return true;
     }
+    if trimmed.starts_with(r"\\") {
+        return split_prefix(trimmed, flavor).remainder.is_empty();
+    }
     false
 }
 
@@ -391,7 +402,7 @@ pub fn is_root(path: &str, flavor: PathFlavor) -> bool {
 /// simulated `D:\Users\me` is absolute on Windows and is not a relative POSIX
 /// path, and the difference decides whether a cleanup target is acceptable.
 pub fn is_absolute(path: &str, flavor: PathFlavor) -> bool {
-    let stripped = strip_verbatim(path, flavor);
+    let stripped = canonical_separators(&strip_verbatim(path, flavor), flavor);
     if !flavor.is_windows() {
         return stripped.starts_with('/');
     }
@@ -405,13 +416,21 @@ pub fn is_absolute(path: &str, flavor: PathFlavor) -> bool {
         && flavor.is_separator(chars[2])
 }
 
-/// True when the path is a UNC path (`\\server\share`).
+/// True when the path is a complete UNC path (`\\server\share`). A server-only
+/// prefix is not a usable absolute path.
 pub fn is_unc(path: &str, flavor: PathFlavor) -> bool {
     if !flavor.is_windows() {
         return false;
     }
-    let stripped = path.to_string();
-    stripped.starts_with(r"\\") && !stripped.starts_with(r"\\?\") && !stripped.starts_with(r"\\.\")
+    let canonical = canonical_separators(path, flavor);
+    if !canonical.starts_with(r"\\")
+        || canonical.starts_with(r"\\?\")
+        || canonical.starts_with(r"\\.\")
+    {
+        return false;
+    }
+    let mut components = canonical[2..].split('\\').filter(|part| !part.is_empty());
+    components.next().is_some() && components.next().is_some()
 }
 
 /// True when the path uses a Windows namespace this application refuses to act
@@ -420,7 +439,8 @@ pub fn is_unsupported_namespace(path: &str, flavor: PathFlavor) -> bool {
     if !flavor.is_windows() {
         return false;
     }
-    path.starts_with(r"\\.\") || path.starts_with(r"\??\")
+    let canonical = canonical_separators(path, flavor);
+    canonical.starts_with(r"\\.\") || canonical.starts_with(r"\??\")
 }
 
 /// True for a component that Windows resolves to a device rather than a file,
@@ -697,10 +717,17 @@ mod tests {
             normalize(r"\\?\UNC\server\share\Windows", W),
             normalize(r"\\server\share\Windows", W)
         );
+        assert_eq!(
+            normalize(r"//?/uNc/server/share/Windows", W),
+            normalize(r"\\server\share\Windows", W)
+        );
         assert!(equal(r"\\?\C:\Windows\", r"C:\Windows", W));
         assert!(is_unc(r"\\server\share", W));
+        assert!(is_unc(r"//server/share/folder", W));
+        assert!(!is_unc(r"\\server", W));
         assert!(!is_unc(r"\\?\C:\Windows", W));
         assert!(is_unsupported_namespace(r"\\.\C:\Windows", W));
+        assert!(is_unsupported_namespace(r"//./PhysicalDrive0", W));
         assert!(is_unsupported_namespace(r"\??\C:\Windows", W));
     }
 
@@ -845,6 +872,13 @@ mod tests {
             let flavor = if path.starts_with('/') { P } else { W };
             assert!(is_root(path, flavor), "{path} must be a root");
         }
+        for path in [r"\\server", r"\\server\share", r"\\?\UNC\server\share\"] {
+            assert!(is_root(path, W), "{path} must be a broad UNC root");
+            assert_eq!(protected_root(path, W), Some(ProtectedRoot::FilesystemRoot));
+        }
+        assert!(!is_absolute(r"\\server", W));
+        assert!(is_absolute(r"\\server\share", W));
+        assert!(!is_root(r"\\server\share\folder", W));
         assert!(!is_root(r"C:\Users", W));
         assert!(!is_root("/Users", P));
     }

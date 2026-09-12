@@ -91,7 +91,9 @@ $doctor.Output | ForEach-Object { Write-Host $_ }
 if ($doctor.ExitCode -ne 0) {
   Fail "--doctor exited with code $($doctor.ExitCode), so a self-check failed"
 }
-if ($doctor.Output -match '(?m)\bFAIL\b') {
+# Match only a rendered check row. Diagnostic details legitimately use phrases
+# such as "fail closed", which must not turn a passing report into a failure.
+if ($doctor.Output -match '^\s*\[FAIL\](?:\s|$)') {
   Fail '--doctor printed a FAIL row'
 }
 
