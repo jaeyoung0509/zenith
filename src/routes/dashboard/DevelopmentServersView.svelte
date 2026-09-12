@@ -23,7 +23,7 @@
     ShieldCheck,
     TriangleAlert,
     X,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   let searchQuery = $state('');
   let isRefreshing = $state(false);

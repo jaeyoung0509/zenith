@@ -8,7 +8,7 @@
   import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
-  import { FolderOpen, ArrowUpRight } from 'lucide-svelte';
+  import { FolderOpen, ArrowUpRight } from '@lucide/svelte';
 
   interface Props {
     item: ScanItem;

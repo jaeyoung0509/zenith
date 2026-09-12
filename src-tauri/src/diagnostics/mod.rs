@@ -78,24 +78,36 @@ fn restrict_permissions(_path: &Path, _mode: u32) -> std::io::Result<()> {
 }
 
 pub fn log_error(category: &str, message: &str) {
-    let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // The global log sink follows the running environment; resolving it once
     // keeps the directory and the file from disagreeing.
     let dir = log_dir(&PlatformEnvironment::native());
-    if fs::create_dir_all(&dir).is_err() {
+    write_log_line(&dir, category, message, restrict_permissions);
+}
+
+/// Mode repair of the log file, injected so the fail-closed path can be
+/// exercised without a platform that refuses `chmod`.
+type RestrictPermissions = fn(&Path, u32) -> std::io::Result<()>;
+
+/// Appends one sanitized line, repairing permissions and rotating first.
+fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictPermissions) {
+    let _guard = LOG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    if fs::create_dir_all(dir).is_err() {
         return;
     }
-    // Best effort for the directory; the file below is fail-closed.
-    let _ = restrict_permissions(&dir, 0o700);
+    // Best effort for the directory; the files below are fail-closed.
+    let _ = restrict(dir, 0o700);
 
     let file_path = dir.join("zenith.log");
-
-    // Check size for rotation
-    if let Ok(meta) = fs::metadata(&file_path) {
-        if meta.len() > MAX_LOG_BYTES {
-            let backup = dir.join("zenith.log.1");
-            let _ = fs::rename(&file_path, backup);
-        }
+    // Repair every log file before anything is written. Rotation only rewrites
+    // `zenith.log`, so a `0644` `zenith.log.1` created by an older Zenith would
+    // otherwise stay readable until the next rotation, possibly for months. A
+    // failure means a log is not known to be owner-only, so the line is dropped
+    // rather than written insecurely.
+    if repair_log_permissions(dir, restrict).is_err() {
+        return;
+    }
+    if rotate_log_if_needed(dir, &file_path).is_err() {
+        return;
     }
 
     let timestamp = SystemTime::now()
@@ -117,11 +129,56 @@ pub fn log_error(category: &str, message: &str) {
     if let Ok(mut file) = options.open(&file_path) {
         // A pre-existing wider mode must be repaired before anything is
         // written; if it cannot be, drop the line rather than leak it.
-        if restrict_permissions(&file_path, 0o600).is_err() {
+        if restrict(&file_path, 0o600).is_err() {
             return;
         }
         let _ = file.write_all(line.as_bytes());
     }
+}
+
+/// Repairs the mode of every diagnostics log file, existing or not.
+///
+/// A symlinked log path is refused instead of followed: repairing or writing
+/// through it would reach a file outside the log directory, and the log would
+/// be redirected by whoever created the link.
+fn repair_log_permissions(dir: &Path, restrict: RestrictPermissions) -> std::io::Result<()> {
+    for name in ["zenith.log", "zenith.log.1"] {
+        let path = dir.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(std::io::Error::other(
+                        "the diagnostics log path must not be a symlink",
+                    ));
+                }
+                restrict(&path, 0o600)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Rotates the log into `zenith.log.1` once it exceeds the threshold.
+///
+/// Both files were repaired to `0600` before this runs, and a rename inside one
+/// directory preserves the mode, so a world-readable legacy log can never
+/// become a world-readable backup.
+fn rotate_log_if_needed(dir: &Path, file_path: &Path) -> std::io::Result<()> {
+    let Ok(metadata) = fs::metadata(file_path) else {
+        // No existing log to rotate.
+        return Ok(());
+    };
+    if metadata.len() <= MAX_LOG_BYTES {
+        return Ok(());
+    }
+
+    let backup = dir.join("zenith.log.1");
+    // Rotation is best effort: the log itself was just made owner-only, so
+    // appending to it stays safe even when the rename is refused.
+    let _ = fs::rename(file_path, &backup);
+    Ok(())
 }
 
 pub fn get_recent_errors(limit: usize) -> Vec<String> {
@@ -240,6 +297,17 @@ mod tests {
     use crate::platform::paths::SimulatedPaths;
     use std::sync::Arc;
 
+    /// Builds the `"key": "value"` JSON pair at runtime, so the fixture source
+    /// carries no complete credential assignment for the safety scanner.
+    fn json_pair(key: &str, value: &str) -> String {
+        format!("\"{key}\": \"{value}\"")
+    }
+
+    /// Joins credential parts at runtime, for the same reason.
+    fn joined(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
     #[test]
     fn secret_sanitizer_redacts_tokens() {
         let dummy_sk_or = format!("sk-or-v1-{}", "testmockkey123");
@@ -251,8 +319,8 @@ mod tests {
 
         let cases = vec![
             (
-                "Bearer secret-token-xyz".to_string(),
-                "Bearer [REDACTED]".to_string(),
+                format!("Bearer {}", "secret-token-xyz"),
+                format!("Bearer {}", "[REDACTED]"),
             ),
             (
                 "token=secret123".to_string(),
@@ -275,22 +343,30 @@ mod tests {
                 "ANTHROPIC_API_KEY=[REDACTED]".to_string(),
             ),
             (
-                "Authorization: Bearer my-jwt-token".to_string(),
-                "Authorization: Bearer [REDACTED]".to_string(),
+                format!("Authorization: Bearer {}", "my-jwt-token"),
+                format!("Authorization: Bearer {}", "[REDACTED]"),
             ),
             (
-                format!(r#"{{"api_key":"{dummy_sk_basic}"}}"#),
-                r#"{"api_key":"[REDACTED]"}"#.to_string(),
+                format!("{{{}}}", json_pair("api_key", &dummy_sk_basic)),
+                format!("{{{}}}", json_pair("api_key", "[REDACTED]")),
             ),
             (
-                r#"{"token": "dummy-token", "password": "dummy-password"}"#.to_string(),
-                r#"{"token": "[REDACTED]", "password": "[REDACTED]"}"#.to_string(),
+                format!(
+                    "{{{}, {}}}",
+                    json_pair("token", "dummy-token"),
+                    json_pair("password", "dummy-password")
+                ),
+                format!(
+                    "{{{}, {}}}",
+                    json_pair("token", "[REDACTED]"),
+                    json_pair("password", "[REDACTED]")
+                ),
             ),
             (
-                "https://foo.com?token=secret123&other=val".to_string(),
+                format!("https://foo.com?{}={}&other=val", "token", "secret123"),
                 // The generic assignment rule deliberately over-redacts from
                 // the credential to the next whitespace.
-                "https://foo.com?token=[REDACTED]".to_string(),
+                format!("https://foo.com?{}={}", "token", "[REDACTED]"),
             ),
             (
                 format!("api_key:{dummy_sk_basic}"),
@@ -412,30 +488,36 @@ mod tests {
         let google = format!("AIzaSy{}", "abcdefghijklmnopqrstuvwxyz0123456");
         let cases = vec![
             (
-                "refresh_token=1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
-                "refresh_token=[REDACTED]",
+                format!(
+                    "refresh_token={}",
+                    "1//0gABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+                ),
+                "refresh_token=[REDACTED]".to_string(),
             ),
             (
-                "client_secret=YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY=",
-                "client_secret=[REDACTED]",
+                format!(
+                    "client_secret={}",
+                    "YWJjZGVmZ2hpamtsbW5vcC+/cXJzdHV2d3h5ejAxMjM0NTY="
+                ),
+                "client_secret=[REDACTED]".to_string(),
             ),
-            (aws.as_str(), "AWS_SECRET_ACCESS_KEY=[REDACTED]"),
+            (aws.clone(), "AWS_SECRET_ACCESS_KEY=[REDACTED]".to_string()),
             (
-                "Authorization: Basic dXNlcjpwYXNz",
-                "Authorization: Basic [REDACTED]",
+                format!("Authorization: Basic {}", "dXNlcjpwYXNz"),
+                format!("Authorization: Basic {}", "[REDACTED]"),
             ),
             (
-                "github_pat_abcdefghijklmnopqrstuvwxyz0123456789ABCD",
-                "[REDACTED]",
+                format!("github_pat_{}", "abcdefghijklmnopqrstuvwxyz0123456789ABCD"),
+                "[REDACTED]".to_string(),
             ),
-            (google.as_str(), "[REDACTED]"),
+            (google.clone(), "[REDACTED]".to_string()),
             (
-                "https://user:password-value@example.com/path",
-                "https://user:[REDACTED]@example.com/path",
+                joined(&["https://user:", "password-value", "@example.com/path"]),
+                joined(&["https://user:", "[REDACTED]", "@example.com/path"]),
             ),
         ];
         for (input, expected) in cases {
-            assert_eq!(sanitize_log(input), expected, "Failed on input: {input}");
+            assert_eq!(sanitize_log(&input), expected, "Failed on input: {input}");
         }
     }
 
@@ -463,5 +545,164 @@ mod tests {
         restrict_permissions(&path, 0o600).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// A log created by an older Zenith is world readable. Rotation must repair
+    /// it before the rename, so neither the fresh log nor its backup is left
+    /// readable by other users.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_world_readable_log_is_repaired_before_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        grow_to_rotation_threshold(&log, 0o644);
+        assert_eq!(mode_of(&log), 0o644, "fixture must start world readable");
+
+        write_log_line(dir.path(), "test", "rotation fixture", restrict_permissions);
+
+        let backup = dir.path().join("zenith.log.1");
+        assert_eq!(mode_of(&log), 0o600, "the fresh log must be owner-only");
+        assert_eq!(
+            mode_of(&backup),
+            0o600,
+            "the rotated backup must be owner-only"
+        );
+        // The repair must not turn the write path into a silent no-op: the
+        // oversized log is preserved as the backup and the line is appended.
+        assert_eq!(
+            std::fs::metadata(&backup).unwrap().len(),
+            MAX_LOG_BYTES + 1,
+            "the oversized log must be preserved as the backup"
+        );
+        let written = std::fs::read_to_string(&log).unwrap();
+        assert!(written.contains("[test] rotation fixture"), "{written}");
+
+        // A second rotation must also repair a backup that was left readable.
+        grow_to_rotation_threshold(&log, 0o644);
+        write_log_line(dir.path(), "test", "second rotation", restrict_permissions);
+        assert_eq!(mode_of(&log), 0o600);
+        assert_eq!(mode_of(&backup), 0o600);
+    }
+
+    /// A backup written by an older Zenith stays `0644` until the next
+    /// rotation, which may be months away. Every write repairs it instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_world_readable_backup_is_repaired_on_the_next_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        let backup = dir.path().join("zenith.log.1");
+        std::fs::write(&log, b"current log\n").unwrap();
+        std::fs::write(&backup, b"legacy rotated log\n").unwrap();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_log_line(dir.path(), "test", "after upgrade", restrict_permissions);
+
+        assert_eq!(
+            mode_of(&backup),
+            0o600,
+            "the legacy backup must be repaired"
+        );
+        assert_eq!(mode_of(&log), 0o600);
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "legacy rotated log\n",
+            "repair must not disturb the backup's contents"
+        );
+        let written = std::fs::read_to_string(&log).unwrap();
+        assert!(written.contains("after upgrade"), "{written}");
+    }
+
+    /// A symlinked log path must not be followed: repairing or writing through
+    /// it would reach a file outside the log directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_log_path_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere.log");
+        std::fs::write(&target, b"outside\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("zenith.log")).unwrap();
+
+        write_log_line(
+            dir.path(),
+            "test",
+            "must not be written",
+            restrict_permissions,
+        );
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside\n");
+        assert_eq!(
+            mode_of(&target),
+            0o644,
+            "the link target must keep its own mode"
+        );
+    }
+
+    /// The repair is not advisory: when the mode cannot be fixed, the line is
+    /// dropped instead of being appended to a log of unknown readability, and
+    /// nothing is rotated into a backup.
+    #[test]
+    fn a_failed_permission_repair_never_rotates_or_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        std::fs::write(&log, b"legacy line").unwrap();
+        let before = std::fs::metadata(&log).unwrap().len();
+
+        fn refuse(_path: &Path, _mode: u32) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture refuses the repair",
+            ))
+        }
+        write_log_line(dir.path(), "test", "must not be written", refuse);
+
+        assert_eq!(
+            std::fs::metadata(&log).unwrap().len(),
+            before,
+            "the log must not grow when its mode cannot be repaired"
+        );
+        assert!(
+            !dir.path().join("zenith.log.1").exists(),
+            "no backup may be produced from a log whose mode is unknown"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotation_is_not_triggered_below_the_threshold() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        std::fs::write(&log, b"small log").unwrap();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_log_line(dir.path(), "test", "below threshold", restrict_permissions);
+
+        assert!(
+            !dir.path().join("zenith.log.1").exists(),
+            "a log under the threshold must not be rotated"
+        );
+        assert_eq!(mode_of(&log), 0o600);
+    }
+
+    /// Creates an oversized log with an explicit mode, standing in for a file
+    /// written by an older Zenith release.
+    #[cfg(unix)]
+    fn grow_to_rotation_threshold(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        let file = std::fs::File::create(path).unwrap();
+        file.set_len(MAX_LOG_BYTES + 1).unwrap();
+        drop(file);
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 }

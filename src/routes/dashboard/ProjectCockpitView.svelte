@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FolderGit2, RefreshCw, Sparkles } from 'lucide-svelte';
+  import { FolderGit2, RefreshCw, Sparkles } from '@lucide/svelte';
   import { agentActivityStore } from '../../lib/stores/agentActivity.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
   import Badge from '../../lib/components/Badge.svelte';

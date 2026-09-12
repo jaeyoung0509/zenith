@@ -43,7 +43,7 @@
     ShieldCheck,
     Bell,
     Users,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   const tabOptions: { id: DashboardTab; label: string; description: string }[] = [
     { id: 'storage', label: 'Storage & Disks', description: 'Primary storage, volumes, and developer/AI caches.' },

@@ -230,10 +230,13 @@ Requirements:
 
 - macOS, or Windows 10 1809 or newer with the MSVC build tools (see
   [docs/WINDOWS.md](docs/WINDOWS.md))
-- Rust 1.93 or newer. The crate declares `rust-version = "1.93.0"` in
+- Rust 1.95 or newer. The crate declares `rust-version = "1.95.0"` in
   `src-tauri/Cargo.toml`, and CI verifies the build against exactly that
   toolchain.
-- Node.js 20 or newer
+- Node.js 22.22.2 or newer on the 22.x line (24.15+ or 26+ also work);
+  `package.json` declares this floor, which comes from the frontend
+  toolchain, and CI runs the typecheck and test gate on exactly that
+  version.
 - pnpm
 - `just` (recommended)
 
@@ -276,7 +279,7 @@ just build-fast        # macOS: debug .app bundle
 
 CI verifies frontend typecheck, Vitest, binding drift, and the Vite build; Rust
 formatting, clippy, unit and safety tests on macOS and Windows x64; packaging
-smoke builds for macOS and Windows; the declared MSRV build with Rust 1.93.0;
+smoke builds for macOS and Windows; the declared MSRV build with Rust 1.95.0;
 and locked-dependency audits for both ecosystems. On Windows it also silently
 installs the per-user installer, runs `Zenith --doctor`, requires every
 self-check to pass, silently uninstalls, and fails if the install directory

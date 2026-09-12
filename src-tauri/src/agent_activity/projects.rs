@@ -212,7 +212,7 @@ pub fn opaque_id(namespace: &str, value: &Path) -> String {
     digest.update(namespace.as_bytes());
     digest.update([0]);
     digest.update(value.as_os_str().as_encoded_bytes());
-    let encoded = format!("{:x}", digest.finalize());
+    let encoded = crate::hash::hex(&digest.finalize());
     format!("{namespace}-{}", &encoded[..16])
 }
 

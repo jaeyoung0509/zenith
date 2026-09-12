@@ -308,7 +308,7 @@ fn worktree_fingerprint(root: &Path, relative: &str) -> String {
         if let Ok(bytes) = std::fs::read(&path) {
             let mut digest = Sha256::new();
             digest.update(&bytes);
-            return format!("{:x}", digest.finalize())[..16].to_string();
+            return crate::hash::hex(&digest.finalize())[..16].to_string();
         }
     }
     format!("len:{}", metadata.len())
@@ -444,7 +444,7 @@ pub fn explicit_diff(
 pub fn fingerprint_path(path: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(path);
-    format!("{:x}", digest.finalize())[..16].to_string()
+    crate::hash::hex(&digest.finalize())[..16].to_string()
 }
 
 #[cfg(test)]

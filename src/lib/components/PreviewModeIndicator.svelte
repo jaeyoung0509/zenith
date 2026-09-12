@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { FlaskConical } from 'lucide-svelte';
+  import { FlaskConical } from '@lucide/svelte';
   import { apiBridgeStore } from '../stores/apiBridge.svelte';
 
   interface Props {

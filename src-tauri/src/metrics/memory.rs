@@ -151,8 +151,16 @@ impl MemorySampler {
                 let raw_name = process.name().to_string_lossy();
                 let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
                 let mem = process.memory();
-                let can_terminate =
-                    MemoryInspector::can_terminate_process(&norm_name, process.exe());
+                // Collect candidate members in this same pass.
+                let member = MemoryInspector::termination_member(
+                    pid_u32,
+                    own_pid,
+                    &raw_name,
+                    &norm_name,
+                    process,
+                    own_uid,
+                    &current_owner,
+                );
 
                 let entry = process_groups
                     .entry(norm_name.clone())
@@ -160,45 +168,15 @@ impl MemorySampler {
                 entry.0 += mem;
                 entry.1 += 1;
                 entry.3.push(pid_u32);
-                entry.4 |= can_terminate;
-
-                // Collect candidate members in this same pass
-                if pid_u32 <= 1 || pid_u32 == own_pid {
-                    continue;
+                // A group is terminable only when this pass collected a member
+                // whose identity a lease can revalidate.
+                if let Some(member) = member {
+                    entry.4 = true;
+                    termination_candidates
+                        .entry(norm_name)
+                        .or_default()
+                        .push(member);
                 }
-                if !can_terminate {
-                    continue;
-                }
-                if crate::process_protection::is_protected_process(
-                    &norm_name,
-                    Some(&raw_name),
-                    process.exe(),
-                ) {
-                    continue;
-                }
-                let Some(owner) = ProcessOwner::verified(
-                    process.effective_user_id().or_else(|| process.user_id()),
-                    own_uid,
-                ) else {
-                    continue;
-                };
-                if owner != current_owner {
-                    continue;
-                }
-                if process.start_time() == 0 {
-                    continue;
-                }
-
-                termination_candidates
-                    .entry(norm_name.clone())
-                    .or_default()
-                    .push(MemoryLeaseMember {
-                        pid: pid_u32,
-                        owner,
-                        start_time: process.start_time(),
-                        exe: process.exe().map(PathBuf::from),
-                        group: norm_name,
-                    });
             }
 
             for members in termination_candidates.values_mut() {
@@ -409,43 +387,22 @@ impl MemoryTerminationSystem for RealMemorySystem {
             let mut members = Vec::new();
             for (pid, process) in sys.processes() {
                 let pid_u32 = pid.as_u32();
-                if pid_u32 <= 1 || pid_u32 == own_pid {
-                    continue;
-                }
                 let raw_name = process.name().to_string_lossy();
                 let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
                 if norm_name != group {
                     continue;
                 }
-                if !MemoryInspector::can_terminate_process(&norm_name, process.exe()) {
-                    continue;
-                }
-                if crate::process_protection::is_protected_process(
+                if let Some(member) = MemoryInspector::termination_member(
+                    pid_u32,
+                    own_pid,
+                    &raw_name,
                     &norm_name,
-                    Some(&raw_name),
-                    process.exe(),
-                ) {
-                    continue;
-                }
-                let Some(owner) = ProcessOwner::verified(
-                    process.effective_user_id().or_else(|| process.user_id()),
+                    process,
                     own_uid,
-                ) else {
-                    continue;
-                };
-                if owner != current_owner {
-                    continue;
+                    &current_owner,
+                ) {
+                    members.push(member);
                 }
-                if process.start_time() == 0 {
-                    continue;
-                }
-                members.push(MemoryLeaseMember {
-                    pid: pid_u32,
-                    owner,
-                    start_time: process.start_time(),
-                    exe: process.exe().map(PathBuf::from),
-                    group: norm_name,
-                });
             }
             members.sort_by_key(|member| member.pid);
             members
@@ -963,6 +920,51 @@ impl MemoryInspector {
             let _ = path;
             None
         }
+    }
+
+    /// Identity a termination lease must be able to revalidate.
+    ///
+    /// `None` means the process is outside the allowlisted user-app group, is
+    /// protected, or its identity cannot be verified from the OS (owner, start
+    /// time). A group is reported as terminable only when at least one member
+    /// produced one of these in the same pass: offering an action the backend
+    /// must refuse would leave the UI with a control that cannot work.
+    fn termination_member(
+        pid: u32,
+        own_pid: u32,
+        raw_name: &str,
+        norm_name: &str,
+        process: &sysinfo::Process,
+        own_uid: Option<&sysinfo::Uid>,
+        current_owner: &ProcessOwner,
+    ) -> Option<MemoryLeaseMember> {
+        if pid <= 1 || pid == own_pid {
+            return None;
+        }
+        if !Self::can_terminate_process(norm_name, process.exe()) {
+            return None;
+        }
+        if crate::process_protection::is_protected_process(norm_name, Some(raw_name), process.exe())
+        {
+            return None;
+        }
+        let owner = ProcessOwner::verified(
+            process.effective_user_id().or_else(|| process.user_id()),
+            own_uid,
+        )?;
+        if owner != *current_owner {
+            return None;
+        }
+        if process.start_time() == 0 {
+            return None;
+        }
+        Some(MemoryLeaseMember {
+            pid,
+            owner,
+            start_time: process.start_time(),
+            exe: process.exe().map(PathBuf::from),
+            group: norm_name.to_string(),
+        })
     }
 
     fn can_terminate_process(name: &str, executable: Option<&Path>) -> bool {
@@ -1712,7 +1714,13 @@ mod tests {
         #[cfg(unix)]
         assert!(matches!(owner, ProcessOwner::Unix(_)));
         #[cfg(not(unix))]
-        assert!(matches!(owner, ProcessOwner::Windows(_)));
+        // An empty SID is the fail-closed sentinel: every ownership comparison
+        // would fail, so the memory termination surface would silently lose
+        // every affordance on Windows.
+        assert!(
+            matches!(&owner, ProcessOwner::Windows(sid) if !sid.is_empty()),
+            "expected a real Windows SID, got {owner:?}"
+        );
     }
 
     #[tokio::test]

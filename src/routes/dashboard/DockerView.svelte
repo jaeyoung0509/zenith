@@ -19,7 +19,7 @@
     Server,
     HardDrive,
     AlertCircle,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   let status = $derived(dockerStore.status);
   let overview = $derived(status?.overview);

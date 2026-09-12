@@ -43,7 +43,11 @@ jobs:
         id: node-cache
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          # The exact floor of the dependency set (jsdom 30 requires
+          # ^22.22.2 || ^24.15.0 || >=26.0.0). The gate runs on the floor so a
+          # dependency that raises it fails here instead of on a user's machine;
+          # the packaging jobs cover the newest patch of the line.
+          node-version: '22.22.2'
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
 
@@ -150,18 +154,18 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
   msrv:
-    name: Minimum Supported Rust Version (1.93.0)
+    name: Minimum Supported Rust Version (1.95.0)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Rust toolchain (the declared rust-version)
-        uses: dtolnay/rust-toolchain@1.93.0
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
@@ -197,7 +201,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install just
         uses: taiki-e/install-action@just
@@ -226,7 +230,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
 
@@ -257,7 +261,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
 

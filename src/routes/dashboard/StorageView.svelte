@@ -39,7 +39,7 @@
     FolderSearch,
     FileSearch,
     AppWindow,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   interface Props {
     onSelectCategory: (category: CategoryResult) => void;

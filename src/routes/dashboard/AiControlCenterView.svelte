@@ -8,7 +8,7 @@
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import Switch from '../../lib/components/Switch.svelte';
-  import { Activity, Battery, Bot, GitBranch, RefreshCw, ShieldCheck, Sparkles, X } from 'lucide-svelte';
+  import { Activity, Battery, Bot, GitBranch, RefreshCw, ShieldCheck, Sparkles, X } from '@lucide/svelte';
 
   interface Props { onNavigateTab?: (tab: DashboardRoute) => void }
   let { onNavigateTab }: Props = $props();

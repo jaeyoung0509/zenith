@@ -161,7 +161,10 @@ fn materialize(value: Candidate, now: u64, cooldown: u64) -> Recommendation {
     hash.update(format!("{:?}", value.kind));
     hash.update(value.project_id.as_deref().unwrap_or("none"));
     hash.update(now.to_le_bytes());
-    let id = format!("recommendation-{}", &format!("{:x}", hash.finalize())[..16]);
+    let id = format!(
+        "recommendation-{}",
+        &crate::hash::hex(&hash.finalize())[..16]
+    );
     Recommendation {
         id,
         kind: value.kind,

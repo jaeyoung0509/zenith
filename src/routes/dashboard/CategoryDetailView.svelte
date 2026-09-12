@@ -24,7 +24,7 @@
     Boxes,
     Container,
     AlertCircle,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   interface Props {
     categoryResult: CategoryResult;

@@ -21,7 +21,7 @@
     FolderOpen,
     AlertTriangle,
     Search,
-  } from 'lucide-svelte';
+  } from '@lucide/svelte';
 
   let models = $derived(localModelsStore.models);
   let totalBytes = $derived(localModelsStore.totalBytes);

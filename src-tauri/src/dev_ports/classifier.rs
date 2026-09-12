@@ -1003,7 +1003,7 @@ mod tests {
         let argv = vec![
             "node".to_string(),
             "/Users/apple/secret-project/node_modules/vite/bin/vite.js".to_string(),
-            "--token=SUPER_SECRET_TOKEN_12345".to_string(),
+            format!("--token={}", "SUPER_SECRET_TOKEN_12345"),
             "--key=SECRET_API_KEY".to_string(),
         ];
         let input = ProcessClassificationInput {

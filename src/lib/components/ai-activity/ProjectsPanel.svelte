@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, HardDrive, Server, Square } from 'lucide-svelte';
+  import { Bot, HardDrive, Server, Square } from '@lucide/svelte';
   import type { AgentActivityStatus, AgentEvidence, AgentSession, AttentionReason } from '../../models/types';
   import { agentActivityStore } from '../../stores/agentActivity.svelte';
   import { platformCapabilitiesStore } from '../../stores/platformCapabilities.svelte';

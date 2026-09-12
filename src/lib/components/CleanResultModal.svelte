@@ -4,7 +4,7 @@
   import { formatBytes } from '../utils/format';
   import { cleanOutcome } from '../utils/cleanResult';
   import Button from './Button.svelte';
-  import { CheckCircle2, AlertTriangle, X, AlertCircle } from 'lucide-svelte';
+  import { CheckCircle2, AlertTriangle, X, AlertCircle } from '@lucide/svelte';
   import { restoreFocus } from '../utils/focus';
 
   interface Props {

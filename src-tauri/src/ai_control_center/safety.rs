@@ -199,10 +199,18 @@ pub fn inspect(
             };
             scanned += 1;
             // Report every credential shape in the file, bounded per file so a
-            // generated file cannot flood the result.
+            // generated file cannot flood the result. A configuration or
+            // credential file is read broadly: a password there may be short or
+            // full of punctuation, while the same text in source is usually an
+            // expression.
+            let context = if is_credential_file(&relative, entry.path()) {
+                secrets::ScanContext::CredentialFile
+            } else {
+                secrets::ScanContext::Source
+            };
             let mut file_findings = 0usize;
             for (line_index, line) in text.lines().enumerate() {
-                if let Some(category) = secrets::match_category(line) {
+                if let Some(category) = secrets::match_category_in(line, context) {
                     push_finding(&mut findings, project_id, SafetyFindingKind::SecretsExposure, FindingSeverity::Critical, category, "local_secret_detector", Some(relative.clone()), Some(line_index as u32 + 1), now, "Remove the exposed value, rotate it with the provider, and keep secrets outside the repository.", None, &dismissed);
                     file_findings += 1;
                     if file_findings >= MAX_FINDINGS_PER_FILE {
@@ -289,6 +297,40 @@ fn safe_entry(entry: &DirEntry) -> bool {
         ".git" | "node_modules" | "target" | "dist" | "build" | ".venv" | "vendor"
     )
 }
+/// Extensions that carry code or prose, where an assignment is an expression
+/// rather than a credential.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "js", "svelte", "py", "go", "java", "kt", "rb", "php", "md", "txt", "sh",
+];
+
+/// Extensions that carry configuration or credential material.
+const CREDENTIAL_EXTENSIONS: &[&str] = &[
+    "env",
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "jsonc",
+    "ini",
+    "conf",
+    "cfg",
+    "properties",
+    "npmrc",
+    "netrc",
+    "pem",
+    "key",
+    "p12",
+    "pfx",
+];
+
+/// The lowercased extension of a path, or an empty string.
+fn extension_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
 fn is_scannable_file(path: &Path, relative: &str) -> bool {
     if is_recognized_config(relative) {
         return true;
@@ -300,32 +342,33 @@ fn is_scannable_file(path: &Path, relative: &str) -> bool {
     if is_scannable_name(&name) {
         return true;
     }
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default(),
-        "rs" | "ts"
-            | "js"
-            | "svelte"
-            | "py"
-            | "go"
-            | "java"
-            | "kt"
-            | "rb"
-            | "php"
-            | "env"
-            | "toml"
-            | "yaml"
-            | "yml"
-            | "json"
-            | "md"
-            | "txt"
-            | "sh"
-            | "pem"
-            | "key"
-            | "p12"
-            | "pfx"
-    )
+    let extension = extension_of(path);
+    SOURCE_EXTENSIONS.contains(&extension.as_str())
+        || CREDENTIAL_EXTENSIONS.contains(&extension.as_str())
+}
+
+/// Whether a file holds configuration or credentials rather than code.
+///
+/// An assignment in one of these is reported even when its value is not
+/// credential-shaped: a punctuation-heavy password is a credential in a `.env`
+/// file, while the same text in source is an expression. The classifier is
+/// deliberately name- and extension-based so it cannot drift from the file
+/// selection rules above, and the extension decides for a stem like
+/// `credentials.rs`, which is source that happens to share a credential file's
+/// name.
+fn is_credential_file(relative: &str, path: &Path) -> bool {
+    if is_recognized_config(relative) {
+        return true;
+    }
+    let extension = extension_of(path);
+    if SOURCE_EXTENSIONS.contains(&extension.as_str()) {
+        return false;
+    }
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    is_scannable_name(&name) || CREDENTIAL_EXTENSIONS.contains(&extension.as_str())
 }
 
 /// Dotfiles such as `.env` have no extension and must be selected by name.
@@ -504,7 +547,7 @@ fn push_finding(
     if let Some(line) = line {
         hash.update(line.to_le_bytes());
     }
-    let id = format!("finding-{}", &format!("{:x}", hash.finalize())[..20]);
+    let id = format!("finding-{}", &crate::hash::hex(&hash.finalize())[..20]);
     target.push(SafetyFinding {
         dismissed: dismissed.contains(&id),
         id,
@@ -719,12 +762,86 @@ mod tests {
         PlatformEnvironment::simulated(PathFlavor::current())
     }
 
+    /// Joins credential parts at runtime. The scanner runs over Zenith's own
+    /// repository, so a fixture must not carry the complete signature in source
+    /// text, while the scanned file still contains the real shape.
+    fn joined(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
+    /// Scanning Zenith's own sources must not report Zenith's own fixtures as
+    /// exposed credentials.
+    ///
+    /// The scanner is pointed at the repository that contains it, using the
+    /// same selection and decoding rules as [`inspect`]. A fixture that carries
+    /// a complete credential shape makes every real finding indistinguishable
+    /// from test data, so fixtures are assembled at runtime and the scanner's
+    /// detectors are kept narrow enough not to fire on ordinary source.
+    #[test]
+    fn zeniths_own_sources_are_scanner_clean() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate lives inside the repository");
+        let mut scanned_files = 0usize;
+        let mut hits = Vec::new();
+        for source_dir in ["src-tauri/src", "src-tauri/tests", "src"] {
+            let walker = WalkDir::new(root.join(source_dir))
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(safe_entry);
+            for entry in walker.filter_map(Result::ok) {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map(|path| {
+                        crate::privacy::paths::normalize_separators(&path.to_string_lossy())
+                    })
+                    .unwrap_or_default();
+                if !is_scannable_file(entry.path(), &relative) {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(entry.path()) else {
+                    continue;
+                };
+                let Some(text) = decode_scannable_text(&bytes) else {
+                    continue;
+                };
+                scanned_files += 1;
+                let context = if is_credential_file(&relative, entry.path()) {
+                    secrets::ScanContext::CredentialFile
+                } else {
+                    secrets::ScanContext::Source
+                };
+                for (line_index, line) in text.lines().enumerate() {
+                    if let Some(category) = secrets::match_category_in(line, context) {
+                        hits.push(format!("{relative}:{}: {category}", line_index + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned_files > 100,
+            "the self-scan must inspect the repository, saw {scanned_files} files"
+        );
+        assert!(
+            hits.is_empty(),
+            "Zenith's own sources must not look like exposed credentials:\n{}",
+            hits.join("\n")
+        );
+    }
+
     #[test]
     fn reports_secret_category_and_line_without_value() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("main.ts"),
-            "const token = 'sk-abcdefghijklmnop1234';\n",
+            format!(
+                "const token = '{}';\n",
+                joined(&["sk-", "abcdefghijklmnop1234"])
+            ),
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
@@ -733,6 +850,42 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("abcdefghijklmnop1234"));
         assert_eq!(result.findings[0].line_start, Some(1));
+    }
+
+    /// The scan context follows the file: a credential file reports a password
+    /// with punctuation, while the same kind of assignment in source must not
+    /// report an identifier.
+    #[test]
+    fn credential_files_are_scanned_broadly_and_source_is_not() {
+        let temp = tempfile::tempdir().unwrap();
+        // Both fixtures are assembled from fragments: the file content is
+        // credential-shaped on purpose, and the source text of this test must
+        // not be.
+        std::fs::write(
+            temp.path().join(".env"),
+            format!(
+                "{}={}\n",
+                "password",
+                joined(&["p@ss", "w0rd!", "very", "-secret"])
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("main.ts"),
+            format!("let token = {};\n", joined(&["platform_", "token2"])),
+        )
+        .unwrap();
+
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&simulated(), &roots, &[], 10);
+
+        assert_eq!(result.findings.len(), 1);
+        let finding = &result.findings[0];
+        assert_eq!(finding.kind, SafetyFindingKind::SecretsExposure);
+        assert_eq!(finding.relative_path.as_deref(), Some(".env"));
+        assert_eq!(finding.line_start, Some(1));
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains(&joined(&["p@ss", "w0rd"])));
     }
     #[test]
     fn config_parser_never_returns_args_headers_or_env_values() {
@@ -749,11 +902,19 @@ mod tests {
     fn symlinked_files_are_not_followed() {
         let temp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secret.txt"), "sk-abcdefghijklmnop1234").unwrap();
+        std::fs::write(
+            outside.path().join("secret.txt"),
+            joined(&["sk-", "abcdefghijklmnop1234"]),
+        )
+        .unwrap();
         // The ordinary file inside the scanned root must always be reported, so
         // this assertion is meaningful on every platform, not only where a
         // symlink can be created.
-        std::fs::write(temp.path().join("ordinary.txt"), "sk-abcdefghijklmnop1234").unwrap();
+        std::fs::write(
+            temp.path().join("ordinary.txt"),
+            joined(&["sk-", "abcdefghijklmnop1234"]),
+        )
+        .unwrap();
         let outside_file = outside.path().join("secret.txt");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside_file, temp.path().join("linked.txt")).unwrap();
@@ -814,17 +975,20 @@ mod tests {
         .unwrap();
         std::fs::write(
             temp.path().join(".env.production"),
-            "API_KEY=abcdef123456\n",
+            format!("API_KEY={}\n", "abcdef123456"),
         )
         .unwrap();
         std::fs::write(
             temp.path().join(".npmrc"),
-            "//registry.npmjs.org/:_authToken=npm_abcdefghijklmnopqrstuvwx\n",
+            format!(
+                "//registry.npmjs.org/:_authToken={}\n",
+                joined(&["npm_", "abcdefghijklmnopqrstuvwx"])
+            ),
         )
         .unwrap();
         std::fs::write(
             temp.path().join("id_rsa"),
-            "-----BEGIN OPENSSH PRIVATE KEY-----\n",
+            format!("{}\n", joined(&["-----BEGIN OPENSSH ", "PRIVATE KEY-----"])),
         )
         .unwrap();
         let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
@@ -917,7 +1081,10 @@ mod tests {
         }
         std::fs::write(
             secret_root.join("main.ts"),
-            "const key = 'sk-abcdefghijklmnop1234';\n",
+            format!(
+                "const key = '{}';\n",
+                joined(&["sk-", "abcdefghijklmnop1234"])
+            ),
         )
         .unwrap();
 

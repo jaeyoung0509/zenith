@@ -100,7 +100,8 @@ pub fn terminate_process(pid: u32, _mode: TerminationMode) -> Result<(), String>
 /// Posts `WM_CLOSE` to every top-level window owned by the target process.
 #[cfg(target_os = "windows")]
 fn post_close_to_process(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{BOOL, LPARAM};
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::LPARAM;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
     };

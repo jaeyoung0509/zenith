@@ -14,7 +14,7 @@
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import PageHeader from '../../lib/components/PageHeader.svelte';
-  import { ArrowLeft, ExternalLink, FolderOpen, HardDrive, RefreshCw } from 'lucide-svelte';
+  import { ArrowLeft, ExternalLink, FolderOpen, HardDrive, RefreshCw } from '@lucide/svelte';
 
   interface Props {
     onReviewCategory: (category: CategoryResult) => void;
