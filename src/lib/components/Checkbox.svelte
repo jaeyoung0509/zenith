@@ -6,6 +6,7 @@
     disabled?: boolean;
     ariaLabel: string;
     class?: string;
+    title?: string;
     onchange?: (checked: boolean) => void;
   }
 
@@ -14,6 +15,7 @@
     disabled = false,
     ariaLabel,
     class: className = '',
+    title,
     onchange,
   }: Props = $props();
 
@@ -25,12 +27,14 @@
 </script>
 
 <label
+  {title}
   class="relative inline-flex items-center justify-center select-none {disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} {className}"
 >
   <input
     type="checkbox"
     {checked}
     {disabled}
+    {title}
     aria-label={ariaLabel}
     onchange={handleChange}
     class="sr-only peer"

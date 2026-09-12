@@ -1,5 +1,9 @@
-use crate::models::{Category, RiskTier};
+use crate::models::{Category, ObservationQuality, RiskTier};
 use serde::{Deserialize, Serialize};
+
+fn unavailable_observation_quality() -> ObservationQuality {
+    ObservationQuality::Unavailable
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -94,6 +98,19 @@ pub struct ScanItem {
     #[specta(type = Option<u64>)]
     pub last_modified: Option<u64>,
     pub exists: bool,
+    #[serde(default = "unavailable_observation_quality")]
+    pub quality: ObservationQuality,
+    #[serde(default)]
+    pub incomplete_reason: Option<String>,
+}
+
+impl ScanItem {
+    pub fn allows_cleanup(&self) -> bool {
+        matches!(
+            self.quality,
+            ObservationQuality::Fresh | ObservationQuality::Partial
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -113,6 +130,8 @@ pub struct CategoryResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub manual_bytes: u64,
+    #[serde(default = "unavailable_observation_quality")]
+    pub quality: ObservationQuality,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -139,14 +158,20 @@ pub struct ScanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub manual_bytes: u64,
+    #[serde(default = "unavailable_observation_quality")]
+    pub quality: ObservationQuality,
+    #[serde(default)]
+    pub incomplete_reasons: Vec<String>,
 }
 
 impl ScanResult {
     pub const VALID_FOR_SECONDS: u32 = 300;
 
     pub fn is_fresh_at(&self, now: u64) -> bool {
-        now.checked_sub(self.finished_at)
-            .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS))
+        self.quality == ObservationQuality::Fresh
+            && now
+                .checked_sub(self.finished_at)
+                .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS))
     }
 
     pub fn validate_for_cleanup(
@@ -155,15 +180,28 @@ impl ScanResult {
         now: u64,
     ) -> Result<(), crate::models::ZenithError> {
         use crate::models::ZenithError;
-        match (self.scan_id == scan_id, self.is_fresh_at(now)) {
-            (false, _) => Err(ZenithError::InvalidPlan(
+        if self.scan_id != scan_id {
+            return Err(ZenithError::InvalidPlan(
                 "The scan is no longer current. Scan again before cleaning.".into(),
-            )),
-            (_, false) => Err(ZenithError::InvalidPlan(
-                "Scan expired. Scan again and review the new results before cleaning.".into(),
-            )),
-            (true, true) => Ok(()),
+            ));
         }
+        let is_current = now
+            .checked_sub(self.finished_at)
+            .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS));
+        if !is_current {
+            return Err(ZenithError::InvalidPlan(
+                "Scan expired. Scan again and review the new results before cleaning.".into(),
+            ));
+        }
+        if !matches!(
+            self.quality,
+            ObservationQuality::Fresh | ObservationQuality::Partial
+        ) {
+            return Err(ZenithError::InvalidPlan(
+                "The scan failed or is unavailable. Scan again before cleaning.".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -210,6 +248,8 @@ mod tests {
             safe_bytes: 0,
             rebuild_bytes: 0,
             manual_bytes: 0,
+            quality: ObservationQuality::Fresh,
+            incomplete_reasons: vec![],
         };
         assert!(scan.is_fresh_at(1000));
         assert!(scan.is_fresh_at(1299));
@@ -221,6 +261,34 @@ mod tests {
         assert!(scan.validate_for_cleanup("fixture", 999).is_err());
         let serialized = serde_json::to_value(&scan).unwrap();
         assert_eq!(serialized["valid_for_seconds"], 300);
+        assert_eq!(serialized["quality"], "fresh");
+    }
+
+    #[test]
+    fn partial_and_unavailable_scans_never_report_fresh() {
+        let mut scan = ScanResult {
+            scan_id: "fixture".into(),
+            valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
+            started_at: 999,
+            finished_at: 1000,
+            categories: vec![],
+            total_bytes: 100,
+            safe_bytes: 100,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+            quality: ObservationQuality::Partial,
+            incomplete_reasons: vec!["Some directories were unreadable".into()],
+        };
+        // A partial scan must NEVER report Fresh, even within the TTL window
+        assert!(!scan.is_fresh_at(1000));
+        assert!(!scan.is_fresh_at(1200));
+        // But validate_for_cleanup allows cleaning inspected items if not expired
+        assert!(scan.validate_for_cleanup("fixture", 1200).is_ok());
+
+        // Unavailable scan cannot be cleaned
+        scan.quality = ObservationQuality::Unavailable;
+        assert!(!scan.is_fresh_at(1000));
+        assert!(scan.validate_for_cleanup("fixture", 1200).is_err());
     }
 
     #[test]
@@ -247,12 +315,20 @@ mod tests {
             is_selected: false,
             last_modified: Some(MAX_SAFE - 2),
             exists: true,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
         };
-        let json = serde_json::to_value(&item).unwrap();
+        let mut json = serde_json::to_value(&item).unwrap();
         assert_eq!(json["size"]["logical"], MAX_SAFE);
         assert_eq!(json["size"]["allocated"], MAX_SAFE - 1);
         assert_eq!(json["last_modified"], MAX_SAFE - 2);
+        assert_eq!(json["quality"], "fresh");
         assert_eq!(json["cache_metadata"]["management_mode"], "tool_managed");
         assert_eq!(json["cache_metadata"]["artifact_kind"], "package_store");
+
+        json.as_object_mut().unwrap().remove("quality");
+        let legacy_item: ScanItem = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy_item.quality, ObservationQuality::Unavailable);
+        assert!(!legacy_item.allows_cleanup());
     }
 }

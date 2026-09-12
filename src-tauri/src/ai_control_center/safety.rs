@@ -77,7 +77,7 @@ pub fn inspect(
         let walker = WalkDir::new(root)
             .follow_links(false)
             .same_file_system(true)
-            .max_depth(MAX_DEPTH)
+            .max_depth(MAX_DEPTH + 1)
             .into_iter()
             .filter_entry(safe_entry);
         for entry in walker {
@@ -93,17 +93,67 @@ pub fn inspect(
                 ));
                 break;
             }
-            let Ok(entry) = entry else {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    skipped += 1;
+                    partial = true;
+                    let reason = if let Some(io_err) = err.io_error() {
+                        if io_err.kind() == std::io::ErrorKind::PermissionDenied {
+                            format!(
+                                "permission denied reading {}",
+                                err.path()
+                                    .map(file_label)
+                                    .unwrap_or_else(|| root_label(root))
+                            )
+                        } else {
+                            format!(
+                                "read error in {}: {}",
+                                err.path()
+                                    .map(file_label)
+                                    .unwrap_or_else(|| root_label(root)),
+                                io_err
+                            )
+                        }
+                    } else {
+                        format!(
+                            "read_dir failure in {}",
+                            err.path()
+                                .map(file_label)
+                                .unwrap_or_else(|| root_label(root))
+                        )
+                    };
+                    boundary_reasons.push(reason);
+                    continue;
+                }
+            };
+            if entry.depth() > MAX_DEPTH {
                 skipped += 1;
                 partial = true;
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|path| {
+                        crate::privacy::paths::normalize_separators(&path.to_string_lossy())
+                    })
+                    .unwrap_or_else(|| file_label(entry.path()));
+                boundary_reasons.push(format!(
+                    "directory depth limit of {MAX_DEPTH} exceeded at {relative} in {}",
+                    root_label(root)
+                ));
                 continue;
-            };
+            }
             if entry.file_type().is_symlink() || !entry.file_type().is_file() {
                 continue;
             }
             let Ok(metadata) = entry.metadata() else {
                 skipped += 1;
                 partial = true;
+                boundary_reasons.push(format!(
+                    "could not read metadata for {}",
+                    file_label(entry.path())
+                ));
                 continue;
             };
             if metadata.len() > MAX_FILE_BYTES || device(entry.path()) != root_device {
@@ -1002,5 +1052,61 @@ mod tests {
             r"\\fileserver\profiles\me\dev",
             Some(unc_home)
         ));
+    }
+
+    #[test]
+    fn directory_deeper_than_max_depth_without_secrets_reports_partial() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut deep = temp.path().to_path_buf();
+        for i in 1..=9 {
+            deep = deep.join(format!("level{i}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("harmless.txt"), b"no secrets here").unwrap();
+
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&simulated(), &roots, &[], 10);
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result
+            .status_message
+            .contains("directory depth limit of 8 exceeded"));
+        assert!(result.findings.is_empty());
+    }
+
+    #[test]
+    fn credential_below_max_depth_never_reports_fresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut deep = temp.path().to_path_buf();
+        for i in 1..=9 {
+            deep = deep.join(format!("level{i}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(
+            deep.join(".env"),
+            format!("API_KEY={}\n", concat!("sk-", "abcdefghijklmnop1234")),
+        )
+        .unwrap();
+
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&simulated(), &roots, &[], 10);
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert_ne!(result.quality, ObservationQuality::Fresh);
+        assert!(result
+            .status_message
+            .contains("directory depth limit of 8 exceeded"));
+    }
+
+    #[test]
+    fn normal_shallow_scan_reports_fresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("index.ts"), b"console.log('hello world');").unwrap();
+
+        let roots = std::collections::HashMap::from([("p".into(), temp.path().into())]);
+        let result = inspect(&simulated(), &roots, &[], 10);
+        assert_eq!(result.quality, ObservationQuality::Fresh);
+        assert_eq!(result.status_message, "Bounded local inspection completed.");
+        assert!(result.findings.is_empty());
     }
 }

@@ -12,6 +12,10 @@
         {:else}
           Refreshing scan. Previous amounts are historical until this finishes.
         {/if}
+      {:else if scanStore.freshness === 'partial'}
+        Partial scan completed. Some locations could not be fully inspected, so displayed totals are lower bounds (≥). Incomplete items cannot be auto-cleaned.
+      {:else if scanStore.freshness === 'unavailable'}
+        Scan results are unavailable because the configured locations could not be inspected. Cleaning is blocked until a scan succeeds.
       {:else if scanStore.lastScan}
         Results are out of date. Scan again, then review the new selection before cleaning.
       {:else}

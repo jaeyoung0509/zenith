@@ -81,15 +81,17 @@ export class ScanStore {
     };
   }
 
-  get freshness(): 'empty' | 'fresh' | 'stale' | 'refreshing' | 'failed' {
+  get freshness(): 'empty' | 'fresh' | 'partial' | 'unavailable' | 'stale' | 'refreshing' | 'failed' {
     if (this.isScanning) return 'refreshing';
     if (this.invalidated && this.error) return 'failed';
     if (!this.lastScan) return 'empty';
-    return this.invalidated || !this.freshAt(this.clock) ? 'stale' : 'fresh';
+    if (this.invalidated || !this.freshAt(this.clock)) return 'stale';
+    if (this.lastScan.quality === 'partial') return 'partial';
+    return this.lastScan.quality === 'fresh' ? 'fresh' : 'unavailable';
   }
 
   get canClean(): boolean {
-    return this.freshness === 'fresh' && !this.isCleaning;
+    return (this.freshness === 'fresh' || this.freshness === 'partial') && !this.isCleaning;
   }
 
   private freshAt(nowMs: number): boolean {
@@ -261,10 +263,14 @@ export class ScanStore {
 
   syncSelectionFromScan(scan: ScanResult) {
     const newMap: Record<string, boolean> = {};
+    const scanAllowsSelection = scan.quality === 'fresh' || scan.quality === 'partial';
     for (const cat of scan.categories) {
       for (const item of cat.items) {
-        // Auto-select only safe items with non-zero size (never manual)
-        newMap[item.id] = item.risk === 'safe' && (item.size.allocated ?? item.size.logical) > 0;
+        // Auto-select only safe items with non-zero size (never manual), and only if fresh/complete
+        newMap[item.id] = scanAllowsSelection
+          && item.risk === 'safe'
+          && (item.size.allocated ?? item.size.logical) > 0
+          && item.quality === 'fresh';
       }
     }
     this.selectedMap = newMap;
@@ -281,23 +287,26 @@ export class ScanStore {
 
   toggleItem(id: string) {
     const item = this.findItem(id);
-    if (!item || item.risk === 'manual') return;
+    if (!this.canClean || !item || item.risk === 'manual'
+      || (item.quality !== 'fresh' && item.quality !== 'partial')) return;
     this.selectedMap[id] = !this.selectedMap[id];
   }
 
   setItemSelected(id: string, selected: boolean) {
     const item = this.findItem(id);
-    if (!item || item.risk === 'manual') return;
+    if (!this.canClean || !item || item.risk === 'manual'
+      || (selected && item.quality !== 'fresh' && item.quality !== 'partial')) return;
     this.selectedMap[id] = selected;
   }
 
   toggleCategory(category: Category, select: boolean) {
-    if (!this.lastScan) return;
+    if (!this.lastScan || !this.canClean) return;
     const cat = this.lastScan.categories.find((c) => c.category === category);
     if (!cat) return;
 
     for (const item of cat.items) {
-      if (item.risk !== 'manual') {
+      if (item.risk !== 'manual'
+        && (!select || item.quality === 'fresh' || item.quality === 'partial')) {
         this.selectedMap[item.id] = select;
       }
     }
@@ -322,11 +331,14 @@ export class ScanStore {
 
   isQuickCleanEligible(category: Category, item: ScanItem, settings: ZenithSettings): boolean {
     const bytes = item.size.allocated ?? item.size.logical;
-    return item.risk === 'safe' && bytes > 0 && this.quickCleanCategoryEnabled(category, settings);
+    return item.risk === 'safe'
+      && bytes > 0
+      && item.quality === 'fresh'
+      && this.quickCleanCategoryEnabled(category, settings);
   }
 
   quickCleanableBytes(settings: ZenithSettings): number {
-    if (!this.lastScan) return 0;
+    if (!this.lastScan || this.lastScan.quality === 'unavailable') return 0;
     let total = 0;
     for (const category of this.lastScan.categories) {
       for (const item of category.items) {
@@ -339,16 +351,18 @@ export class ScanStore {
   }
 
   selectAllSafe() {
-    if (!this.lastScan) return;
+    if (!this.lastScan || !this.canClean) return;
     for (const cat of this.lastScan.categories) {
       for (const item of cat.items) {
-        this.selectedMap[item.id] = item.risk === 'safe' && (item.size.allocated ?? item.size.logical) > 0;
+        this.selectedMap[item.id] = item.risk === 'safe'
+          && (item.size.allocated ?? item.size.logical) > 0
+          && item.quality === 'fresh';
       }
     }
   }
 
   selectQuickCleanDefaults(settings: ZenithSettings) {
-    if (!this.lastScan) return;
+    if (!this.lastScan || this.lastScan.quality === 'unavailable') return;
     const next: Record<string, boolean> = {};
     for (const category of this.lastScan.categories) {
       for (const item of category.items) {

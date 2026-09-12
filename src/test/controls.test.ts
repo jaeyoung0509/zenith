@@ -101,6 +101,7 @@ describe('metric and action consistency contracts', () => {
           safe_bytes: 0,
           rebuild_bytes: 198.8 * 1024 * 1024,
           manual_bytes: 0,
+          quality: 'fresh',
         },
       },
     });
@@ -131,6 +132,7 @@ describe('metric and action consistency contracts', () => {
               is_selected: true,
               last_modified: 0,
               exists: true,
+              quality: 'fresh',
             },
             {
               id: 'rebuild',
@@ -145,12 +147,14 @@ describe('metric and action consistency contracts', () => {
               is_selected: false,
               last_modified: 0,
               exists: true,
+              quality: 'fresh',
             },
           ],
           total_bytes: 292.4 * 1024 * 1024,
           safe_bytes: 84.9 * 1024 * 1024,
           rebuild_bytes: 207.5 * 1024 * 1024,
           manual_bytes: 0,
+          quality: 'fresh',
         },
       },
     });
@@ -180,6 +184,7 @@ describe('metric and action consistency contracts', () => {
               is_selected: false,
               last_modified: 0,
               exists: true,
+              quality: 'fresh',
             },
             {
               id: 'rebuild',
@@ -194,12 +199,14 @@ describe('metric and action consistency contracts', () => {
               is_selected: true,
               last_modified: 0,
               exists: true,
+              quality: 'fresh',
             },
           ],
           total_bytes: 280 * 1024 * 1024,
           safe_bytes: 80 * 1024 * 1024,
           rebuild_bytes: 200 * 1024 * 1024,
           manual_bytes: 0,
+          quality: 'fresh',
         },
       },
     });

@@ -25,6 +25,8 @@ function item(overrides: Partial<ScanItem>): ScanItem {
     is_selected: false,
     last_modified: null,
     exists: true,
+    quality: 'fresh',
+    incomplete_reason: null,
     ...overrides,
   };
 }
@@ -114,6 +116,8 @@ describe('quick clean eligibility and predicate consistency', () => {
       safe_bytes: 1500,
       rebuild_bytes: 2000,
       manual_bytes: 0,
+      quality: 'fresh' as const,
+      incomplete_reasons: [],
       categories: [
         {
           category: 'ai' as const,
@@ -122,6 +126,7 @@ describe('quick clean eligibility and predicate consistency', () => {
           safe_bytes: 1000,
           rebuild_bytes: 2000,
           manual_bytes: 0,
+          quality: 'fresh' as const,
           items: [
             item({ id: 'ai-safe', category: 'ai', risk: 'safe', size: { logical: 1000, allocated: 1000 } }),
             item({ id: 'ai-rebuild', category: 'ai', risk: 'rebuild', size: { logical: 2000, allocated: 2000 } }),
@@ -134,6 +139,7 @@ describe('quick clean eligibility and predicate consistency', () => {
           safe_bytes: 500,
           rebuild_bytes: 0,
           manual_bytes: 0,
+          quality: 'fresh' as const,
           items: [
             item({ id: 'dev-safe', category: 'developer', risk: 'safe', size: { logical: 500, allocated: 500 } }),
           ],
@@ -218,6 +224,8 @@ describe('scanStore selectionSummary', () => {
       safe_bytes: 1500,
       rebuild_bytes: 2000,
       manual_bytes: 4000,
+      quality: 'fresh' as const,
+      incomplete_reasons: [],
       categories: [
         {
           category: 'ai' as const,
@@ -226,6 +234,7 @@ describe('scanStore selectionSummary', () => {
           safe_bytes: 1500,
           rebuild_bytes: 2000,
           manual_bytes: 0,
+          quality: 'fresh' as const,
           items: [
             item({ id: 'item-safe', category: 'ai', risk: 'safe', size: { logical: 1500, allocated: 1500 } }),
             item({ id: 'item-rebuild', category: 'ai', risk: 'rebuild', size: { logical: 2000, allocated: 2000 } }),
@@ -238,6 +247,7 @@ describe('scanStore selectionSummary', () => {
           safe_bytes: 0,
           rebuild_bytes: 0,
           manual_bytes: 4000,
+          quality: 'fresh' as const,
           items: [
             item({ id: 'item-manual-1', category: 'developer', risk: 'manual', size: { logical: 1000, allocated: 1000 } }),
             item({ id: 'item-manual-2', category: 'developer', risk: 'manual', size: { logical: 3000, allocated: 3000 } }),

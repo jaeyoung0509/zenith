@@ -48,7 +48,10 @@
     );
   });
 
-  let cleanableFilteredItems = $derived(filteredItems.filter((i) => i.risk !== 'manual'));
+  let cleanableFilteredItems = $derived(
+    filteredItems.filter((i) => i.risk !== 'manual'
+      && (i.quality === 'fresh' || i.quality === 'partial'))
+  );
 
   let allFilteredSelected = $derived.by(() => {
     if (cleanableFilteredItems.length === 0) return false;
@@ -87,11 +90,18 @@
         <ArrowLeft size={16} />
       </Button>
       <div>
-        <h2 class="text-base font-semibold text-foreground tracking-tight">
-          {categoryResult.display_name}
-        </h2>
+        <div class="flex items-center gap-2">
+          <h2 class="text-base font-semibold text-foreground tracking-tight">
+            {categoryResult.display_name}
+          </h2>
+          {#if categoryResult.quality === 'partial'}
+            <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title="Some paths could not be fully inspected">
+              Partial
+            </span>
+          {/if}
+        </div>
         <p class="text-xs text-muted-foreground">
-          {filteredItems.length} detected {filteredItems.length === 1 ? 'location' : 'locations'} • {formatBytes(categoryResult.total_bytes)} detected
+          {filteredItems.length} detected {filteredItems.length === 1 ? 'location' : 'locations'} • {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)} detected
         </p>
       </div>
     </div>

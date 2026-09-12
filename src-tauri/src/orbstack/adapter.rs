@@ -1,4 +1,4 @@
-use crate::models::{Category, FileSize, RiskTier, ScanItem};
+use crate::models::{Category, FileSize, ObservationQuality, RiskTier, ScanItem};
 use crate::platform::description::PlatformEnvironment;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -73,6 +73,8 @@ impl OrbStackAdapter {
             is_selected: false,
             last_modified,
             exists: true,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
         })
     }
 }

@@ -1,7 +1,9 @@
 use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
-use crate::models::{Category, CategoryResult, RiskTier, ScanEvent, ScanItem, ScanResult};
+use crate::models::{
+    Category, CategoryResult, ObservationQuality, RiskTier, ScanEvent, ScanItem, ScanResult,
+};
 use crate::orbstack::OrbStackAdapter;
 use crate::platform::PlatformEnvironment;
 use crate::scanner::DirectoryScanner;
@@ -10,6 +12,26 @@ use std::time::SystemTime;
 use uuid::Uuid;
 
 pub struct ScanEngine;
+
+fn aggregate_quality(
+    qualities: impl IntoIterator<Item = ObservationQuality>,
+) -> ObservationQuality {
+    let mut saw_any = false;
+    let mut all_fresh = true;
+    let mut all_unavailable = true;
+    for quality in qualities {
+        saw_any = true;
+        all_fresh &= quality == ObservationQuality::Fresh;
+        all_unavailable &= quality == ObservationQuality::Unavailable;
+    }
+    if !saw_any || all_fresh {
+        ObservationQuality::Fresh
+    } else if all_unavailable {
+        ObservationQuality::Unavailable
+    } else {
+        ObservationQuality::Partial
+    }
+}
 
 impl ScanEngine {
     /// Executes a full or filtered scan across all categories, emitting streaming events.
@@ -73,7 +95,9 @@ impl ScanEngine {
                     DirectoryScanner::scan_signature_with_pool(sig, directory_pool, environment);
                 for item in items {
                     let bytes = item.size.reclaimable();
-                    if !item.exists || bytes == 0 {
+                    // Preserve items that encountered errors or partial observations even if 0 bytes.
+                    let is_empty_fresh = item.quality == ObservationQuality::Fresh && bytes == 0;
+                    if !item.exists || is_empty_fresh {
                         continue;
                     }
                     category_total_bytes += bytes;
@@ -82,6 +106,16 @@ impl ScanEngine {
                         RiskTier::Safe => cat_safe += bytes,
                         RiskTier::Rebuild => cat_rebuild += bytes,
                         RiskTier::Manual => cat_manual += bytes,
+                    }
+
+                    if item.quality != ObservationQuality::Fresh {
+                        let message = format!(
+                            "Could not fully inspect {}: {}",
+                            item.name,
+                            item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
+                        );
+                        crate::diagnostics::log_error("scanner", &message);
+                        on_event(ScanEvent::Error { message });
                     }
 
                     on_event(ScanEvent::ItemFound { item: item.clone() });
@@ -133,6 +167,8 @@ impl ScanEngine {
             rebuild_bytes += cat_rebuild;
             manual_bytes += cat_manual;
 
+            let cat_quality = aggregate_quality(category_items.iter().map(|item| item.quality));
+
             let cat_item_count = category_items.len();
             category_results.push(CategoryResult {
                 category,
@@ -142,6 +178,7 @@ impl ScanEngine {
                 safe_bytes: cat_safe,
                 rebuild_bytes: cat_rebuild,
                 manual_bytes: cat_manual,
+                quality: cat_quality,
             });
 
             on_event(ScanEvent::CategoryFinished {
@@ -156,6 +193,18 @@ impl ScanEngine {
             .unwrap_or_default()
             .as_secs();
 
+        let mut incomplete_reasons = Vec::new();
+        for cat in &category_results {
+            for item in &cat.items {
+                if let Some(reason) = &item.incomplete_reason {
+                    if !incomplete_reasons.contains(reason) {
+                        incomplete_reasons.push(reason.clone());
+                    }
+                }
+            }
+        }
+        let scan_quality = aggregate_quality(category_results.iter().map(|cat| cat.quality));
+
         let result = ScanResult {
             scan_id,
             valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
@@ -166,6 +215,8 @@ impl ScanEngine {
             safe_bytes,
             rebuild_bytes,
             manual_bytes,
+            quality: scan_quality,
+            incomplete_reasons,
         };
 
         on_event(ScanEvent::Finished {
@@ -173,5 +224,31 @@ impl ScanEngine {
         });
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aggregate_quality;
+    use crate::models::ObservationQuality;
+
+    #[test]
+    fn observation_quality_aggregation_distinguishes_total_and_partial_failure() {
+        assert_eq!(aggregate_quality([]), ObservationQuality::Fresh);
+        assert_eq!(
+            aggregate_quality([ObservationQuality::Fresh, ObservationQuality::Fresh]),
+            ObservationQuality::Fresh
+        );
+        assert_eq!(
+            aggregate_quality([
+                ObservationQuality::Unavailable,
+                ObservationQuality::Unavailable,
+            ]),
+            ObservationQuality::Unavailable
+        );
+        assert_eq!(
+            aggregate_quality([ObservationQuality::Fresh, ObservationQuality::Unavailable]),
+            ObservationQuality::Partial
+        );
     }
 }

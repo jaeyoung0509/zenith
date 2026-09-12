@@ -1471,7 +1471,12 @@ fn record_from_measurement(
     candidate: Candidate,
     stats: TreeStats,
 ) -> Option<DeveloperArtifactRecord> {
-    if stats.logical_bytes == 0 && stats.allocated_bytes == 0 {
+    if stats.complete
+        && !stats.safety_blocked
+        && !stats.cancelled
+        && stats.logical_bytes == 0
+        && stats.allocated_bytes == 0
+    {
         return None;
     }
     let identity = FileIdentity::from_path(&candidate.path)?;

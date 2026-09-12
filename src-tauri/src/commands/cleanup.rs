@@ -220,7 +220,10 @@ pub fn select_quick_clean_safe_candidates(
         }
         for item in &category.items {
             let bytes = item.size.allocated.unwrap_or(item.size.logical);
-            if item.risk == RiskTier::Safe && bytes > 0 {
+            if item.risk == RiskTier::Safe
+                && bytes > 0
+                && item.quality == crate::models::ObservationQuality::Fresh
+            {
                 eligible_ids.push(item.id.clone());
             }
         }

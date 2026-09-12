@@ -85,6 +85,13 @@ impl SafetyPlanner {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
+            if !item.allows_cleanup() {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' was not completely inspected or is inaccessible and cannot be cleaned",
+                    item.name
+                )));
+            }
+
             // 1. Verify signature exists in registry
             let signature = registry
                 .get(&item.signature_id)
@@ -181,7 +188,7 @@ impl SafetyPlanner {
 #[cfg(test)]
 mod tests {
     use super::SafetyPlanner;
-    use crate::models::{Category, FileSize, RiskTier, ScanItem, ZenithError};
+    use crate::models::{Category, FileSize, ObservationQuality, RiskTier, ScanItem, ZenithError};
     use crate::signatures::SignatureRegistry;
 
     #[test]
@@ -200,6 +207,8 @@ mod tests {
             is_selected: true,
             last_modified: None,
             exists: true,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
         };
 
         let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());
