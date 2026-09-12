@@ -551,9 +551,14 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success());
+        let environment = crate::platform::PlatformEnvironment::simulated(
+            crate::platform::path_algebra::PathFlavor::Windows,
+        )
+        .with_home(profile.clone());
         assert!(SymlinkGuard::validate_components_between(
             &link.join("프로젝트"),
-            &profile.canonicalize().unwrap()
+            &profile.canonicalize().unwrap(),
+            &environment,
         )
         .is_err());
     }
