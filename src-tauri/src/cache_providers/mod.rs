@@ -1,6 +1,6 @@
 use crate::models::{
-    CacheArtifactKind, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category, RiskTier,
-    ScanItem,
+    CacheArtifactKind, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category,
+    ObservationQuality, RiskTier, ScanItem,
 };
 use crate::platform::path_algebra::{self, PathFlavor};
 use crate::platform::PlatformEnvironment;
@@ -150,10 +150,20 @@ impl CacheProviderRegistry {
             return Ok(None);
         }
         let path = discover_path(provider, environment)?;
-        let (size, file_count) = SizeCalculator::measure_path(&path, &[], environment);
-        if size.reclaimable() == 0 {
+        let measurement = SizeCalculator::measure_path_full(&path, &[], environment);
+        if measurement.size.reclaimable() == 0 && measurement.complete {
             return Ok(None);
         }
+        let (quality, size_semantics) = if !measurement.complete {
+            let q = if measurement.size.reclaimable() == 0 {
+                ObservationQuality::Unavailable
+            } else {
+                ObservationQuality::Partial
+            };
+            (q, CacheSizeSemantics::ConservativeLowerBound)
+        } else {
+            (ObservationQuality::Fresh, CacheSizeSemantics::Informational)
+        };
         let last_modified = std::fs::metadata(&path)
             .ok()
             .and_then(|metadata| metadata.modified().ok())
@@ -166,20 +176,22 @@ impl CacheProviderRegistry {
             category: Category::Developer,
             risk: RiskTier::Rebuild,
             path: path.to_string_lossy().into_owned(),
-            size,
-            file_count,
+            size: measurement.size,
+            file_count: measurement.file_count,
             description: "Inspected and pruned by the owning package manager.".to_string(),
             cache_metadata: CacheMetadata {
                 provider: provider.executable().to_string(),
                 management_mode: CacheManagementMode::ToolManaged,
                 artifact_kind: CacheArtifactKind::PackageStore,
                 consequence: provider.consequence().to_string(),
-                size_semantics: CacheSizeSemantics::Informational,
+                size_semantics,
                 last_used_confidence: Default::default(),
             },
             is_selected: false,
             last_modified,
             exists: true,
+            quality,
+            incomplete_reason: measurement.incomplete_reason,
         }))
     }
 

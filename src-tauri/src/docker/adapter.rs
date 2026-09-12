@@ -1,6 +1,6 @@
 use crate::models::{
     Category, DockerContainerItem, DockerImageItem, DockerOverview, DockerStatus, DockerVolumeItem,
-    FileSize, RiskTier, ScanItem, ZenithError,
+    FileSize, ObservationQuality, RiskTier, ScanItem, ZenithError,
 };
 use crate::platform::description::{PlatformEnvironment, ToolResolution};
 use crate::tooling;
@@ -251,6 +251,8 @@ impl DockerAdapter {
                 is_selected: true,
                 last_modified: None,
                 exists: true,
+                quality: ObservationQuality::Fresh,
+                incomplete_reason: None,
             });
         }
 
@@ -272,6 +274,8 @@ impl DockerAdapter {
                 is_selected: true,
                 last_modified: None,
                 exists: true,
+                quality: ObservationQuality::Fresh,
+                incomplete_reason: None,
             });
         }
 
@@ -295,6 +299,8 @@ impl DockerAdapter {
                 is_selected: false,
                 last_modified: None,
                 exists: true,
+                quality: ObservationQuality::Fresh,
+                incomplete_reason: None,
             });
         }
 
@@ -316,6 +322,8 @@ impl DockerAdapter {
                 is_selected: false,
                 last_modified: None,
                 exists: true,
+                quality: ObservationQuality::Fresh,
+                incomplete_reason: None,
             });
         }
 
@@ -337,6 +345,8 @@ impl DockerAdapter {
                 is_selected: false,
                 last_modified: None,
                 exists: true,
+                quality: ObservationQuality::Fresh,
+                incomplete_reason: None,
             });
         }
 

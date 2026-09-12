@@ -96,10 +96,15 @@
       </div>
 
       <div class="min-w-0 flex-1">
-        <div class="flex min-w-0 items-center">
+        <div class="flex min-w-0 items-center gap-2">
           <h3 class="min-w-0 truncate text-sm font-medium text-foreground tracking-tight">
             {categoryResult.display_name}
           </h3>
+          {#if categoryResult.quality === 'partial'}
+            <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title="Some paths could not be fully inspected">
+              Partial
+            </span>
+          {/if}
         </div>
         <div class="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground font-mono">
@@ -127,7 +132,7 @@
     <div class="flex shrink-0 items-center gap-3">
       <div class="w-[7rem] shrink-0 text-right">
         <span class="block whitespace-nowrap text-sm font-semibold font-mono tabular-nums text-foreground">
-          {formatBytes(categoryResult.total_bytes)}
+          {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)}
         </span>
         <span class="block whitespace-nowrap text-micro text-muted-foreground">Detected</span>
         {#if showSelectedBytes}

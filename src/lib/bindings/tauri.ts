@@ -46,6 +46,8 @@ export const commands = {
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
+	quality: ObservationQuality,
+	incomplete_reasons: string[],
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
@@ -587,6 +589,7 @@ export type CategoryResult_Deserialize = {
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
+	quality?: ObservationQuality,
 };
 
 export type CategoryResult_Serialize = {
@@ -597,6 +600,7 @@ export type CategoryResult_Serialize = {
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
+	quality: ObservationQuality,
 };
 
 export type CleanEvent = CleanEvent_Serialize | CleanEvent_Deserialize;
@@ -1791,6 +1795,8 @@ export type ScanItem_Deserialize = {
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
+	quality?: ObservationQuality,
+	incomplete_reason?: string | null,
 };
 
 export type ScanItem_Serialize = {
@@ -1807,6 +1813,8 @@ export type ScanItem_Serialize = {
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
+	quality: ObservationQuality,
+	incomplete_reason: string | null,
 };
 
 export type ScanResult = ScanResult_Serialize | ScanResult_Deserialize;
@@ -1822,6 +1830,8 @@ export type ScanResult_Deserialize = {
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
+	quality?: ObservationQuality,
+	incomplete_reasons?: string[],
 };
 
 export type ScanResult_Serialize = {
@@ -1835,6 +1845,8 @@ export type ScanResult_Serialize = {
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
+	quality: ObservationQuality,
+	incomplete_reasons: string[],
 };
 
 export type SelectedApplication = {

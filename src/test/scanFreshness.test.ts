@@ -277,4 +277,102 @@ describe('cleanup freshness and recovery', () => {
     expect(store.lastScanTrigger).toBe('manual');
     stop();
   });
+
+  it('identifies partial scans, allows manual cleanup, but excludes partial/unavailable items from auto-select', async () => {
+    const store = new ScanStore();
+    const partialScan: ScanResult = {
+      scan_id: 'partial-scan',
+      valid_for_seconds: 300,
+      started_at: 999,
+      finished_at: 1000,
+      total_bytes: 50,
+      safe_bytes: 50,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+      quality: 'partial',
+      incomplete_reasons: ['Subtree could not be fully read'],
+      categories: [{
+        category: 'developer',
+        display_name: 'Developer',
+        total_bytes: 50,
+        safe_bytes: 50,
+        rebuild_bytes: 0,
+        manual_bytes: 0,
+        quality: 'partial',
+        items: [
+          {
+            id: 'fresh-safe-item',
+            signature_id: 'fresh.sig',
+            name: 'Fresh Item',
+            category: 'developer',
+            risk: 'safe',
+            path: '/fresh',
+            size: { logical: 30, allocated: 30 },
+            file_count: 3,
+            description: 'Fully inspected',
+            is_selected: false,
+            last_modified: null,
+            exists: true,
+            quality: 'fresh',
+            incomplete_reason: null,
+          },
+          {
+            id: 'partial-safe-item',
+            signature_id: 'partial.sig',
+            name: 'Partial Item',
+            category: 'developer',
+            risk: 'safe',
+            path: '/partial',
+            size: { logical: 20, allocated: 20 },
+            file_count: 2,
+            description: 'Partially inspected',
+            is_selected: false,
+            last_modified: null,
+            exists: true,
+            quality: 'partial',
+            incomplete_reason: 'Some files inaccessible',
+          },
+          {
+            id: 'unavailable-item',
+            signature_id: 'unavail.sig',
+            name: 'Unavailable Item',
+            category: 'developer',
+            risk: 'safe',
+            path: '/unavailable',
+            size: { logical: 0, allocated: 0 },
+            file_count: 0,
+            description: 'Cannot read',
+            is_selected: false,
+            last_modified: null,
+            exists: true,
+            quality: 'unavailable',
+            incomplete_reason: 'Permission denied',
+          },
+        ],
+      }],
+    };
+
+    vi.mocked(tauriGetLastScan).mockResolvedValue(partialScan);
+    await store.init();
+
+    // Freshness reports 'partial'
+    expect(store.freshness).toBe('partial');
+    // Manual review cleanup is permitted on partial scan
+    expect(store.canClean).toBe(true);
+
+    // Auto-selection only selects fresh items (partial and unavailable are NOT auto-selected)
+    expect(store.selectedMap['fresh-safe-item']).toBe(true);
+    expect(store.selectedMap['partial-safe-item']).toBe(false);
+    expect(store.selectedMap['unavailable-item']).toBe(false);
+
+    // Unavailable item CANNOT be selected even manually
+    store.setItemSelected('unavailable-item', true);
+    expect(store.selectedMap['unavailable-item']).toBe(false);
+    store.toggleItem('unavailable-item');
+    expect(store.selectedMap['unavailable-item']).toBe(false);
+
+    // Partial item CAN be selected manually for review cleanup
+    store.setItemSelected('partial-safe-item', true);
+    expect(store.selectedMap['partial-safe-item']).toBe(true);
+  });
 });

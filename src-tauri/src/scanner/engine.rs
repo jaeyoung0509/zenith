@@ -1,7 +1,9 @@
 use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
-use crate::models::{Category, CategoryResult, RiskTier, ScanEvent, ScanItem, ScanResult};
+use crate::models::{
+    Category, CategoryResult, ObservationQuality, RiskTier, ScanEvent, ScanItem, ScanResult,
+};
 use crate::orbstack::OrbStackAdapter;
 use crate::platform::PlatformEnvironment;
 use crate::scanner::DirectoryScanner;
@@ -73,7 +75,9 @@ impl ScanEngine {
                     DirectoryScanner::scan_signature_with_pool(sig, directory_pool, environment);
                 for item in items {
                     let bytes = item.size.reclaimable();
-                    if !item.exists || bytes == 0 {
+                    // Preserve items that encountered errors or partial observations even if 0 bytes.
+                    let is_empty_fresh = item.quality == ObservationQuality::Fresh && bytes == 0;
+                    if !item.exists || is_empty_fresh {
                         continue;
                     }
                     category_total_bytes += bytes;
@@ -82,6 +86,16 @@ impl ScanEngine {
                         RiskTier::Safe => cat_safe += bytes,
                         RiskTier::Rebuild => cat_rebuild += bytes,
                         RiskTier::Manual => cat_manual += bytes,
+                    }
+
+                    if item.quality == ObservationQuality::Unavailable {
+                        on_event(ScanEvent::Error {
+                            message: format!(
+                                "Could not inspect {}: {}",
+                                item.name,
+                                item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
+                            ),
+                        });
                     }
 
                     on_event(ScanEvent::ItemFound { item: item.clone() });
@@ -133,6 +147,16 @@ impl ScanEngine {
             rebuild_bytes += cat_rebuild;
             manual_bytes += cat_manual;
 
+            let mut cat_quality = ObservationQuality::Fresh;
+            for item in &category_items {
+                if item.quality == ObservationQuality::Partial
+                    || item.quality == ObservationQuality::Unavailable
+                {
+                    cat_quality = ObservationQuality::Partial;
+                    break;
+                }
+            }
+
             let cat_item_count = category_items.len();
             category_results.push(CategoryResult {
                 category,
@@ -142,6 +166,7 @@ impl ScanEngine {
                 safe_bytes: cat_safe,
                 rebuild_bytes: cat_rebuild,
                 manual_bytes: cat_manual,
+                quality: cat_quality,
             });
 
             on_event(ScanEvent::CategoryFinished {
@@ -156,6 +181,21 @@ impl ScanEngine {
             .unwrap_or_default()
             .as_secs();
 
+        let mut scan_quality = ObservationQuality::Fresh;
+        let mut incomplete_reasons = Vec::new();
+        for cat in &category_results {
+            if cat.quality != ObservationQuality::Fresh {
+                scan_quality = ObservationQuality::Partial;
+            }
+            for item in &cat.items {
+                if let Some(reason) = &item.incomplete_reason {
+                    if !incomplete_reasons.contains(reason) {
+                        incomplete_reasons.push(reason.clone());
+                    }
+                }
+            }
+        }
+
         let result = ScanResult {
             scan_id,
             valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
@@ -166,6 +206,8 @@ impl ScanEngine {
             safe_bytes,
             rebuild_bytes,
             manual_bytes,
+            quality: scan_quality,
+            incomplete_reasons,
         };
 
         on_event(ScanEvent::Finished {

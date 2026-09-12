@@ -391,6 +391,14 @@
       </div>
     {/if}
 
+    <!-- Partial Scan Alert -->
+    {#if scanStore.freshness === 'partial'}
+      <div role="status" class="p-3.5 rounded-xl bg-warning/10 border border-warning/30 text-warning flex items-center gap-2.5 text-xs">
+        <AlertCircle size={16} class="shrink-0" />
+        <span>Partial scan completed. Some locations could not be fully inspected, so displayed amounts are lower bounds (≥). Incomplete items cannot be auto-cleaned.</span>
+      </div>
+    {/if}
+
     <!-- Categories Section -->
     <div class="space-y-3">
       <div class="flex items-center justify-between">

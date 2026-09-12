@@ -4,10 +4,66 @@ use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::{Scope, ThreadPool};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathMeasurement {
+    pub size: FileSize,
+    pub file_count: usize,
+    pub complete: bool,
+    pub incomplete_reason: Option<String>,
+}
+
+impl PathMeasurement {
+    pub fn new(
+        size: FileSize,
+        file_count: usize,
+        complete: bool,
+        incomplete_reason: Option<String>,
+    ) -> Self {
+        Self {
+            size,
+            file_count,
+            complete,
+            incomplete_reason,
+        }
+    }
+
+    pub fn complete(size: FileSize, file_count: usize) -> Self {
+        Self {
+            size,
+            file_count,
+            complete: true,
+            incomplete_reason: None,
+        }
+    }
+
+    pub fn incomplete(size: FileSize, file_count: usize, reason: impl Into<String>) -> Self {
+        Self {
+            size,
+            file_count,
+            complete: false,
+            incomplete_reason: Some(reason.into()),
+        }
+    }
+
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            size: FileSize::default(),
+            file_count: 0,
+            complete: false,
+            incomplete_reason: Some(reason.into()),
+        }
+    }
+
+    pub fn into_tuple(self) -> (FileSize, usize) {
+        (self.size, self.file_count)
+    }
+}
 
 #[cfg(windows)]
 pub fn get_allocated_size(path: &Path) -> Option<u64> {
@@ -68,6 +124,14 @@ impl SizeCalculator {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> (FileSize, usize) {
+        Self::measure_path_full(path, exclusions, environment).into_tuple()
+    }
+
+    pub fn measure_path_full<P: AsRef<Path>>(
+        path: P,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> PathMeasurement {
         Self::measure_path_with_pool(path, exclusions, None, environment)
     }
 
@@ -76,26 +140,45 @@ impl SizeCalculator {
         exclusions: &[String],
         pool: Option<&ThreadPool>,
         environment: &PlatformEnvironment,
-    ) -> (FileSize, usize) {
+    ) -> PathMeasurement {
         let path = path.as_ref();
         if !path.exists() && !SymlinkGuard::is_symlink(path) {
-            return (FileSize::default(), 0);
+            return PathMeasurement::complete(FileSize::default(), 0);
         }
 
         // Check if path is in blacklist
         if Blacklist::is_blacklisted_with(path, environment) {
-            return (FileSize::default(), 0);
+            return PathMeasurement::incomplete(
+                FileSize::default(),
+                0,
+                "Protected by system safety blacklist",
+            );
         }
 
         // If path is a symlink, only measure the symlink itself
         if SymlinkGuard::is_symlink(path) {
-            let logical = fs::symlink_metadata(path).map(|m| m.len()).unwrap_or(0);
-            return (FileSize::new(logical, Some(logical)), 1);
+            let logical = match fs::symlink_metadata(path) {
+                Ok(m) => m.len(),
+                Err(err) => {
+                    return PathMeasurement::incomplete(
+                        FileSize::default(),
+                        0,
+                        format!("Could not read symlink metadata for {}: {}", path.display(), err),
+                    );
+                }
+            };
+            return PathMeasurement::complete(FileSize::new(logical, Some(logical)), 1);
         }
 
         let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
-            Err(_) => return (FileSize::default(), 0),
+            Err(err) => {
+                return PathMeasurement::unavailable(format!(
+                    "Could not read metadata for {}: {}",
+                    path.display(),
+                    err
+                ));
+            }
         };
 
         if meta.is_file() {
@@ -107,7 +190,7 @@ impl SizeCalculator {
             #[cfg(not(any(unix, windows)))]
             let allocated = Some(logical);
 
-            return (FileSize::new(logical, allocated), 1);
+            return PathMeasurement::complete(FileSize::new(logical, allocated), 1);
         }
 
         if meta.is_dir() {
@@ -117,7 +200,7 @@ impl SizeCalculator {
             return Self::measure_dir_recursive(path, exclusions, 0, 32, environment);
         }
 
-        (FileSize::default(), 0)
+        PathMeasurement::complete(FileSize::default(), 0)
     }
 
     fn measure_dir_parallel(
@@ -125,10 +208,13 @@ impl SizeCalculator {
         exclusions: &[String],
         pool: &ThreadPool,
         environment: &PlatformEnvironment,
-    ) -> (FileSize, usize) {
+    ) -> PathMeasurement {
         let logical = AtomicU64::new(0);
         let allocated = AtomicU64::new(0);
         let file_count = AtomicUsize::new(0);
+        let complete = AtomicBool::new(true);
+        let reason = Mutex::new(None);
+
         pool.scope(|scope| {
             Self::spawn_dir_measurement(
                 scope,
@@ -139,17 +225,23 @@ impl SizeCalculator {
                 &logical,
                 &allocated,
                 &file_count,
+                &complete,
+                &reason,
                 environment,
             );
         });
 
-        (
-            FileSize::new(
+        let is_complete = complete.load(Ordering::Relaxed);
+        let incomplete_reason = reason.into_inner().unwrap_or_default();
+        PathMeasurement {
+            size: FileSize::new(
                 logical.load(Ordering::Relaxed),
                 Some(allocated.load(Ordering::Relaxed)),
             ),
-            file_count.load(Ordering::Relaxed),
-        )
+            file_count: file_count.load(Ordering::Relaxed),
+            complete: is_complete,
+            incomplete_reason,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -162,15 +254,33 @@ impl SizeCalculator {
         logical: &'scope AtomicU64,
         allocated: &'scope AtomicU64,
         file_count: &'scope AtomicUsize,
+        complete: &'scope AtomicBool,
+        reason: &'scope Mutex<Option<String>>,
         environment: &'scope PlatformEnvironment,
     ) {
         scope.spawn(move |scope| {
             if current_depth > max_depth {
+                complete.store(false, Ordering::Relaxed);
+                let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                if r.is_none() {
+                    *r = Some(format!(
+                        "Directory depth limit of {} exceeded at {}",
+                        max_depth,
+                        dir.display()
+                    ));
+                }
                 return;
             }
-            let entries = match fs::read_dir(dir) {
+            let entries = match fs::read_dir(&dir) {
                 Ok(entries) => entries,
-                Err(_) => return,
+                Err(err) => {
+                    complete.store(false, Ordering::Relaxed);
+                    let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                    if r.is_none() {
+                        *r = Some(format!("Failed to read directory {}: {}", dir.display(), err));
+                    }
+                    return;
+                }
             };
 
             // Aggregate files locally and synchronize only once per directory.
@@ -178,8 +288,23 @@ impl SizeCalculator {
             let mut local_allocated = 0u64;
             let mut local_file_count = 0usize;
 
-            for entry in entries.flatten() {
-                let child_path = entry.path();
+            for entry in entries {
+                let ent = match entry {
+                    Ok(e) => e,
+                    Err(err) => {
+                        complete.store(false, Ordering::Relaxed);
+                        let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                        if r.is_none() {
+                            *r = Some(format!(
+                                "Failed to read directory entry in {}: {}",
+                                dir.display(),
+                                err
+                            ));
+                        }
+                        continue;
+                    }
+                };
+                let child_path = ent.path();
                 if Self::is_excluded(&child_path, exclusions, environment)
                     || Blacklist::is_blacklisted_with(&child_path, environment)
                 {
@@ -188,55 +313,112 @@ impl SizeCalculator {
 
                 // Never follow symlinked directories; account only for the link.
                 if SymlinkGuard::is_symlink(&child_path) {
-                    if let Ok(meta) = fs::symlink_metadata(&child_path) {
-                        let len = meta.len();
-                        local_logical += len;
-                        #[cfg(unix)]
-                        {
-                            local_allocated += meta.blocks() * 512;
+                    match fs::symlink_metadata(&child_path) {
+                        Ok(meta) => {
+                            let len = meta.len();
+                            local_logical += len;
+                            #[cfg(unix)]
+                            {
+                                local_allocated += meta.blocks() * 512;
+                            }
+                            #[cfg(windows)]
+                            {
+                                local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                            }
+                            #[cfg(not(any(unix, windows)))]
+                            {
+                                local_allocated += len;
+                            }
+                            local_file_count += 1;
                         }
-                        #[cfg(windows)]
-                        {
-                            local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        Err(err) => {
+                            complete.store(false, Ordering::Relaxed);
+                            let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                            if r.is_none() {
+                                *r = Some(format!(
+                                    "Failed to read symlink metadata for {}: {}",
+                                    child_path.display(),
+                                    err
+                                ));
+                            }
                         }
-                        #[cfg(not(any(unix, windows)))]
-                        {
-                            local_allocated += len;
-                        }
-                        local_file_count += 1;
                     }
                     continue;
                 }
 
-                if let Ok(meta) = fs::symlink_metadata(&child_path) {
-                    if meta.is_file() {
-                        let len = meta.len();
-                        local_logical += len;
-                        #[cfg(unix)]
+                match fs::symlink_metadata(&child_path) {
+                    Ok(meta) => {
+                        if meta.is_dir()
+                            && child_path
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
                         {
-                            local_allocated += meta.blocks() * 512;
+                            complete.store(false, Ordering::Relaxed);
+                            let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                            if r.is_none() {
+                                *r = Some(format!(
+                                    "Protected application bundle encountered in {}",
+                                    child_path.display()
+                                ));
+                            }
+                            continue;
                         }
-                        #[cfg(windows)]
-                        {
-                            local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+
+                        if meta.is_file() {
+                            let len = meta.len();
+                            local_logical += len;
+                            #[cfg(unix)]
+                            {
+                                local_allocated += meta.blocks() * 512;
+                            }
+                            #[cfg(windows)]
+                            {
+                                local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                            }
+                            #[cfg(not(any(unix, windows)))]
+                            {
+                                local_allocated += len;
+                            }
+                            local_file_count += 1;
+                        } else if meta.is_dir() {
+                            if current_depth < max_depth {
+                                Self::spawn_dir_measurement(
+                                    scope,
+                                    child_path,
+                                    exclusions,
+                                    current_depth + 1,
+                                    max_depth,
+                                    logical,
+                                    allocated,
+                                    file_count,
+                                    complete,
+                                    reason,
+                                    environment,
+                                );
+                            } else {
+                                complete.store(false, Ordering::Relaxed);
+                                let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                                if r.is_none() {
+                                    *r = Some(format!(
+                                        "Directory depth limit of {} exceeded at {}",
+                                        max_depth,
+                                        child_path.display()
+                                    ));
+                                }
+                            }
                         }
-                        #[cfg(not(any(unix, windows)))]
-                        {
-                            local_allocated += len;
+                    }
+                    Err(err) => {
+                        complete.store(false, Ordering::Relaxed);
+                        let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                        if r.is_none() {
+                            *r = Some(format!(
+                                "Failed to read metadata for {}: {}",
+                                child_path.display(),
+                                err
+                            ));
                         }
-                        local_file_count += 1;
-                    } else if meta.is_dir() && current_depth < max_depth {
-                        Self::spawn_dir_measurement(
-                            scope,
-                            child_path,
-                            exclusions,
-                            current_depth + 1,
-                            max_depth,
-                            logical,
-                            allocated,
-                            file_count,
-                            environment,
-                        );
                     }
                 }
             }
@@ -273,22 +455,52 @@ impl SizeCalculator {
         current_depth: usize,
         max_depth: usize,
         environment: &PlatformEnvironment,
-    ) -> (FileSize, usize) {
+    ) -> PathMeasurement {
         if current_depth > max_depth {
-            return (FileSize::default(), 0);
+            return PathMeasurement::incomplete(
+                FileSize::default(),
+                0,
+                format!(
+                    "Directory depth limit of {} exceeded at {}",
+                    max_depth,
+                    dir.display()
+                ),
+            );
         }
 
         let mut total_logical = 0u64;
         let mut total_allocated = 0u64;
         let mut file_count = 0usize;
+        let mut complete = true;
+        let mut incomplete_reason: Option<String> = None;
 
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
-            Err(_) => return (FileSize::default(), 0),
+            Err(err) => {
+                return PathMeasurement::incomplete(
+                    FileSize::default(),
+                    0,
+                    format!("Failed to read directory {}: {}", dir.display(), err),
+                );
+            }
         };
 
-        for entry in entries.flatten() {
-            let child_path = entry.path();
+        for entry in entries {
+            let ent = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    complete = false;
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(format!(
+                            "Failed to read directory entry in {}: {}",
+                            dir.display(),
+                            err
+                        ));
+                    }
+                    continue;
+                }
+            };
+            let child_path = ent.path();
 
             if Self::is_excluded(&child_path, exclusions, environment) {
                 continue;
@@ -301,62 +513,110 @@ impl SizeCalculator {
 
             // Symlink check: DO NOT traverse into symlinked directories
             if SymlinkGuard::is_symlink(&child_path) {
-                if let Ok(m) = fs::symlink_metadata(&child_path) {
-                    let len = m.len();
-                    total_logical += len;
-                    #[cfg(unix)]
-                    {
-                        total_allocated += m.blocks() * 512;
+                match fs::symlink_metadata(&child_path) {
+                    Ok(m) => {
+                        let len = m.len();
+                        total_logical += len;
+                        #[cfg(unix)]
+                        {
+                            total_allocated += m.blocks() * 512;
+                        }
+                        #[cfg(windows)]
+                        {
+                            total_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        }
+                        #[cfg(not(any(unix, windows)))]
+                        {
+                            total_allocated += len;
+                        }
+                        file_count += 1;
                     }
-                    #[cfg(windows)]
-                    {
-                        total_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                    Err(err) => {
+                        complete = false;
+                        if incomplete_reason.is_none() {
+                            incomplete_reason = Some(format!(
+                                "Failed to read symlink metadata for {}: {}",
+                                child_path.display(),
+                                err
+                            ));
+                        }
                     }
-                    #[cfg(not(any(unix, windows)))]
-                    {
-                        total_allocated += len;
-                    }
-                    file_count += 1;
                 }
                 continue;
             }
 
-            if let Ok(meta) = fs::symlink_metadata(&child_path) {
-                if meta.is_file() {
-                    let len = meta.len();
-                    total_logical += len;
-                    #[cfg(unix)]
+            match fs::symlink_metadata(&child_path) {
+                Ok(meta) => {
+                    if meta.is_dir()
+                        && child_path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
                     {
-                        total_allocated += meta.blocks() * 512;
+                        complete = false;
+                        if incomplete_reason.is_none() {
+                            incomplete_reason = Some(format!(
+                                "Protected application bundle encountered in {}",
+                                child_path.display()
+                            ));
+                        }
+                        continue;
                     }
-                    #[cfg(windows)]
-                    {
-                        total_allocated += get_allocated_size(&child_path).unwrap_or(len);
+
+                    if meta.is_file() {
+                        let len = meta.len();
+                        total_logical += len;
+                        #[cfg(unix)]
+                        {
+                            total_allocated += meta.blocks() * 512;
+                        }
+                        #[cfg(windows)]
+                        {
+                            total_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        }
+                        #[cfg(not(any(unix, windows)))]
+                        {
+                            total_allocated += len;
+                        }
+                        file_count += 1;
+                    } else if meta.is_dir() {
+                        let sub = Self::measure_dir_recursive(
+                            &child_path,
+                            exclusions,
+                            current_depth + 1,
+                            max_depth,
+                            environment,
+                        );
+                        total_logical += sub.size.logical;
+                        total_allocated += sub.size.allocated.unwrap_or(sub.size.logical);
+                        file_count += sub.file_count;
+                        if !sub.complete {
+                            complete = false;
+                            if incomplete_reason.is_none() {
+                                incomplete_reason = sub.incomplete_reason;
+                            }
+                        }
                     }
-                    #[cfg(not(any(unix, windows)))]
-                    {
-                        total_allocated += len;
+                }
+                Err(err) => {
+                    complete = false;
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(format!(
+                            "Failed to read metadata for {}: {}",
+                            child_path.display(),
+                            err
+                        ));
                     }
-                    file_count += 1;
-                } else if meta.is_dir() {
-                    let (sub_size, sub_count) = Self::measure_dir_recursive(
-                        &child_path,
-                        exclusions,
-                        current_depth + 1,
-                        max_depth,
-                        environment,
-                    );
-                    total_logical += sub_size.logical;
-                    total_allocated += sub_size.allocated.unwrap_or(sub_size.logical);
-                    file_count += sub_count;
                 }
             }
         }
 
-        (
-            FileSize::new(total_logical, Some(total_allocated)),
+        PathMeasurement {
+            size: FileSize::new(total_logical, Some(total_allocated)),
             file_count,
-        )
+            complete,
+            incomplete_reason,
+        }
     }
 }
 
@@ -393,7 +653,7 @@ mod tests {
 
         let environment = PlatformEnvironment::simulated(PathFlavor::current());
         let exclusions = vec!["excluded".to_string()];
-        let sequential = SizeCalculator::measure_path(root.path(), &exclusions, &environment);
+        let sequential = SizeCalculator::measure_path_full(root.path(), &exclusions, &environment);
         let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
         let parallel = SizeCalculator::measure_path_with_pool(
             root.path(),
@@ -403,9 +663,10 @@ mod tests {
         );
 
         assert_eq!(parallel, sequential);
+        assert!(parallel.complete);
         let expected_files = 2 + usize::from(cfg!(unix));
         assert_eq!(
-            parallel.1, expected_files,
+            parallel.file_count, expected_files,
             "two files plus (on unix) one untraversed symlink"
         );
     }

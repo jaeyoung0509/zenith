@@ -24,12 +24,13 @@
     size_semantics: 'physical_reclaimable' as const,
     last_used_confidence: 'unknown' as const,
   });
+  let isUnavailable = $derived(item.quality === 'unavailable');
   let isManual = $derived(item.risk === 'manual' || cacheMetadata.management_mode === 'advisory');
-  let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual);
+  let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual && !isUnavailable);
   let revealError = $state<string | null>(null);
 
   function handleToggle() {
-    if (isManual) return;
+    if (isManual || isUnavailable) return;
     scanStore.toggleItem(item.id);
   }
 
@@ -60,9 +61,10 @@
     {:else}
       <Checkbox
         checked={isSelected}
-        disabled={!scanStore.canClean}
+        disabled={!scanStore.canClean || isUnavailable}
         onchange={handleToggle}
-        ariaLabel={`Select ${item.name}`}
+        ariaLabel={isUnavailable ? `${item.name} is inaccessible` : `Select ${item.name}`}
+        title={isUnavailable ? (item.incomplete_reason ?? 'Inaccessible: cleanup blocked') : undefined}
         class="mt-0.5 shrink-0"
       />
     {/if}
@@ -73,7 +75,22 @@
           {item.name}
         </span>
         <RiskBadge risk={item.risk} />
+        {#if item.quality === 'partial'}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.incomplete_reason ?? 'Partial scan'}>
+            Partial
+          </span>
+        {:else if item.quality === 'unavailable'}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={item.incomplete_reason ?? 'Inaccessible item'}>
+            Inaccessible
+          </span>
+        {/if}
       </div>
+
+      {#if item.incomplete_reason}
+        <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.incomplete_reason}>
+          {item.incomplete_reason}
+        </p>
+      {/if}
 
       <p class="text-meta text-muted-foreground mt-0.5 line-clamp-1">
         {item.description || item.path}
@@ -113,7 +130,7 @@
       <span role="alert" class="text-caption text-destructive">{revealError}</span>
     {/if}
     <span class="w-[12ch] whitespace-nowrap text-right text-xs font-mono tabular-nums font-semibold text-foreground">
-      {cacheMetadata.size_semantics === 'conservative_lower_bound' ? '≥ ' : cacheMetadata.size_semantics === 'informational' ? '~ ' : ''}{formatBytes(item.size.allocated ?? item.size.logical)}
+      {item.quality === 'partial' || cacheMetadata.size_semantics === 'conservative_lower_bound' ? '≥ ' : cacheMetadata.size_semantics === 'informational' ? '~ ' : ''}{formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
 
     <Button

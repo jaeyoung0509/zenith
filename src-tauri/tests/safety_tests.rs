@@ -4,8 +4,8 @@ use std::path::Path;
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
-    Category, CategoryResult, CleanFailureReason, CleanStrategy, FileSize, RiskTier, ScanItem,
-    ScanResult, Signature, ZenithError,
+    CacheMetadata, CacheSizeSemantics, Category, CategoryResult, CleanFailureReason, CleanStrategy,
+    FileSize, ObservationQuality, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
 };
 use zenith_lib::platform::path_algebra::PathFlavor;
 use zenith_lib::platform::paths::SimulatedPaths;
@@ -369,6 +369,8 @@ fn test_safety_planner_rejects_unknown_signatures() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
 
     let plan_res = SafetyPlanner::create_plan(&[fake_item], &registry);
@@ -400,6 +402,8 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
 
     let result = SafetyPlanner::create_plan(&[forged_item], &registry);
@@ -461,6 +465,8 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
@@ -607,11 +613,14 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             safe_bytes: 0,
             rebuild_bytes: 0,
             manual_bytes: 0,
+            quality: ObservationQuality::Fresh,
         }],
         total_bytes: 0,
         safe_bytes: 0,
         rebuild_bytes: 0,
         manual_bytes: 0,
+        quality: ObservationQuality::Fresh,
+        incomplete_reasons: vec![],
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -677,6 +686,8 @@ fn manual_strategy_never_enters_generic_cleaner() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
 
     assert!(matches!(
@@ -708,6 +719,8 @@ fn npm_cache_selection_plans_provider_cleanup_without_deleting_fixture() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     assert_eq!(plan.targets.len(), 1);
@@ -759,6 +772,8 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
@@ -907,6 +922,8 @@ fn test_docker_prune_target_can_create_plan() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
 
     let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
@@ -961,6 +978,8 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         is_selected: true,
         last_modified: None,
         exists: true,
+        quality: ObservationQuality::Fresh,
+        incomplete_reason: None,
     };
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
@@ -1066,6 +1085,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 safe_bytes: 200,
                 rebuild_bytes: 400,
                 manual_bytes: 0,
+                quality: ObservationQuality::Fresh,
                 items: vec![
                     ScanItem {
                         id: "dev.safe.nonzero".to_string(),
@@ -1081,6 +1101,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                         is_selected: true,
                         last_modified: None,
                         exists: true,
+                        quality: ObservationQuality::Fresh,
+                        incomplete_reason: None,
                     },
                     ScanItem {
                         id: "dev.safe.zero".to_string(),
@@ -1096,6 +1118,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                         is_selected: true,
                         last_modified: None,
                         exists: true,
+                        quality: ObservationQuality::Fresh,
+                        incomplete_reason: None,
                     },
                     ScanItem {
                         id: "dev.rebuild".to_string(),
@@ -1111,6 +1135,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                         is_selected: true,
                         last_modified: None,
                         exists: true,
+                        quality: ObservationQuality::Fresh,
+                        incomplete_reason: None,
                     },
                 ],
             },
@@ -1121,6 +1147,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 safe_bytes: 400,
                 rebuild_bytes: 0,
                 manual_bytes: 0,
+                quality: ObservationQuality::Fresh,
                 items: vec![ScanItem {
                     id: "sys.safe.nonzero".to_string(),
                     signature_id: "sys.signature".to_string(),
@@ -1135,6 +1162,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     is_selected: true,
                     last_modified: None,
                     exists: true,
+                    quality: ObservationQuality::Fresh,
+                    incomplete_reason: None,
                 }],
             },
             CategoryResult {
@@ -1144,6 +1173,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 safe_bytes: 0,
                 rebuild_bytes: 0,
                 manual_bytes: 500,
+                quality: ObservationQuality::Fresh,
                 items: vec![ScanItem {
                     id: "model.manual".to_string(),
                     signature_id: "model.signature".to_string(),
@@ -1158,9 +1188,13 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     is_selected: true,
                     last_modified: None,
                     exists: true,
+                    quality: ObservationQuality::Fresh,
+                    incomplete_reason: None,
                 }],
             },
         ],
+        quality: ObservationQuality::Fresh,
+        incomplete_reasons: vec![],
     };
 
     // Default settings has clean_developer_tools=true
@@ -1223,6 +1257,144 @@ fn test_quick_panel_capability_boundary_safe_only() {
 
     assert!(main_permission_strings.contains(&"allow-create-delete-plan"));
     assert!(main_permission_strings.contains(&"allow-execute-clean"));
+}
+
+#[test]
+fn test_permission_denied_or_inaccessible_measurement_is_captured_with_reason() {
+    let dir = tempdir().expect("tempdir");
+    let unreadable = dir.path().join("unreadable_dir");
+    fs::create_dir(&unreadable).unwrap();
+    fs::write(unreadable.join("payload.bin"), b"unreachable content").unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    let measurement = SizeCalculator::measure_path_full(
+        dir.path(),
+        &[],
+        &PlatformEnvironment::native(),
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Restore permissions for clean tempdir teardown
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    {
+        assert!(!measurement.complete);
+        assert!(measurement.incomplete_reason.is_some());
+        let reason = measurement.incomplete_reason.unwrap();
+        assert!(
+            reason.contains("Failed to read directory") || reason.contains("Permission denied"),
+            "unexpected reason: {reason}"
+        );
+    }
+}
+
+#[test]
+fn test_partial_scan_byte_semantics_and_cleanup_gate() {
+    use zenith_lib::commands::select_quick_clean_safe_candidates;
+    use zenith_lib::models::ZenithSettings;
+
+    let partial_item = ScanItem {
+        id: "dev.partial.item".to_string(),
+        signature_id: "dev.signature".to_string(),
+        name: "Partial Dev Cache".to_string(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        path: "/tmp/partial-cache".to_string(),
+        size: FileSize::new(500, Some(500)),
+        file_count: 5,
+        description: "Partial cache".to_string(),
+        cache_metadata: CacheMetadata {
+            size_semantics: CacheSizeSemantics::ConservativeLowerBound,
+            ..Default::default()
+        },
+        is_selected: false,
+        last_modified: None,
+        exists: true,
+        quality: ObservationQuality::Partial,
+        incomplete_reason: Some("Permission denied in subtree".to_string()),
+    };
+
+    let unavailable_item = ScanItem {
+        id: "sys.unavailable.item".to_string(),
+        signature_id: "sys.signature".to_string(),
+        name: "Inaccessible System Logs".to_string(),
+        category: Category::System,
+        risk: RiskTier::Safe,
+        path: "/tmp/unavailable-logs".to_string(),
+        size: FileSize::new(0, Some(0)),
+        file_count: 0,
+        description: "Inaccessible".to_string(),
+        cache_metadata: CacheMetadata {
+            size_semantics: CacheSizeSemantics::Informational,
+            ..Default::default()
+        },
+        is_selected: false,
+        last_modified: None,
+        exists: true,
+        quality: ObservationQuality::Unavailable,
+        incomplete_reason: Some("Failed to access directory".to_string()),
+    };
+
+    // 1. Cleanup permission invariants
+    assert!(partial_item.allows_cleanup());
+    assert!(!unavailable_item.allows_cleanup());
+
+    let registry = SignatureRegistry::load_embedded().unwrap();
+    let unavailable_plan_res = SafetyPlanner::create_plan(&[unavailable_item.clone()], &registry);
+    assert!(
+        matches!(unavailable_plan_res, Err(ZenithError::InvalidPlan(_))),
+        "SafetyPlanner must reject unavailable items"
+    );
+
+    // 2. Quick clean exclusion
+    let scan = ScanResult {
+        scan_id: "partial-scan-test".to_string(),
+        valid_for_seconds: 60,
+        started_at: 1000,
+        finished_at: 1005,
+        total_bytes: 500,
+        safe_bytes: 500,
+        rebuild_bytes: 0,
+        manual_bytes: 0,
+        categories: vec![CategoryResult {
+            category: Category::Developer,
+            display_name: "Developer".to_string(),
+            total_bytes: 500,
+            safe_bytes: 500,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+            quality: ObservationQuality::Partial,
+            items: vec![partial_item.clone(), unavailable_item.clone()],
+        }],
+        quality: ObservationQuality::Partial,
+        incomplete_reasons: vec!["Permission denied in subtree".to_string()],
+    };
+
+    let settings = ZenithSettings::default();
+    let candidates = select_quick_clean_safe_candidates(&scan, &settings);
+    assert!(
+        candidates.is_empty(),
+        "Partial and unavailable items must NEVER be selected for quick clean"
+    );
+
+    // 3. Freshness & cleanup validation invariants
+    assert!(!scan.is_fresh_at(1010)); // Partial scans never report fresh
+    assert!(scan.validate_for_cleanup("partial-scan-test", 1010).is_ok()); // Manual cleanup valid for partial
+
+    let unavailable_scan = ScanResult {
+        quality: ObservationQuality::Unavailable,
+        ..scan
+    };
+    assert!(unavailable_scan.validate_for_cleanup("partial-scan-test", 1010).is_err()); // Unavailable scan fails closed
 }
 
 #[cfg(unix)]
