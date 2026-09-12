@@ -1345,8 +1345,14 @@ mod windows_safety {
     #[test]
     fn case_insensitive_protected_paths_are_rejected() {
         let host = PlatformEnvironment::native();
-        assert!(Blacklist::is_blacklisted_with(Path::new("C:\\Windows"), &host));
-        assert!(Blacklist::is_blacklisted_with(Path::new("c:\\windows"), &host));
+        assert!(Blacklist::is_blacklisted_with(
+            Path::new("C:\\Windows"),
+            &host
+        ));
+        assert!(Blacklist::is_blacklisted_with(
+            Path::new("c:\\windows"),
+            &host
+        ));
         assert!(Blacklist::is_blacklisted_with(
             Path::new("C:\\WINDOWS\\System32"),
             &host
