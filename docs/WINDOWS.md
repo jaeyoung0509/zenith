@@ -62,9 +62,13 @@ just doctor                          # builds and runs the source tree
 & "C:\Program Files\Zenith\Zenith.exe" --doctor --json
 ```
 
-CI runs the packaging gate through `just test-package <installer>`, which
-installs silently, runs `--doctor`, requires exit code 0 and zero failing
-checks, uninstalls silently, and fails if the install directory survives.
+CI runs the packaging gate through `just test-package <installer> <scope>`,
+which installs silently, asserts the application landed under the base
+directory the scope requires (`%LOCALAPPDATA%` for `perUser`, `%ProgramFiles%`
+for `perMachine`), runs `--doctor`, requires exit code 0 and zero failing
+checks, uninstalls silently, and fails if the install directory survives. Both
+installers are gated: the machine-wide one additionally reports a missing
+elevated session instead of failing later with a generic installer error.
 
 ## Windows release contract
 
@@ -210,8 +214,9 @@ managed machine will allow the binary to run.
 ## CI contract
 
 `.github/workflows/ci.yml` runs the same checks on `windows-latest`, plus the
-packaging gate described under [Doctor self-check](#doctor-self-check), and
-uploads both debug NSIS installers as `zenith-windows-x64-nsis-debug`. The
+packaging gate described under [Doctor self-check](#doctor-self-check) for both
+installers, and uploads both debug NSIS installers as
+`zenith-windows-x64-nsis-debug`. The
 `msrv` job builds with the declared Rust 1.95.0 toolchain and the `supply-chain`
 job audits both lockfiles.
 

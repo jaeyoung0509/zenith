@@ -6,12 +6,21 @@
   Installs the built installer silently, runs `--doctor` against the installed
   binary, fails when any self-check fails or the exit code is not 0, uninstalls
   silently, and fails when the install directory survives. Run by the
-  `package-windows` CI job through `just test-package <installer>`.
+  `package-windows` CI job through `just test-package <installer> <scope>`.
+
+  The scope is asserted, not assumed: a `perUser` installer must land under
+  `%LOCALAPPDATA%` and a `perMachine` installer under `%ProgramFiles%`, so a
+  package whose install mode drifted fails here instead of on a user's machine.
+  A `perMachine` install requires an elevated session; the gate reports that
+  precondition instead of failing later with a generic installer error.
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
+
+  [ValidateSet('perUser', 'perMachine')]
+  [string]$Scope = 'perUser',
 
   [string]$ProductName = 'Zenith',
 
@@ -27,6 +36,26 @@ function Fail {
   Write-Host "Error: $Message"
   exit 1
 }
+
+function Test-IsElevated {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ($Scope -eq 'perMachine' -and -not (Test-IsElevated)) {
+  # The machine-wide NSIS package requests elevation, and the hosted Windows
+  # runner grants it without a prompt. A session that cannot elevate cannot
+  # verify this package, and reporting it here is clearer than the generic
+  # installer failure that follows an unanswerable consent request.
+  Fail 'the machine-wide installer requires an elevated session, and this session is not elevated'
+}
+
+$expectedBase = if ($Scope -eq 'perMachine') { $env:ProgramFiles } else { $env:LOCALAPPDATA }
+if (-not $expectedBase) {
+  Fail "the environment does not define the base directory a $Scope install uses"
+}
+$expectedRoot = Join-Path $expectedBase $ProductName
 
 # Native commands write progress and warnings to stderr, which PowerShell turns
 # into a terminating error while $ErrorActionPreference is 'Stop'. Run them
@@ -55,32 +84,30 @@ if (-not $resolvedInstaller -or -not (Test-Path -LiteralPath $resolvedInstaller 
 }
 $installer = $resolvedInstaller.Path
 
-Write-Host "Installing $installer silently ..."
+Write-Host "Installing $installer silently (scope: $Scope) ..."
 $installProcess = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
 if ($installProcess.ExitCode -ne 0) {
   Fail "installer exited with code $($installProcess.ExitCode)"
 }
 
-$installRoots = @()
-foreach ($base in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
-  if ($base) {
-    $installRoots += (Join-Path $base $ProductName)
+$installedExe = Join-Path $expectedRoot $ExecutableName
+$installRoot = $expectedRoot
+if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
+  # Report where it did land: a package whose install mode drifted is the
+  # defect this gate exists to catch, and the actual location says which way.
+  $elsewhere = @()
+  foreach ($base in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ($base) {
+      $candidate = Join-Path (Join-Path $base $ProductName) $ExecutableName
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $elsewhere += $candidate
+      }
+    }
   }
-}
-
-$installedExe = $null
-$installRoot = $null
-foreach ($root in $installRoots) {
-  $candidate = Join-Path $root $ExecutableName
-  if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-    $installedExe = $candidate
-    $installRoot = $root
-    break
+  if ($elsewhere.Count -gt 0) {
+    Fail "the $Scope installer did not install to $expectedRoot, but $ExecutableName exists at: $($elsewhere -join ', ')"
   }
-}
-
-if (-not $installedExe) {
-  Fail "installed $ExecutableName was not found under: $($installRoots -join ', ')"
+  Fail "the $Scope installer did not install $ExecutableName under $expectedRoot"
 }
 
 Write-Host "Installed application: $installedExe"

@@ -111,16 +111,25 @@ static FUNCTION_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"fn\s+([A-Za-z0-9_]+)").expect("static regex"));
 static ASSERTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"assert(_eq|_ne)?!|panic!|unreachable!").expect("static regex"));
-static ENV_GATE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*(?:\}\s*)?if\s+(?:let\s+)?[^\n]*env::var").expect("static regex")
-});
+/// Any environment lookup inside a test body, whatever the shape: `if let
+/// Ok(..) = env::var(..)`, `let Ok(..) = env::var(..) else { .. }`, or a
+/// helper that reads the variable. A test whose behaviour depends on the
+/// runner's environment asserts nothing on a machine that does not set it.
+static ENV_GATE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"env::var(?:_os)?\s*\(").expect("static regex"));
+/// A `return` with no value: the shape that turns an unmeetable precondition
+/// into a no-op. The value-returning form is a normal early exit from a helper
+/// closure, so only the bare one is a skip.
 static BARE_RETURN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*return;\s*$").expect("static regex"));
+    LazyLock::new(|| Regex::new(r"\breturn\s*;").expect("static regex"));
 static CFG_IDENTITY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"cfg!\((?:unix|windows|target_os)\s*[=),]").expect("static regex")
 });
 static EXHAUSTIVE_MATCHES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)assert!\s*\(\s*matches!\s*\([^;]*?\|[^;]*?\)\s*\)").expect("static regex")
+});
+static MODULE_DECLARATION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:pub\s+)?(?:\([^)]*\)\s*)?mod\s+[A-Za-z0-9_]").expect("static regex")
 });
 
 struct TestBody {
@@ -130,6 +139,49 @@ struct TestBody {
     text: String,
 }
 
+struct AttributeBlock {
+    text: String,
+    start_line: usize,
+    end_line: usize,
+}
+
+/// Reads one complete Rust attribute, including a rustfmt-expanded multiline
+/// attribute. Bracket counting uses code-only text so brackets inside a string
+/// literal cannot terminate the attribute early.
+fn attribute_block(lines: &[&str], start: usize) -> Option<AttributeBlock> {
+    let first = lines.get(start)?.trim();
+    if !first.starts_with("#[") && !first.starts_with("#![") {
+        return None;
+    }
+
+    let mut depth = 0i32;
+    let mut opened = false;
+    let mut text = String::new();
+    for (offset, line) in lines.iter().enumerate().skip(start) {
+        let code = code_only(line);
+        depth += code.matches('[').count() as i32;
+        depth -= code.matches(']').count() as i32;
+        opened |= code.contains('[');
+        text.push_str(line.trim());
+        text.push(' ');
+        if opened && depth <= 0 {
+            return Some(AttributeBlock {
+                text: text.trim().to_string(),
+                start_line: start,
+                end_line: offset,
+            });
+        }
+    }
+    None
+}
+
+fn compact_attribute(attribute: &str) -> String {
+    attribute
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
 /// Extracts every `#[test]`/`#[tokio::test]` function body with the `cfg`
 /// attributes that guard it.
 fn test_bodies(source: &str) -> Vec<TestBody> {
@@ -137,25 +189,42 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
     let mut bodies = Vec::new();
     let mut index = 0;
     while index < lines.len() {
-        let line = lines[index].trim();
-        if !TEST_ATTRIBUTE.is_match(line) {
+        let Some(first_attribute) = attribute_block(&lines, index) else {
             index += 1;
             continue;
+        };
+
+        // Collect the entire attribute block that carries this test. A `cfg`
+        // normally precedes `#[test]`, but starting at `#[test]` loses the
+        // condition the identity-cfg rule is meant to inspect.
+        let mut attributes = vec![first_attribute];
+        let mut cursor = attributes[0].end_line + 1;
+        loop {
+            while cursor < lines.len()
+                && (lines[cursor].trim().is_empty() || lines[cursor].trim_start().starts_with("//"))
+            {
+                cursor += 1;
+            }
+            let Some(attribute) = attribute_block(&lines, cursor) else {
+                break;
+            };
+            cursor = attribute.end_line + 1;
+            attributes.push(attribute);
         }
 
-        // Collect the attribute block that carries this test, including any
-        // #[cfg(...)] that follows it before the signature.
-        let mut attributes = Vec::new();
-        let mut cursor = index;
+        let Some(test_line) = attributes.iter().find_map(|attribute| {
+            TEST_ATTRIBUTE
+                .is_match(&compact_attribute(&attribute.text))
+                .then_some(attribute.start_line)
+        }) else {
+            index += 1;
+            continue;
+        };
+
         let mut body_start = None;
         let mut signature = String::new();
         while cursor < lines.len() {
             let current = lines[cursor].trim();
-            if current.starts_with("#[") {
-                attributes.push(current.to_string());
-                cursor += 1;
-                continue;
-            }
             if current.is_empty() {
                 cursor += 1;
                 continue;
@@ -179,8 +248,8 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
             .unwrap_or_else(|| "<anonymous>".to_string());
         let cfg = attributes
             .iter()
-            .filter(|attribute| attribute.contains("cfg("))
-            .cloned()
+            .filter(|attribute| cfg_predicate(&attribute.text).is_some())
+            .map(|attribute| attribute.text.clone())
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -203,12 +272,19 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
         bodies.push(TestBody {
             name,
             cfg,
-            start_line: index + 1,
+            start_line: test_line + 1,
             text,
         });
         index = end_line.map(|line| line + 1).unwrap_or(index + 1);
     }
     bodies
+}
+
+/// The stable id a violation and an allowlist entry are matched on. Separators
+/// are normalized so the same exception text describes the same file on a
+/// Windows runner, which reports paths with a backslash.
+fn location_of(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn assertion_marker(text: &str) -> Option<usize> {
@@ -225,12 +301,22 @@ fn inspect_test(location: &str, body: &TestBody) -> Vec<Violation> {
         });
     };
 
-    if ENV_GATE.is_match(&body.text) {
+    // String literals and comments are removed first so an `assert!(x ==
+    // "env::var(...)")` or a commented example cannot be mistaken for the real
+    // thing, and so an inline `if x { return; }` is found wherever it sits.
+    let code = body
+        .text
+        .lines()
+        .map(code_only)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if ENV_GATE.is_match(&code) {
         record(RULE_ENV_GATE);
     }
 
-    if let Some(early) = BARE_RETURN.find(&body.text) {
-        let asserted = assertion_marker(&body.text);
+    if let Some(early) = BARE_RETURN.find(&code) {
+        let asserted = assertion_marker(&code);
         if asserted.is_none_or(|asserted| early.start() < asserted) {
             record(RULE_EARLY_RETURN);
         }
@@ -251,51 +337,104 @@ fn inspect_test(location: &str, body: &TestBody) -> Vec<Violation> {
     violations
 }
 
-/// A whole file or a whole test module gated on one platform cannot run
-/// anywhere else, which is how the size measurer and directory scanner suites
-/// lost their Windows coverage. Gating on a *selection* of platforms
-/// (`any(...)`, `not(...)`, `all(...)`) is a deliberate choice and is allowed.
-fn is_platform_specific_gate(trimmed: &str) -> bool {
-    if !trimmed.starts_with("#![cfg(") && !trimmed.starts_with("#[cfg(all(test,") {
+/// The `cfg` predicate of an attribute, if it is a `cfg` attribute. Whitespace
+/// is insignificant, so this also accepts rustfmt-expanded multiline forms.
+fn cfg_predicate(attribute: &str) -> Option<String> {
+    let attribute = compact_attribute(attribute);
+    let attribute = attribute.strip_prefix('#')?;
+    let attribute = attribute.strip_prefix('!').unwrap_or(attribute);
+    attribute
+        .strip_prefix("[cfg(")
+        .and_then(|inner| inner.strip_suffix(")]"))
+        .map(str::to_string)
+}
+
+/// A `cfg` predicate that pins a suite to one platform cannot run anywhere
+/// else, which is how the size measurer and directory scanner suites lost their
+/// Windows coverage. Gating on a *selection* of platforms (`any(...)`,
+/// `not(...)`, `all(...)` around a selection) is a deliberate choice.
+fn is_platform_specific_predicate(predicate: &str) -> bool {
+    if predicate.contains("any(") || predicate.contains("not(") {
         return false;
     }
-    // `any(..)`/`not(..)` select a set of platforms deliberately; a bare
-    // `unix`, `windows`, or single `target_os` gate is the shape that hides a
-    // whole suite from every other runner.
-    if trimmed.contains("any(") || trimmed.contains("not(") {
-        return false;
+    predicate.contains("unix") || predicate.contains("windows") || predicate.contains("target_os")
+}
+
+/// The next item after an attribute, skipping comments and any additional
+/// attributes attached to the same item.
+fn next_significant_item<'a>(lines: &'a [&str], from: usize) -> Option<&'a str> {
+    let mut cursor = from + 1;
+    while cursor < lines.len() {
+        let line = lines[cursor].trim();
+        if line.is_empty() || line.starts_with("//") {
+            cursor += 1;
+            continue;
+        }
+        if let Some(attribute) = attribute_block(lines, cursor) {
+            cursor = attribute.end_line + 1;
+            continue;
+        }
+        return Some(line);
     }
-    let Some(end) = trimmed.find(")]") else {
-        return false;
-    };
-    let inner = &trimmed[..end];
-    inner.contains("unix") || inner.contains("windows") || inner.contains("target_os")
+    None
 }
 
 fn file_level_violations(location: &str, source: &str) -> Vec<Violation> {
     let mut violations = Vec::new();
-    for (index, line) in source.lines().enumerate() {
-        if is_platform_specific_gate(line.trim()) {
+    let lines = source.lines().collect::<Vec<_>>();
+    // An integration target under `tests/` exists only to run tests, so a
+    // platform-gated module there is a whole suite that other runners skip.
+    let is_test_target = location.starts_with("tests/") || location.starts_with("tests\\");
+    let mut index = 0;
+    while index < lines.len() {
+        let Some(attribute) = attribute_block(&lines, index) else {
+            index += 1;
+            continue;
+        };
+        index = attribute.end_line + 1;
+        let Some(predicate) = cfg_predicate(&attribute.text) else {
+            continue;
+        };
+        if !is_platform_specific_predicate(&predicate) {
+            continue;
+        }
+        let file_level = compact_attribute(&attribute.text).starts_with("#![cfg(");
+        let gates_module = next_significant_item(&lines, attribute.end_line)
+            .is_some_and(|next| MODULE_DECLARATION.is_match(next));
+        let gated_suite = gates_module && (is_test_target || predicate.contains("test"));
+        if file_level || gated_suite {
             violations.push(Violation {
                 location: location.to_string(),
                 rule: RULE_PLATFORM_GATED_MODULE,
-                test: format!("platform-gated module (line {})", index + 1),
+                test: format!("platform-gated module (line {})", attribute.start_line + 1),
             });
         }
     }
     violations
 }
 
-fn allowlist() -> BTreeSet<String> {
-    let path = Path::new("tests/hygiene_allowlist.txt");
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return BTreeSet::new();
+/// The `path::test (line N)` ids named in `tests/hygiene_allowlist.txt`,
+/// together with the reason each one carries.
+///
+/// An exception without a reason is not reviewable, and an entry that no longer
+/// matches a violation silently widens the guard, so both are refused rather
+/// than accepted.
+fn allowlist() -> Vec<(String, String)> {
+    let Ok(contents) = std::fs::read_to_string("tests/hygiene_allowlist.txt") else {
+        return Vec::new();
     };
+    allowlist_entries(&contents)
+}
+
+fn allowlist_entries(contents: &str) -> Vec<(String, String)> {
     contents
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| line.split('#').next().unwrap_or(line).trim().to_string())
+        .map(|line| {
+            let (id, reason) = line.split_once('#').unwrap_or((line, ""));
+            (id.trim().to_string(), reason.trim().to_string())
+        })
         .collect()
 }
 
@@ -317,7 +456,7 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
             continue;
         };
         scanned += 1;
-        let location = file.to_string_lossy().to_string();
+        let location = location_of(&file);
         violations.extend(file_level_violations(&location, &source));
         for body in test_bodies(&source) {
             violations.extend(inspect_test(&location, &body));
@@ -330,10 +469,44 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
     );
 
     let allowed = allowlist();
+    let without_reason = allowed
+        .iter()
+        .filter(|(_, reason)| reason.is_empty())
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        without_reason.is_empty(),
+        "every tests/hygiene_allowlist.txt entry needs a `# reason`: {}",
+        without_reason.join(", ")
+    );
+
+    let allowed_ids = allowed
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<BTreeSet<_>>();
     let unexpected = violations
         .iter()
-        .filter(|violation| !allowed.contains(&violation.id()))
+        .filter(|violation| !allowed_ids.contains(&violation.id()))
         .collect::<Vec<_>>();
+    let matched = violations
+        .iter()
+        .map(|violation| violation.id())
+        .collect::<BTreeSet<_>>();
+    let stale = allowed_ids
+        .iter()
+        .filter(|id| !matched.contains(*id))
+        .collect::<Vec<_>>();
+
+    assert!(
+        stale.is_empty(),
+        "tests/hygiene_allowlist.txt grants exceptions that no longer match a violation, \
+         which silently widens this guard: {}",
+        stale
+            .iter()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     if !unexpected.is_empty() {
         let report = unexpected
@@ -384,6 +557,12 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         exhaustive_rules.contains(RULE_EXHAUSTIVE_MATCHES),
         "the guard did not detect a matches! assertion over every variant: {exhaustive_rules:?}"
     );
+    let cfg_before_test =
+        "#[cfg(unix)]\n#[test]\nfn fixed_platform() {\n    assert_eq!(cfg!(unix), true);\n}\n";
+    assert!(
+        rules_for(cfg_before_test).contains(RULE_IDENTITY_CFG),
+        "the guard lost a cfg attribute that precedes the test attribute"
+    );
 
     // And it must not fire on the shapes that are legitimate.
     let allowed_shapes = "#[test]\nfn legit() {\n    let value = compute();\n    assert_eq!(value, 4);\n    if value > 2 {\n        return;\n    }\n    assert!(value < 100);\n}\n";
@@ -392,19 +571,112 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         "the guard flagged a test that asserts before returning: {:?}",
         rules_for(allowed_shapes)
     );
+
+    // The inline skip shapes a line-anchored detector misses.
+    let inline_return = "#[test]\nfn skipped_inline() {\n    if precondition() { return; }\n    assert!(value);\n}\n";
     assert!(
-        !is_platform_specific_gate(
-            "#[cfg(all(test, not(any(target_os = \"macos\", target_os = \"windows\"))))]"
-        ),
+        rules_for(inline_return).contains(RULE_EARLY_RETURN),
+        "the guard did not detect an inline return standing in for an assertion"
+    );
+    let let_else_env = "#[test]\nfn skipped_env() {\n    let Ok(home) = std::env::var(\"HOME\") else { return; };\n    assert!(!home.is_empty());\n}\n";
+    let let_else_rules = rules_for(let_else_env);
+    assert!(
+        let_else_rules.contains(RULE_ENV_GATE) && let_else_rules.contains(RULE_EARLY_RETURN),
+        "the guard did not detect a `let ... else` environment gate: {let_else_rules:?}"
+    );
+    // A test that reads the environment through a helper is the same gate.
+    let helper_env = "#[test]\nfn skipped_helper() {\n    let shape = describe(std::env::var_os(\"LOCALAPPDATA\"));\n    assert!(shape.is_some());\n}\n";
+    assert!(
+        rules_for(helper_env).contains(RULE_ENV_GATE),
+        "the guard did not detect an environment lookup inside a test body"
+    );
+    // The value-returning form is a normal early exit from a closure.
+    let value_return = "#[test]\nfn maps_values() {\n    let mapped = (|| {\n        if broken() {\n            return None;\n        }\n        Some(1)\n    })();\n    assert_eq!(mapped, Some(1));\n}\n";
+    assert!(
+        rules_for(value_return).is_empty(),
+        "the guard flagged a value-returning early exit: {:?}",
+        rules_for(value_return)
+    );
+
+    // Platform gates: a whole suite pinned to one platform is refused, a
+    // deliberate platform *selection* and a production platform module are not.
+    let gated_suite =
+        "#[cfg(unix)]\nmod release_integration {\n    #[test]\n    fn runs() {\n        assert!(true);\n    }\n}\n";
+    assert_eq!(
+        file_level_violations("tests/dev_ports_tests.rs", gated_suite).len(),
+        1,
+        "an integration target gated on one platform must be reported"
+    );
+    assert_eq!(
+        file_level_violations(
+            "src/scanner/size.rs",
+            "#[cfg(all(test, unix))]\nmod tests {\n}\n"
+        )
+        .len(),
+        1,
+        "a test module gated on one platform must be reported"
+    );
+    assert_eq!(
+        file_level_violations(
+            "src/scanner/size.rs",
+            "#[cfg(\n    all(test, target_os = \"windows\")\n)]\n#[allow(dead_code)]\nmod tests {\n}\n"
+        )
+        .len(),
+        1,
+        "a multiline cfg attribute must not hide a platform-gated test module"
+    );
+    assert_eq!(
+        file_level_violations("src/lib.rs", "#![cfg(target_os = \"windows\")]\n").len(),
+        1,
+        "a file-level platform gate must be reported"
+    );
+    assert_eq!(
+        file_level_violations("src/lib.rs", "#![cfg(\n    target_os = \"windows\"\n)]\n").len(),
+        1,
+        "a multiline file-level platform gate must be reported"
+    );
+    assert!(
+        file_level_violations(
+            "src/power/assertion.rs",
+            "#[cfg(all(test, not(any(target_os = \"macos\", target_os = \"windows\"))))]\nmod unsupported_tests {\n}\n"
+        )
+        .is_empty(),
         "a platform selection gate is not a platform-specific suite"
     );
-    assert!(is_platform_specific_gate(
-        "#[cfg(all(test, unix))] mod tests {"
-    ));
-    assert!(is_platform_specific_gate(
-        "#[cfg(all(test, windows))] mod tests {"
-    ));
-    assert!(is_platform_specific_gate(
-        "#![cfg(target_os = \"windows\")]"
-    ));
+    assert!(
+        file_level_violations(
+            "src/power/assertion.rs",
+            "#[cfg(target_os = \"macos\")]\nmod macos_iokit {\n}\n"
+        )
+        .is_empty(),
+        "a production platform module is not a test suite"
+    );
+    assert!(
+        file_level_violations(
+            "src/metrics/memory.rs",
+            "#[cfg(target_os = \"windows\")]\nfn native_handle() -> u32 {\n}\n"
+        )
+        .is_empty(),
+        "a platform-gated function is not a suite"
+    );
+
+    // A violation id is platform-independent, so one allowlist entry describes
+    // the same exception on every runner.
+    assert_eq!(
+        location_of(Path::new("tests\\dev_ports_tests.rs")),
+        "tests/dev_ports_tests.rs"
+    );
+
+    // An exception carries its reason, and a bare path is refused.
+    let parsed = allowlist_entries(
+        "# a comment\n\n  tests/dev_ports_tests.rs::platform-gated module (line 6) # Unix-only helper process\n",
+    );
+    assert_eq!(
+        parsed,
+        vec![(
+            "tests/dev_ports_tests.rs::platform-gated module (line 6)".to_string(),
+            "Unix-only helper process".to_string()
+        )]
+    );
+    assert!(!parsed.iter().any(|(_, reason)| reason.is_empty()));
 }

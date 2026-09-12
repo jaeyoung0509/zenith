@@ -769,21 +769,21 @@ mod tests {
     #[test]
     fn the_report_carries_no_paths_or_identities() {
         // De-identification is by construction; this asserts the construction.
+        // Every marker below belongs to the stated environment, so the test
+        // asserts the same thing on a runner that happens to have a different
+        // account name — or no `USER` at all.
         let environment = stated_posix_environment();
         let report = self_check(&environment);
         let rendered = render_text(&report) + &serde_json::to_string(&report).unwrap();
         for leak in [
-            "/home/tester".to_string(),
-            "tester".to_string(),
-            "C:\\".to_string(),
-            std::env::var("USER").unwrap_or_default(),
-            std::env::var("HOSTNAME").unwrap_or_default(),
+            "/home/tester",
+            "tester",
+            "/home/tester/.local/share",
+            "/home/tester/.config",
+            "C:\\",
         ] {
-            if leak.is_empty() {
-                continue;
-            }
             assert!(
-                !rendered.contains(&leak),
+                !rendered.contains(leak),
                 "report leaked `{leak}`: {rendered}"
             );
         }

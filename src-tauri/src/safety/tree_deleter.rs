@@ -1,4 +1,4 @@
-use crate::platform::PlatformEnvironment;
+use crate::platform::{PathFlavor, PlatformEnvironment};
 #[cfg(windows)]
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
@@ -1191,7 +1191,8 @@ impl SafeTreeDeleter {
     fn is_excluded(path: &Path, exclusions: &[String], environment: &PlatformEnvironment) -> bool {
         exclusions.iter().any(|exclusion| {
             if SignatureLoader::expand_exclusion(exclusion, environment).is_some_and(|expanded| {
-                Self::paths_equal(path, &expanded) || Self::path_starts_with(path, &expanded)
+                Self::paths_equal(path, &expanded, environment.flavor())
+                    || Self::path_starts_with(path, &expanded, environment.flavor())
             }) {
                 return true;
             }
@@ -1201,39 +1202,23 @@ impl SafeTreeDeleter {
         })
     }
 
-    fn paths_equal(left: &Path, right: &Path) -> bool {
-        #[cfg(windows)]
-        {
-            Self::windows_path_key(left) == Self::windows_path_key(right)
-        }
-        #[cfg(not(windows))]
-        {
-            left == right
-        }
+    /// The shared flavor-parameterized rules, so exclusion matching cannot
+    /// drift from the path algebra the rest of the tree uses and the Windows
+    /// semantics are covered on every runner.
+    fn paths_equal(left: &Path, right: &Path, flavor: PathFlavor) -> bool {
+        crate::platform::path_algebra::equal(
+            &left.to_string_lossy(),
+            &right.to_string_lossy(),
+            flavor,
+        )
     }
 
-    fn path_starts_with(path: &Path, base: &Path) -> bool {
-        #[cfg(windows)]
-        {
-            let path_key = Self::windows_path_key(path);
-            let base_key = Self::windows_path_key(base);
-            path_key
-                .strip_prefix(&base_key)
-                .is_some_and(|suffix| suffix.starts_with('/'))
-        }
-        #[cfg(not(windows))]
-        {
-            path.starts_with(base)
-        }
-    }
-
-    #[cfg(windows)]
-    fn windows_path_key(path: &Path) -> String {
-        Blacklist::normalize_path(path)
-            .to_string_lossy()
-            .replace('\\', "/")
-            .trim_end_matches('/')
-            .to_ascii_lowercase()
+    fn path_starts_with(path: &Path, base: &Path, flavor: PathFlavor) -> bool {
+        crate::platform::path_algebra::contains(
+            &base.to_string_lossy(),
+            &path.to_string_lossy(),
+            flavor,
+        )
     }
 }
 
@@ -1258,6 +1243,23 @@ mod tests {
     /// exclusion in these tests needs the environment to expand.
     fn environment() -> PlatformEnvironment {
         PlatformEnvironment::simulated(PathFlavor::current())
+    }
+
+    #[test]
+    fn exclusion_matching_uses_the_stated_path_flavor() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let exclusions = vec![r"C:\Users\Alice\Cache".to_string()];
+
+        assert!(SafeTreeDeleter::is_excluded(
+            Path::new(r"c:/users/alice/cache/nested/file.bin"),
+            &exclusions,
+            &environment
+        ));
+        assert!(!SafeTreeDeleter::is_excluded(
+            Path::new(r"C:\Users\Alice\Cache-Other\file.bin"),
+            &exclusions,
+            &environment
+        ));
     }
 
     #[cfg(windows)]

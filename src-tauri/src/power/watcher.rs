@@ -733,13 +733,14 @@ impl KeepAwakeManager {
     }
 
     fn paths_equal(left: &Path, right: &Path) -> bool {
-        let left = left.to_string_lossy().replace('\\', "/");
-        let right = right.to_string_lossy().replace('\\', "/");
-        if cfg!(windows) {
-            left.eq_ignore_ascii_case(&right)
-        } else {
-            left == right
-        }
+        // The shared flavor-parameterized rule, so Keep Awake matching cannot
+        // drift from the rest of the tree and the Windows semantics are
+        // covered by `platform::path_algebra` on every runner.
+        crate::platform::path_algebra::equal(
+            &left.to_string_lossy(),
+            &right.to_string_lossy(),
+            crate::platform::path_algebra::PathFlavor::current(),
+        )
     }
 
     fn matches_executable_alias(value: &str, alias: &str) -> bool {

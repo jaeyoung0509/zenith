@@ -54,13 +54,14 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Generate Tauri bindings
+      - name: Generate Tauri bindings and capability golden data
         run: |
           mkdir -p dist
           cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_platform_capability_golden -- --ignored --exact
 
-      - name: Verify generated bindings and Cargo.lock
-        run: git diff --exit-code -- src/lib/bindings/tauri.ts Cargo.lock
+      - name: Verify generated bindings, capability golden data, and Cargo.lock
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts src/lib/bindings/platform-capabilities.golden.json Cargo.lock
 
       - name: Svelte Typecheck
         run: pnpm check
@@ -102,20 +103,18 @@ jobs:
       - name: Prepare Tauri frontend directory
         run: mkdir -p dist
 
-      - name: Rust Format Check
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-
-      - name: Rust Clippy Linter
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-
-      - name: Rust Unit & Safety Tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      - name: Rust Cargo Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
-
       - name: Install just
         uses: taiki-e/install-action@just
+
+      # The recipes are the single command surface; CI must not repeat them.
+      - name: Rust format and lint gate
+        run: just lint-rust
+
+      - name: Rust Unit & Safety Tests
+        run: just test-rust
+
+      - name: Rust Cargo Check
+        run: just check-rust
 
       - name: Release installer regression tests
         run: just test-release-installer
@@ -141,17 +140,18 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-      - name: Rust Format Check
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Install just
+        uses: taiki-e/install-action@just
 
-      - name: Rust Clippy Linter
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      # The recipes are the single command surface; CI must not repeat them.
+      - name: Rust format and lint gate
+        run: just lint-rust
 
       - name: Rust Unit & Safety Tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: just test-rust
 
       - name: Rust Cargo Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: just check-rust
 
   msrv:
     name: Minimum Supported Rust Version (1.95.0)
@@ -306,6 +306,12 @@ jobs:
             throw "Expected exactly one machine-wide NSIS installer, found $($installers.Count)"
           }
           Copy-Item -Path $installers[0].FullName -Destination packaging/Zenith-windows-x64-setup-machine.exe
+
+      # The machine-wide package is the one a policy-managed machine needs, so it
+      # gets the same install, doctor, and uninstall gate as the per-user one.
+      - name: Smoke-test the machine-wide installer
+        shell: pwsh
+        run: just test-package packaging/Zenith-windows-x64-setup-machine.exe perMachine
 
       - name: Upload Windows packaging smoke artifacts
         uses: actions/upload-artifact@v7

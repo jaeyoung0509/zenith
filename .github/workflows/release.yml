@@ -76,13 +76,14 @@ jobs:
           upload-release-assets: false
           dependency-snapshot: false
 
-      - name: Generate Tauri bindings
+      - name: Generate Tauri bindings and capability golden data
         run: |
           mkdir -p dist
           cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_platform_capability_golden -- --ignored --exact
 
-      - name: Verify generated bindings and Cargo.lock
-        run: git diff --exit-code -- src/lib/bindings/tauri.ts Cargo.lock
+      - name: Verify generated bindings, capability golden data, and Cargo.lock
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts src/lib/bindings/platform-capabilities.golden.json Cargo.lock
 
       - name: Run frontend checks and tests
         run: |
@@ -144,12 +145,16 @@ jobs:
           name: release-frontend-dist
           path: dist
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # The recipes are the single command surface; the release path runs the
+      # same gate as CI instead of repeating the commands.
       - name: Run macOS Rust checks
         run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path src-tauri/Cargo.toml
-          cargo check --manifest-path src-tauri/Cargo.toml
+          just lint-rust
+          just test-rust
+          just check-rust
 
       - name: Build macOS DMG bundle (ARM64)
         run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg --config .github/tauri.package-ci.json
@@ -232,12 +237,16 @@ jobs:
           name: release-frontend-dist
           path: dist
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # The recipes are the single command surface; the release path runs the
+      # same gate as CI instead of repeating the commands.
       - name: Run Windows Rust checks
         run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path src-tauri/Cargo.toml
-          cargo check --manifest-path src-tauri/Cargo.toml
+          just lint-rust
+          just test-rust
+          just check-rust
 
       - name: Create release artifact directory
         shell: pwsh

@@ -121,7 +121,7 @@ generate-bindings: ensure-dist
 test: test-rust test-front test-release-installer
     @echo "🎉 All Rust & Frontend tests passed!"
 
-# Run Rust safety invariants & unit tests
+# Run Rust safety invariants & unit tests (the same command CI runs)
 test-rust:
     cargo test --manifest-path src-tauri/Cargo.toml
 
@@ -144,24 +144,32 @@ test-release-installer:
 test-release-installer:
     @echo "The release-replacement regression test uses macOS bundle semantics; Windows packaging is covered by 'just test-package <installer>'."
 
-# Install NSIS silently, run --doctor, assert self-checks pass, then uninstall
+# Install NSIS silently, run --doctor, assert self-checks pass, then uninstall.
+# The scope is asserted so a package whose install mode drifted fails here.
 [windows]
-test-package installer:
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows_packaging_smoke.ps1 -InstallerPath "{{installer}}"
+test-package installer scope="perUser":
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows_packaging_smoke.ps1 -InstallerPath "{{installer}}" -Scope "{{scope}}"
 
 # Run the doctor self-check against a binary built from this source tree.
 doctor: ensure-dist
     cargo run --manifest-path src-tauri/Cargo.toml --bin Zenith -- --doctor
 
-# Lint and format gate (the same commands CI runs).
-lint:
+# Rust format and lint gate (the same command the CI Rust jobs run).
+lint-rust:
     cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
     cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+# Lint and format gate (Rust plus the frontend typecheck).
+lint: lint-rust
     pnpm check
 
-# Check code types & compile check
-check: ensure-dist
+# Rust compile check (the same command the CI Rust jobs run).
+check-rust:
     cargo check --manifest-path src-tauri/Cargo.toml
+
+# Check code types & compile check
+check: ensure-dist lint-rust
+    just check-rust
     pnpm check
     pnpm build
 
