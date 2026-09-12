@@ -1444,6 +1444,6 @@ mod tests {
         );
 
         // The one-shot lease is consumed by the graceful attempt.
-        assert!(release_listener(&store, &fake, &listener.id, ReleaseMode::Force).is_err());
+        assert!(release_listener(&store, &fake, &listener.id, ReleaseMode::Force, None).is_err());
     }
 }
