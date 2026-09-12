@@ -121,7 +121,10 @@ reclaimable_is_lower_bound = true
 id = "dev.yarn.cache"
 name = "Yarn Cache"
 category = "developer"
-risk = "rebuild"
+# Yarn 1 and Yarn Berry keep different structures and expose no pruning command
+# the planner can verify, so this stays a manual, adapter-owned target: the
+# planner refuses a plan it cannot execute instead of offering one.
+risk = "manual"
 strategy = "manual"
 paths = [
     "~/Library/Caches/Yarn",

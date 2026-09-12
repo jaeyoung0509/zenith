@@ -805,6 +805,12 @@ mod tests {
             registry.get("dev.npm.cache").unwrap().strategy,
             crate::models::CleanStrategy::ExternalCommand
         );
+        // Yarn has no version-aware adapter yet, so it stays a manual target:
+        // a `rebuild` risk with a `manual` strategy would be a plan the planner
+        // refuses and the interface can still select.
+        let yarn = registry.get("dev.yarn.cache").unwrap();
+        assert_eq!(yarn.risk, RiskTier::Manual);
+        assert_eq!(yarn.strategy, crate::models::CleanStrategy::Manual);
     }
 
     #[test]
