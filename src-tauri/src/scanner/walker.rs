@@ -689,7 +689,10 @@ mod tests {
         // A reserved device name is a Windows boundary, but Windows itself
         // cannot create every one of them, so the fixture states it only where
         // the host can hold it and the expectation follows.
-        let reserved_created = std::fs::create_dir_all(candidate.join("nul")).is_ok();
+        let _ = std::fs::create_dir_all(candidate.join("nul"));
+        // Windows reports success for a reserved name without creating it, so
+        // the fixture is what the filesystem actually holds.
+        let reserved_created = std::fs::symlink_metadata(candidate.join("nul")).is_ok();
         if reserved_created {
             std::fs::write(candidate.join("nul/payload"), vec![2u8; 2_048]).unwrap();
         }

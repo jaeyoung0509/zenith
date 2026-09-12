@@ -391,9 +391,14 @@ mod tests {
     #[test]
     fn selected_plain_path_matches_canonical_profile_and_outside_roots_are_allowed() {
         let dir = tempfile::tempdir().unwrap();
-        let profile = dir.path().join("사용자 하나");
+        // `validate_workspace_root` compares the canonicalized path against the
+        // stated roots, so the fixture states the canonical root: a temporary
+        // path spelled with an 8.3 alias would otherwise fall back to walking in
+        // from the drive root.
+        let base = dir.path().canonicalize().unwrap();
+        let profile = base.join("사용자 하나");
         let workspace = profile.join("프로젝트");
-        let other = dir.path().join("사용자 둘");
+        let other = base.join("사용자 둘");
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir_all(&other).unwrap();
         let canonical_profile = profile.canonicalize().unwrap();
@@ -410,16 +415,14 @@ mod tests {
         // The fixture lives in the temporary directory, which is the root the
         // relocated workspace is anchored at; the profile above is the selected
         // one, not the containing one.
-        .with_temp_dir(dir.path());
-        assert!(crate::developer_artifacts::validate_workspace_root(
-            &environment,
-            &plain_workspace
-        )
-        .is_ok());
+        .with_temp_dir(base.clone());
+        crate::developer_artifacts::validate_workspace_root(&environment, &plain_workspace)
+            .unwrap_or_else(|error| panic!("the selected workspace must be allowed: {error}"));
         // A relocated workspace outside the selected profile (D:\dev-style)
         // is accepted under anchored symlink validation; the cross-account
         // traversal check above still rejects reading through another profile.
-        assert!(crate::developer_artifacts::validate_workspace_root(&environment, &other).is_ok());
+        crate::developer_artifacts::validate_workspace_root(&environment, &other)
+            .unwrap_or_else(|error| panic!("a relocated workspace must be allowed: {error}"));
     }
 
     #[cfg(windows)]
