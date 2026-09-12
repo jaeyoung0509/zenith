@@ -339,7 +339,23 @@ impl CleanExecutor {
             }
             CleanStrategy::ExternalCommand => {
                 return match CacheProviderRegistry::prune(&target.signature_id, path, environment) {
-                    Ok(reclaimed) => CleanItemResult {
+                    // The provider pruned its own cache but the amount could not
+                    // be measured completely: the target is partial, not clean,
+                    // and no byte count is claimed for it.
+                    Ok(None) => CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                        status: CleanStatus::Partial,
+                        success: true,
+                        bytes_reclaimed: 0,
+                        failure_reason: None,
+                        error_message: Some(
+                            "The provider pruned its cache, but the reclaimed amount could not be measured completely"
+                                .to_string(),
+                        ),
+                    },
+                    Ok(Some(reclaimed)) => CleanItemResult {
                         item_id: target.item_id.clone(),
                         name: target.name.clone(),
                         path: path.to_string_lossy().into_owned(),

@@ -20,6 +20,12 @@ pub async fn start_scan(
     categories: Option<Vec<Category>>,
     state: State<'_, AppState>,
 ) -> Result<ScanResult, String> {
+    // A catalog that failed to load is empty, and an empty catalog reports an
+    // empty scan with `Fresh` quality: refusing here is what keeps a startup
+    // failure from looking like a clean machine.
+    if let Some(refusal) = state.catalog_failure() {
+        return Err(refusal);
+    }
     state
         .platform_capabilities
         .capabilities()

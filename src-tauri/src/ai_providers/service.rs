@@ -177,14 +177,23 @@ impl ProviderCollectionService {
                         match res {
                             Ok(Ok(usage)) => usage,
                             Ok(Err(err)) => map_error_to_usage(&adapter.descriptor(), err),
-                            Err(panic) => failed_provider(
-                                id,
-                                provider_name,
-                                &format!(
-                                    "Collector panicked unexpectedly: {}",
-                                    panic_payload_text(panic.as_ref())
-                                ),
-                            ),
+                            // The payload is the cause, but the row crosses
+                            // IPC: sanitize what the user sees, and keep the
+                            // raw text in the diagnostics log below.
+                            Err(panic) => {
+                                let payload = panic_payload_text(panic.as_ref());
+                                crate::diagnostics::log_error(
+                                    "provider",
+                                    &format!("Collector panicked unexpectedly: {payload}"),
+                                );
+                                failed_provider(
+                                    id,
+                                    provider_name,
+                                    &crate::diagnostics::sanitize_log(&format!(
+                                        "Collector panicked unexpectedly: {payload}"
+                                    )),
+                                )
+                            }
                         }
                     }
                     None => failed_provider(id, provider_name, "Unknown provider"),

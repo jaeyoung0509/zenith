@@ -226,7 +226,7 @@ export const nativeApi = {
     return await unwrap(commands.getLocalModels());
   },
 
-  async deleteLocalModel(modelId: string): Promise<number> {
+  async deleteLocalModel(modelId: string): Promise<number | null> {
     return await unwrap(commands.deleteLocalModel(modelId));
   },
 

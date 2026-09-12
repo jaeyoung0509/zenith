@@ -344,6 +344,19 @@ fn drive_root_keys_match(left: &str, right: &str) -> bool {
     left.trim_end_matches('\\') == right.trim_end_matches('\\')
 }
 
+/// True when the path names a `..` component, whatever separator spelling the
+/// flavor accepts.
+///
+/// A lexical rule, so it is decided by the flavor rather than by the host's
+/// `Path::components`: a Windows-shaped path is checked with Windows separators
+/// on every runner.
+pub fn has_parent_traversal(path: &str, flavor: PathFlavor) -> bool {
+    let canonical = canonical_separators(&strip_verbatim(path, flavor), flavor);
+    canonical
+        .split(flavor.separator())
+        .any(|component| component == "..")
+}
+
 /// Component-boundary containment: `parent` contains `child` when `child`
 /// equals `parent` or lives below it. `C:\Program Files (x86)` does not contain
 /// `C:\Program Files`.
@@ -695,6 +708,34 @@ mod tests {
         assert!(equal(r"C:\Program Files", "C:/Program Files", W));
         assert!(equal(r"C:\Program Files\\", r"C:\Program Files", W));
         assert!(!equal("/usr/bin", "/usr\\bin", P));
+    }
+
+    #[test]
+    fn parent_traversal_is_recognized_on_both_flavors() {
+        assert!(has_parent_traversal("../cache", PathFlavor::Posix));
+        assert!(has_parent_traversal(
+            "/Users/me/../other",
+            PathFlavor::Posix
+        ));
+        assert!(!has_parent_traversal("/Users/me/...", PathFlavor::Posix));
+        assert!(!has_parent_traversal("/Users/me/cache", PathFlavor::Posix));
+
+        assert!(has_parent_traversal(
+            r"C:\Users\me\..\other",
+            PathFlavor::Windows
+        ));
+        assert!(has_parent_traversal(
+            r"C:/Users/me/../other",
+            PathFlavor::Windows
+        ));
+        assert!(!has_parent_traversal(
+            r"C:\Users\me\...",
+            PathFlavor::Windows
+        ));
+        assert!(!has_parent_traversal(
+            r"\\?\C:\Users\me\cache",
+            PathFlavor::Windows
+        ));
     }
 
     #[test]

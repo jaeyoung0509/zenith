@@ -17,6 +17,11 @@ pub struct AppState {
     /// environment on its own.
     pub container_host: crate::docker::adapter::ContainerHost,
     pub registry: Arc<SignatureRegistry>,
+    /// Why the embedded signature catalog never loaded, when it did not.
+    ///
+    /// A catalog that failed is empty, and an empty catalog scans clean: the
+    /// scan refuses while this is set instead of reporting a healthy machine.
+    pub registry_load_error: Option<String>,
     pub awake_manager: Arc<KeepAwakeManager>,
     pub settings: Arc<Mutex<ZenithSettings>>,
     pub last_scan: Arc<Mutex<Option<ScanResult>>>,
@@ -59,10 +64,23 @@ impl AppState {
         // The catalog is loaded against the same description every other
         // component receives, instead of building a second, unrelated native
         // environment.
-        let registry = Arc::new(SignatureRegistry::load_or_default(
-            &environment,
-            SignatureRegistry::load_embedded_with,
-        ));
+        let (registry, registry_load_error) =
+            SignatureRegistry::load_or_default(&environment, SignatureRegistry::load_embedded_with);
+        Self::with_catalog(environment, container_host, registry, registry_load_error)
+    }
+
+    /// Builds the state around a catalog the caller already loaded.
+    ///
+    /// [`AppState::new`] delegates here after loading the embedded catalog; the
+    /// seam exists so a test can assert that a catalog which failed to load
+    /// refuses a scan instead of reporting an empty, healthy-looking one.
+    pub fn with_catalog(
+        environment: Arc<crate::platform::PlatformEnvironment>,
+        container_host: crate::docker::adapter::ContainerHost,
+        registry: SignatureRegistry,
+        registry_load_error: Option<String>,
+    ) -> Self {
+        let registry = Arc::new(registry);
         let awake_manager = Arc::new(KeepAwakeManager::new());
         awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
         let settings = Arc::new(Mutex::new(ZenithSettings::default()));
@@ -113,6 +131,7 @@ impl AppState {
             environment,
             container_host,
             registry,
+            registry_load_error,
             awake_manager,
             settings,
             last_scan,
@@ -138,5 +157,16 @@ impl AppState {
             execution_budgets,
             docker_status_cache: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The reason a scan cannot run, when the signature catalog never loaded.
+    ///
+    /// An empty catalog scans nothing and reports `Fresh`, which is exactly
+    /// what a clean machine reports; refusing the scan is what keeps a startup
+    /// failure from being presented as one.
+    pub fn catalog_failure(&self) -> Option<String> {
+        self.registry_load_error.as_deref().map(|error| {
+            format!("{error}. Scan and cleanup are unavailable until the signature catalog loads.")
+        })
     }
 }

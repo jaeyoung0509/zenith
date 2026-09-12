@@ -12,7 +12,7 @@ impl LocalModelManager {
     pub fn delete_by_id(
         environment: &PlatformEnvironment,
         model_id: &str,
-    ) -> Result<u64, ZenithError> {
+    ) -> Result<Option<u64>, ZenithError> {
         let models = LocalModelScanner::scan_all_models(environment);
         let model = Self::resolve_by_id(&models, model_id)?;
         match model.source {
@@ -37,19 +37,19 @@ impl LocalModelManager {
             .ok_or_else(|| ZenithError::PathNotAllowed(format!("unknown model id: {model_id}")))
     }
 
+    /// Deletes one model through the owning CLI.
+    ///
+    /// The returned amount is `None` when either measurement of the blob store
+    /// was incomplete: the model was deleted, and the caller reports that the
+    /// reclaimed bytes are unknown instead of subtracting two partial numbers.
     fn delete_ollama(
         environment: &PlatformEnvironment,
         model: &LocalModelItem,
-    ) -> Result<u64, ZenithError> {
+    ) -> Result<Option<u64>, ZenithError> {
         let blobs_dir = SignatureLoader::expand_path("~/.ollama/models/blobs", environment);
-        let before_bytes = blobs_dir
+        let before = blobs_dir
             .as_ref()
-            .map(|p| {
-                crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment)
-                    .size
-                    .reclaimable()
-            })
-            .unwrap_or(0);
+            .map(|p| crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment));
 
         let mut cmd = tooling::command("ollama");
         cmd.args(Self::ollama_delete_args(model));
@@ -71,17 +71,14 @@ impl LocalModelManager {
             ));
         }
 
-        let after_bytes = blobs_dir
+        let after = blobs_dir
             .as_ref()
-            .map(|p| {
-                crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment)
-                    .size
-                    .reclaimable()
-            })
-            .unwrap_or(0);
+            .map(|p| crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment));
 
-        let actual_reclaimed = before_bytes.saturating_sub(after_bytes);
-        Ok(actual_reclaimed)
+        Ok(match (before, after) {
+            (Some(before), Some(after)) => crate::scanner::size::reclaimed_between(&before, &after),
+            _ => None,
+        })
     }
 
     fn ollama_delete_args(model: &LocalModelItem) -> [&str; 2] {
@@ -92,7 +89,7 @@ impl LocalModelManager {
         environment: &PlatformEnvironment,
         model: &LocalModelItem,
         allowed_root: &str,
-    ) -> Result<u64, ZenithError> {
+    ) -> Result<Option<u64>, ZenithError> {
         let root = SignatureLoader::expand_path(allowed_root, environment)
             .ok_or_else(|| ZenithError::PathNotAllowed(allowed_root.into()))?;
         let path = PathBuf::from(&model.path);
@@ -105,7 +102,9 @@ impl LocalModelManager {
 
         let report = SafeTreeDeleter::delete_path(&path, &[], environment);
         if report.is_success() || report.reclaimed_bytes > 0 {
-            Ok(report.reclaimed_bytes)
+            // The tree deleter's own accounting is exact: it reports what it
+            // removed, not a difference between two measurements.
+            Ok(Some(report.reclaimed_bytes))
         } else {
             Err(ZenithError::Io(report.errors.join("; ")))
         }
@@ -186,7 +185,10 @@ mod tests {
         let reclaimed =
             LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
                 .expect("a model under the stated root is deletable");
-        assert!(reclaimed > 0, "the deleted file's bytes are reported");
+        assert!(
+            reclaimed.is_some_and(|bytes| bytes > 0),
+            "the deleted file's bytes are reported"
+        );
         assert!(
             !model_dir.exists(),
             "the model under the stated root is removed"

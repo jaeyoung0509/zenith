@@ -10,7 +10,9 @@
     const skipped = scan.skipped_entry_count ?? 0;
     const incomplete = scan.incomplete_item_count ?? 0;
     if (skipped > 0) parts.push(`${skipped} entries skipped`);
-    if (incomplete > 0) parts.push(`${incomplete} items partially measured`);
+    // An `Unavailable` item was not measured at all, so the summary says what
+    // is true of both it and a partially measured one.
+    if (incomplete > 0) parts.push(`${incomplete} items not fully measured`);
     return parts.length > 0 ? parts.join(' · ') : null;
   });
 </script>

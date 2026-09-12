@@ -196,11 +196,16 @@ impl CacheProviderRegistry {
         }))
     }
 
+    /// Runs the provider's own prune command.
+    ///
+    /// The returned amount is `None` when either measurement was incomplete:
+    /// the provider still pruned, and the caller reports the target as partial
+    /// instead of showing a difference between two partial numbers as exact.
     pub fn prune(
         signature_id: &str,
         planned_path: &Path,
         environment: &PlatformEnvironment,
-    ) -> Result<u64, String> {
+    ) -> Result<Option<u64>, String> {
         let provider = ProviderKind::for_signature(signature_id)
             .ok_or_else(|| "Unknown external cache provider".to_string())?;
         if matching_process_is_active(provider) {
@@ -215,9 +220,7 @@ impl CacheProviderRegistry {
                 "The provider cache location changed since the scan. Scan again.".to_string(),
             );
         }
-        let before = SizeCalculator::measure_path_logged(&fresh_path, &[], environment)
-            .size
-            .reclaimable();
+        let before = SizeCalculator::measure_path_logged(&fresh_path, &[], environment);
         let output = run_provider(provider, provider.prune_args(), environment)?;
         if !output.status.success() {
             return Err(format!(
@@ -230,10 +233,8 @@ impl CacheProviderRegistry {
         if !paths_match(&rediscovered, &fresh_path) {
             return Err("The provider cache location changed during cleanup.".to_string());
         }
-        let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment)
-            .size
-            .reclaimable();
-        Ok(before.saturating_sub(after))
+        let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment);
+        Ok(crate::scanner::size::reclaimed_between(&before, &after))
     }
 }
 

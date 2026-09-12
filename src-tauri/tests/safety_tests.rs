@@ -884,8 +884,11 @@ fn test_symlink_ancestor_above_signature_root_rejection() {
         let signature_target = symlink_dot_cargo.join("registry").join("cache");
 
         // Validate that checking against base_dir detects the .cargo symlink
-        let validation_res =
-            SymlinkGuard::validate_components_between(&signature_target, base_dir.path());
+        let validation_res = SymlinkGuard::validate_components_between(
+            &signature_target,
+            base_dir.path(),
+            &PlatformEnvironment::native(),
+        );
         assert!(
             validation_res.is_err(),
             "Symlink above signature root must be rejected!"
@@ -910,8 +913,11 @@ fn test_signature_root_itself_symlink_rejection() {
         let symlink_cache = base_dir.path().join("cache");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_cache).expect("create symlink");
 
-        let validation_res =
-            SymlinkGuard::validate_components_between(&symlink_cache, base_dir.path());
+        let validation_res = SymlinkGuard::validate_components_between(
+            &symlink_cache,
+            base_dir.path(),
+            &PlatformEnvironment::native(),
+        );
         assert!(
             validation_res.is_err(),
             "Signature root as symlink must be rejected!"

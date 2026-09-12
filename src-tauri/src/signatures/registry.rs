@@ -70,18 +70,20 @@ impl SignatureRegistry {
     /// [`Self::default`]: the catalog that just failed to load cannot be
     /// replaced by one validated against a different environment, and nothing
     /// should be scanned or cleaned from a catalog that was never verified.
+    ///
+    /// The failure is returned as well as logged. An empty catalog produces an
+    /// empty scan, and an empty scan is byte-for-byte what a clean machine
+    /// reports; the caller is the only place that can tell the two apart.
     pub(crate) fn load_or_default<E: std::fmt::Display>(
         environment: &PlatformEnvironment,
         load: impl FnOnce(&PlatformEnvironment) -> Result<SignatureRegistry, E>,
-    ) -> SignatureRegistry {
+    ) -> (SignatureRegistry, Option<String>) {
         match load(environment) {
-            Ok(registry) => registry,
+            Ok(registry) => (registry, None),
             Err(error) => {
-                crate::diagnostics::log_error(
-                    "startup",
-                    &format!("Signature catalog could not be loaded: {error}"),
-                );
-                Self::new()
+                let message = format!("Signature catalog could not be loaded: {error}");
+                crate::diagnostics::log_error("startup", &message);
+                (Self::new(), Some(message))
             }
         }
     }
@@ -578,7 +580,7 @@ mod tests {
     fn signature_catalog_failure_falls_back_to_an_empty_registry() {
         let environment = stated_environment();
 
-        let registry = SignatureRegistry::load_or_default(&environment, |_| {
+        let (registry, failure) = SignatureRegistry::load_or_default(&environment, |_| {
             Err(crate::models::ZenithError::SignatureMismatch(
                 "stated catalog defect".to_string(),
             ))
@@ -587,12 +589,15 @@ mod tests {
         // Fail closed: a catalog that could not be loaded must not leave the
         // process scanning and cleaning from signatures nobody verified.
         assert!(registry.all().is_empty());
+        let failure = failure.expect("the failure is reported, not only logged");
+        assert!(failure.contains("stated catalog defect"), "{failure}");
 
         // A successful load is passed through untouched, so the fallback is
         // not a second implementation of the loader.
-        let loaded =
+        let (loaded, failure) =
             SignatureRegistry::load_or_default(&environment, SignatureRegistry::load_embedded_with);
         assert!(!loaded.all().is_empty());
+        assert_eq!(failure, None);
     }
 
     #[test]

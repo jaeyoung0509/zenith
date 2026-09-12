@@ -139,9 +139,9 @@
           {#if (categoryResult.incomplete_item_count ?? 0) > 0}
             <span
               class="shrink-0 whitespace-nowrap text-meta text-muted-foreground font-mono"
-              title="Items whose locations could not be fully inspected"
+              title="Items whose locations could not be fully inspected: partly measured or inaccessible"
             >
-              • {categoryResult.incomplete_item_count} items partially measured
+              • {categoryResult.incomplete_item_count} items not fully measured
             </span>
           {/if}
         </div>

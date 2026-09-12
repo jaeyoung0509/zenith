@@ -125,7 +125,17 @@ fn the_self_check_command_answers_from_the_injected_environment() {
             cmd: "run_environment_self_check".into(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            // The local origin is spelled per platform: `tauri://localhost` on
+            // macOS, `http://tauri.localhost` on Windows. Anything else is a
+            // remote origin, and a remote origin has to clear the command ACL,
+            // which a mock context does not carry.
+            url: if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .unwrap(),
             body: InvokeBody::default(),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.to_string(),
@@ -138,4 +148,36 @@ fn the_self_check_command_answers_from_the_injected_environment() {
         .expect("the payload is an environment report");
     assert_eq!(report.platform, PlatformKind::Windows);
     assert_eq!(report.failures, 0);
+}
+
+/// A catalog that never loaded must refuse the scan instead of reporting an
+/// empty result that looks exactly like a clean machine.
+#[test]
+fn a_failed_catalog_refuses_the_scan_instead_of_reporting_an_empty_one() {
+    use zenith_lib::signatures::SignatureRegistry;
+
+    let failure = "Signature catalog could not be loaded: stated catalog defect";
+    let state = AppState::with_catalog(
+        Arc::new(stated_windows_machine()),
+        ContainerHost::unstated(),
+        SignatureRegistry::new(),
+        Some(failure.to_string()),
+    );
+
+    let refusal = state
+        .catalog_failure()
+        .expect("a failed catalog is a refusal, not a quiet empty scan");
+    assert!(refusal.contains(failure), "{refusal}");
+    assert!(refusal.contains("unavailable"), "{refusal}");
+    assert!(
+        state.registry.all().is_empty(),
+        "the fallback registry stays empty rather than inventing signatures"
+    );
+
+    // A catalog that loaded has nothing to refuse.
+    let healthy = AppState::new(
+        Arc::new(stated_windows_machine()),
+        ContainerHost::unstated(),
+    );
+    assert_eq!(healthy.catalog_failure(), None);
 }

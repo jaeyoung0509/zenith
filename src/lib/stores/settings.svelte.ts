@@ -140,8 +140,9 @@ export class SettingsStore {
     } catch {
       // A failed load used to look exactly like a successful one whose values
       // happened to be the defaults, so the next save wrote those defaults over
-      // whatever the backend actually holds. Record the failure instead and
-      // leave `persistedSettings` untouched: `save` refuses without a snapshot.
+      // whatever the backend actually holds. Record the failure instead: the
+      // previous snapshot is kept for rollback only, and `save` refuses while
+      // the store is not loaded, so a failed refresh cannot be written either.
       this.error = 'Settings could not be loaded.';
       this.hasLoaded = false;
     } finally {
@@ -150,7 +151,10 @@ export class SettingsStore {
   }
 
   async save(partial: Partial<ZenithSettings>): Promise<boolean> {
-    if (this.persistedSettings === null) {
+    // `hasLoaded` is part of the authority check, not a UI flag: after a failed
+    // refresh the store still holds the previous snapshot for rollback, and
+    // saving from it would write state the backend never confirmed.
+    if (!this.hasLoaded || this.persistedSettings === null) {
       this.error = 'Settings could not be loaded, so nothing was saved.';
       return false;
     }

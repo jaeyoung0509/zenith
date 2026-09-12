@@ -122,6 +122,24 @@ pub fn get_allocated_size(path: &Path) -> Option<u64> {
     }
 }
 
+/// The bytes a before/after measurement pair proves were reclaimed.
+///
+/// Both sides have to be complete. A measurement that skipped entries cannot be
+/// subtracted from another one and reported as an exact amount: the difference
+/// between two incomplete numbers looks precise and is not, so the caller is
+/// told the amount is unknown instead.
+pub fn reclaimed_between(before: &PathMeasurement, after: &PathMeasurement) -> Option<u64> {
+    if !before.complete || !after.complete {
+        return None;
+    }
+    Some(
+        before
+            .size
+            .reclaimable()
+            .saturating_sub(after.size.reclaimable()),
+    )
+}
+
 pub struct SizeCalculator;
 
 impl SizeCalculator {
@@ -832,6 +850,43 @@ mod tests {
         assert_eq!(
             measured.size.logical,
             4_096 + if reserved_created { 2_048 } else { 0 }
+        );
+    }
+
+    /// A partial measurement never becomes an exact reclaim amount: the pair
+    /// reports `None` instead of a number the caller cannot defend.
+    #[test]
+    fn a_partial_measurement_never_becomes_an_exact_reclaim_amount() {
+        use super::reclaimed_between;
+
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("_cacache");
+        std::fs::create_dir_all(cache.join("Tool.app/Contents")).unwrap();
+        std::fs::write(cache.join("content.bin"), vec![1u8; 4_096]).unwrap();
+        std::fs::write(cache.join("Tool.app/Contents/payload"), vec![2u8; 2_048]).unwrap();
+
+        let clean = root.path().join("clean");
+        std::fs::create_dir(&clean).unwrap();
+        std::fs::write(clean.join("content.bin"), vec![3u8; 1_024]).unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let bounded = SizeCalculator::measure_path_full(&cache, &[], &environment);
+        let complete = SizeCalculator::measure_path_full(&clean, &[], &environment);
+        assert!(!bounded.complete);
+        assert!(complete.complete);
+
+        assert_eq!(reclaimed_between(&bounded, &complete), None);
+        assert_eq!(reclaimed_between(&complete, &bounded), None);
+
+        // Two complete measurements do produce the difference the caller
+        // reports, on the same accounting the sizes use.
+        let wiped = SizeCalculator::measure_path_full(&clean, &[], &environment);
+        std::fs::remove_file(clean.join("content.bin")).unwrap();
+        let emptied = SizeCalculator::measure_path_full(&clean, &[], &environment);
+        assert!(emptied.complete);
+        assert_eq!(
+            reclaimed_between(&wiped, &emptied),
+            Some(wiped.size.reclaimable())
         );
     }
 

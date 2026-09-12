@@ -1254,7 +1254,7 @@ export const mockApi = {
     ];
   },
 
-  async deleteLocalModel(_modelId: string): Promise<number> {
+  async deleteLocalModel(_modelId: string): Promise<number | null> {
     return 4.2 * 1024 * 1024 * 1024;
   },
 

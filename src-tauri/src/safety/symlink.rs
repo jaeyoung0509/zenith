@@ -5,6 +5,40 @@ use std::path::{Path, PathBuf};
 
 pub struct SymlinkGuard;
 
+/// The target's components below `base`, when `base` contains it under the
+/// flavor's own rules (separators, drive/UNC prefixes, and case folding).
+///
+/// Pure: no filesystem access, so the same input is judged the same way on
+/// every runner.
+fn relative_components(
+    base: &str,
+    target: &str,
+    flavor: path_algebra::PathFlavor,
+) -> Option<Vec<String>> {
+    let separator = flavor.separator();
+    let parts = |text: &str| -> Vec<String> {
+        // Either separator spelling names the same component on Windows, so the
+        // comparison runs on the flavor's canonical spelling.
+        path_algebra::canonical_separators(&path_algebra::strip_verbatim(text, flavor), flavor)
+            .split(separator)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let base_parts = parts(base);
+    let target_parts = parts(target);
+    if target_parts.len() < base_parts.len() {
+        return None;
+    }
+    let contains = target_parts
+        .iter()
+        .zip(base_parts.iter())
+        .all(|(target, base)| {
+            path_algebra::fold(target, flavor) == path_algebra::fold(base, flavor)
+        });
+    contains.then(|| target_parts[base_parts.len()..].to_vec())
+}
+
 /// The drive or UNC root a Windows path descends from, or the path itself when
 /// it has none.
 fn windows_root(text: &str) -> String {
@@ -90,21 +124,32 @@ impl SymlinkGuard {
     }
 
     /// Validates all path components from `base` down to `target`.
-    pub fn validate_components_between(target: &Path, base: &Path) -> Result<(), ZenithError> {
+    ///
+    /// The lexical judgments — absolute, parent traversal, and containment — are
+    /// decided by the described flavor's algebra, so a Windows-shaped path is
+    /// judged by Windows rules on every runner. Only the per-component check
+    /// reads real filesystem metadata, which is native by necessity: a path the
+    /// host cannot see is a path whose links the host cannot prove.
+    pub fn validate_components_between(
+        target: &Path,
+        base: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
+        let flavor = environment.flavor();
+        let target_text = target.to_string_lossy();
+        let base_text = base.to_string_lossy();
         // Do not erase a link/.. traversal before checking its components.
-        if !target.is_absolute()
-            || !base.is_absolute()
-            || target
-                .components()
-                .chain(base.components())
-                .any(|component| matches!(component, std::path::Component::ParentDir))
+        if !path_algebra::is_absolute(&target_text, flavor)
+            || !path_algebra::is_absolute(&base_text, flavor)
+            || path_algebra::has_parent_traversal(&target_text, flavor)
+            || path_algebra::has_parent_traversal(&base_text, flavor)
         {
             return Err(ZenithError::SymlinkEscape(
                 "Expected an absolute path without parent traversal".into(),
             ));
         }
-        let normalized_target = crate::safety::Blacklist::normalize_path(target);
-        let normalized_base = crate::safety::Blacklist::normalize_path(base);
+        let normalized_target = path_algebra::normalize(&target_text, flavor);
+        let normalized_base = path_algebra::normalize(&base_text, flavor);
         let outside_base = || {
             ZenithError::SymlinkEscape(format!(
                 "Target {} is not within base {}",
@@ -112,9 +157,9 @@ impl SymlinkGuard {
                 base.display()
             ))
         };
-        let relative = match normalized_target.strip_prefix(&normalized_base) {
-            Ok(relative) => relative.to_path_buf(),
-            Err(_) => {
+        let relative = match relative_components(&normalized_base, &normalized_target, flavor) {
+            Some(relative) => relative,
+            None => {
                 #[cfg(not(windows))]
                 return Err(outside_base());
                 #[cfg(windows)]
@@ -125,20 +170,22 @@ impl SymlinkGuard {
                     // junction cannot disappear during canonicalization.
                     for path in [target, base] {
                         let root = path.ancestors().last().ok_or_else(outside_base)?;
-                        Self::validate_components_between(path, root)?;
+                        Self::validate_components_between(path, root, environment)?;
                     }
                     let canonical_target = fs::canonicalize(target).map_err(|_| outside_base())?;
                     let canonical_base = fs::canonicalize(base).map_err(|_| outside_base())?;
-                    canonical_target
-                        .strip_prefix(&canonical_base)
-                        .map_err(|_| outside_base())?
-                        .to_path_buf()
+                    relative_components(
+                        &canonical_base.to_string_lossy(),
+                        &canonical_target.to_string_lossy(),
+                        flavor,
+                    )
+                    .ok_or_else(outside_base)?
                 }
             }
         };
 
         let mut current = base.to_path_buf();
-        for component in relative.components() {
+        for component in relative {
             current.push(component);
             if Self::is_symlink(&current) {
                 return Err(ZenithError::SymlinkEscape(format!(
@@ -160,10 +207,10 @@ impl SymlinkGuard {
     ) -> Result<(), ZenithError> {
         let anchor = Self::resolve_trusted_anchor(trusted_root, environment);
         if trusted_root.starts_with(&anchor) && anchor != *trusted_root {
-            Self::validate_components_between(trusted_root, &anchor)?;
+            Self::validate_components_between(trusted_root, &anchor, environment)?;
         }
 
-        Self::validate_components_between(target, trusted_root)?;
+        Self::validate_components_between(target, trusted_root, environment)?;
         Ok(())
     }
 
@@ -173,7 +220,7 @@ impl SymlinkGuard {
         environment: &crate::platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         let anchor = Self::resolve_trusted_anchor(target, environment);
-        Self::validate_components_between(target, &anchor)
+        Self::validate_components_between(target, &anchor, environment)
     }
 
     /// Verifies that the path itself is safe. If it is a symlink, ensures its target does not point to a blacklisted destination.
@@ -319,11 +366,62 @@ fn classify_name_surrogate_reparse_point(path: &Path) -> std::io::Result<bool> {
 mod tests {
     use super::*;
 
+    /// The lexical judgments follow the stated flavor, so a Windows-shaped pair
+    /// is decided by Windows rules on this runner: separators, drive prefixes,
+    /// and case folding.
+    #[test]
+    fn component_validation_judges_windows_shaped_paths_with_the_stated_flavor() {
+        use crate::platform::path_algebra::PathFlavor;
+
+        // Containment is component-wise and folds case on Windows.
+        assert_eq!(
+            relative_components(
+                r"C:\Users\Tester\cache",
+                r"C:\Users\tester\cache\npm\_cacache",
+                PathFlavor::Windows,
+            ),
+            Some(vec!["npm".to_string(), "_cacache".to_string()])
+        );
+        // A sibling directory is not contained, and a prefix lookalike is not
+        // either.
+        assert_eq!(
+            relative_components(
+                r"C:\Users\tester\cache",
+                r"C:\Users\tester\cache-two\x",
+                PathFlavor::Windows,
+            ),
+            None
+        );
+        // Forward slashes are separators on Windows and characters on POSIX.
+        assert_eq!(
+            relative_components(
+                "C:/Users/tester/cache",
+                "C:/Users/tester/cache/npm",
+                PathFlavor::Windows,
+            ),
+            Some(vec!["npm".to_string()])
+        );
+        assert_eq!(
+            relative_components("/Users/tester", "/Users/tester/cache", PathFlavor::Posix),
+            Some(vec!["cache".to_string()])
+        );
+        // POSIX keeps case sensitivity.
+        assert_eq!(
+            relative_components("/Users/Tester", "/Users/tester/cache", PathFlavor::Posix),
+            None
+        );
+    }
+
     #[test]
     fn normalization_never_hides_parent_traversal() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("link/../cache");
-        assert!(SymlinkGuard::validate_components_between(&path, dir.path()).is_err());
+        assert!(SymlinkGuard::validate_components_between(
+            &path,
+            dir.path(),
+            &crate::platform::PlatformEnvironment::native(),
+        )
+        .is_err());
     }
 
     #[test]
@@ -403,11 +501,24 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         let canonical_profile = profile.canonicalize().unwrap();
         let plain_workspace = crate::safety::Blacklist::normalize_path(&workspace);
-        SymlinkGuard::validate_components_between(&plain_workspace, &canonical_profile)
-            .unwrap_or_else(|error| {
-                panic!("target={plain_workspace:?}, base={canonical_profile:?}: {error}")
-            });
-        assert!(SymlinkGuard::validate_components_between(&other, &canonical_profile).is_err());
+        SymlinkGuard::validate_components_between(
+            &plain_workspace,
+            &canonical_profile,
+            &crate::platform::PlatformEnvironment::simulated(
+                crate::platform::path_algebra::PathFlavor::Windows,
+            ),
+        )
+        .unwrap_or_else(|error| {
+            panic!("target={plain_workspace:?}, base={canonical_profile:?}: {error}")
+        });
+        assert!(SymlinkGuard::validate_components_between(
+            &other,
+            &canonical_profile,
+            &crate::platform::PlatformEnvironment::simulated(
+                crate::platform::path_algebra::PathFlavor::Windows,
+            ),
+        )
+        .is_err());
         let environment = crate::platform::PlatformEnvironment::simulated(
             crate::platform::path_algebra::PathFlavor::Windows,
         )

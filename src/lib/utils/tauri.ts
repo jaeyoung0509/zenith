@@ -217,7 +217,8 @@ export function tauriGetLocalModels(): Promise<LocalModelItem[]> {
   return api.getLocalModels();
 }
 
-export function tauriDeleteLocalModel(modelId: string): Promise<number> {
+/** `null` means the model was deleted but the reclaimed amount is unknown. */
+export function tauriDeleteLocalModel(modelId: string): Promise<number | null> {
   return api.deleteLocalModel(modelId);
 }
 

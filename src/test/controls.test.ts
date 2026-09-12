@@ -130,7 +130,7 @@ describe('metric and action consistency contracts', () => {
     });
 
     expect(rendered.body).toContain('12 entries skipped');
-    expect(rendered.body).toContain('2 items partially measured');
+    expect(rendered.body).toContain('2 items not fully measured');
 
     const complete = render(CategoryCard, {
       props: {
@@ -150,7 +150,7 @@ describe('metric and action consistency contracts', () => {
     });
 
     expect(complete.body).not.toContain('entries skipped');
-    expect(complete.body).not.toContain('items partially measured');
+    expect(complete.body).not.toContain('items not fully measured');
   });
 
   it('does not duplicate the default safe subtotal as a Selected metric', () => {

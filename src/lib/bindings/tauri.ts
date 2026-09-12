@@ -69,7 +69,13 @@ export const commands = {
 	getDockerStatus: () => typedError<DockerStatus_Serialize, string>(__TAURI_INVOKE("get_docker_status")),
 	pruneDockerTarget: (signatureId: string) => typedError<number, string>(__TAURI_INVOKE("prune_docker_target", { signatureId })),
 	getLocalModels: () => typedError<LocalModelItem_Serialize[], string>(__TAURI_INVOKE("get_local_models")),
-	deleteLocalModel: (modelId: string) => typedError<number, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
+	/**
+	 *  Deletes one local model and reports the bytes it reclaimed.
+	 * 
+	 *  `None` means the model was deleted but the reclaimed amount could not be
+	 *  measured completely; the interface must not present that as a number.
+	 */
+	deleteLocalModel: (modelId: string) => typedError<number | null, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
 	getAwakeState: () => typedError<AwakeState_Serialize, string>(__TAURI_INVOKE("get_awake_state")),
 	setAwakeRules: (rules: AwakeRule_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_awake_rules", { rules })),
 	setManualAwake: (durationSecs: number | null, behavior: AwakeBehavior) => typedError<null, string>(__TAURI_INVOKE("set_manual_awake", { durationSecs, behavior })),

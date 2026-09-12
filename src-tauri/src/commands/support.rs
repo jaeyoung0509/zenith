@@ -23,12 +23,14 @@ where
 ///
 /// The join error's `Display` carries the panic message the worker died with,
 /// and `map_err(|_| "… panicked")` used to throw exactly that away: the log and
-/// the user were left with the symptom and no cause. Both the context and the
-/// underlying reason are logged and returned.
+/// the user were left with the symptom and no cause. The raw message goes to the
+/// diagnostics sink (which redacts credentials and masks paths); the value that
+/// crosses IPC is sanitized the same way, so a panic payload cannot leak into
+/// the interface what the log would have hidden.
 pub(crate) fn join_failure(context: &str, error: impl std::fmt::Display) -> String {
     let message = format!("{context}: {error}");
     crate::diagnostics::log_error("worker", &message);
-    message
+    crate::diagnostics::sanitize_log(&message)
 }
 
 /// The profile of the environment the command is acting on.

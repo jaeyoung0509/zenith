@@ -233,6 +233,26 @@ describe('SettingsStore persistence and lifecycle', () => {
     expect(await store.save({ clean_docker: false })).toBe(true);
   });
 
+  it('a failed refresh does not leave the store writable on the stale snapshot', async () => {
+    await store.load();
+    await store.save({ clean_docker: false });
+    mockSaveSettings.mockClear();
+
+    // The refresh fails after a successful initial load: `persistedSettings`
+    // still holds the last confirmed snapshot, but the store is no longer
+    // loaded, so writing from it would report a state the backend never gave.
+    mockGetSettings.mockRejectedValueOnce(new Error('Settings file became unreadable'));
+    await store.load(true);
+
+    expect(store.error).toBe('Settings could not be loaded.');
+    expect(await store.save({ clean_docker: true })).toBe(false);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+    expect(store.error).toBe('Settings could not be loaded, so nothing was saved.');
+
+    // The stale snapshot is still what a rollback would restore.
+    expect(store.settings.clean_docker).toBe(false);
+  });
+
   it('save is refused before a successful load', async () => {
     mockGetSettings.mockRejectedValueOnce(new Error('Settings file is unreadable'));
     await store.load();
