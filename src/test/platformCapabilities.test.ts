@@ -88,15 +88,27 @@ describe('platform capability contract', () => {
   });
 
   it('keeps the newest forced refresh when an older request finishes last', async () => {
-    const pending: Array<PromiseWithResolvers<PlatformCapabilities>> = [];
+    // `Promise.withResolvers` is unavailable on the Node version CI runs, so
+    // the deferred is created explicitly.
+    interface Deferred {
+      promise: Promise<PlatformCapabilities>;
+      resolve: (value: PlatformCapabilities) => void;
+    }
+    const pending: Deferred[] = [];
     const store = new PlatformCapabilitiesStore(() => {
-      const deferred = Promise.withResolvers<PlatformCapabilities>();
-      pending.push(deferred);
-      return deferred.promise;
+      let resolveDeferred!: (value: PlatformCapabilities) => void;
+      const promise = new Promise<PlatformCapabilities>((resolve) => {
+        resolveDeferred = resolve;
+      });
+      pending.push({ promise, resolve: resolveDeferred });
+      return promise;
     });
 
     const firstLoad = store.load();
     const forcedLoad = store.load(true);
+
+    // A forced refresh must not be deduplicated behind the in-flight request.
+    expect(pending).toHaveLength(2);
 
     pending[1].resolve(goldenWindows);
     await forcedLoad;

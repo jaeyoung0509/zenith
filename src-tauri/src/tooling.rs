@@ -727,7 +727,8 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     #[cfg(unix)]
     use super::is_executable;
-    #[cfg(unix)]
+    // Used by portable tests as well as the Unix ones, so it must not be
+    // gated on `unix`: gating it made the Windows job fail to compile.
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;

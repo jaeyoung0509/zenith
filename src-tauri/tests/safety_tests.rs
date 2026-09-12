@@ -1234,6 +1234,7 @@ fn unix_parent_replacement_between_validation_and_unlink_leaves_outside_untouche
 mod windows_safety {
     use super::*;
     use std::os::windows::ffi::OsStrExt;
+    use std::path::PathBuf;
 
     #[test]
     fn directory_handle_captures_real_volume_file_identity() {
