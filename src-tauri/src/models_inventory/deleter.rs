@@ -1,7 +1,7 @@
 use crate::models::{LocalModelItem, ModelSource, ZenithError};
 use crate::models_inventory::LocalModelScanner;
 use crate::platform::PlatformEnvironment;
-use crate::safety::SafeTreeDeleter;
+use crate::safety::{SafeTreeDeleter, TreeDeleteReport};
 use crate::signatures::SignatureLoader;
 use crate::tooling;
 use std::path::{Path, PathBuf};
@@ -101,12 +101,25 @@ impl LocalModelManager {
         crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root, environment)?;
 
         let report = SafeTreeDeleter::delete_path(&path, &[], environment);
-        if report.is_success() || report.reclaimed_bytes > 0 {
+        Self::filesystem_delete_result(report)
+    }
+
+    fn filesystem_delete_result(report: TreeDeleteReport) -> Result<Option<u64>, ZenithError> {
+        if report.is_success() {
             // The tree deleter's own accounting is exact: it reports what it
             // removed, not a difference between two measurements.
             Ok(Some(report.reclaimed_bytes))
         } else {
-            Err(ZenithError::Io(report.errors.join("; ")))
+            let detail = report.errors.join("; ");
+            let message = if report.reclaimed_bytes > 0 {
+                format!(
+                    "Model deletion was partial after reclaiming {} bytes: {detail}",
+                    report.reclaimed_bytes
+                )
+            } else {
+                detail
+            };
+            Err(ZenithError::Io(message))
         }
     }
 
@@ -121,6 +134,7 @@ mod tests {
     use crate::models::{LocalModelItem, ModelSource, ZenithError};
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
+    use crate::safety::TreeDeleteReport;
     use std::path::Path;
 
     fn model(id: &str, name: &str, path: &str) -> LocalModelItem {
@@ -166,6 +180,23 @@ mod tests {
             Path::new("/Users/me/Documents"),
             Path::new("/Users/me/.cache/mlx")
         ));
+    }
+
+    #[test]
+    fn a_partial_filesystem_delete_is_not_reported_as_success() {
+        let result = LocalModelManager::filesystem_delete_result(TreeDeleteReport {
+            reclaimed_bytes: 42,
+            deleted_files: 1,
+            skipped_files: 1,
+            errors: vec!["locked shard".to_string()],
+            os_error_codes: vec![],
+        });
+
+        let error = result.expect_err("a partial delete must remain a failure");
+        let message = error.to_string();
+        assert!(message.contains("partial"), "{message}");
+        assert!(message.contains("42 bytes"), "{message}");
+        assert!(message.contains("locked shard"), "{message}");
     }
 
     #[test]

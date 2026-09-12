@@ -6,6 +6,7 @@ import { FrontendErrorStore, frontendErrorStore } from '../lib/stores/frontendEr
 describe('FrontendErrorStore', () => {
   afterEach(() => {
     frontendErrorStore.clear();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -67,5 +68,17 @@ describe('FrontendErrorStore', () => {
     const store = new FrontendErrorStore();
     store.push('error', '   ');
     expect(store.entries[0].message).toBe('No message was provided');
+  });
+
+  it('assigns a stable unique key when duplicate errors share a timestamp', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-12T12:00:00.000Z'));
+    const store = new FrontendErrorStore();
+
+    store.push('error', 'duplicate');
+    store.push('error', 'duplicate');
+
+    expect(store.entries[0].at).toBe(store.entries[1].at);
+    expect(store.entries[0].id).not.toBe(store.entries[1].id);
   });
 });

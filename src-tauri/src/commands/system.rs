@@ -206,13 +206,12 @@ pub async fn get_local_models(state: State<'_, AppState>) -> Result<Vec<LocalMod
 #[tauri::command]
 #[specta::specta]
 /// Deletes one local model and reports the bytes it reclaimed.
-///
 /// `None` means the model was deleted but the reclaimed amount could not be
 /// measured completely; the interface must not present that as a number.
 pub async fn delete_local_model(
     model_id: String,
     state: State<'_, AppState>,
-) -> Result<Option<u64>, String> {
+) -> Result<crate::ipc_numeric::IpcOptionalU64, String> {
     state
         .platform_capabilities
         .capabilities()
@@ -234,6 +233,7 @@ pub async fn delete_local_model(
         "Local model deletion worker panicked",
     )
     .await
+    .map(Into::into)
 }
 
 #[tauri::command]

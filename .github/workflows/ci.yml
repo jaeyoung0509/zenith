@@ -54,14 +54,15 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Generate Tauri bindings and capability golden data
+      - name: Generate Tauri bindings and platform golden data
         run: |
           mkdir -p dist
           cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
           cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_platform_capability_golden -- --ignored --exact
+          cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_platform_context_golden -- --ignored --exact
 
-      - name: Verify generated bindings, capability golden data, and Cargo.lock
-        run: git diff --exit-code -- src/lib/bindings/tauri.ts src/lib/bindings/platform-capabilities.golden.json Cargo.lock
+      - name: Verify generated bindings, platform golden data, and Cargo.lock
+        run: git diff --exit-code -- src/lib/bindings/tauri.ts src/lib/bindings/platform-capabilities.golden.json src/lib/bindings/platform-context.golden.json Cargo.lock
 
       - name: Svelte Typecheck
         run: pnpm check

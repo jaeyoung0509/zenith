@@ -10,6 +10,7 @@
 export type FrontendErrorKind = 'error' | 'rejection';
 
 export interface FrontendErrorEntry {
+  id: number;
   kind: FrontendErrorKind;
   message: string;
   at: string;
@@ -34,9 +35,11 @@ function describeRejection(reason: unknown): string {
 
 export class FrontendErrorStore {
   entries = $state<FrontendErrorEntry[]>([]);
+  private nextId = 0;
 
   push(kind: FrontendErrorKind, message: string) {
     const entry: FrontendErrorEntry = {
+      id: this.nextId++,
       kind,
       message: message.trim() || 'No message was provided',
       at: new Date().toISOString(),

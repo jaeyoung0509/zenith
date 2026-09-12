@@ -422,6 +422,21 @@ pub fn is_absolute(path: &str, flavor: PathFlavor) -> bool {
     if is_unc(&stripped, flavor) {
         return true;
     }
+    // `strip_verbatim` removes trailing separators for comparison keys, so a
+    // drive root arrives here as `C:`. Preserve the distinction between the
+    // absolute `C:\` (including `\\?\C:\`) and drive-relative `C:` spellings
+    // by consulting the original rooted form.
+    if stripped.len() == 2
+        && stripped.ends_with(':')
+        && stripped.as_bytes()[0].is_ascii_alphabetic()
+    {
+        let canonical = canonical_separators(path, flavor);
+        let without_verbatim = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+        return without_verbatim
+            .as_bytes()
+            .get(2)
+            .is_some_and(|byte| *byte == b'\\');
+    }
     let chars: Vec<char> = stripped.chars().collect();
     chars.len() >= 3
         && is_drive_letter(chars[0])
@@ -919,6 +934,10 @@ mod tests {
         }
         assert!(!is_absolute(r"\\server", W));
         assert!(is_absolute(r"\\server\share", W));
+        assert!(is_absolute(r"C:\", W));
+        assert!(is_absolute(r"\\?\C:\", W));
+        assert!(!is_absolute("C:", W));
+        assert!(!is_absolute(r"1:\", W));
         assert!(!is_root(r"\\server\share\folder", W));
         assert!(!is_root(r"C:\Users", W));
         assert!(!is_root("/Users", P));

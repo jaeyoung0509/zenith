@@ -961,7 +961,8 @@ mod tests {
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
         std::fs::remove_file(marker).unwrap();
         let mut move_attempts = 0;
-        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(temp.path());
         let result = TrashExecutor::execute_with(&environment, plan, |_| {
             move_attempts += 1;
             Ok(())
@@ -1025,7 +1026,8 @@ mod tests {
         };
         let plan =
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
-        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(temp.path());
         let result = TrashExecutor::execute_with(&environment, plan, |path| {
             assert_eq!(path, target);
             std::fs::rename(path, &trashed).map_err(|error| error.to_string())
@@ -1165,7 +1167,8 @@ mod tests {
                 kind: DeveloperArtifactKind::CargoTarget,
             },
         };
-        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(dir.path());
         let err = validate_target(&environment, &target_item).unwrap_err();
         assert!(
             err.contains("zero identity"),

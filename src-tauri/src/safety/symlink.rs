@@ -51,7 +51,16 @@ fn windows_root(text: &str) -> String {
     let mut candidate = trimmed.as_str();
     loop {
         if crate::platform::path_algebra::is_root(candidate, flavor) {
-            return candidate.to_string();
+            // `path_algebra::is_root` intentionally treats both `C:` and
+            // `C:\` as root spellings, but only the latter is absolute.
+            // This anchor is fed back through `is_absolute`, so keep the
+            // separator for drive roots instead of turning a relocated
+            // workspace such as `D:\dev` into the drive-relative `D:`.
+            return if candidate.len() == 2 && candidate.ends_with(':') {
+                format!("{candidate}\\")
+            } else {
+                candidate.to_string()
+            };
         }
         match candidate.rfind('\\') {
             Some(index) if index > 0 => candidate = &candidate[..index],
@@ -206,7 +215,11 @@ impl SymlinkGuard {
         environment: &crate::platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         let anchor = Self::resolve_trusted_anchor(trusted_root, environment);
-        if trusted_root.starts_with(&anchor) && anchor != *trusted_root {
+        if !path_algebra::equal(
+            &anchor.to_string_lossy(),
+            &trusted_root.to_string_lossy(),
+            environment.flavor(),
+        ) {
             Self::validate_components_between(trusted_root, &anchor, environment)?;
         }
 
@@ -410,6 +423,23 @@ mod tests {
             relative_components("/Users/Tester", "/Users/tester/cache", PathFlavor::Posix),
             None
         );
+    }
+
+    #[test]
+    fn windows_drive_and_unc_anchors_remain_absolute() {
+        use crate::platform::path_algebra::PathFlavor;
+
+        for (target, expected) in [
+            (r"D:\dev\zenith", "D:\\"),
+            (r"\\server\share\projects\zenith", r"\\server\share"),
+        ] {
+            let anchor = windows_root(target);
+            assert_eq!(anchor, expected);
+            assert!(
+                path_algebra::is_absolute(&anchor, PathFlavor::Windows),
+                "anchor must be absolute: {anchor}"
+            );
+        }
     }
 
     #[test]

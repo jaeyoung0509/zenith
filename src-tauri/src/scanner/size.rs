@@ -64,7 +64,9 @@ impl PathMeasurement {
             file_count: 0,
             complete: false,
             incomplete_reason: Some(reason.into()),
-            skipped_entries: 0,
+            // The requested root itself could not be measured. Callers may
+            // replace this when they have a more precise subtree count.
+            skipped_entries: 1,
         }
     }
 
@@ -140,6 +142,18 @@ pub fn reclaimed_between(before: &PathMeasurement, after: &PathMeasurement) -> O
     )
 }
 
+fn measurement_for_metadata_error(path: &Path, error: &std::io::Error) -> PathMeasurement {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        PathMeasurement::complete(FileSize::default(), 0)
+    } else {
+        PathMeasurement::unavailable(format!(
+            "Could not read metadata for {}: {}",
+            path.display(),
+            error
+        ))
+    }
+}
+
 pub struct SizeCalculator;
 
 impl SizeCalculator {
@@ -193,10 +207,6 @@ impl SizeCalculator {
         environment: &PlatformEnvironment,
     ) -> PathMeasurement {
         let path = path.as_ref();
-        if !path.exists() && !SymlinkGuard::is_symlink(path) {
-            return PathMeasurement::complete(FileSize::default(), 0);
-        }
-
         // Check if path is in blacklist
         if Blacklist::is_blacklisted_with(path, environment) {
             return PathMeasurement::incomplete(
@@ -207,37 +217,18 @@ impl SizeCalculator {
             .with_skipped_entries(1);
         }
 
-        // If path is a symlink, only measure the symlink itself
-        if SymlinkGuard::is_symlink(path) {
-            let logical = match fs::symlink_metadata(path) {
-                Ok(m) => m.len(),
-                Err(err) => {
-                    return PathMeasurement::incomplete(
-                        FileSize::default(),
-                        0,
-                        format!(
-                            "Could not read symlink metadata for {}: {}",
-                            path.display(),
-                            err
-                        ),
-                    )
-                    .with_skipped_entries(1);
-                }
-            };
-            return PathMeasurement::complete(FileSize::new(logical, Some(logical)), 1);
-        }
-
         let meta = match fs::symlink_metadata(path) {
             Ok(m) => m,
-            Err(err) => {
-                return PathMeasurement::unavailable(format!(
-                    "Could not read metadata for {}: {}",
-                    path.display(),
-                    err
-                ))
-                .with_skipped_entries(1);
-            }
+            Err(err) => return measurement_for_metadata_error(path, &err),
         };
+
+        // If path is a symlink, only measure the link itself. Reusing the
+        // metadata above avoids a second TOCTOU window between classification
+        // and accounting, and dangling links remain visible.
+        if meta.file_type().is_symlink() {
+            let logical = meta.len();
+            return PathMeasurement::complete(FileSize::new(logical, Some(logical)), 1);
+        }
 
         if meta.is_file() {
             let logical = meta.len();
@@ -710,10 +701,28 @@ impl SizeCalculator {
 
 #[cfg(test)]
 mod tests {
-    use super::SizeCalculator;
+    use super::{measurement_for_metadata_error, SizeCalculator};
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
     use rayon::ThreadPoolBuilder;
+
+    #[test]
+    fn metadata_errors_are_not_mistaken_for_missing_zero_byte_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let measurement = measurement_for_metadata_error(root.path(), &denied);
+
+        assert!(!measurement.complete);
+        assert_eq!(measurement.skipped_entries, 1);
+        assert!(measurement.incomplete_reason.is_some());
+
+        let missing =
+            SizeCalculator::measure_path_full(root.path().join("missing"), &[], &environment);
+        assert!(missing.complete);
+        assert_eq!(missing.skipped_entries, 0);
+    }
 
     #[test]
     fn parallel_measurement_matches_sequential_safety_semantics() {

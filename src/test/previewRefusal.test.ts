@@ -144,4 +144,26 @@ describe('native mode', () => {
     expect(tauriUtils.tauriDeleteLocalModel).toHaveBeenCalledWith('mlx.zenith-probe');
     expect(localModelsStore.error).toBeNull();
   });
+
+  it('refreshes the model inventory after a deletion reports partial failure', async () => {
+    nativeWindow();
+    localModelsStore.models = [
+      {
+        id: 'mlx.partial',
+        name: 'partial',
+        source: 'mlx',
+        path: '/tmp/partial',
+      } as never,
+    ];
+    vi.mocked(tauriUtils.tauriDeleteLocalModel).mockRejectedValue(
+      new Error('Model deletion was partial')
+    );
+    vi.mocked(tauriUtils.tauriGetLocalModels).mockResolvedValue([]);
+
+    await expect(localModelsStore.deleteModel(localModelsStore.models[0])).resolves.toBe(false);
+
+    expect(tauriUtils.tauriGetLocalModels).toHaveBeenCalledOnce();
+    expect(localModelsStore.models).toEqual([]);
+    expect(localModelsStore.error).toContain('Model deletion was partial');
+  });
 });

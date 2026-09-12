@@ -857,7 +857,7 @@
           <p class="text-meta text-muted-foreground">No uncaught frontend errors.</p>
         {:else}
           <ul class="space-y-1.5">
-            {#each frontendErrorStore.entries as entry (entry.at + entry.message)}
+            {#each frontendErrorStore.entries as entry (entry.id)}
               <li
                 class="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-meta"
                 role="alert"

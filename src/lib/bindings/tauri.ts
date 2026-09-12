@@ -71,11 +71,10 @@ export const commands = {
 	getLocalModels: () => typedError<LocalModelItem_Serialize[], string>(__TAURI_INVOKE("get_local_models")),
 	/**
 	 *  Deletes one local model and reports the bytes it reclaimed.
-	 * 
 	 *  `None` means the model was deleted but the reclaimed amount could not be
 	 *  measured completely; the interface must not present that as a number.
 	 */
-	deleteLocalModel: (modelId: string) => typedError<number | null, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
+	deleteLocalModel: (modelId: string) => typedError<IpcOptionalU64_Serialize, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
 	getAwakeState: () => typedError<AwakeState_Serialize, string>(__TAURI_INVOKE("get_awake_state")),
 	setAwakeRules: (rules: AwakeRule_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_awake_rules", { rules })),
 	setManualAwake: (durationSecs: number | null, behavior: AwakeBehavior) => typedError<null, string>(__TAURI_INVOKE("set_manual_awake", { durationSecs, behavior })),
@@ -1151,6 +1150,30 @@ export type InstalledApp_Serialize = {
 	is_running: boolean,
 	is_system_protected: boolean,
 };
+
+/**
+ *  A nullable integer that crosses IPC without changing its JSON or Specta
+ *  shape. Command return values cannot attach a serde field adapter directly,
+ *  so this transparent wrapper keeps `number | null` while enforcing the same
+ *  JavaScript-safe range as model fields.
+ */
+export type IpcOptionalU64 = IpcOptionalU64_Serialize | IpcOptionalU64_Deserialize;
+
+/**
+ *  A nullable integer that crosses IPC without changing its JSON or Specta
+ *  shape. Command return values cannot attach a serde field adapter directly,
+ *  so this transparent wrapper keeps `number | null` while enforcing the same
+ *  JavaScript-safe range as model fields.
+ */
+export type IpcOptionalU64_Deserialize = number | null;
+
+/**
+ *  A nullable integer that crosses IPC without changing its JSON or Specta
+ *  shape. Command return values cannot attach a serde field adapter directly,
+ *  so this transparent wrapper keeps `number | null` while enforcing the same
+ *  JavaScript-safe range as model fields.
+ */
+export type IpcOptionalU64_Serialize = number | null;
 
 export type LargeFileFilter = "all" | "installers";
 
