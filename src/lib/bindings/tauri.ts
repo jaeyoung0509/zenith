@@ -816,10 +816,33 @@ export type DevelopmentListener_Serialize = {
 	blocked_reason: string | null,
 };
 
+/**
+ *  What the diagnostics panel shows about this machine.
+ * 
+ *  The machine facts are first-class fields rather than prose in
+ *  `enabled_features`: a report from a machine the maintainers do not own is
+ *  only useful if the arch, the OS build, the webview runtime, the elevation
+ *  state, and the locale can be read without parsing a string.
+ */
 export type DiagnosticsSnapshot = {
 	app_version: string,
 	os_version: string,
+	/**  OS build/revision when the platform exposes one. */
+	os_build: string | null,
+	/**  Process architecture: what this binary runs as. */
 	arch: string,
+	/**  Native architecture, `None` when the platform cannot report it. */
+	native_arch: string | null,
+	/**  True when this process runs under emulation. */
+	emulated: boolean,
+	webview_version: string | null,
+	elevated: boolean | null,
+	locale: string | null,
+	/**
+	 *  The first write failure observed by this process, if any. A later
+	 *  successful write does not erase evidence that may explain a log gap.
+	 */
+	log_failure: string | null,
 	log_path: string,
 	enabled_features: string[],
 	recent_errors: string[],

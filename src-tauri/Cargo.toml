@@ -1,6 +1,6 @@
 [package]
 name = "zenith-core"
-version = "0.3.21"
+version = "0.3.22"
 description = "Zenith - cross-platform AI & Developer System Manager"
 authors = ["Zenith Team"]
 edition = "2021"
@@ -65,6 +65,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_Security",
     "Win32_Security_Credentials",
+    "Win32_Globalization",
     "Win32_UI_WindowsAndMessaging",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",

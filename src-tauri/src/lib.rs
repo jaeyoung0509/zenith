@@ -171,8 +171,15 @@ pub fn toggle_quick_panel_from_app(app: &AppHandle) {
 /// Toggles the quick panel for a user-initiated click, suppressing a click that
 /// is really the tail of the dismissal it would otherwise undo.
 fn toggle_quick_panel(app: &AppHandle, tray_rect: Option<Rect>) {
-    let Ok(window) = ensure_window(app, "quick") else {
-        return;
+    let window = match ensure_window(app, "quick") {
+        Ok(window) => window,
+        Err(error) => {
+            crate::diagnostics::report_startup_failure(
+                "The quick panel could not be created",
+                &error.to_string(),
+            );
+            return;
+        }
     };
     let visibility = app.state::<QuickPanelVisibility>();
     let visible = window.is_visible().unwrap_or(false);
@@ -186,14 +193,35 @@ fn toggle_quick_panel(app: &AppHandle, tray_rect: Option<Rect>) {
             // Clear the marker so the next click opens the panel.
             visibility.mark_shown();
         }
-        TrayToggle::Show => show_quick_panel_tracked(app, &window, tray_rect),
+        TrayToggle::Show => {
+            if let Err(error) = show_quick_panel_tracked(app, &window, tray_rect) {
+                crate::diagnostics::report_startup_failure(
+                    "The quick panel could not be shown",
+                    &error.to_string(),
+                );
+            }
+        }
+    }
+}
+
+/// Shows the main window, reporting a failure where the user can see it.
+///
+/// Every user-initiated path goes through this: dropping the error would leave
+/// a machine whose webview runtime is missing, too old, or policy-blocked with
+/// a tray icon and no explanation.
+pub fn show_main_window_or_report(app: &AppHandle) {
+    if let Err(error) = show_main_window(app) {
+        crate::diagnostics::report_startup_failure(
+            "The main window could not be created",
+            &error.to_string(),
+        );
     }
 }
 
 pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     let window = ensure_window(app, "main")?;
     let _ = window.unminimize();
-    let _ = window.show();
+    window.show()?;
     let _ = window.set_focus();
     if app.get_webview_window("quick").is_some() {
         hide_quick_panel(app);
@@ -245,7 +273,7 @@ fn quick_panel_position(
     )
 }
 
-fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
+fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::Result<()> {
     if let Some(rect) = tray_rect {
         if let Ok(size) = window.outer_size() {
             // Logical tray rectangles need a scale factor before the monitor
@@ -270,15 +298,21 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
             let _ = window.set_position(target);
         }
     }
-    let _ = window.show();
+    window.show()?;
     let _ = window.set_focus();
+    Ok(())
 }
 
 /// Shows the quick panel and records that it is open, which clears the
 /// dismissal marker a stale tray click would otherwise consume.
-fn show_quick_panel_tracked(app: &AppHandle, window: &WebviewWindow, tray_rect: Option<Rect>) {
-    show_quick_panel(window, tray_rect);
+fn show_quick_panel_tracked(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    tray_rect: Option<Rect>,
+) -> tauri::Result<()> {
+    show_quick_panel(window, tray_rect)?;
     app.state::<QuickPanelVisibility>().mark_shown();
+    Ok(())
 }
 
 pub fn run() {
@@ -366,11 +400,11 @@ pub fn run() {
         docker_status_cache: Arc::new(Mutex::new(None)),
     };
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second launch focuses the existing instance instead of
             // starting a competing process that could corrupt settings.
-            let _ = show_main_window(app);
+            show_main_window_or_report(app);
         }))
         .plugin(tauri_plugin_notification::init())
         .manage(app_state)
@@ -437,7 +471,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open_dashboard" => {
-                        let _ = show_main_window(app);
+                        show_main_window_or_report(app);
                     }
                     "toggle_quick" => {
                         let tray_rect = app
@@ -480,19 +514,32 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(specta_builder().invoke_handler())
-        .build(tauri::generate_context!())
-        .expect("error while building zenith application")
-        .run(|app, event| match event {
-            tauri::RunEvent::Ready => {
-                let _ = show_main_window(app);
-            }
-            #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => {
-                let _ = show_main_window(app);
-            }
-            _ => {}
-        });
+        .invoke_handler(specta_builder().invoke_handler());
+
+    let app = match builder.build(tauri::generate_context!()) {
+        Ok(app) => app,
+        Err(error) => {
+            // A build failure happens before any window exists and release
+            // builds have no console, so the report is written and raised here
+            // instead of panicking where nobody can read it.
+            crate::diagnostics::report_fatal_startup_failure(
+                "Zenith could not start",
+                &error.to_string(),
+            );
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|app, event| match event {
+        tauri::RunEvent::Ready => {
+            show_main_window_or_report(app);
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            show_main_window_or_report(app);
+        }
+        _ => {}
+    });
 }
 
 pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {

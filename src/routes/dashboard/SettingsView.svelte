@@ -911,16 +911,36 @@
 
       {#if diagnosticsData}
         <div class="mt-3 rounded-lg bg-secondary/40 border border-border/40 p-3 text-meta font-mono text-muted-foreground space-y-1 overflow-x-auto max-h-48 overflow-y-auto scroll-stable">
-          <div><span class="text-foreground font-semibold">Zenith:</span> {diagnosticsData.app_version} ({diagnosticsData.arch})</div>
+          <div>
+            <span class="text-foreground font-semibold">Zenith:</span>
+            {diagnosticsData.app_version} ({diagnosticsData.arch}{diagnosticsData.emulated ? ', emulated' : ''})
+          </div>
           <div><span class="text-foreground font-semibold">OS:</span> {diagnosticsData.os_version}</div>
+          {#if diagnosticsData.native_arch}
+            <div><span class="text-foreground font-semibold">Native Arch:</span> {diagnosticsData.native_arch}</div>
+          {/if}
+          {#if diagnosticsData.webview_version}
+            <div><span class="text-foreground font-semibold">WebView:</span> {diagnosticsData.webview_version}</div>
+          {/if}
+          {#if diagnosticsData.elevated !== null}
+            <div><span class="text-foreground font-semibold">Elevated:</span> {diagnosticsData.elevated ? 'yes' : 'no'}</div>
+          {/if}
+          {#if diagnosticsData.locale}
+            <div><span class="text-foreground font-semibold">Locale:</span> {diagnosticsData.locale}</div>
+          {/if}
           <div><span class="text-foreground font-semibold">Log:</span> {diagnosticsData.log_path}</div>
+          {#if diagnosticsData.log_failure}
+            <div class="pt-2 text-destructive font-semibold">Diagnostics encountered a write failure:</div>
+            <div class="text-destructive/80">{diagnosticsData.log_failure}</div>
+          {/if}
           {#if diagnosticsData.recent_errors.length > 0}
             <div class="pt-2 text-destructive font-semibold">Recent Errors ({diagnosticsData.recent_errors.length}):</div>
             {#each diagnosticsData.recent_errors as err}
               <div class="text-destructive/80 truncate">{err}</div>
             {/each}
           {:else}
-            <div class="pt-1 text-success/80">No recent errors logged.</div>
+            <!-- An empty list is absence of data, not evidence of health. -->
+            <div class="pt-1 text-muted-foreground">No recent errors in the log file.</div>
           {/if}
         </div>
       {/if}

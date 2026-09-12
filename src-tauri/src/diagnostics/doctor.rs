@@ -202,11 +202,41 @@ pub fn render_text(report: &EnvironmentReport) -> String {
     lines.join("\n")
 }
 
+/// Appends the check that only a running machine can answer: whether this
+/// process can actually write the diagnostics log, in the directory the
+/// application uses.
+///
+/// It is separate from [`self_check`] because that function is also run against
+/// committed environment fixtures, and a report must never write to the
+/// directory it is describing.
+pub fn with_log_writability(mut report: EnvironmentReport) -> EnvironmentReport {
+    let environment = PlatformEnvironment::native();
+    let directory = crate::diagnostics::log_dir(&environment);
+    let outcome = match crate::diagnostics::probe_log_writability(&directory) {
+        Ok(()) => row(
+            "log_writable",
+            0,
+            1,
+            "write probe succeeded and was removed",
+        ),
+        Err(_) => SelfCheckRow {
+            name: "log_writable".to_string(),
+            outcome: SelfCheckOutcome::Fail,
+            detail: "the diagnostics log cannot be written".to_string(),
+        },
+    };
+    if outcome.outcome == SelfCheckOutcome::Fail {
+        report.failures += 1;
+    }
+    report.checks.push(outcome);
+    report
+}
+
 /// Returns Some(exit_code) when argv asked for a console action.
 pub fn run_cli(args: &[String]) -> Option<i32> {
     match args.first().map(String::as_str) {
         Some("--doctor") => {
-            let report = self_check(&PlatformEnvironment::native());
+            let report = with_log_writability(self_check(&PlatformEnvironment::native()));
             let exit_code = i32::from(report.failures > 0);
             if args.iter().skip(1).any(|argument| argument == "--json") {
                 // Serialized verbatim: the payload is de-identified by

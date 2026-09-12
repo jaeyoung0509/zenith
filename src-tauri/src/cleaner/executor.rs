@@ -365,6 +365,13 @@ impl CleanExecutor {
             let error_str = report.errors.join("; ");
             let failure_reason =
                 classify_cleanup_failure_with_codes(&report.os_error_codes, &error_str);
+            // A refusal under Controlled Folder Access is not something the user
+            // can find from the raw OS error, so the message names the setting.
+            let error_message = if failure_reason == CleanFailureReason::PermissionDenied {
+                crate::platform::environment::describe_access_refusal(environment, path, &error_str)
+            } else {
+                error_str
+            };
             CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -373,7 +380,7 @@ impl CleanExecutor {
                 success: false,
                 bytes_reclaimed: 0,
                 failure_reason: Some(failure_reason),
-                error_message: Some(error_str),
+                error_message: Some(error_message),
             }
         }
     }
