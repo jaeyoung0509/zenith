@@ -338,7 +338,7 @@ fn validate_cache_path(
             "The provider cache override is outside approved user cache locations".to_string(),
         );
     }
-    Blacklist::validate(&canonical).map_err(|error| error.to_string())?;
+    Blacklist::validate_with(&canonical, environment).map_err(|error| error.to_string())?;
     if in_profile {
         SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home)
             .map_err(|error| error.to_string())?;
@@ -600,9 +600,15 @@ mod tests {
                 .with_local_app_data(local_app_data.path()),
         ));
         let relocated = super::relocated_cache_roots(&environment);
+        // `canonicalize` returns a verbatim path on Windows; the relocation
+        // decision is made on the normalized spelling, so the expectation is
+        // normalized the same way instead of encoding the host's prefix.
+        let expected = crate::platform::NativePlatformPaths::normalize_verbatim_path(
+            &local_app_data.path().canonicalize().unwrap(),
+        );
         assert_eq!(
             relocated,
-            vec![local_app_data.path().canonicalize().unwrap()],
+            vec![expected],
             "the stated application-data container is the only relocated root"
         );
     }

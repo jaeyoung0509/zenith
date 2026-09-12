@@ -150,7 +150,7 @@ impl CleanExecutor {
         }
 
         // 1. Blacklist check (lexical & canonical, fail closed on mutation)
-        if let Err(e) = Blacklist::validate(path) {
+        if let Err(e) = Blacklist::validate_with(path, environment) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -162,7 +162,7 @@ impl CleanExecutor {
                 error_message: Some(e.to_string()),
             };
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -223,6 +223,7 @@ impl CleanExecutor {
         if let Some(days) = target.min_age_days {
             if path.is_dir() {
                 let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+                    environment,
                     path,
                     &target.exclusions,
                     0,

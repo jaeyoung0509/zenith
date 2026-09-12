@@ -139,6 +139,27 @@ pub fn canonical_separators(path: &str, flavor: PathFlavor) -> String {
     path.replace('/', r"\")
 }
 
+/// Joins a tail onto a base using the flavor's own separator, then normalizes
+/// the result.
+///
+/// `Path::join` applies the *host's* rules, so a stated POSIX root joined on a
+/// Windows runner came back with backslashes and stopped being recognized as
+/// absolute. This keeps the described environment's semantics in charge on
+/// every runner.
+pub fn join(base: &str, tail: &str, flavor: PathFlavor) -> String {
+    let separator = flavor.separator();
+    let mut text = canonical_separators(&strip_verbatim(base, flavor), flavor);
+    if !text.ends_with(separator) {
+        text.push(separator);
+    }
+    if !tail.is_empty() {
+        let tail = canonical_separators(tail, flavor);
+        let tail = tail.trim_start_matches(separator);
+        text.push_str(tail);
+    }
+    normalize(&text, flavor)
+}
+
 /// Removes trailing separators except when the path is itself a root.
 pub fn trim_trailing_separators(path: &str, flavor: PathFlavor) -> String {
     let separator = flavor.separator();
@@ -167,10 +188,10 @@ pub fn normalize(path: &str, flavor: PathFlavor) -> String {
     let canonical = canonical_separators(&stripped, flavor);
     let separator = flavor.separator();
 
-    let (prefix, remainder) = split_prefix(&canonical, flavor);
+    let split = split_prefix(&canonical, flavor);
 
     let mut components: Vec<&str> = Vec::new();
-    for component in remainder.split(|ch| flavor.is_separator(ch)) {
+    for component in split.remainder.split(|ch| flavor.is_separator(ch)) {
         if component.is_empty() {
             continue;
         }
@@ -190,7 +211,7 @@ pub fn normalize(path: &str, flavor: PathFlavor) -> String {
         components.push(component);
     }
 
-    let mut result = prefix;
+    let mut result = split.prefix;
     let joined = components.join(&separator.to_string());
     if result.is_empty() {
         let is_absolute = canonical.starts_with(separator) && !canonical.is_empty();
@@ -198,6 +219,14 @@ pub fn normalize(path: &str, flavor: PathFlavor) -> String {
             return format!("{separator}{joined}");
         }
         return joined;
+    }
+    if !split.rooted {
+        // `C:cache` is relative to the current directory on `C:` and must not
+        // be rewritten into the rooted `C:\cache`. The two name different
+        // locations, and rewriting one into the other would let a relative
+        // pattern pass an absolute-path check.
+        result.push_str(&joined);
+        return result;
     }
     if !joined.is_empty() {
         if !result.ends_with(separator) {
@@ -210,11 +239,24 @@ pub fn normalize(path: &str, flavor: PathFlavor) -> String {
     result
 }
 
+/// A path split into the part that identifies the volume and the rest.
+struct PrefixSplit {
+    prefix: String,
+    remainder: String,
+    /// True when the prefix was followed by a separator, which is what makes
+    /// `C:\foo` rooted on its drive while `C:foo` stays drive-relative.
+    rooted: bool,
+}
+
 /// Splits a canonicalized Windows path into its prefix (`\\server\share`,
 /// `C:`) and the remainder below it. For POSIX the prefix is empty.
-fn split_prefix(canonical: &str, flavor: PathFlavor) -> (String, String) {
+fn split_prefix(canonical: &str, flavor: PathFlavor) -> PrefixSplit {
     if !flavor.is_windows() {
-        return (String::new(), canonical.trim_start_matches('/').to_string());
+        return PrefixSplit {
+            prefix: String::new(),
+            remainder: canonical.trim_start_matches('/').to_string(),
+            rooted: canonical.starts_with('/'),
+        };
     }
     if let Some(rest) = canonical.strip_prefix(r"\\") {
         // UNC: \\server\share\... — the share is part of the prefix.
@@ -223,26 +265,45 @@ fn split_prefix(canonical: &str, flavor: PathFlavor) -> (String, String) {
         let share = parts.next().unwrap_or_default();
         let remainder = parts.next().unwrap_or_default();
         if server.is_empty() {
-            return (canonical.to_string(), String::new());
+            return PrefixSplit {
+                prefix: canonical.to_string(),
+                remainder: String::new(),
+                rooted: true,
+            };
         }
         if share.is_empty() {
-            return (format!(r"\\{server}"), String::new());
+            return PrefixSplit {
+                prefix: format!(r"\\{server}"),
+                remainder: String::new(),
+                rooted: true,
+            };
         }
-        return (format!(r"\\{server}\{share}"), remainder.to_string());
+        return PrefixSplit {
+            prefix: format!(r"\\{server}\{share}"),
+            remainder: remainder.to_string(),
+            rooted: true,
+        };
     }
     let mut chars = canonical.chars();
     let first = chars.next();
     let second = chars.next();
     if let (Some(first), Some(':')) = (first, second) {
         if is_drive_letter(first) {
-            let rest = canonical[2..].trim_start_matches('\\');
-            return (canonical[..2].to_string(), rest.to_string());
+            let after_prefix = &canonical[2..];
+            let rooted = after_prefix.starts_with('\\') || after_prefix.starts_with('/');
+            let remainder = after_prefix.trim_start_matches(['\\', '/']);
+            return PrefixSplit {
+                prefix: canonical[..2].to_string(),
+                remainder: remainder.to_string(),
+                rooted,
+            };
         }
     }
-    (
-        String::new(),
-        canonical.trim_start_matches('\\').to_string(),
-    )
+    PrefixSplit {
+        prefix: String::new(),
+        remainder: canonical.trim_start_matches('\\').to_string(),
+        rooted: false,
+    }
 }
 
 fn is_drive_letter(ch: char) -> bool {
@@ -435,10 +496,10 @@ fn is_short_name_char(ch: char) -> bool {
 /// used to decide whether an 8.3 alias could shadow a protected directory.
 pub fn first_component(path: &str, flavor: PathFlavor) -> Option<String> {
     let canonical = canonical_separators(&strip_verbatim(path, flavor), flavor);
-    let separator = flavor.separator();
-    let (_, remainder) = split_prefix(&canonical, flavor);
-    let mut components = remainder.split(|ch| flavor.is_separator(ch) || ch == separator);
-    components
+    let split = split_prefix(&canonical, flavor);
+    split
+        .remainder
+        .split(|ch| flavor.is_separator(ch))
         .find(|component| !component.is_empty())
         .map(str::to_string)
 }
@@ -479,13 +540,19 @@ pub fn protected_root(path: &str, flavor: PathFlavor) -> Option<ProtectedRoot> {
 
     // Windows: the protected tails are drive-letter independent, so a machine
     // whose system drive is `D:` is protected exactly like a `C:` machine.
-    let (prefix, remainder) = split_prefix(&canonical, flavor);
-    let is_drive_prefixed = prefix.len() == 2 && prefix.ends_with(':');
-    let is_unc_prefixed = prefix.starts_with(r"\\");
+    let split = split_prefix(&canonical, flavor);
+    let is_drive_prefixed = split.prefix.len() == 2 && split.prefix.ends_with(':');
+    let is_unc_prefixed = split.prefix.starts_with(r"\\");
     if !is_drive_prefixed && !is_unc_prefixed {
         return None;
     }
-    let mut components = remainder.split('\\').filter(|part| !part.is_empty());
+    if is_drive_prefixed && !split.rooted {
+        // `C:Windows` is drive-relative, not the Windows directory. Refuse it
+        // instead of classifying a path whose meaning depends on the calling
+        // process's current directory.
+        return Some(ProtectedRoot::FilesystemRoot);
+    }
+    let mut components = split.remainder.split('\\').filter(|part| !part.is_empty());
     let first = components.next()?;
     let tail_is_only_component = components.next().is_none();
 
@@ -719,6 +786,57 @@ mod tests {
         assert!(!has_alternate_data_stream(r"C:\Users\me\file.txt", W));
         assert!(has_trailing_dot_or_space(r"C:\Users\me\Downloads ", W));
         assert!(!has_trailing_dot_or_space(r"C:\Users\me\Downloads", W));
+    }
+
+    #[test]
+    fn drive_relative_paths_stay_relative() {
+        // `C:cache` is relative to the current directory on `C:`; `C:\cache`
+        // is rooted on the drive. Rewriting one into the other would let a
+        // relative pattern pass an absolute-path check.
+        assert_eq!(normalize("C:cache", W), "C:cache");
+        assert_eq!(normalize(r"C:\cache", W), r"C:\cache");
+        assert!(!is_absolute(&normalize("C:cache", W), W));
+        assert!(is_absolute(&normalize(r"C:\cache", W), W));
+        assert!(!is_absolute(&normalize(r"C:..\Windows", W), W));
+        assert_eq!(normalize(r"C:..\Windows", W), r"C:..\Windows");
+        assert!(!is_absolute(&normalize(r"D:Users\me", W), W));
+        assert!(!is_absolute(&normalize("C:.", W), W));
+        // A drive-relative path is never classified as a protected root by
+        // accident; it is refused as a root instead.
+        assert_eq!(
+            protected_root(r"C:Windows", W),
+            Some(ProtectedRoot::FilesystemRoot)
+        );
+        assert_eq!(
+            protected_root(r"C:\Windows", W),
+            Some(ProtectedRoot::WindowsDirectory)
+        );
+        // Normalization stays idempotent for relative spellings too.
+        for path in ["C:cache", r"C:..\Windows", "C:.", "relative/path"] {
+            let once = normalize(path, W);
+            assert_eq!(once, normalize(&once, W), "not idempotent for {path:?}");
+        }
+    }
+
+    #[test]
+    fn joining_a_tail_uses_the_described_flavor_not_the_host() {
+        // Host `Path::join` would turn these into backslash paths on a Windows
+        // runner and stop recognizing them as absolute.
+        assert_eq!(
+            join("/mnt/data/downloads", "cache", P),
+            "/mnt/data/downloads/cache"
+        );
+        assert_eq!(
+            join(r"D:\\Cache\\Documents", r"keep\\file.txt", W),
+            r"D:\Cache\Documents\keep\file.txt"
+        );
+        assert_eq!(
+            join(r"\\fileserver\share", "kept", W),
+            r"\\fileserver\share\kept"
+        );
+        // A tail that is already rooted is appended, not substituted.
+        assert_eq!(join("/base", "/tail", P), "/base/tail");
+        assert_eq!(join("/base", "", P), "/base");
     }
 
     #[test]

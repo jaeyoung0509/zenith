@@ -7,38 +7,61 @@ use zenith_lib::models::{
     Category, CategoryResult, CleanFailureReason, CleanStrategy, FileSize, RiskTier, ScanItem,
     ScanResult, Signature, ZenithError,
 };
-use zenith_lib::platform::{NativePlatformPaths, PlatformEnvironment};
+use zenith_lib::platform::path_algebra::PathFlavor;
+use zenith_lib::platform::paths::SimulatedPaths;
+use zenith_lib::platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
 use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
 use zenith_lib::scanner::SizeCalculator;
 use zenith_lib::signatures::SignatureRegistry;
 
-/// The Windows environment a blacklist verdict is computed against. Every fact
-/// is stated here, so the same assertions hold whatever host runs them.
-fn blacklist_environment(home: Option<&str>, temp_dir: &str) -> BlacklistEnvironment {
-    BlacklistEnvironment {
-        home: home.map(str::to_string),
-        temp_dir: temp_dir.to_string(),
-        known_content_dirs: vec![r"D:\Redirected\OneDrive\Documents".to_string()],
-        system_roots: vec![r"D:\Tools\System".to_string()],
-        local_app_data: home.map(|home| format!("{home}/AppData/Local")),
-        roaming_app_data: home.map(|home| format!("{home}/AppData/Roaming")),
+/// The Windows environment every Windows blacklist assertion is computed
+/// against. The classifier's input is derived from the same value the runtime
+/// would receive, so a test cannot describe one machine and classify another.
+fn windows_environment(home: Option<&str>, temp_dir: &str) -> PlatformEnvironment {
+    let mut roots = SimulatedPaths::new()
+        .with_flavor(PathFlavor::Windows)
+        .with_temp_dir(temp_dir)
+        .with_program_files(r"Z:\Program Files")
+        .with_program_data(r"Z:\ProgramData");
+    if let Some(home) = home {
+        roots = roots
+            .with_home(home)
+            .with_local_app_data(format!(r"{home}\AppData\Local"))
+            .with_roaming_app_data(format!(r"{home}\AppData\Roaming"));
     }
+    PlatformEnvironment::simulated(PathFlavor::Windows)
+        .with_roots(std::sync::Arc::new(roots))
+        .with_known_folder(KnownFolder::Documents, r"D:\OneDrive\Documents")
+        .with_path_entry(r"Z:\Windows\System32")
+}
+
+/// The classifier input derived from [`windows_environment`].
+fn windows_classifier(home: Option<&str>, temp_dir: &str) -> BlacklistEnvironment {
+    BlacklistEnvironment::from_environment(&windows_environment(home, temp_dir))
+}
+
+/// The host's own environment: the POSIX assertions are about the real profile
+/// the process runs under, which is the one case where host facts are the
+/// intended input.
+fn native_environment() -> PlatformEnvironment {
+    PlatformEnvironment::native()
 }
 
 #[test]
 fn test_blacklist_root_and_home_rejection() {
     // 1. Root / and every drive root must be rejected
+    let host = native_environment();
     for root in ["/", "//", "///"] {
-        assert!(Blacklist::is_blacklisted(Path::new(root)));
-        assert!(Blacklist::validate(Path::new(root)).is_err());
+        assert!(Blacklist::is_blacklisted_with(Path::new(root), &host));
+        assert!(Blacklist::validate_with(Path::new(root), &host).is_err());
     }
 
     // 2. The user home the rule protects is stated literally, so this body
     // executes identically on every host instead of depending on the profile
     // the test runner happens to have.
     let stated_home = "/Users/zenith-tester";
-    let environment = blacklist_environment(Some(stated_home), "/var/folders/zenith/T");
+    let environment = windows_classifier(Some(stated_home), "/var/folders/zenith/T");
     assert_eq!(
         classify_windows(stated_home, &environment),
         BlacklistVerdict::Denied("user home")
@@ -60,7 +83,7 @@ fn test_blacklist_root_and_home_rejection() {
     }
     // The rule is driven by the stated home: without one this location is not
     // recognized as a profile, while the filesystem root still is.
-    let without_home = blacklist_environment(None, "/var/folders/zenith/T");
+    let without_home = windows_classifier(None, "/var/folders/zenith/T");
     assert_eq!(
         classify_windows(stated_home, &without_home),
         BlacklistVerdict::Allowed
@@ -75,8 +98,8 @@ fn test_blacklist_root_and_home_rejection() {
     let native_home = NativePlatformPaths::new()
         .home()
         .expect("a POSIX host exposes a home directory");
-    assert!(Blacklist::is_blacklisted(&native_home));
-    assert!(Blacklist::validate(&native_home).is_err());
+    assert!(Blacklist::is_blacklisted_with(&native_home, &host));
+    assert!(Blacklist::validate_with(&native_home, &host).is_err());
 }
 
 #[test]
@@ -96,14 +119,15 @@ fn test_blacklist_system_directories_rejection() {
             "/Applications",
             "/Library",
         ];
+        let host = native_environment();
         for path_str in &sys_paths {
             let path = Path::new(path_str);
             assert!(
-                Blacklist::is_blacklisted(path),
+                Blacklist::is_blacklisted_with(path, &host),
                 "Expected {} to be blacklisted",
                 path_str
             );
-            assert!(Blacklist::validate(path).is_err());
+            assert!(Blacklist::validate_with(path, &host).is_err());
         }
     }
 
@@ -111,10 +135,11 @@ fn test_blacklist_system_directories_rejection() {
     // refused whether the system lives on `C:`, another drive, or the drive the
     // stated profile happens to use. Nothing here encodes the drive letter or
     // profile layout of the host that runs the test.
-    let environment = blacklist_environment(
+    let platform = windows_environment(
         Some(r"Z:\Users\tester"),
         r"Z:\Users\tester\AppData\Local\Temp",
     );
+    let environment = BlacklistEnvironment::from_environment(&platform);
     for drive in ["C:", "D:", "Z:"] {
         for tail in [
             r"\Windows",
@@ -131,7 +156,7 @@ fn test_blacklist_system_directories_rejection() {
                 "Expected {path_str} to be denied on Windows"
             );
             assert!(
-                Blacklist::validate(path).is_err(),
+                Blacklist::validate_with(path, &platform).is_err(),
                 "Expected {path_str} to be rejected"
             );
         }
@@ -159,8 +184,7 @@ fn test_blacklist_sensitive_user_directories() {
     // The home these locations are relative to is stated, so the body always
     // executes and every assertion can fail.
     let stated_home = r"D:\Users\tester";
-    let environment =
-        blacklist_environment(Some(stated_home), r"D:\Users\tester\AppData\Local\Temp");
+    let environment = windows_classifier(Some(stated_home), r"D:\Users\tester\AppData\Local\Temp");
     for rel in &sensitive {
         let path = format!("{stated_home}/{}", rel.replace('/', "\\"));
         let verdict = classify_windows(&path, &environment);
@@ -183,12 +207,13 @@ fn test_blacklist_sensitive_user_directories() {
         .expect("a POSIX host exposes a home directory");
     for rel in &sensitive {
         let full_path = native_home.join(rel);
+        let host = native_environment();
         assert!(
-            Blacklist::is_blacklisted(&full_path),
+            Blacklist::is_blacklisted_with(&full_path, &host),
             "Expected {} to be blacklisted",
             full_path.display()
         );
-        assert!(Blacklist::validate(&full_path).is_err());
+        assert!(Blacklist::validate_with(&full_path, &host).is_err());
     }
 }
 
@@ -200,19 +225,21 @@ fn test_blacklist_parent_traversal_attacks() {
         .home()
         .expect("a POSIX host exposes a home directory");
     let attack_path = native_home.join(".cache/foo/../../.ssh");
+    let host = native_environment();
     assert!(
-        Blacklist::validate(&attack_path).is_err(),
+        Blacklist::validate_with(&attack_path, &host).is_err(),
         "Expected traversal attack to be rejected"
     );
-    assert!(Blacklist::validate(Path::new("/Users/../System")).is_err());
+    assert!(Blacklist::validate_with(Path::new("/Users/../System"), &host).is_err());
 
     // Windows flavor, drive-letter independent: the same attacks normalize to a
     // system directory and are refused, while traversal that stays inside the
     // stated profile remains cleanable.
-    let environment = blacklist_environment(
+    let environment = windows_environment(
         Some(r"Z:\Users\tester"),
         r"Z:\Users\tester\AppData\Local\Temp",
     );
+    let classifier = BlacklistEnvironment::from_environment(&environment);
     for attack in [
         r"Z:\Users\tester\..\..\Windows",
         r"Z:\Users\tester\Documents\..\..\..\Windows\System32",
@@ -224,18 +251,18 @@ fn test_blacklist_parent_traversal_attacks() {
         r"D:\Users\tester\..\..\ProgramData\app",
         r"D:\Users\tester\AppData\Local\Temp\..\..\..\..\..\Windows",
     ] {
-        let verdict = classify_windows(attack, &environment);
+        let verdict = classify_windows(attack, &classifier);
         assert!(
             verdict.is_denied(),
             "Expected traversal {attack} to be denied, got {verdict:?}"
         );
     }
     assert_eq!(
-        classify_windows(r"Z:\Users\tester\dev\cache\..\cache\file.tmp", &environment),
+        classify_windows(r"Z:\Users\tester\dev\cache\..\cache\file.tmp", &classifier),
         BlacklistVerdict::Allowed
     );
     assert_eq!(
-        classify_windows(r"Z:\Users\tester\docs\..\..\tester\dev\repo", &environment),
+        classify_windows(r"Z:\Users\tester\docs\..\..\tester\dev\repo", &classifier),
         BlacklistVerdict::Allowed
     );
 }
@@ -244,19 +271,21 @@ fn test_blacklist_parent_traversal_attacks() {
 fn test_blacklist_git_directory_rejection() {
     #[cfg(unix)]
     {
+        let host = native_environment();
         let git_dir = Path::new("/tmp/some-project/.git");
-        assert!(Blacklist::is_blacklisted(git_dir));
-        assert!(Blacklist::validate(git_dir).is_err());
+        assert!(Blacklist::is_blacklisted_with(git_dir, &host));
+        assert!(Blacklist::validate_with(git_dir, &host).is_err());
 
         let git_file = Path::new("/tmp/some-project/.git/config");
-        assert!(Blacklist::is_blacklisted(git_file));
+        assert!(Blacklist::is_blacklisted_with(git_file, &host));
     }
     #[cfg(windows)]
     {
         let dir = tempdir().expect("tempdir");
         let git_dir = dir.path().join("some-project").join(".git");
-        assert!(Blacklist::is_blacklisted(&git_dir));
-        assert!(Blacklist::validate(&git_dir).is_err());
+        let host = native_environment();
+        assert!(Blacklist::is_blacklisted_with(&git_dir, &host));
+        assert!(Blacklist::validate_with(&git_dir, &host).is_err());
     }
 }
 
@@ -1315,12 +1344,14 @@ mod windows_safety {
 
     #[test]
     fn case_insensitive_protected_paths_are_rejected() {
-        assert!(Blacklist::is_blacklisted(Path::new("C:\\Windows")));
-        assert!(Blacklist::is_blacklisted(Path::new("c:\\windows")));
-        assert!(Blacklist::is_blacklisted(Path::new(
-            "C:\\WINDOWS\\System32"
-        )));
-        assert!(Blacklist::validate(Path::new("c:\\windows\\system32")).is_err());
+        let host = PlatformEnvironment::native();
+        assert!(Blacklist::is_blacklisted_with(Path::new("C:\\Windows"), &host));
+        assert!(Blacklist::is_blacklisted_with(Path::new("c:\\windows"), &host));
+        assert!(Blacklist::is_blacklisted_with(
+            Path::new("C:\\WINDOWS\\System32"),
+            &host
+        ));
+        assert!(Blacklist::validate_with(Path::new("c:\\windows\\system32"), &host).is_err());
     }
 
     #[test]
@@ -1336,7 +1367,10 @@ mod windows_safety {
         let verbatim = format!(r"\\?\{}", payload.display());
         let verbatim_path = PathBuf::from(&verbatim);
         // Blacklist normalization must not mistake the verbatim prefix for ADS.
-        assert!(!Blacklist::is_blacklisted(&verbatim_path));
+        assert!(!Blacklist::is_blacklisted_with(
+            &verbatim_path,
+            &PlatformEnvironment::native()
+        ));
         let report = SafeTreeDeleter::delete_contents(&deep, &[], &PlatformEnvironment::native());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());

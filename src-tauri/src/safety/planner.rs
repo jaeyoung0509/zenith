@@ -126,11 +126,11 @@ impl SafetyPlanner {
                 }
 
                 // 3. Hard Blacklist check (lexical & canonical)
-                Blacklist::validate(&path)?;
-                SymlinkGuard::validate_canonical_blacklist(&path)?;
+                Blacklist::validate_with(&path, environment)?;
+                SymlinkGuard::validate_canonical_blacklist(&path, environment)?;
 
                 // 4. Symlink Target check
-                SymlinkGuard::validate_symlink_target(&path)?;
+                SymlinkGuard::validate_symlink_target(&path, environment)?;
 
                 // 5. Capture current file identity for TOCTOU protection
                 if path.exists() || SymlinkGuard::is_symlink(&path) {

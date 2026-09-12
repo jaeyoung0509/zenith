@@ -83,7 +83,7 @@ impl SizeCalculator {
         }
 
         // Check if path is in blacklist
-        if Blacklist::is_blacklisted(path) {
+        if Blacklist::is_blacklisted_with(path, environment) {
             return (FileSize::default(), 0);
         }
 
@@ -181,7 +181,7 @@ impl SizeCalculator {
             for entry in entries.flatten() {
                 let child_path = entry.path();
                 if Self::is_excluded(&child_path, exclusions, environment)
-                    || Blacklist::is_blacklisted(&child_path)
+                    || Blacklist::is_blacklisted_with(&child_path, environment)
                 {
                     continue;
                 }
@@ -298,7 +298,7 @@ impl SizeCalculator {
             }
 
             // Check blacklist
-            if Blacklist::is_blacklisted(&child_path) {
+            if Blacklist::is_blacklisted_with(&child_path, environment) {
                 continue;
             }
 
@@ -417,17 +417,20 @@ mod tests {
     fn exclusions_resolve_through_the_stated_environment() {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
-        let kept = home.join("Documents/keep");
-        let scanned = home.join("Library/Caches/scanned");
+        // The scanned tree is the literal profile `Downloads` folder. Scanning
+        // the profile root itself is refused by the blacklist, and the point
+        // here is which location a known-folder exclusion resolves to, so the
+        // tree sits one level below the stated home.
+        let scanned = home.join("Downloads");
+        let kept = scanned.join("keep");
         std::fs::create_dir_all(&kept).unwrap();
-        std::fs::create_dir_all(&scanned).unwrap();
         std::fs::write(kept.join("keep.bin"), vec![1u8; 4_096]).unwrap();
-        std::fs::write(scanned.join("cache.bin"), vec![2u8; 8_192]).unwrap();
+        std::fs::write(scanned.join("other.bin"), vec![2u8; 8_192]).unwrap();
 
-        // The environment states a redirected Documents folder outside the
-        // literal profile, so `~/Documents/keep` inside the scanned tree is
-        // only excluded when the stated folder is consulted.
-        let redirected = root.path().join("redirected/Documents");
+        // When the environment states a redirected Downloads folder outside the
+        // literal profile, `~/Downloads/keep` must resolve there and stop
+        // excluding the identically named folder inside this tree.
+        let redirected = root.path().join("redirected/Downloads");
         std::fs::create_dir_all(&redirected).unwrap();
         let simulated = |redirect: bool| {
             let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_roots(
@@ -438,29 +441,29 @@ mod tests {
                 ),
             );
             if redirect {
-                environment.with_known_folder(crate::platform::KnownFolder::Documents, &redirected)
+                environment.with_known_folder(crate::platform::KnownFolder::Downloads, &redirected)
             } else {
                 environment
             }
         };
 
-        let exclusions = vec!["~/Documents/keep".to_string()];
-        let redirected_environment = simulated(true);
-        let (_, scanned_files) =
-            SizeCalculator::measure_path(&scanned, &exclusions, &redirected_environment);
-        assert_eq!(scanned_files, 1, "the scanned tree is measured");
-        let (_, files) = SizeCalculator::measure_path(&home, &exclusions, &redirected_environment);
-        // `~/Documents/keep` resolves to the redirected folder, which is not in
-        // this tree, so nothing here is excluded: home holds both files.
-        assert_eq!(files, 2);
+        let exclusions = vec!["~/Downloads/keep".to_string()];
 
-        // Without the redirect the literal profile spelling is excluded.
+        let redirected_environment = simulated(true);
+        let (_, redirected_files) =
+            SizeCalculator::measure_path(&scanned, &exclusions, &redirected_environment);
+        assert_eq!(
+            redirected_files, 2,
+            "the redirect moves the exclusion out of this tree, so both files are measured"
+        );
+
+        // Without a stated redirect the literal profile spelling is excluded.
         let literal_environment = simulated(false);
         let (_, literal_files) =
-            SizeCalculator::measure_path(&home, &exclusions, &literal_environment);
+            SizeCalculator::measure_path(&scanned, &exclusions, &literal_environment);
         assert_eq!(
             literal_files, 1,
-            "the literal profile spelling excludes `~/Documents/keep`"
+            "the literal profile spelling excludes `~/Downloads/keep`"
         );
     }
 }

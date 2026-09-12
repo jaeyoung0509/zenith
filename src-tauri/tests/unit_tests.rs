@@ -319,19 +319,27 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
 #[test]
 fn test_windows_blacklist_and_path_defense() {
     use std::path::Path;
+    use zenith_lib::platform::path_algebra::PathFlavor;
+    use zenith_lib::platform::paths::SimulatedPaths;
+    use zenith_lib::platform::KnownFolder;
     use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
     use zenith_lib::safety::Blacklist;
 
     // Stated environment: the profile lives on `Z:`, the redirected Documents
     // folder lives on `D:`, and nothing here mirrors this host's layout.
-    let environment = BlacklistEnvironment {
-        home: Some(r"Z:\Users\tester".to_string()),
-        temp_dir: r"Z:\Users\tester\AppData\Local\Temp".to_string(),
-        known_content_dirs: vec![r"D:\OneDrive\Documents".to_string()],
-        system_roots: vec![r"Z:\Windows".to_string()],
-        local_app_data: Some(r"Z:\Users\tester\AppData\Local".to_string()),
-        roaming_app_data: Some(r"Z:\Users\tester\AppData\Roaming".to_string()),
-    };
+    let platform = PlatformEnvironment::simulated(PathFlavor::Windows)
+        .with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"Z:\Users\tester")
+                .with_temp_dir(r"Z:\Users\tester\AppData\Local\Temp")
+                .with_local_app_data(r"Z:\Users\tester\AppData\Local")
+                .with_roaming_app_data(r"Z:\Users\tester\AppData\Roaming")
+                .with_program_files(r"Z:\Program Files")
+                .with_program_data(r"Z:\ProgramData"),
+        ))
+        .with_known_folder(KnownFolder::Documents, r"D:\OneDrive\Documents");
+    let environment = BlacklistEnvironment::from_environment(&platform);
 
     // Drive roots, system directories, and the users root on every drive
     // letter, including the 32-bit Program Files tail.
@@ -352,7 +360,7 @@ fn test_windows_blacklist_and_path_defense() {
                 "expected {path_str} to be denied, got {verdict:?}"
             );
             assert!(
-                Blacklist::validate(Path::new(&path_str)).is_err(),
+                Blacklist::validate_with(Path::new(&path_str), &platform).is_err(),
                 "expected {path_str} to be rejected"
             );
         }
@@ -393,7 +401,7 @@ fn test_windows_blacklist_and_path_defense() {
         r"Z:\Users\tester\dev\folder ",
     ] {
         assert!(
-            Blacklist::validate(Path::new(path)).is_err(),
+            Blacklist::validate_with(Path::new(path), &platform).is_err(),
             "expected {path} to be rejected"
         );
     }
@@ -416,6 +424,8 @@ fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
     use std::path::{Path, PathBuf};
     use zenith_lib::safety::Blacklist;
 
+    let host = PlatformEnvironment::native();
+
     let user_cache = Path::new(r"\\?\C:\Users\테스트\.gemini\antigravity-cli\log");
     assert_eq!(
         Blacklist::normalize_path(user_cache),
@@ -425,20 +435,26 @@ fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
         Blacklist::normalize_path(Path::new(r"\\?\UNC\server\share\cache")),
         PathBuf::from(r"\\server\share\cache")
     );
-    assert!(!Blacklist::is_blacklisted(user_cache));
-    assert!(Blacklist::validate(user_cache).is_ok());
+    assert!(!Blacklist::is_blacklisted_with(user_cache, &host));
+    assert!(Blacklist::validate_with(user_cache, &host).is_ok());
 
-    assert!(Blacklist::is_blacklisted(Path::new(r"\\?\C:\")));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        r"\\?\C:\Windows\System32"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        r"\\?\C:\safe\file.txt:stream"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new(
-        r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"
-    )));
-    assert!(Blacklist::is_blacklisted(Path::new(r"\\.\PhysicalDrive0")));
+    assert!(Blacklist::is_blacklisted_with(Path::new(r"\\?\C:\"), &host));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\?\C:\Windows\System32"),
+        &host
+    ));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\?\C:\safe\file.txt:stream"),
+        &host
+    ));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"),
+        &host
+    ));
+    assert!(Blacklist::is_blacklisted_with(
+        Path::new(r"\\.\PhysicalDrive0"),
+        &host
+    ));
 }
 
 #[test]

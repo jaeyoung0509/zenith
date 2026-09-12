@@ -327,11 +327,11 @@ impl SafeTreeDeleter {
             return report;
         }
 
-        if let Err(e) = Blacklist::validate(root) {
+        if let Err(e) = Blacklist::validate_with(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
@@ -402,11 +402,11 @@ impl SafeTreeDeleter {
                 return report;
             }
         }
-        if let Err(e) = Blacklist::validate(root) {
+        if let Err(e) = Blacklist::validate_with(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root) {
+        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root, environment) {
             report.errors.push(e.to_string());
             return report;
         }
@@ -453,7 +453,7 @@ impl SafeTreeDeleter {
             };
 
             if Self::is_excluded(&child_path, exclusions, environment)
-                || Blacklist::is_blacklisted(&child_path)
+                || Blacklist::is_blacklisted_with(&child_path, environment)
             {
                 report.skipped_files += 1;
                 continue;
@@ -473,7 +473,9 @@ impl SafeTreeDeleter {
                 report.errors.push(error);
                 continue;
             }
-            if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(&child_path) {
+            if let Err(error) =
+                SymlinkGuard::validate_canonical_blacklist_strict(&child_path, environment)
+            {
                 report
                     .errors
                     .push(format!("{}: {}", child_path.display(), error));
@@ -594,7 +596,9 @@ impl SafeTreeDeleter {
         environment: &PlatformEnvironment,
         report: &mut TreeDeleteReport,
     ) {
-        if Self::is_excluded(path, exclusions, environment) || Blacklist::is_blacklisted(path) {
+        if Self::is_excluded(path, exclusions, environment)
+            || Blacklist::is_blacklisted_with(path, environment)
+        {
             report.skipped_files += 1;
             return;
         }
@@ -615,7 +619,7 @@ impl SafeTreeDeleter {
         // Re-check the canonical location at every recursive entry before any
         // permission change or deletion. Symlink entries are still removed as
         // links, never traversed. Canonicalization failure fails closed.
-        if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(path) {
+        if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
             report.errors.push(format!("{}: {}", path.display(), error));
             return;
         }
@@ -1341,7 +1345,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist-link");
         assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
-        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing).is_err());
+        let environment = crate::platform::PlatformEnvironment::native();
+        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment).is_err());
     }
 
     #[test]

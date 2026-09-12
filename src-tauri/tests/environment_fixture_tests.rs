@@ -9,6 +9,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use zenith_lib::diagnostics::doctor::SelfCheckOutcome;
 use zenith_lib::platform::path_algebra::{self, PathFlavor, ProtectedRoot};
 use zenith_lib::platform::{
     EnvironmentFixture, KnownFolder, PlatformEnvironment, ProfileShape, ToolResolution,
@@ -205,6 +206,32 @@ fn every_committed_environment_fixture_holds_its_invariants() {
         assert!(
             findings.is_empty(),
             "{label}: the signature catalog does not hold under this environment: {findings:?}"
+        );
+    }
+}
+
+/// The fixture contract and the `--doctor` contract must agree. Without this
+/// cross-check the two can drift into contradicting invariants: a fixture that
+/// models a redirected known folder while the self-check demands that every
+/// known folder live under the profile would make a healthy machine report a
+/// failure.
+#[test]
+fn the_self_check_passes_for_every_committed_fixture() {
+    for path in fixture_paths() {
+        let (_, fixture) = load(&path);
+        let environment = fixture.environment();
+        let report = zenith_lib::diagnostics::doctor::self_check(&environment);
+
+        let failed = report
+            .checks
+            .iter()
+            .filter(|check| check.outcome == SelfCheckOutcome::Fail)
+            .map(|check| format!("{}: {}", check.name, check.detail))
+            .collect::<Vec<_>>();
+        assert!(
+            failed.is_empty(),
+            "{}: the self-check failed for a committed environment fixture: {failed:?}",
+            fixture.name
         );
     }
 }

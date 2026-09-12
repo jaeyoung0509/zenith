@@ -60,7 +60,11 @@ impl SignatureLoader {
         if tail.is_empty() {
             return Some(root.to_string_lossy().into_owned());
         }
-        Some(root.join(tail).to_string_lossy().into_owned())
+        Some(crate::platform::path_algebra::join(
+            &root.to_string_lossy(),
+            &tail,
+            environment.flavor(),
+        ))
     }
 
     fn split_known_folder(pattern: &str, flavor: PathFlavor) -> Option<(KnownFolder, String)> {

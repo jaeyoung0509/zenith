@@ -332,7 +332,7 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
             }
         }
         TrashScope::AppRelated => {
-            if Blacklist::is_blacklisted(&target.path) {
+            if Blacklist::is_blacklisted_with(&target.path, environment) {
                 return Err("Skipped because the path is protected by Zenith.".to_string());
             }
             let root = app_data_root_for_path(environment, &target.path).ok_or_else(|| {
@@ -350,6 +350,7 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
             kind,
         } => {
             validate_developer_artifact_target(
+                environment,
                 target,
                 workspace_root,
                 workspace_identity,
@@ -410,6 +411,7 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
 
 #[allow(clippy::too_many_arguments)]
 fn validate_developer_artifact_target(
+    environment: &PlatformEnvironment,
     target: &TrashTarget,
     workspace_root: &Path,
     workspace_identity: &FileIdentity,
@@ -424,7 +426,7 @@ fn validate_developer_artifact_target(
             "Skipped because a project or workspace root is never a cleanup target.".to_string(),
         );
     }
-    if Blacklist::is_blacklisted(target.path.as_path()) {
+    if Blacklist::is_blacklisted_with(target.path.as_path(), environment) {
         return Err("Skipped because the developer artifact is protected by Zenith.".to_string());
     }
     if !target.path.starts_with(workspace_root)
@@ -1046,7 +1048,10 @@ mod tests {
             },
         };
 
-        let stated = PlatformEnvironment::simulated(PathFlavor::Posix)
+        // The fixture paths come from `tempfile`, so they follow the host's
+        // separator rules; stating the host flavor keeps the test about the
+        // scope decision rather than about path spelling.
+        let stated = PlatformEnvironment::simulated(PathFlavor::current())
             .with_home(&home)
             .with_known_folder(KnownFolder::Documents, documents.clone());
         assert!(is_allowed_large_file_path(&stated, &file));
@@ -1058,7 +1063,7 @@ mod tests {
 
         // The literal profile spelling is not an approved scope once the
         // platform states the real folder, and then nothing may be deleted.
-        let unstated = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(&home);
+        let unstated = PlatformEnvironment::simulated(PathFlavor::current()).with_home(&home);
         assert!(!is_allowed_large_file_path(&unstated, &file));
         let error = validate_target(&unstated, &target).unwrap_err();
         assert!(error.contains("Large Files scope"), "{error}");

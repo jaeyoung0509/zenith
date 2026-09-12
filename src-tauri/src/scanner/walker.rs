@@ -43,6 +43,7 @@ impl DirectoryScanner {
 
             if let Some(min_age_days) = signature.min_age_days {
                 items.extend(Self::scan_aged_children(
+                    environment,
                     signature,
                     &path_buf,
                     idx,
@@ -115,6 +116,7 @@ impl DirectoryScanner {
     }
 
     fn scan_aged_children(
+        environment: &PlatformEnvironment,
         signature: &Signature,
         root: &std::path::Path,
         path_index: usize,
@@ -153,7 +155,7 @@ impl DirectoryScanner {
             }
 
             // Single-pass fail-closed tree measurement
-            let stats = Self::measure_tree_stats(&path, &signature.exclusions, 0, 32);
+            let stats = Self::measure_tree_stats(environment, &path, &signature.exclusions, 0, 32);
             // Fail-closed: If scan encountered permission errors or depth cutoff, exclude from stale cleanup
             if !stats.complete {
                 continue;
@@ -199,6 +201,7 @@ impl DirectoryScanner {
     /// Measures directory statistics (size, count, newest mtime) in a single recursive pass.
     /// Marks complete = false if any error, symlink escape, or depth cutoff occurs.
     pub fn measure_tree_stats(
+        environment: &PlatformEnvironment,
         path: &Path,
         exclusions: &[String],
         current_depth: usize,
@@ -287,7 +290,7 @@ impl DirectoryScanner {
             };
             let child_path = ent.path();
 
-            if crate::safety::Blacklist::is_blacklisted(&child_path) {
+            if crate::safety::Blacklist::is_blacklisted_with(&child_path, environment) {
                 continue;
             }
 
@@ -303,8 +306,13 @@ impl DirectoryScanner {
                 continue;
             }
 
-            let sub_stats =
-                Self::measure_tree_stats(&child_path, exclusions, current_depth + 1, max_depth);
+            let sub_stats = Self::measure_tree_stats(
+                environment,
+                &child_path,
+                exclusions,
+                current_depth + 1,
+                max_depth,
+            );
             if !sub_stats.complete {
                 stats.complete = false;
             }
@@ -438,9 +446,10 @@ mod tests {
         assert_eq!(names, vec!["plain.cache"]);
 
         // The guard must also fail closed at delete-time TOCTOU re-verification.
-        let stats = DirectoryScanner::measure_tree_stats(&nested, &[], 0, 32);
+        let stats = DirectoryScanner::measure_tree_stats(&environment(), &nested, &[], 0, 32);
         assert!(!stats.complete);
-        let mixed_case_stats = DirectoryScanner::measure_tree_stats(&mixed_case, &[], 0, 32);
+        let mixed_case_stats =
+            DirectoryScanner::measure_tree_stats(&environment(), &mixed_case, &[], 0, 32);
         assert!(!mixed_case_stats.complete);
     }
 }

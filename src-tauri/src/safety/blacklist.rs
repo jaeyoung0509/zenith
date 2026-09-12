@@ -23,6 +23,38 @@ pub struct BlacklistEnvironment {
 }
 
 impl BlacklistEnvironment {
+    /// Describes a stated environment instead of the running process.
+    ///
+    /// The classifier must reach the same verdict for the environment the
+    /// caller is acting on, not for the machine that happens to run the code:
+    /// the manifest lint, the plan verifier, and the scanner all classify paths
+    /// that came from an injected environment.
+    pub fn from_environment(environment: &crate::platform::PlatformEnvironment) -> Self {
+        let text = |path: std::path::PathBuf| path.to_string_lossy().into_owned();
+        let known_content_dirs = crate::platform::KnownFolder::ALL
+            .into_iter()
+            .filter_map(|folder| environment.content_dir(folder.token()))
+            .map(text)
+            .collect();
+        Self {
+            home: environment.user_home().map(text),
+            temp_dir: environment.temp_dir().to_string_lossy().into_owned(),
+            known_content_dirs,
+            system_roots: [
+                environment.program_files(),
+                environment.program_data(),
+                environment.local_app_data(),
+                environment.roaming_app_data(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(text)
+            .collect(),
+            local_app_data: environment.local_app_data().map(text),
+            roaming_app_data: environment.roaming_app_data().map(text),
+        }
+    }
+
     /// Describes the running process. Only the composition boundary should
     /// prefer this over a stated environment.
     pub fn native() -> Self {
@@ -258,40 +290,41 @@ fn has_unsupported_windows_namespace(path: &str) -> bool {
 }
 
 impl Blacklist {
-    /// System and user directory paths that must NEVER be deleted under any circumstances.
-    pub fn is_blacklisted(path: &Path) -> bool {
-        #[cfg(target_os = "windows")]
-        {
-            Self::is_blacklisted_windows(path)
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Self::is_blacklisted_posix(path)
+    /// System and user directory paths that must NEVER be deleted under any
+    /// circumstances, decided for the environment the caller is acting on.
+    pub fn is_blacklisted_with(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> bool {
+        let described = BlacklistEnvironment::from_environment(environment);
+        // The described flavor chooses the rule set, not the host that happens
+        // to run the check: a simulated Windows environment must be classified
+        // by Windows rules on every runner.
+        if environment.flavor().is_windows() {
+            Self::is_blacklisted_windows(path, &described)
+        } else {
+            Self::is_blacklisted_posix(path, &described)
         }
     }
 
     /// Windows classification, delegated to the environment-independent
     /// classifier so the rules execute on every host.
-    #[cfg(target_os = "windows")]
-    fn is_blacklisted_windows(path: &Path) -> bool {
-        // The raw spelling carries the namespace prefix normalization rewrites,
-        // so classify it before `\\?\` is stripped.
+    fn is_blacklisted_windows(path: &Path, described: &BlacklistEnvironment) -> bool {
+        // The raw spelling carries the namespace prefix that normalization
+        // rewrites, so classify the raw text first. Normalization then goes
+        // through the algebra rather than the host's `Path`, which would treat
+        // `C:\\Windows` as a single component on a POSIX runner.
         let raw = path.to_string_lossy();
-        if has_unsupported_windows_namespace(&raw) {
+        if path_algebra::is_unsupported_namespace(&raw, WINDOWS) {
             return true;
         }
-        let normalized = Self::normalize_path(path);
-        classify_windows(
-            &normalized.to_string_lossy(),
-            &BlacklistEnvironment::native(),
-        )
-        .is_denied()
+        let normalized = path_algebra::normalize(&raw, WINDOWS);
+        classify_windows(&normalized, described).is_denied()
     }
 
     /// POSIX classification keeps byte-exact `Path` semantics.
-    #[cfg(not(target_os = "windows"))]
-    fn is_blacklisted_posix(path: &Path) -> bool {
-        let home = crate::platform::NativePlatformPaths::new().home();
+    fn is_blacklisted_posix(path: &Path, described: &BlacklistEnvironment) -> bool {
+        let home = described.home.as_deref().map(PathBuf::from);
 
         // 1. Exact forbidden root & home
         if path == Path::new("/") {
@@ -322,7 +355,7 @@ impl Blacklist {
         }
 
         // Whole temp dir itself
-        let temp = std::env::temp_dir();
+        let temp = PathBuf::from(&described.temp_dir);
         if path == temp.as_path() {
             return true;
         }
@@ -385,14 +418,10 @@ impl Blacklist {
         }
 
         // 3b. Dynamically resolved known folders (e.g. OneDrive Known Folder Move, redirected Documents/Desktop)
-        let platform_paths = crate::platform::NativePlatformPaths::new();
-        for folder_token in ["downloads", "desktop", "documents", "movies"] {
-            if let Some(known_dir) = platform_paths.content_dir(folder_token) {
-                let norm_known =
-                    crate::platform::NativePlatformPaths::normalize_verbatim_path(&known_dir);
-                if path == norm_known.as_path() || path.starts_with(&norm_known) {
-                    return true;
-                }
+        for known_dir in &described.known_content_dirs {
+            let norm_known = PathBuf::from(known_dir);
+            if path == norm_known.as_path() || path.starts_with(&norm_known) {
+                return true;
             }
         }
 
@@ -496,12 +525,16 @@ impl Blacklist {
         false
     }
 
-    /// Verifies that a target path is completely safe from the blacklist.
-    pub fn validate(path: &Path) -> Result<(), ZenithError> {
+    /// Verifies that a target path is completely safe from the blacklist for
+    /// the environment the caller is acting on.
+    pub fn validate_with(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         // Resolve parent components to catch ../ attacks
         let normalized = Self::normalize_path(path);
 
-        if Self::is_blacklisted(&normalized) {
+        if Self::is_blacklisted_with(&normalized, environment) {
             return Err(ZenithError::BlacklistedPath(
                 path.to_string_lossy().to_string(),
             ));

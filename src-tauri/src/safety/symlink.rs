@@ -146,7 +146,10 @@ impl SymlinkGuard {
     }
 
     /// Verifies that the path itself is safe. If it is a symlink, ensures its target does not point to a blacklisted destination.
-    pub fn validate_symlink_target(path: &Path) -> Result<(), ZenithError> {
+    pub fn validate_symlink_target(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         if Self::is_symlink(path) {
             // Read link destination
             if let Ok(target) = fs::read_link(path) {
@@ -157,23 +160,29 @@ impl SymlinkGuard {
                 };
 
                 // Target cannot be blacklisted
-                crate::safety::Blacklist::validate(&resolved_target)?;
+                crate::safety::Blacklist::validate_with(&resolved_target, environment)?;
             }
         }
         Ok(())
     }
 
     /// Canonicalizes the path and verifies that its canonical location does not violate Blacklist.
-    pub fn validate_canonical_blacklist(path: &Path) -> Result<(), ZenithError> {
+    pub fn validate_canonical_blacklist(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         if let Ok(canonical) = fs::canonicalize(path) {
-            crate::safety::Blacklist::validate(&canonical)?;
+            crate::safety::Blacklist::validate_with(&canonical, environment)?;
         }
         Ok(())
     }
 
     /// Strict variant for mutation paths: canonicalization failure aborts the
     /// affected mutation instead of being treated as safe.
-    pub fn validate_canonical_blacklist_strict(path: &Path) -> Result<(), ZenithError> {
+    pub fn validate_canonical_blacklist_strict(
+        path: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
         let canonical = fs::canonicalize(path).map_err(|error| {
             ZenithError::ChangedSinceScan(format!(
                 "Could not verify canonical location for {}: {}",
@@ -181,7 +190,7 @@ impl SymlinkGuard {
                 error
             ))
         })?;
-        crate::safety::Blacklist::validate(&canonical)?;
+        crate::safety::Blacklist::validate_with(&canonical, environment)?;
         Ok(())
     }
 
@@ -306,12 +315,13 @@ mod tests {
 
         // Read-side helpers report "no link to follow" for a missing path.
         assert!(!SymlinkGuard::is_symlink(&missing));
-        assert!(SymlinkGuard::validate_symlink_target(&missing).is_ok());
+        let environment = crate::platform::PlatformEnvironment::native();
+        assert!(SymlinkGuard::validate_symlink_target(&missing, &environment).is_ok());
 
         // Mutation-side helpers must fail closed instead of mistaking an
         // unreadable path for a verified-safe one.
         assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
-        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing).is_err());
+        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment).is_err());
     }
 
     #[cfg(unix)]

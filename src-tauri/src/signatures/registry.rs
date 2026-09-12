@@ -1,5 +1,5 @@
 use crate::models::{Category, PlatformKind, RiskTier, Signature, ZenithError};
-use crate::platform::path_algebra::{contains, is_absolute, normalize, PathFlavor};
+use crate::platform::path_algebra::{self, contains, is_absolute, normalize, PathFlavor};
 use crate::platform::PlatformEnvironment;
 use crate::safety::Blacklist;
 use crate::signatures::SignatureLoader;
@@ -306,7 +306,7 @@ fn audit_signature(
                                 root.reason()
                             ),
                         ));
-                    } else if Blacklist::is_blacklisted(&path) {
+                    } else if Blacklist::is_blacklisted_with(&path, environment) {
                         findings.push(finding(
                             signature,
                             None,
@@ -330,7 +330,7 @@ fn audit_signature(
 
     if let Some(scope) = common_scope(&resolved, flavor) {
         for exclusion in &signature.exclusions {
-            if !is_path_shaped(exclusion) {
+            if !is_path_shaped(exclusion, flavor) {
                 continue;
             }
             let Some(expanded) = SignatureLoader::expand_path(exclusion, environment) else {
@@ -414,8 +414,15 @@ fn is_dynamic_pattern(pattern: &str) -> bool {
 
 /// An exclusion is path-shaped when the walkers treat it as a path rather than
 /// as a bare file name.
-fn is_path_shaped(exclusion: &str) -> bool {
-    exclusion.starts_with('~') || exclusion.starts_with('/') || exclusion.contains("${")
+///
+/// Absoluteness is decided by the described flavor, not by `Path::is_absolute`:
+/// on a Windows runner the host check would reject `C:\\Users\\me\\keep` and
+/// `\\\\server\\share\\keep`, so the scope audit would silently skip the most
+/// ordinary Windows absolute exclusion there is.
+fn is_path_shaped(exclusion: &str, flavor: PathFlavor) -> bool {
+    exclusion.starts_with('~')
+        || exclusion.contains("${")
+        || path_algebra::is_absolute(exclusion, flavor)
 }
 
 fn platform_token(platform: PlatformKind) -> &'static str {
@@ -539,6 +546,91 @@ mod tests {
                 .with_roaming_app_data("/home/tester/.config")
                 .with_temp_dir("/tmp"),
         ))
+    }
+
+    use crate::signatures::SignatureLoader;
+
+    /// A stated Windows machine: the profile is on `D:`, and the catalog
+    /// assertions below are about that machine rather than about the host.
+    fn stated_windows_environment() -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"D:\Users\tester")
+                .with_temp_dir(r"D:\Users\tester\AppData\Local\Temp")
+                .with_local_app_data(r"D:\Users\tester\AppData\Local")
+                .with_roaming_app_data(r"D:\Users\tester\AppData\Roaming")
+                .with_program_files(r"D:\Program Files")
+                .with_program_data(r"D:\ProgramData"),
+        ))
+    }
+
+    #[test]
+    fn a_drive_relative_signature_path_is_refused() {
+        // `C:cache` names a location relative to the current directory on `C:`
+        // and must never be treated as an absolute cleanup target.
+        assert_eq!(
+            SignatureLoader::expand_path(r"C:cache\logs", &stated_windows_environment()),
+            None
+        );
+        assert_eq!(
+            SignatureLoader::expand_path(r"C:..\Windows\Temp", &stated_windows_environment()),
+            None
+        );
+    }
+
+    #[test]
+    fn the_stated_environment_decides_the_blacklist_verdict() {
+        let mut registry = SignatureRegistry::new();
+        let mut signature = test_signature(
+            "developer.test.host-decides",
+            vec![r"C:\Windows\Temp\zenith"],
+            vec![PlatformKind::Windows],
+        );
+        signature.min_age_days = None;
+        registry.register(signature);
+
+        // Windows rules refuse the system directory, and they are reached
+        // through the stated environment rather than through the host's.
+        let windows_findings =
+            SignatureRegistry::audit_signature_platforms(&registry, &stated_windows_environment());
+        assert_eq!(windows_findings.len(), 1, "{windows_findings:?}");
+        assert!(
+            windows_findings[0]
+                .message
+                .contains("protected Windows directory"),
+            "{windows_findings:?}"
+        );
+
+        // The same literal under POSIX rules is a relative path, so the POSIX
+        // audit reports it as such instead of inheriting the Windows verdict.
+        let posix_findings =
+            SignatureRegistry::audit_signature_platforms(&registry, &stated_environment());
+        assert_eq!(posix_findings.len(), 1, "{posix_findings:?}");
+        assert!(
+            posix_findings[0].message.contains("not an absolute path"),
+            "{posix_findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_windows_absolute_exclusion_is_scope_checked() {
+        let mut registry = SignatureRegistry::new();
+        let mut signature = test_signature(
+            "developer.test.windows-exclusion",
+            vec![r"${LOCAL_APP_DATA}\Zenith\cache"],
+            vec![PlatformKind::Windows],
+        );
+        signature.exclusions = vec![r"D:\Documents\do-not-delete".to_string()];
+        registry.register(signature);
+
+        // The exclusion is absolute in its own spelling, so the scope audit has
+        // to run: on a Windows runner the host `Path` check would have skipped
+        // it and the escape would have gone unreported.
+        let findings =
+            SignatureRegistry::audit_signature_platforms(&registry, &stated_windows_environment());
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].message.contains("scope"), "{findings:?}");
     }
 
     fn test_signature(id: &str, paths: Vec<&str>, platforms: Vec<PlatformKind>) -> Signature {

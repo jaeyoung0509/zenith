@@ -144,9 +144,15 @@ fn tray_toggle_action(
 
 fn hide_quick_panel(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("quick") {
+        // Only a visible-to-hidden transition is a dismissal. Recording a
+        // marker while the panel is already hidden would let the suppression
+        // window swallow the user's next, genuine request to open it.
+        let was_visible = window.is_visible().unwrap_or(false);
         let _ = window.hide();
+        if was_visible {
+            app.state::<QuickPanelVisibility>().mark_hidden();
+        }
     }
-    app.state::<QuickPanelVisibility>().mark_hidden();
 }
 
 /// Toggles the quick panel in response to an interface request.
@@ -277,7 +283,10 @@ fn show_quick_panel_tracked(app: &AppHandle, window: &WebviewWindow, tray_rect: 
 pub fn run() {
     crate::platform::environment::set_webview_version(tauri::webview_version().ok());
     let environment = Arc::new(crate::platform::PlatformEnvironment::native());
-    let registry = Arc::new(SignatureRegistry::load_embedded().unwrap_or_default());
+    // The catalog is loaded against the same description every other component
+    // receives, instead of building a second, unrelated native environment.
+    let registry =
+        Arc::new(SignatureRegistry::load_embedded_with(&environment).unwrap_or_default());
     let awake_manager = Arc::new(KeepAwakeManager::new());
     awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
@@ -372,21 +381,13 @@ pub fn run() {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = window.hide();
-                    window
-                        .app_handle()
-                        .state::<QuickPanelVisibility>()
-                        .mark_hidden();
+                    hide_quick_panel(window.app_handle());
                 }
                 // The panel dismisses itself when it loses focus. Recording
                 // that here is what makes the following tray mouse-up
                 // recognisable as the tail of this dismissal.
                 tauri::WindowEvent::Focused(false) => {
-                    let _ = window.hide();
-                    window
-                        .app_handle()
-                        .state::<QuickPanelVisibility>()
-                        .mark_hidden();
+                    hide_quick_panel(window.app_handle());
                 }
                 _ => {}
             }

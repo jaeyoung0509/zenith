@@ -15,6 +15,7 @@
 //!   invariant makes the check fail rather than pass vacuously.
 
 use crate::models::PlatformKind;
+use crate::platform::path_algebra;
 use crate::platform::path_algebra::{
     contains, fold, is_absolute, is_root, key, normalize, protected_root, PathFlavor,
 };
@@ -429,32 +430,26 @@ fn broad_root_row(environment: &PlatformEnvironment) -> SelfCheckRow {
 
 fn known_folder_row(environment: &PlatformEnvironment) -> SelfCheckRow {
     let flavor = environment.flavor();
-    let mut declared: Vec<String> = Vec::new();
-    for root in [
-        environment.user_home(),
-        environment.local_app_data(),
-        environment.roaming_app_data(),
-        environment.program_files(),
-        environment.program_data(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        declared.push(root.to_string_lossy().into_owned());
-    }
-
     let stated = environment.known_folders().len();
     let mut violations = 0usize;
     for path in environment.known_folders().values() {
         let text = path.to_string_lossy();
-        let resolves =
-            is_absolute(&text, flavor) && declared.iter().any(|root| contains(root, &text, flavor));
-        if !resolves {
+        // A known folder is authoritative because the operating system
+        // reports it, so requiring it to sit under the profile would fail
+        // exactly the environments this check exists for: Known Folder Move,
+        // redirected Documents, and roaming profiles on a corporate share.
+        // What must hold is that the resolved location is a usable absolute
+        // path and not a broad root or a device namespace.
+        let usable = is_absolute(&text, flavor)
+            && !path_algebra::is_root(&text, flavor)
+            && !path_algebra::is_unsupported_namespace(&text, flavor)
+            && !path_algebra::contains_short_name(&text, flavor);
+        if !usable {
             violations += 1;
         }
     }
     SelfCheckRow {
-        name: "known_folders_resolve_under_declared_roots".to_string(),
+        name: "known_folders_resolve_to_usable_locations".to_string(),
         outcome: if violations == 0 {
             SelfCheckOutcome::Pass
         } else {
@@ -463,9 +458,9 @@ fn known_folder_row(environment: &PlatformEnvironment) -> SelfCheckRow {
         detail: if stated == 0 {
             "no user-content folders stated".to_string()
         } else if violations == 0 {
-            format!("{stated} of {stated} folders resolve under a declared root")
+            format!("{stated} of {stated} folders resolve to usable absolute locations")
         } else {
-            format!("{violations} of {stated} folders resolve outside every declared root")
+            format!("{violations} of {stated} folders did not resolve to a usable location")
         },
     }
 }
@@ -637,6 +632,19 @@ mod tests {
         ))
     }
 
+    fn stated_windows_environment() -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Windows)
+                .with_home(r"D:\Users\tester")
+                .with_temp_dir(r"D:\Users\tester\AppData\Local\Temp")
+                .with_local_app_data(r"D:\Users\tester\AppData\Local")
+                .with_roaming_app_data(r"D:\Users\tester\AppData\Roaming")
+                .with_program_files(r"D:\Program Files")
+                .with_program_data(r"D:\ProgramData"),
+        ))
+    }
+
     #[test]
     fn every_check_passes_for_a_stated_environment() {
         let report = self_check(&stated_posix_environment());
@@ -669,7 +677,7 @@ mod tests {
                 "short_name_ambiguity_fails_closed",
                 "home_resolves",
                 "home_is_not_a_broad_root",
-                "known_folders_resolve_under_declared_roots",
+                "known_folders_resolve_to_usable_locations",
                 "signature_catalog_lints_clean",
             ]
         );
@@ -707,35 +715,55 @@ mod tests {
     }
 
     #[test]
-    fn a_known_folder_outside_every_declared_root_fails() {
-        let environment = stated_posix_environment().with_known_folder(
-            crate::platform::KnownFolder::Documents,
-            "/mnt/other/Documents",
-        );
-        let report = self_check(&environment);
-        let row = report
-            .checks
-            .iter()
-            .find(|check| check.name == "known_folders_resolve_under_declared_roots")
-            .unwrap();
-        assert_eq!(row.outcome, SelfCheckOutcome::Fail, "{row:?}");
-        assert!(
-            row.detail.contains("outside every declared root"),
-            "{row:?}"
-        );
+    fn a_redirected_known_folder_is_healthy() {
+        // Known Folder Move, redirected Documents, and roaming profiles on a
+        // corporate share all resolve outside the profile. The operating
+        // system reporting the location is what makes it authoritative, so a
+        // redirect must pass rather than fail the self-check.
+        for environment in [
+            stated_posix_environment().with_known_folder(
+                crate::platform::KnownFolder::Documents,
+                "/mnt/other/Documents",
+            ),
+            stated_windows_environment().with_known_folder(
+                crate::platform::KnownFolder::Documents,
+                r"D:\Redirected\Documents",
+            ),
+            stated_windows_environment().with_known_folder(
+                crate::platform::KnownFolder::Downloads,
+                r"\\fileserver\profiles\tester\Downloads",
+            ),
+        ] {
+            let report = self_check(&environment);
+            let row = report
+                .checks
+                .iter()
+                .find(|check| check.name == "known_folders_resolve_to_usable_locations")
+                .unwrap();
+            assert_eq!(row.outcome, SelfCheckOutcome::Pass, "{row:?}");
+            assert_eq!(report.failures, 0, "{:?}", report.checks);
+        }
+    }
 
-        // The literal profile join is inside the declared root.
-        let inside = stated_posix_environment().with_known_folder(
-            crate::platform::KnownFolder::Documents,
-            "/home/tester/Documents",
-        );
-        let report = self_check(&inside);
-        let row = report
-            .checks
-            .iter()
-            .find(|check| check.name == "known_folders_resolve_under_declared_roots")
-            .unwrap();
-        assert_eq!(row.outcome, SelfCheckOutcome::Pass, "{row:?}");
+    #[test]
+    fn an_unusable_known_folder_fails() {
+        // The check still has teeth: a location that is not usable as an
+        // absolute folder is reported instead of passing.
+        for (name, path) in [
+            ("relative", "Documents"),
+            ("root", "/"),
+            ("device namespace", r"\\.\C:\Windows"),
+        ] {
+            let environment = stated_posix_environment()
+                .with_known_folder(crate::platform::KnownFolder::Documents, path);
+            let report = self_check(&environment);
+            let row = report
+                .checks
+                .iter()
+                .find(|check| check.name == "known_folders_resolve_to_usable_locations")
+                .unwrap();
+            assert_eq!(row.outcome, SelfCheckOutcome::Fail, "{name}: {row:?}");
+        }
     }
 
     #[test]

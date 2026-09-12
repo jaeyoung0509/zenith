@@ -213,6 +213,7 @@ impl DeveloperArtifactScanner {
             }
 
             discover_workspace(
+                environment,
                 workspace,
                 &cancel,
                 &mut candidates,
@@ -579,7 +580,7 @@ pub fn validate_workspace_root(
         }
     }
 
-    if Blacklist::is_blacklisted(&norm_canonical) {
+    if Blacklist::is_blacklisted_with(&norm_canonical, environment) {
         return Err("That location is protected and cannot be used as a workspace.".to_string());
     }
 
@@ -642,6 +643,7 @@ fn workspace_root_scope_refusal(
 
 #[allow(clippy::too_many_arguments)]
 fn discover_workspace<F>(
+    environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
     cancel: &AtomicBool,
     candidates: &mut Vec<Candidate>,
@@ -702,7 +704,7 @@ fn discover_workspace<F>(
             if name == ".git" {
                 continue;
             }
-            if should_skip_protected_discovery_path(workspace, &path, &name) {
+            if should_skip_protected_discovery_path(environment, workspace, &path, &name) {
                 *skipped_entries = skipped_entries.saturating_add(1);
                 continue;
             }
@@ -1298,6 +1300,7 @@ fn should_skip_discovery_directory(name: &str) -> bool {
 }
 
 fn should_skip_protected_discovery_path(
+    environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
     path: &Path,
     name: &str,
@@ -1308,7 +1311,7 @@ fn should_skip_protected_discovery_path(
     if !workspace.whole_home {
         return false;
     }
-    if Blacklist::is_blacklisted(path) {
+    if Blacklist::is_blacklisted_with(path, environment) {
         return true;
     }
     let credential_names = [

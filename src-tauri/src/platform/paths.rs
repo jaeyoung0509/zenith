@@ -45,6 +45,13 @@ pub trait PlatformPathsProvider: Send + Sync {
         if pattern.is_empty() {
             return None;
         }
+        let flavor = self.flavor();
+
+        // The host's own `Path::join` is used only when the described
+        // environment *is* the host's, which keeps POSIX byte-exactness. A
+        // simulated environment joins with its own separator rules instead, so
+        // a POSIX root stays POSIX on a Windows runner.
+        let joined = |base: PathBuf, tail: &str| join_with_flavor(base, tail, flavor);
 
         let raw_path = if pattern == "$TMPDIR" || pattern == "${TEMP}" {
             self.temp_dir()
@@ -53,52 +60,58 @@ pub trait PlatformPathsProvider: Send + Sync {
             .or_else(|| pattern.strip_prefix("${TEMP}\\"))
             .or_else(|| pattern.strip_prefix("$TMPDIR/"))
         {
-            self.temp_dir().join(rest)
+            joined(self.temp_dir(), rest)
         } else if let Some(rest) = pattern
             .strip_prefix("${USER_HOME}/")
             .or_else(|| pattern.strip_prefix("${USER_HOME}\\"))
         {
-            self.user_home()?.join(rest)
+            joined(self.user_home()?, rest)
         } else if pattern == "${USER_HOME}" || pattern == "~" {
             self.user_home()?
         } else if let Some(rest) = pattern.strip_prefix("~/") {
-            self.user_home()?.join(rest)
+            joined(self.user_home()?, rest)
         } else if let Some(rest) = pattern
             .strip_prefix("${LOCAL_APP_DATA}/")
             .or_else(|| pattern.strip_prefix("${LOCAL_APP_DATA}\\"))
         {
-            self.local_app_data()?.join(rest)
+            joined(self.local_app_data()?, rest)
         } else if pattern == "${LOCAL_APP_DATA}" {
             self.local_app_data()?
         } else if let Some(rest) = pattern
             .strip_prefix("${ROAMING_APP_DATA}/")
             .or_else(|| pattern.strip_prefix("${ROAMING_APP_DATA}\\"))
         {
-            self.roaming_app_data()?.join(rest)
+            joined(self.roaming_app_data()?, rest)
         } else if pattern == "${ROAMING_APP_DATA}" {
             self.roaming_app_data()?
         } else if let Some(rest) = pattern
             .strip_prefix("${PROGRAM_FILES}/")
             .or_else(|| pattern.strip_prefix("${PROGRAM_FILES}\\"))
         {
-            self.program_files()?.join(rest)
+            joined(self.program_files()?, rest)
         } else if pattern == "${PROGRAM_FILES}" {
             self.program_files()?
         } else if let Some(rest) = pattern
             .strip_prefix("${PROGRAM_DATA}/")
             .or_else(|| pattern.strip_prefix("${PROGRAM_DATA}\\"))
         {
-            self.program_data()?.join(rest)
+            joined(self.program_data()?, rest)
         } else if pattern == "${PROGRAM_DATA}" {
             self.program_data()?
         } else if pattern.starts_with("${") {
             // Reject any unapproved arbitrary placeholder
             return None;
         } else {
+            // A literal pattern must already be absolute in its own spelling.
+            // Normalization cannot be trusted to decide this: `C:cache` is
+            // drive-relative while `C:\cache` is rooted, and a normalizer that
+            // inserted a separator would accept the relative form.
+            if !crate::platform::path_algebra::is_absolute(pattern, self.flavor()) {
+                return None;
+            }
             PathBuf::from(pattern)
         };
 
-        let flavor = self.flavor();
         // Normalize without following symlinks. POSIX keeps the byte-exact
         // `Path` form; Windows uses the flavor-parameterized algebra, which is
         // also what a simulated Windows environment is checked against.
@@ -665,6 +678,22 @@ fn resolve_user_home(
         .filter(|path| path.is_absolute() && !is_broad_root(path))
 }
 
+/// Joins a placeholder tail onto a resolved root.
+///
+/// When the described environment is the host's, the host join is byte-exact
+/// and is preferred. When it is a simulation of another platform, the join must
+/// follow the described flavor instead of the host's separator rules.
+fn join_with_flavor(base: PathBuf, tail: &str, flavor: PathFlavor) -> PathBuf {
+    if flavor == PathFlavor::current() {
+        return base.join(tail);
+    }
+    PathBuf::from(crate::platform::path_algebra::join(
+        &base.to_string_lossy(),
+        tail,
+        flavor,
+    ))
+}
+
 /// A [`PlatformPathsProvider`] whose roots the caller states.
 ///
 /// Tests and the `--doctor` self-check use this to present an environment that
@@ -935,6 +964,24 @@ mod tests {
         assert_eq!(
             environment.expand_placeholder("$TMPDIR"),
             Some(dir.path().join("temp"))
+        );
+    }
+
+    #[test]
+    fn a_literal_drive_relative_pattern_is_refused() {
+        let environment = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Windows)
+            .with_home(r"D:\Users\me");
+
+        // `D:cache` means "relative to the current directory on D:" and must
+        // not be accepted as an absolute cleanup target.
+        assert_eq!(environment.expand_placeholder("D:cache"), None);
+        assert_eq!(environment.expand_placeholder(r"D:..\Windows"), None);
+        assert_eq!(environment.expand_placeholder("D:."), None);
+        // The rooted spelling is still accepted.
+        assert_eq!(
+            environment.expand_placeholder(r"D:\cache"),
+            Some(PathBuf::from(r"D:\cache"))
         );
     }
 

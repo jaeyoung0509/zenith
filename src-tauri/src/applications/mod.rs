@@ -278,7 +278,7 @@ impl ApplicationScanner {
                     continue;
                 };
                 let path = entry.path();
-                if Blacklist::is_blacklisted(&path)
+                if Blacklist::is_blacklisted_with(&path, environment)
                     || fs::symlink_metadata(&path)
                         .map(|m| m.file_type().is_symlink())
                         .unwrap_or(true)
