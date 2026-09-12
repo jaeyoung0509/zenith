@@ -139,6 +139,49 @@ struct TestBody {
     text: String,
 }
 
+struct AttributeBlock {
+    text: String,
+    start_line: usize,
+    end_line: usize,
+}
+
+/// Reads one complete Rust attribute, including a rustfmt-expanded multiline
+/// attribute. Bracket counting uses code-only text so brackets inside a string
+/// literal cannot terminate the attribute early.
+fn attribute_block(lines: &[&str], start: usize) -> Option<AttributeBlock> {
+    let first = lines.get(start)?.trim();
+    if !first.starts_with("#[") && !first.starts_with("#![") {
+        return None;
+    }
+
+    let mut depth = 0i32;
+    let mut opened = false;
+    let mut text = String::new();
+    for (offset, line) in lines.iter().enumerate().skip(start) {
+        let code = code_only(line);
+        depth += code.matches('[').count() as i32;
+        depth -= code.matches(']').count() as i32;
+        opened |= code.contains('[');
+        text.push_str(line.trim());
+        text.push(' ');
+        if opened && depth <= 0 {
+            return Some(AttributeBlock {
+                text: text.trim().to_string(),
+                start_line: start,
+                end_line: offset,
+            });
+        }
+    }
+    None
+}
+
+fn compact_attribute(attribute: &str) -> String {
+    attribute
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
 /// Extracts every `#[test]`/`#[tokio::test]` function body with the `cfg`
 /// attributes that guard it.
 fn test_bodies(source: &str) -> Vec<TestBody> {
@@ -146,25 +189,42 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
     let mut bodies = Vec::new();
     let mut index = 0;
     while index < lines.len() {
-        let line = lines[index].trim();
-        if !TEST_ATTRIBUTE.is_match(line) {
+        let Some(first_attribute) = attribute_block(&lines, index) else {
             index += 1;
             continue;
+        };
+
+        // Collect the entire attribute block that carries this test. A `cfg`
+        // normally precedes `#[test]`, but starting at `#[test]` loses the
+        // condition the identity-cfg rule is meant to inspect.
+        let mut attributes = vec![first_attribute];
+        let mut cursor = attributes[0].end_line + 1;
+        loop {
+            while cursor < lines.len()
+                && (lines[cursor].trim().is_empty() || lines[cursor].trim_start().starts_with("//"))
+            {
+                cursor += 1;
+            }
+            let Some(attribute) = attribute_block(&lines, cursor) else {
+                break;
+            };
+            cursor = attribute.end_line + 1;
+            attributes.push(attribute);
         }
 
-        // Collect the attribute block that carries this test, including any
-        // #[cfg(...)] that follows it before the signature.
-        let mut attributes = Vec::new();
-        let mut cursor = index;
+        let Some(test_line) = attributes.iter().find_map(|attribute| {
+            TEST_ATTRIBUTE
+                .is_match(&compact_attribute(&attribute.text))
+                .then_some(attribute.start_line)
+        }) else {
+            index += 1;
+            continue;
+        };
+
         let mut body_start = None;
         let mut signature = String::new();
         while cursor < lines.len() {
             let current = lines[cursor].trim();
-            if current.starts_with("#[") {
-                attributes.push(current.to_string());
-                cursor += 1;
-                continue;
-            }
             if current.is_empty() {
                 cursor += 1;
                 continue;
@@ -188,8 +248,8 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
             .unwrap_or_else(|| "<anonymous>".to_string());
         let cfg = attributes
             .iter()
-            .filter(|attribute| attribute.contains("cfg("))
-            .cloned()
+            .filter(|attribute| cfg_predicate(&attribute.text).is_some())
+            .map(|attribute| attribute.text.clone())
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -212,7 +272,7 @@ fn test_bodies(source: &str) -> Vec<TestBody> {
         bodies.push(TestBody {
             name,
             cfg,
-            start_line: index + 1,
+            start_line: test_line + 1,
             text,
         });
         index = end_line.map(|line| line + 1).unwrap_or(index + 1);
@@ -277,14 +337,16 @@ fn inspect_test(location: &str, body: &TestBody) -> Vec<Violation> {
     violations
 }
 
-/// The `cfg` predicate of an attribute line, if the line is a `cfg` attribute.
-fn cfg_predicate(attribute: &str) -> Option<&str> {
-    let attribute = attribute.trim();
+/// The `cfg` predicate of an attribute, if it is a `cfg` attribute. Whitespace
+/// is insignificant, so this also accepts rustfmt-expanded multiline forms.
+fn cfg_predicate(attribute: &str) -> Option<String> {
+    let attribute = compact_attribute(attribute);
     let attribute = attribute.strip_prefix('#')?;
     let attribute = attribute.strip_prefix('!').unwrap_or(attribute);
     attribute
         .strip_prefix("[cfg(")
         .and_then(|inner| inner.strip_suffix(")]"))
+        .map(str::to_string)
 }
 
 /// A `cfg` predicate that pins a suite to one platform cannot run anywhere
@@ -298,37 +360,53 @@ fn is_platform_specific_predicate(predicate: &str) -> bool {
     predicate.contains("unix") || predicate.contains("windows") || predicate.contains("target_os")
 }
 
-/// The next line with content, so an attribute block can be tied to the item it
-/// actually guards.
-fn next_significant_line(source: &str, from: usize) -> Option<&str> {
-    source
-        .lines()
-        .skip(from + 1)
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("//") && !line.starts_with("#["))
+/// The next item after an attribute, skipping comments and any additional
+/// attributes attached to the same item.
+fn next_significant_item<'a>(lines: &'a [&str], from: usize) -> Option<&'a str> {
+    let mut cursor = from + 1;
+    while cursor < lines.len() {
+        let line = lines[cursor].trim();
+        if line.is_empty() || line.starts_with("//") {
+            cursor += 1;
+            continue;
+        }
+        if let Some(attribute) = attribute_block(lines, cursor) {
+            cursor = attribute.end_line + 1;
+            continue;
+        }
+        return Some(line);
+    }
+    None
 }
 
 fn file_level_violations(location: &str, source: &str) -> Vec<Violation> {
     let mut violations = Vec::new();
+    let lines = source.lines().collect::<Vec<_>>();
     // An integration target under `tests/` exists only to run tests, so a
     // platform-gated module there is a whole suite that other runners skip.
     let is_test_target = location.starts_with("tests/") || location.starts_with("tests\\");
-    for (index, line) in source.lines().enumerate() {
-        let Some(predicate) = cfg_predicate(line) else {
+    let mut index = 0;
+    while index < lines.len() {
+        let Some(attribute) = attribute_block(&lines, index) else {
+            index += 1;
             continue;
         };
-        if !is_platform_specific_predicate(predicate) {
+        index = attribute.end_line + 1;
+        let Some(predicate) = cfg_predicate(&attribute.text) else {
+            continue;
+        };
+        if !is_platform_specific_predicate(&predicate) {
             continue;
         }
-        let file_level = line.trim_start().starts_with("#![cfg(");
-        let gates_module = next_significant_line(source, index)
+        let file_level = compact_attribute(&attribute.text).starts_with("#![cfg(");
+        let gates_module = next_significant_item(&lines, attribute.end_line)
             .is_some_and(|next| MODULE_DECLARATION.is_match(next));
         let gated_suite = gates_module && (is_test_target || predicate.contains("test"));
         if file_level || gated_suite {
             violations.push(Violation {
                 location: location.to_string(),
                 rule: RULE_PLATFORM_GATED_MODULE,
-                test: format!("platform-gated module (line {})", index + 1),
+                test: format!("platform-gated module (line {})", attribute.start_line + 1),
             });
         }
     }
@@ -479,6 +557,12 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         exhaustive_rules.contains(RULE_EXHAUSTIVE_MATCHES),
         "the guard did not detect a matches! assertion over every variant: {exhaustive_rules:?}"
     );
+    let cfg_before_test =
+        "#[cfg(unix)]\n#[test]\nfn fixed_platform() {\n    assert_eq!(cfg!(unix), true);\n}\n";
+    assert!(
+        rules_for(cfg_before_test).contains(RULE_IDENTITY_CFG),
+        "the guard lost a cfg attribute that precedes the test attribute"
+    );
 
     // And it must not fire on the shapes that are legitimate.
     let allowed_shapes = "#[test]\nfn legit() {\n    let value = compute();\n    assert_eq!(value, 4);\n    if value > 2 {\n        return;\n    }\n    assert!(value < 100);\n}\n";
@@ -533,9 +617,23 @@ fn no_test_skips_or_unfailable_assertions_are_added() {
         "a test module gated on one platform must be reported"
     );
     assert_eq!(
+        file_level_violations(
+            "src/scanner/size.rs",
+            "#[cfg(\n    all(test, target_os = \"windows\")\n)]\n#[allow(dead_code)]\nmod tests {\n}\n"
+        )
+        .len(),
+        1,
+        "a multiline cfg attribute must not hide a platform-gated test module"
+    );
+    assert_eq!(
         file_level_violations("src/lib.rs", "#![cfg(target_os = \"windows\")]\n").len(),
         1,
         "a file-level platform gate must be reported"
+    );
+    assert_eq!(
+        file_level_violations("src/lib.rs", "#![cfg(\n    target_os = \"windows\"\n)]\n").len(),
+        1,
+        "a multiline file-level platform gate must be reported"
     );
     assert!(
         file_level_violations(
