@@ -292,11 +292,27 @@ fn show_native_error_dialog(title: &str, detail: &str) {
 /// `--doctor` runs this against the machine's own log directory: a report that
 /// cannot be written is the failure that hides every other failure.
 pub(crate) fn probe_log_writability(dir: &Path) -> Result<(), String> {
+    // The probe leaves the machine as it found it. On Windows the per-user log
+    // directory sits inside the install directory, so a probe that kept its
+    // file would make an uninstalled tree look like it survived, and the
+    // packaging gate exists to catch exactly that kind of residue.
+    let directory_existed = dir.exists();
     fs::create_dir_all(dir)
         .map_err(|error| format!("the log directory could not be created: {error}"))?;
-    repair_log_permissions(dir, restrict_permissions)
-        .map_err(|error| format!("the log file mode could not be repaired: {error}"))?;
+    let cleanup = || {
+        let _ = fs::remove_file(dir.join("zenith.log"));
+        if !directory_existed {
+            let _ = fs::remove_dir(dir);
+        }
+    };
+    if let Err(error) = repair_log_permissions(dir, restrict_permissions)
+        .map_err(|error| format!("the log file mode could not be repaired: {error}"))
+    {
+        cleanup();
+        return Err(error);
+    }
     let file_path = dir.join("zenith.log");
+    let file_existed = file_path.exists();
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -305,10 +321,23 @@ pub(crate) fn probe_log_writability(dir: &Path) -> Result<(), String> {
         // Create owner-only from the first byte, as the write path does.
         options.mode(0o600);
     }
-    options
-        .open(&file_path)
-        .map(|_| ())
-        .map_err(|error| format!("the log file could not be opened for writing: {error}"))
+    match options.open(&file_path) {
+        Ok(_) => {
+            if !file_existed {
+                let _ = fs::remove_file(&file_path);
+            }
+            if !directory_existed {
+                let _ = fs::remove_dir(dir);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            cleanup();
+            Err(format!(
+                "the log file could not be opened for writing: {error}"
+            ))
+        }
+    }
 }
 
 /// Repairs the mode of every diagnostics log file, existing or not.
@@ -756,9 +785,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let logs = dir.path().join("logs");
         assert!(probe_log_writability(&logs).is_ok());
+        // What it created, it removes: an uninstalled tree must not look like
+        // it survived because a report was requested.
         assert!(
-            logs.join("zenith.log").exists(),
-            "the probe creates the file a write would create"
+            !logs.exists(),
+            "the probe must leave no residue when it created the directory"
+        );
+
+        // A directory that already exists keeps its contents.
+        std::fs::create_dir_all(&logs).unwrap();
+        let existing = logs.join("zenith.log");
+        std::fs::write(&existing, b"previous line\n").unwrap();
+        assert!(probe_log_writability(&logs).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&existing).unwrap(),
+            "previous line\n"
         );
 
         // A path that cannot be a directory is reported, not ignored.
