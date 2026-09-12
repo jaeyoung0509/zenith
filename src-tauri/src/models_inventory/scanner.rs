@@ -149,7 +149,7 @@ impl LocalModelScanner {
                 if name.starts_with("models--") {
                     let clean_name = name.trim_start_matches("models--").replace("--", "/");
                     let path = entry.path();
-                    let (size, _) = SizeCalculator::measure_path(&path, &[], environment);
+                    let size = SizeCalculator::measure_path_logged(&path, &[], environment).size;
                     let last_modified = fs::metadata(&path)
                         .ok()
                         .and_then(|m| m.modified().ok())
@@ -212,7 +212,7 @@ impl LocalModelScanner {
 
                 if meta.is_dir() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let (size, _) = SizeCalculator::measure_path(&path, &[], environment);
+                    let size = SizeCalculator::measure_path_logged(&path, &[], environment).size;
                     let last_modified = meta
                         .modified()
                         .ok()

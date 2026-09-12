@@ -209,6 +209,7 @@ mod tests {
             exists: true,
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
+            skipped_entry_count: 0,
         };
 
         let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());

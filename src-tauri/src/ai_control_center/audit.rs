@@ -14,17 +14,62 @@ pub struct AuditStore {
 impl AuditStore {
     pub fn load(config: &Path) -> Self {
         let path = config.join(FILE_NAME);
-        let Ok(meta) = path.metadata() else {
-            return Self::default();
+        let metadata = match path.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                // A file that is not there yet is the first-run case. Anything
+                // else means the user's control-center history was dropped, and
+                // the empty history would otherwise look like a fresh install.
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    crate::diagnostics::log_error(
+                        "startup",
+                        &format!(
+                            "Control center history at {} could not be inspected: {error}",
+                            path.display()
+                        ),
+                    );
+                }
+                return Self::default();
+            }
         };
-        if meta.len() > MAX_FILE_BYTES {
+        if metadata.len() > MAX_FILE_BYTES {
+            crate::diagnostics::log_error(
+                "startup",
+                &format!(
+                    "Control center history at {} is {} bytes, above the {} byte cap; the history was not loaded",
+                    path.display(),
+                    metadata.len(),
+                    MAX_FILE_BYTES
+                ),
+            );
             return Self::default();
         }
-        let Ok(bytes) = std::fs::read(path) else {
-            return Self::default();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                crate::diagnostics::log_error(
+                    "startup",
+                    &format!(
+                        "Control center history at {} could not be read: {error}",
+                        path.display()
+                    ),
+                );
+                return Self::default();
+            }
         };
-        let mut entries =
-            serde_json::from_slice::<VecDeque<AuditEntry>>(&bytes).unwrap_or_default();
+        let mut entries = match serde_json::from_slice::<VecDeque<AuditEntry>>(&bytes) {
+            Ok(entries) => entries,
+            Err(error) => {
+                crate::diagnostics::log_error(
+                    "startup",
+                    &format!(
+                        "Control center history at {} could not be parsed: {error}; the history was not loaded",
+                        path.display()
+                    ),
+                );
+                return Self::default();
+            }
+        };
         for entry in &mut entries {
             entry.event_kind = safe_label(&entry.event_kind);
             entry.outcome = safe_label(&entry.outcome);

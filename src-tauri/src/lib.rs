@@ -320,8 +320,10 @@ pub fn run() {
     let environment = Arc::new(crate::platform::PlatformEnvironment::native());
     // The catalog is loaded against the same description every other component
     // receives, instead of building a second, unrelated native environment.
-    let registry =
-        Arc::new(SignatureRegistry::load_embedded_with(&environment).unwrap_or_default());
+    let registry = Arc::new(SignatureRegistry::load_or_default(
+        &environment,
+        SignatureRegistry::load_embedded_with,
+    ));
     let awake_manager = Arc::new(KeepAwakeManager::new());
     awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
     let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
@@ -428,7 +430,22 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            if let Ok(config_dir) = app.path().app_config_dir() {
+            let config_dir = match app.path().app_config_dir() {
+                Ok(config_dir) => Some(config_dir),
+                Err(error) => {
+                    // Without the config directory every stored setting falls
+                    // back to its default, so the reason is the only record
+                    // that the user's own preferences were not applied.
+                    crate::diagnostics::log_error(
+                        "startup",
+                        &format!(
+                            "Settings directory is unavailable; stored settings were not loaded: {error}"
+                        ),
+                    );
+                    None
+                }
+            };
+            if let Some(config_dir) = config_dir {
                 let loaded = settings_store::load(&config_dir);
                 app.state::<AppState>()
                     .awake_manager

@@ -61,6 +61,31 @@ impl SignatureRegistry {
         Ok(registry)
     }
 
+    /// Loads the catalog for startup, recording a load failure instead of
+    /// presenting an empty catalog as a healthy one.
+    ///
+    /// A failed catalog used to reach `unwrap_or_default()` at the composition
+    /// root, where the failure was invisible in the log and the fallback was
+    /// unreachable from a test. The fallback is an empty registry rather than
+    /// [`Self::default`]: the catalog that just failed to load cannot be
+    /// replaced by one validated against a different environment, and nothing
+    /// should be scanned or cleaned from a catalog that was never verified.
+    pub(crate) fn load_or_default<E: std::fmt::Display>(
+        environment: &PlatformEnvironment,
+        load: impl FnOnce(&PlatformEnvironment) -> Result<SignatureRegistry, E>,
+    ) -> SignatureRegistry {
+        match load(environment) {
+            Ok(registry) => registry,
+            Err(error) => {
+                crate::diagnostics::log_error(
+                    "startup",
+                    &format!("Signature catalog could not be loaded: {error}"),
+                );
+                Self::new()
+            }
+        }
+    }
+
     /// Loads the embedded catalog without the platform-declaration gate. The
     /// manifest lint and the environment doctor must see an offending
     /// signature in order to report it, so they load through this entry point.
@@ -547,6 +572,27 @@ mod tests {
                 .with_program_files(r"D:\Program Files")
                 .with_program_data(r"D:\ProgramData"),
         ))
+    }
+
+    #[test]
+    fn signature_catalog_failure_falls_back_to_an_empty_registry() {
+        let environment = stated_environment();
+
+        let registry = SignatureRegistry::load_or_default(&environment, |_| {
+            Err(crate::models::ZenithError::SignatureMismatch(
+                "stated catalog defect".to_string(),
+            ))
+        });
+
+        // Fail closed: a catalog that could not be loaded must not leave the
+        // process scanning and cleaning from signatures nobody verified.
+        assert!(registry.all().is_empty());
+
+        // A successful load is passed through untouched, so the fallback is
+        // not a second implementation of the loader.
+        let loaded =
+            SignatureRegistry::load_or_default(&environment, SignatureRegistry::load_embedded_with);
+        assert!(!loaded.all().is_empty());
     }
 
     #[test]

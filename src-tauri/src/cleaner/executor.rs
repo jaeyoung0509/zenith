@@ -11,6 +11,40 @@ use std::time::SystemTime;
 
 pub struct CleanExecutor;
 
+/// Counts the items that did not fully clean, as `(partial, failed)`.
+///
+/// A `Partial` item reclaimed some bytes and therefore reports `success`, but
+/// it is not a success: without this count a run whose targets were mostly left
+/// behind is indistinguishable from a clean one at the summary level.
+fn count_incomplete_items(items: &[CleanItemResult]) -> (u64, u64) {
+    items
+        .iter()
+        .fold((0u64, 0u64), |(partial, failed), item| match item.status {
+            CleanStatus::Success => (partial, failed),
+            CleanStatus::Partial => (partial + 1, failed),
+            CleanStatus::Failed => (partial, failed + 1),
+        })
+}
+
+/// The diagnostics line for one target that did not fully clean.
+fn incomplete_item_message(result: &CleanItemResult) -> String {
+    let reason = result
+        .error_message
+        .as_deref()
+        .unwrap_or("no reason reported");
+    if result.status == CleanStatus::Partial {
+        format!(
+            "Target `{}` ({}) did not fully clean: {reason}",
+            result.name, result.path
+        )
+    } else {
+        format!(
+            "Target `{}` ({}) failed: {reason}",
+            result.name, result.path
+        )
+    }
+}
+
 impl CleanExecutor {
     /// Executes a verified DeletePlan safely and securely, emitting streaming CleanEvents.
     ///
@@ -57,12 +91,9 @@ impl CleanExecutor {
                 total_reclaimed_bytes += result.bytes_reclaimed;
             } else {
                 total_failed_bytes += target.expected_bytes;
-                if let Some(ref err) = result.error_message {
-                    crate::diagnostics::log_error(
-                        "cleanup",
-                        &format!("Target `{}` ({}) failed: {err}", result.name, result.path),
-                    );
-                }
+            }
+            if result.status != CleanStatus::Success {
+                crate::diagnostics::log_error("cleanup", &incomplete_item_message(&result));
             }
 
             on_event(CleanEvent::ItemFinished {
@@ -75,6 +106,8 @@ impl CleanExecutor {
 
             item_results.push(result);
         }
+
+        let (partial_count, failed_count) = count_incomplete_items(&item_results);
 
         let finished_at = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -93,6 +126,8 @@ impl CleanExecutor {
             finished_at,
             total_reclaimed_bytes,
             total_failed_bytes,
+            partial_count,
+            failed_count,
             items: item_results,
             actual_disk_free_delta,
         };
@@ -446,6 +481,106 @@ pub fn classify_cleanup_failure_with_codes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item_with_status(status: CleanStatus) -> CleanItemResult {
+        CleanItemResult {
+            item_id: "item".to_string(),
+            name: "Cache".to_string(),
+            path: "/tmp/cache".to_string(),
+            status,
+            success: status != CleanStatus::Failed,
+            bytes_reclaimed: if status == CleanStatus::Failed {
+                0
+            } else {
+                512
+            },
+            failure_reason: None,
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn clean_result_counts_partial_and_failed_items() {
+        let items = vec![
+            item_with_status(CleanStatus::Success),
+            item_with_status(CleanStatus::Partial),
+            item_with_status(CleanStatus::Partial),
+            item_with_status(CleanStatus::Failed),
+        ];
+
+        assert_eq!(count_incomplete_items(&items), (2, 1));
+        assert_eq!(count_incomplete_items(&[]), (0, 0));
+    }
+
+    /// Both incomplete shapes reach the log with the target named; a partial
+    /// item is the one the old summary line could not report at all.
+    #[test]
+    fn incomplete_item_message_names_partial_and_failed_targets() {
+        let mut partial = item_with_status(CleanStatus::Partial);
+        partial.error_message = Some("2 file(s) could not be removed: busy".to_string());
+        assert_eq!(
+            incomplete_item_message(&partial),
+            "Target `Cache` (/tmp/cache) did not fully clean: 2 file(s) could not be removed: busy"
+        );
+
+        assert_eq!(
+            incomplete_item_message(&item_with_status(CleanStatus::Failed)),
+            "Target `Cache` (/tmp/cache) failed: no reason reported"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn partial_cleanup_keeps_item_success_but_reports_the_count() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("partial-cache");
+        std::fs::create_dir(&cache_root).unwrap();
+        let removable = cache_root.join("removable.bin");
+        std::fs::write(&removable, b"payload").unwrap();
+        // A link that resolves into the user profile is refused by the
+        // canonical blacklist, so its sibling is deleted while this child is
+        // recorded as an error: bytes were reclaimed without finishing.
+        let home = crate::platform::NativePlatformPaths::new()
+            .home()
+            .expect("a POSIX host exposes a home directory");
+        let refused = cache_root.join("linked-profile");
+        symlink(&home, &refused).unwrap();
+
+        let plan = DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-partial".to_string(),
+            targets: vec![DeleteTarget {
+                item_id: "partial-target".to_string(),
+                signature_id: "test.partial".to_string(),
+                name: "Partial cache".to_string(),
+                path: cache_root.clone(),
+                strategy: CleanStrategy::DeleteContents,
+                expected_bytes: 4096,
+                risk: crate::models::RiskTier::Safe,
+                identity: None,
+                exclusions: vec![],
+                min_age_days: None,
+            }],
+            expected_reclaim_bytes: 4096,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+        };
+
+        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+
+        assert_eq!(result.items.len(), 1);
+        assert!(!removable.exists(), "the deletable sibling must be gone");
+        assert!(refused.exists(), "the refused link must be left in place");
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Partial);
+        assert!(item.success, "a partial item still reclaimed bytes");
+        assert!(item.bytes_reclaimed > 0);
+        assert!(item.error_message.is_some());
+        assert_eq!(result.partial_count, 1);
+        assert_eq!(result.failed_count, 0);
+    }
 
     #[test]
     fn classifies_sharing_violation_as_in_use() {

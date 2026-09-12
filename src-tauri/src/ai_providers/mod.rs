@@ -248,6 +248,13 @@ mod tests {
         assert!(snapshot.providers[0].connected);
         assert!(!snapshot.providers[1].connected);
         assert!(snapshot.providers[1].status_message.contains("panicked"));
+        assert!(
+            snapshot.providers[1]
+                .status_message
+                .contains("intentional test panic in collector"),
+            "the panic payload must reach the provider row: {}",
+            snapshot.providers[1].status_message
+        );
     }
 
     #[test]

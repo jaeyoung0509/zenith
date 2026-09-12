@@ -192,6 +192,7 @@ impl CacheProviderRegistry {
             exists: true,
             quality,
             incomplete_reason: measurement.incomplete_reason,
+            skipped_entry_count: measurement.skipped_entries,
         }))
     }
 
@@ -214,8 +215,8 @@ impl CacheProviderRegistry {
                 "The provider cache location changed since the scan. Scan again.".to_string(),
             );
         }
-        let before = SizeCalculator::measure_path(&fresh_path, &[], environment)
-            .0
+        let before = SizeCalculator::measure_path_logged(&fresh_path, &[], environment)
+            .size
             .reclaimable();
         let output = run_provider(provider, provider.prune_args(), environment)?;
         if !output.status.success() {
@@ -229,8 +230,8 @@ impl CacheProviderRegistry {
         if !paths_match(&rediscovered, &fresh_path) {
             return Err("The provider cache location changed during cleanup.".to_string());
         }
-        let after = SizeCalculator::measure_path(&rediscovered, &[], environment)
-            .0
+        let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment)
+            .size
             .reclaimable();
         Ok(before.saturating_sub(after))
     }

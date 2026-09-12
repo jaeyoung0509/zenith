@@ -45,8 +45,8 @@ impl LocalModelManager {
         let before_bytes = blobs_dir
             .as_ref()
             .map(|p| {
-                crate::scanner::SizeCalculator::measure_path(p, &[], environment)
-                    .0
+                crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment)
+                    .size
                     .reclaimable()
             })
             .unwrap_or(0);
@@ -74,8 +74,8 @@ impl LocalModelManager {
         let after_bytes = blobs_dir
             .as_ref()
             .map(|p| {
-                crate::scanner::SizeCalculator::measure_path(p, &[], environment)
-                    .0
+                crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment)
+                    .size
                     .reclaimable()
             })
             .unwrap_or(0);

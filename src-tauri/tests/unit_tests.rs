@@ -204,19 +204,18 @@ fn test_size_calculator_recursive_and_exclusions() {
         .unwrap();
 
     // Measure without exclusions
-    let (total_size, total_count) =
-        SizeCalculator::measure_path(dir.path(), &[], &PlatformEnvironment::native());
-    assert_eq!(total_count, 2);
-    assert!(total_size.logical >= 60000);
+    let total = SizeCalculator::measure_path_full(dir.path(), &[], &PlatformEnvironment::native());
+    assert_eq!(total.file_count, 2);
+    assert!(total.size.logical >= 60000);
 
     // Measure with exclusion of "excluded_folder"
-    let (filtered_size, filtered_count) = SizeCalculator::measure_path(
+    let filtered = SizeCalculator::measure_path_full(
         dir.path(),
         &["excluded_folder".to_string()],
         &PlatformEnvironment::native(),
     );
-    assert_eq!(filtered_count, 1);
-    assert_eq!(filtered_size.logical, 10000);
+    assert_eq!(filtered.file_count, 1);
+    assert_eq!(filtered.size.logical, 10000);
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

@@ -16,6 +16,10 @@ pub struct PathMeasurement {
     pub file_count: usize,
     pub complete: bool,
     pub incomplete_reason: Option<String>,
+    /// Entries the walk did not account for: excluded, blacklisted, protected,
+    /// unreadable, or beyond the depth limit. A size that skipped entries must
+    /// never be presented as a complete measurement.
+    pub skipped_entries: u64,
 }
 
 impl PathMeasurement {
@@ -30,6 +34,7 @@ impl PathMeasurement {
             file_count,
             complete,
             incomplete_reason,
+            skipped_entries: 0,
         }
     }
 
@@ -39,6 +44,7 @@ impl PathMeasurement {
             file_count,
             complete: true,
             incomplete_reason: None,
+            skipped_entries: 0,
         }
     }
 
@@ -48,6 +54,7 @@ impl PathMeasurement {
             file_count,
             complete: false,
             incomplete_reason: Some(reason.into()),
+            skipped_entries: 0,
         }
     }
 
@@ -57,11 +64,14 @@ impl PathMeasurement {
             file_count: 0,
             complete: false,
             incomplete_reason: Some(reason.into()),
+            skipped_entries: 0,
         }
     }
 
-    pub fn into_tuple(self) -> (FileSize, usize) {
-        (self.size, self.file_count)
+    /// Records how many entries the walk did not measure.
+    pub fn with_skipped_entries(mut self, skipped_entries: u64) -> Self {
+        self.skipped_entries = skipped_entries;
+        self
     }
 }
 
@@ -115,24 +125,47 @@ pub fn get_allocated_size(path: &Path) -> Option<u64> {
 pub struct SizeCalculator;
 
 impl SizeCalculator {
-    /// Calculates the FileSize (logical size and allocated size on disk) for a single file or directory.
+    /// Measures a file or directory, reporting how complete the observation is.
     ///
     /// Exclusions are expanded through the described environment, so a
-    /// path-shaped exclusion resolves exactly as the environment states.
-    pub fn measure_path<P: AsRef<Path>>(
-        path: P,
-        exclusions: &[String],
-        environment: &PlatformEnvironment,
-    ) -> (FileSize, usize) {
-        Self::measure_path_full(path, exclusions, environment).into_tuple()
-    }
-
+    /// path-shaped exclusion resolves exactly as the environment states. The
+    /// caller receives [`PathMeasurement`] rather than a size pair because a
+    /// measurement that skipped entries must be logged, not added up silently.
     pub fn measure_path_full<P: AsRef<Path>>(
         path: P,
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> PathMeasurement {
         Self::measure_path_with_pool(path, exclusions, None, environment)
+    }
+
+    /// Measures a path and records an incomplete observation in the log.
+    ///
+    /// Callers that report the number to the user need both the measurement and
+    /// the knowledge that it is a lower bound: a walk that could not read part
+    /// of the tree used to arrive as an ordinary size. `measure_path_full`
+    /// stays available for callers that handle incompleteness themselves.
+    pub fn measure_path_logged<P: AsRef<Path>>(
+        path: P,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> PathMeasurement {
+        let path = path.as_ref();
+        let measurement = Self::measure_path_full(path, exclusions, environment);
+        if !measurement.complete {
+            crate::diagnostics::log_error(
+                "measurement",
+                &format!(
+                    "Incomplete measurement for {}: {}",
+                    path.display(),
+                    measurement
+                        .incomplete_reason
+                        .as_deref()
+                        .unwrap_or("unknown boundary")
+                ),
+            );
+        }
+        measurement
     }
 
     pub(crate) fn measure_path_with_pool<P: AsRef<Path>>(
@@ -152,7 +185,8 @@ impl SizeCalculator {
                 FileSize::default(),
                 0,
                 "Protected by system safety blacklist",
-            );
+            )
+            .with_skipped_entries(1);
         }
 
         // If path is a symlink, only measure the symlink itself
@@ -168,7 +202,8 @@ impl SizeCalculator {
                             path.display(),
                             err
                         ),
-                    );
+                    )
+                    .with_skipped_entries(1);
                 }
             };
             return PathMeasurement::complete(FileSize::new(logical, Some(logical)), 1);
@@ -181,7 +216,8 @@ impl SizeCalculator {
                     "Could not read metadata for {}: {}",
                     path.display(),
                     err
-                ));
+                ))
+                .with_skipped_entries(1);
             }
         };
 
@@ -217,6 +253,7 @@ impl SizeCalculator {
         let allocated = AtomicU64::new(0);
         let file_count = AtomicUsize::new(0);
         let complete = AtomicBool::new(true);
+        let skipped = AtomicU64::new(0);
         let reason = Mutex::new(None);
 
         pool.scope(|scope| {
@@ -230,6 +267,7 @@ impl SizeCalculator {
                 &allocated,
                 &file_count,
                 &complete,
+                &skipped,
                 &reason,
                 environment,
             );
@@ -245,6 +283,7 @@ impl SizeCalculator {
             file_count: file_count.load(Ordering::Relaxed),
             complete: is_complete,
             incomplete_reason,
+            skipped_entries: skipped.load(Ordering::Relaxed),
         }
     }
 
@@ -259,12 +298,14 @@ impl SizeCalculator {
         allocated: &'scope AtomicU64,
         file_count: &'scope AtomicUsize,
         complete: &'scope AtomicBool,
+        skipped: &'scope AtomicU64,
         reason: &'scope Mutex<Option<String>>,
         environment: &'scope PlatformEnvironment,
     ) {
         scope.spawn(move |scope| {
             if current_depth > max_depth {
                 complete.store(false, Ordering::Relaxed);
+                skipped.fetch_add(1, Ordering::Relaxed);
                 let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                 if r.is_none() {
                     *r = Some(format!(
@@ -279,6 +320,7 @@ impl SizeCalculator {
                 Ok(entries) => entries,
                 Err(err) => {
                     complete.store(false, Ordering::Relaxed);
+                    skipped.fetch_add(1, Ordering::Relaxed);
                     let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                     if r.is_none() {
                         *r = Some(format!(
@@ -295,12 +337,14 @@ impl SizeCalculator {
             let mut local_logical = 0u64;
             let mut local_allocated = 0u64;
             let mut local_file_count = 0usize;
+            let mut local_skipped = 0u64;
 
             for entry in entries {
                 let ent = match entry {
                     Ok(e) => e,
                     Err(err) => {
                         complete.store(false, Ordering::Relaxed);
+                        local_skipped += 1;
                         let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                         if r.is_none() {
                             *r = Some(format!(
@@ -316,6 +360,7 @@ impl SizeCalculator {
                 if Self::is_excluded(&child_path, exclusions, environment)
                     || Blacklist::is_blacklisted_with(&child_path, environment)
                 {
+                    local_skipped += 1;
                     continue;
                 }
 
@@ -341,6 +386,7 @@ impl SizeCalculator {
                         }
                         Err(err) => {
                             complete.store(false, Ordering::Relaxed);
+                            local_skipped += 1;
                             let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                             if r.is_none() {
                                 *r = Some(format!(
@@ -363,6 +409,7 @@ impl SizeCalculator {
                                 .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
                         {
                             complete.store(false, Ordering::Relaxed);
+                            local_skipped += 1;
                             let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                             if r.is_none() {
                                 *r = Some(format!(
@@ -401,11 +448,13 @@ impl SizeCalculator {
                                     allocated,
                                     file_count,
                                     complete,
+                                    skipped,
                                     reason,
                                     environment,
                                 );
                             } else {
                                 complete.store(false, Ordering::Relaxed);
+                                local_skipped += 1;
                                 let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                                 if r.is_none() {
                                     *r = Some(format!(
@@ -419,6 +468,7 @@ impl SizeCalculator {
                     }
                     Err(err) => {
                         complete.store(false, Ordering::Relaxed);
+                        local_skipped += 1;
                         let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
                         if r.is_none() {
                             *r = Some(format!(
@@ -434,6 +484,7 @@ impl SizeCalculator {
             logical.fetch_add(local_logical, Ordering::Relaxed);
             allocated.fetch_add(local_allocated, Ordering::Relaxed);
             file_count.fetch_add(local_file_count, Ordering::Relaxed);
+            skipped.fetch_add(local_skipped, Ordering::Relaxed);
         });
     }
 
@@ -473,7 +524,8 @@ impl SizeCalculator {
                     max_depth,
                     dir.display()
                 ),
-            );
+            )
+            .with_skipped_entries(1);
         }
 
         let mut total_logical = 0u64;
@@ -481,6 +533,7 @@ impl SizeCalculator {
         let mut file_count = 0usize;
         let mut complete = true;
         let mut incomplete_reason: Option<String> = None;
+        let mut skipped_entries = 0u64;
 
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
@@ -489,7 +542,8 @@ impl SizeCalculator {
                     FileSize::default(),
                     0,
                     format!("Failed to read directory {}: {}", dir.display(), err),
-                );
+                )
+                .with_skipped_entries(1);
             }
         };
 
@@ -498,6 +552,7 @@ impl SizeCalculator {
                 Ok(e) => e,
                 Err(err) => {
                     complete = false;
+                    skipped_entries += 1;
                     if incomplete_reason.is_none() {
                         incomplete_reason = Some(format!(
                             "Failed to read directory entry in {}: {}",
@@ -511,11 +566,13 @@ impl SizeCalculator {
             let child_path = ent.path();
 
             if Self::is_excluded(&child_path, exclusions, environment) {
+                skipped_entries += 1;
                 continue;
             }
 
             // Check blacklist
             if Blacklist::is_blacklisted_with(&child_path, environment) {
+                skipped_entries += 1;
                 continue;
             }
 
@@ -541,6 +598,7 @@ impl SizeCalculator {
                     }
                     Err(err) => {
                         complete = false;
+                        skipped_entries += 1;
                         if incomplete_reason.is_none() {
                             incomplete_reason = Some(format!(
                                 "Failed to read symlink metadata for {}: {}",
@@ -562,6 +620,7 @@ impl SizeCalculator {
                             .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
                     {
                         complete = false;
+                        skipped_entries += 1;
                         if incomplete_reason.is_none() {
                             incomplete_reason = Some(format!(
                                 "Protected application bundle encountered in {}",
@@ -598,6 +657,7 @@ impl SizeCalculator {
                         total_logical += sub.size.logical;
                         total_allocated += sub.size.allocated.unwrap_or(sub.size.logical);
                         file_count += sub.file_count;
+                        skipped_entries += sub.skipped_entries;
                         if !sub.complete {
                             complete = false;
                             if incomplete_reason.is_none() {
@@ -608,6 +668,7 @@ impl SizeCalculator {
                 }
                 Err(err) => {
                     complete = false;
+                    skipped_entries += 1;
                     if incomplete_reason.is_none() {
                         incomplete_reason = Some(format!(
                             "Failed to read metadata for {}: {}",
@@ -624,6 +685,7 @@ impl SizeCalculator {
             file_count,
             complete,
             incomplete_reason,
+            skipped_entries,
         }
     }
 }
@@ -677,6 +739,47 @@ mod tests {
             parallel.file_count, expected_files,
             "two files plus (on unix) one untraversed symlink"
         );
+        assert_eq!(
+            parallel.skipped_entries, 2,
+            "the named exclusion and the `.git` tree are deliberately not measured"
+        );
+    }
+
+    /// The prune and model-inventory paths measure a cache around a mutation; a
+    /// walk that could not read part of the tree has to report that boundary
+    /// instead of returning a smaller number that looks complete.
+    #[test]
+    fn an_incomplete_provider_cache_measurement_is_reported() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("_cacache");
+        std::fs::create_dir_all(cache.join("Tool.app/Contents")).unwrap();
+        std::fs::write(cache.join("content.bin"), vec![1u8; 8_192]).unwrap();
+        std::fs::write(cache.join("Tool.app/Contents/payload"), vec![2u8; 4_096]).unwrap();
+
+        let clean = root.path().join("clean-cache");
+        std::fs::create_dir_all(clean.join(".git")).unwrap();
+        std::fs::write(clean.join("content.bin"), vec![3u8; 1_024]).unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let bounded = SizeCalculator::measure_path_logged(&cache, &[], &environment);
+        assert!(
+            !bounded.complete,
+            "the protected bundle is a boundary the walk cannot cross"
+        );
+        assert_eq!(bounded.skipped_entries, 1);
+        assert!(bounded
+            .incomplete_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Protected application bundle")));
+        assert_eq!(bounded.size.logical, 8_192);
+        assert_eq!(bounded.file_count, 1);
+
+        // A skipped `.git` tree is a deliberate exclusion, not a boundary: the
+        // measurement is complete and says how many entries it left out.
+        let complete = SizeCalculator::measure_path_logged(&clean, &[], &environment);
+        assert!(complete.complete);
+        assert_eq!(complete.skipped_entries, 1);
+        assert_eq!(complete.size.logical, 1_024);
     }
 
     #[test]
@@ -716,19 +819,19 @@ mod tests {
         let exclusions = vec!["~/Downloads/keep".to_string()];
 
         let redirected_environment = simulated(true);
-        let (_, redirected_files) =
-            SizeCalculator::measure_path(&scanned, &exclusions, &redirected_environment);
+        let redirected =
+            SizeCalculator::measure_path_full(&scanned, &exclusions, &redirected_environment);
         assert_eq!(
-            redirected_files, 2,
+            redirected.file_count, 2,
             "the redirect moves the exclusion out of this tree, so both files are measured"
         );
 
         // Without a stated redirect the literal profile spelling is excluded.
         let literal_environment = simulated(false);
-        let (_, literal_files) =
-            SizeCalculator::measure_path(&scanned, &exclusions, &literal_environment);
+        let literal =
+            SizeCalculator::measure_path_full(&scanned, &exclusions, &literal_environment);
         assert_eq!(
-            literal_files, 1,
+            literal.file_count, 1,
             "the literal profile spelling excludes `~/Downloads/keep`"
         );
     }

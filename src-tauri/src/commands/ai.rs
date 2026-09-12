@@ -197,7 +197,7 @@ pub async fn get_agent_quick_summary(
         false,
     )
     .await
-    .map_err(|_| "Agent activity cache is unavailable.".to_string())?;
+    .map_err(|error| format!("Agent activity cache is unavailable: {error}"))?;
     let mut active_count = 0;
     let mut attention_count = 0;
     let mut rows = Vec::new();
