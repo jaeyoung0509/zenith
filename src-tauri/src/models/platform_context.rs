@@ -131,6 +131,22 @@ impl PlatformContext {
     pub fn current(log_directory: String) -> Self {
         Self::for_platform(PlatformKind::current(), log_directory)
     }
+
+    /// Deterministic context for browser preview fixtures.
+    ///
+    /// A `PathFlavor` distinguishes Windows from POSIX paths but cannot
+    /// distinguish macOS from Linux. Keeping their default display locations
+    /// here prevents golden generation from inheriting the runner's `cfg` and
+    /// emitting macOS log copy for Linux (or the reverse).
+    pub fn for_preview(platform: PlatformKind) -> Self {
+        let log_directory = match platform {
+            PlatformKind::Macos => "~/Library/Logs/Zenith",
+            PlatformKind::Windows => "~/AppData/Local/Zenith/Logs",
+            PlatformKind::Linux => "~/.local/share/zenith/logs",
+            PlatformKind::Other => "zenith_logs",
+        };
+        Self::for_platform(platform, log_directory.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +205,21 @@ mod tests {
                 PlatformContext::RELEASES_URL
             );
         }
+    }
+
+    #[test]
+    fn preview_log_locations_do_not_depend_on_the_build_host() {
+        assert_eq!(
+            PlatformContext::for_preview(PlatformKind::Macos).log_directory,
+            "~/Library/Logs/Zenith"
+        );
+        assert_eq!(
+            PlatformContext::for_preview(PlatformKind::Linux).log_directory,
+            "~/.local/share/zenith/logs"
+        );
+        assert_eq!(
+            PlatformContext::for_preview(PlatformKind::Windows).log_directory,
+            "~/AppData/Local/Zenith/Logs"
+        );
     }
 }

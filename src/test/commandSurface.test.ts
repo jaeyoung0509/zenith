@@ -68,6 +68,8 @@ describe('preview platform selection', () => {
     setPreviewPlatform('linux');
     const linux = await api.getPlatformCapabilities();
     expect(linux).toEqual(goldenCapabilitiesByPlatform.linux);
-    expect((await api.getPlatformContext()).platform).toBe('linux');
+    const linuxContext = await api.getPlatformContext();
+    expect(linuxContext.platform).toBe('linux');
+    expect(linuxContext.log_directory).toBe('~/.local/share/zenith/logs');
   });
 });

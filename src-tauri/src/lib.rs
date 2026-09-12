@@ -768,38 +768,11 @@ mod tests {
     #[ignore = "code generation"]
     fn export_platform_context_golden() {
         use crate::models::{PlatformContext, PlatformKind};
-        use crate::platform::path_algebra::PathFlavor;
-        use crate::platform::paths::SimulatedPaths;
-        use crate::platform::PlatformEnvironment;
-        use std::sync::Arc;
-
-        let windows_environment =
-            PlatformEnvironment::simulated(PathFlavor::Windows).with_roots(Arc::new(
-                SimulatedPaths::new()
-                    .with_flavor(PathFlavor::Windows)
-                    .with_home(r"C:\Users\tester")
-                    .with_local_app_data(r"C:\Users\tester\AppData\Local"),
-            ));
-        let posix_environment =
-            PlatformEnvironment::simulated(PathFlavor::Posix).with_roots(Arc::new(
-                SimulatedPaths::new()
-                    .with_flavor(PathFlavor::Posix)
-                    .with_home("/home/tester"),
-            ));
 
         let golden = serde_json::json!({
-            "macos": PlatformContext::for_platform(
-                PlatformKind::Macos,
-                crate::diagnostics::log_directory_display_of(&posix_environment),
-            ),
-            "windows": PlatformContext::for_platform(
-                PlatformKind::Windows,
-                crate::diagnostics::log_directory_display_of(&windows_environment),
-            ),
-            "linux": PlatformContext::for_platform(
-                PlatformKind::Linux,
-                crate::diagnostics::log_directory_display_of(&posix_environment),
-            ),
+            "macos": PlatformContext::for_preview(PlatformKind::Macos),
+            "windows": PlatformContext::for_preview(PlatformKind::Windows),
+            "linux": PlatformContext::for_preview(PlatformKind::Linux),
         });
         let rendered = serde_json::to_string_pretty(&golden)
             .expect("serialize platform context golden")

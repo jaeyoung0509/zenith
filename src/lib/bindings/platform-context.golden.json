@@ -3,7 +3,7 @@
     "app_data_label": "data directory",
     "app_identity_label": "installed application",
     "container_runtime_hint": null,
-    "log_directory": "~/Library/Logs/Zenith",
+    "log_directory": "~/.local/share/zenith/logs",
     "native_caption_bar": true,
     "overlay_title_bar": false,
     "platform": "linux",
