@@ -21,8 +21,8 @@ pub struct DiagnosticsSnapshot {
     pub webview_version: Option<String>,
     pub elevated: Option<bool>,
     pub locale: Option<String>,
-    /// `None` while the log is writable; otherwise why it is not. A logger that
-    /// disables itself silently removes the only evidence of what disabled it.
+    /// The first write failure observed by this process, if any. A later
+    /// successful write does not erase evidence that may explain a log gap.
     pub log_failure: Option<String>,
     pub log_path: String,
     pub enabled_features: Vec<String>,

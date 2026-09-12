@@ -930,7 +930,7 @@
           {/if}
           <div><span class="text-foreground font-semibold">Log:</span> {diagnosticsData.log_path}</div>
           {#if diagnosticsData.log_failure}
-            <div class="pt-2 text-destructive font-semibold">Diagnostics are not being written:</div>
+            <div class="pt-2 text-destructive font-semibold">Diagnostics encountered a write failure:</div>
             <div class="text-destructive/80">{diagnosticsData.log_failure}</div>
           {/if}
           {#if diagnosticsData.recent_errors.length > 0}

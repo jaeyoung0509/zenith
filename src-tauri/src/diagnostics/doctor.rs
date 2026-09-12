@@ -213,7 +213,12 @@ pub fn with_log_writability(mut report: EnvironmentReport) -> EnvironmentReport 
     let environment = PlatformEnvironment::native();
     let directory = crate::diagnostics::log_dir(&environment);
     let outcome = match crate::diagnostics::probe_log_writability(&directory) {
-        Ok(()) => row("log_writable", 0, 1, "line appended to the diagnostics log"),
+        Ok(()) => row(
+            "log_writable",
+            0,
+            1,
+            "write probe succeeded and was removed",
+        ),
         Err(_) => SelfCheckRow {
             name: "log_writable".to_string(),
             outcome: SelfCheckOutcome::Fail,

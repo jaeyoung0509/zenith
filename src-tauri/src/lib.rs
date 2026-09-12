@@ -193,7 +193,14 @@ fn toggle_quick_panel(app: &AppHandle, tray_rect: Option<Rect>) {
             // Clear the marker so the next click opens the panel.
             visibility.mark_shown();
         }
-        TrayToggle::Show => show_quick_panel_tracked(app, &window, tray_rect),
+        TrayToggle::Show => {
+            if let Err(error) = show_quick_panel_tracked(app, &window, tray_rect) {
+                crate::diagnostics::report_startup_failure(
+                    "The quick panel could not be shown",
+                    &error.to_string(),
+                );
+            }
+        }
     }
 }
 
@@ -214,7 +221,7 @@ pub fn show_main_window_or_report(app: &AppHandle) {
 pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     let window = ensure_window(app, "main")?;
     let _ = window.unminimize();
-    let _ = window.show();
+    window.show()?;
     let _ = window.set_focus();
     if app.get_webview_window("quick").is_some() {
         hide_quick_panel(app);
@@ -266,7 +273,7 @@ fn quick_panel_position(
     )
 }
 
-fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
+fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::Result<()> {
     if let Some(rect) = tray_rect {
         if let Ok(size) = window.outer_size() {
             // Logical tray rectangles need a scale factor before the monitor
@@ -291,15 +298,21 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) {
             let _ = window.set_position(target);
         }
     }
-    let _ = window.show();
+    window.show()?;
     let _ = window.set_focus();
+    Ok(())
 }
 
 /// Shows the quick panel and records that it is open, which clears the
 /// dismissal marker a stale tray click would otherwise consume.
-fn show_quick_panel_tracked(app: &AppHandle, window: &WebviewWindow, tray_rect: Option<Rect>) {
-    show_quick_panel(window, tray_rect);
+fn show_quick_panel_tracked(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    tray_rect: Option<Rect>,
+) -> tauri::Result<()> {
+    show_quick_panel(window, tray_rect)?;
     app.state::<QuickPanelVisibility>().mark_shown();
+    Ok(())
 }
 
 pub fn run() {
@@ -509,7 +522,7 @@ pub fn run() {
             // A build failure happens before any window exists and release
             // builds have no console, so the report is written and raised here
             // instead of panicking where nobody can read it.
-            crate::diagnostics::report_startup_failure(
+            crate::diagnostics::report_fatal_startup_failure(
                 "Zenith could not start",
                 &error.to_string(),
             );

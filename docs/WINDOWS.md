@@ -62,10 +62,12 @@ just doctor                          # builds and runs the source tree
 & "C:\Program Files\Zenith\Zenith.exe" --doctor --json
 ```
 
-`Zenith --doctor` also appends a runtime row, `log_writable`, which appends a
-line to the diagnostics log in the directory the application uses: a report that
-cannot be written is the failure that would hide every other one. The
-diagnostics panel shows the same fact as a warning next to the log path.
+`Zenith --doctor` also appends a runtime row, `log_writable`, which opens an
+existing diagnostics log for append and performs an actual write through a
+temporary sibling file in the same directory. The probe is removed without
+changing the real log: a report that cannot be written is the failure that
+would hide every other one. The diagnostics panel shows the same fact as a
+warning next to the log path.
 
 CI runs the packaging gate through `just test-package <installer> <scope>`,
 which installs silently, asserts the application landed under the base

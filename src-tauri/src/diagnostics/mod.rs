@@ -4,12 +4,14 @@ use crate::platform::PlatformEnvironment;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
 pub mod doctor;
 
 static LOG_MUTEX: Mutex<()> = Mutex::new(());
+static LOG_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const MAX_LOG_BYTES: u64 = 1_000_000; // 1 MB rotation threshold
 
@@ -113,10 +115,12 @@ fn record_log_failure_in(dir: &Path, reason: impl Into<String>) {
     ));
 }
 
-/// Why diagnostics are not being written, sanitized for the interface.
+/// The first diagnostics write failure observed by this process, sanitized for
+/// the interface.
 ///
-/// The reason can name a path, so it is masked and redacted on the way out the
-/// same way a log line is.
+/// A later successful write does not erase the failure that may explain a gap
+/// in the log. The reason can name a path, so it is masked and redacted on the
+/// way out the same way a log line is.
 pub fn log_failure() -> Option<String> {
     let reason = LOG_FAILURE
         .lock()
@@ -204,6 +208,19 @@ fn write_log_line(dir: &Path, category: &str, message: &str, restrict: RestrictP
 /// times; the user needs to be told once, not once per click.
 static REPORTED_STARTUP_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+const STARTUP_FAILURE_TITLE: &str = "Zenith could not open its window";
+
+fn prepare_startup_failure(context: &str, error: &str) -> Option<(String, String)> {
+    let detail = format!(
+        "{context}: {error}\n\nRun `Zenith --doctor` for a self-check, or open the log at {}.",
+        normalized_log_path()
+    );
+    log_error("startup", &detail);
+
+    mark_startup_failure_reported(context)
+        .then(|| (STARTUP_FAILURE_TITLE.to_string(), sanitize_log(&detail)))
+}
+
 /// Reports a failure the user cannot see otherwise.
 ///
 /// Release builds run with `windows_subsystem = "windows"` and no console, so a
@@ -213,22 +230,25 @@ static REPORTED_STARTUP_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// in a native dialog, once per context, and it names `--doctor` and the log
 /// path so the diagnostics stay reachable without a window.
 pub fn report_startup_failure(context: &str, error: &str) {
-    let detail = format!(
-        "{context}: {error}\n\nRun `Zenith --doctor` for a self-check, or open the log at {}.",
-        normalized_log_path()
-    );
-    log_error("startup", &detail);
-
-    if !mark_startup_failure_reported(context) {
+    let Some((title, detail)) = prepare_startup_failure(context, error) else {
         return;
-    }
+    };
 
     // The dialog is raised off the calling thread: the failure may have
     // happened on the main thread, and a modal dialog there would block the
     // event loop that is trying to finish starting.
-    let title = "Zenith could not open its window".to_string();
-    let detail = sanitize_log(&detail);
     std::thread::spawn(move || show_native_error_dialog(&title, &detail));
+}
+
+/// Reports a fatal failure synchronously before the process exits.
+///
+/// A detached dialog thread cannot survive `process::exit`, so failures that
+/// abort startup must wait for the native dialog instead of using the
+/// non-blocking path intended for the running event loop.
+pub fn report_fatal_startup_failure(context: &str, error: &str) {
+    if let Some((title, detail)) = prepare_startup_failure(context, error) {
+        show_native_error_dialog(&title, &detail);
+    }
 }
 
 /// Records that a context was reported, answering whether this is the first
@@ -286,57 +306,112 @@ fn show_native_error_dialog(title: &str, detail: &str) {
     }
 }
 
-/// Whether a line could be appended right now, creating the directory and the
-/// file if they do not exist, exactly as a real write would.
+/// Whether a line could be appended right now, creating the directory and
+/// writing a temporary sibling probe on the same file system.
 ///
 /// `--doctor` runs this against the machine's own log directory: a report that
 /// cannot be written is the failure that hides every other failure.
 pub(crate) fn probe_log_writability(dir: &Path) -> Result<(), String> {
+    probe_log_writability_with(dir, |file| {
+        file.write_all(b"Zenith diagnostics write probe\n")?;
+        file.flush()
+    })
+}
+
+type ProbeWrite = fn(&mut fs::File) -> std::io::Result<()>;
+
+fn probe_log_writability_with(dir: &Path, write_probe: ProbeWrite) -> Result<(), String> {
     // The probe leaves the machine as it found it. On Windows the per-user log
     // directory sits inside the install directory, so a probe that kept its
     // file would make an uninstalled tree look like it survived, and the
     // packaging gate exists to catch exactly that kind of residue.
-    let directory_existed = dir.exists();
+    let directory_existed = match fs::symlink_metadata(dir) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(format!("the log directory could not be inspected: {error}")),
+    };
     fs::create_dir_all(dir)
         .map_err(|error| format!("the log directory could not be created: {error}"))?;
-    let cleanup = || {
-        let _ = fs::remove_file(dir.join("zenith.log"));
-        if !directory_existed {
-            let _ = fs::remove_dir(dir);
+    let cleanup_created_directory = || -> Result<(), String> {
+        if directory_existed {
+            return Ok(());
+        }
+        fs::remove_dir(dir)
+            .map_err(|error| format!("the temporary log directory could not be removed: {error}"))
+    };
+
+    let file_path = dir.join("zenith.log");
+    let file_exists = match fs::symlink_metadata(&file_path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            let _ = cleanup_created_directory();
+            return Err(format!("the log file could not be inspected: {error}"));
         }
     };
     if let Err(error) = repair_log_permissions(dir, restrict_permissions)
         .map_err(|error| format!("the log file mode could not be repaired: {error}"))
     {
-        cleanup();
+        // Never remove a pre-existing log on a failed probe. If this call made
+        // the directory, it is still empty and can be removed safely.
+        let _ = cleanup_created_directory();
         return Err(error);
     }
-    let file_path = dir.join("zenith.log");
-    let file_existed = file_path.exists();
+
+    if file_exists {
+        // Verify that the real log can be opened, but never append the probe to
+        // it. Restoring by truncating to an earlier length could discard lines
+        // written concurrently by a running Zenith process.
+        if let Err(error) = OpenOptions::new().append(true).open(&file_path) {
+            return Err(format!(
+                "the log file could not be opened for writing: {error}"
+            ));
+        }
+    }
+
+    // A sibling file exercises creation and an actual write on the same file
+    // system without changing the user's log. A unique, create-only path makes
+    // cleanup safe even when multiple doctor processes run at once.
+    let probe_path = dir.join(format!(
+        ".zenith-write-probe-{}-{}",
+        std::process::id(),
+        LOG_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     let mut options = OpenOptions::new();
-    options.create(true).append(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         // Create owner-only from the first byte, as the write path does.
         options.mode(0o600);
     }
-    match options.open(&file_path) {
-        Ok(_) => {
-            if !file_existed {
-                let _ = fs::remove_file(&file_path);
-            }
-            if !directory_existed {
-                let _ = fs::remove_dir(dir);
-            }
-            Ok(())
-        }
+
+    let mut file = match options.open(&probe_path) {
+        Ok(file) => file,
         Err(error) => {
-            cleanup();
-            Err(format!(
-                "the log file could not be opened for writing: {error}"
-            ))
+            let mut message = format!("the log write probe could not be created: {error}");
+            if let Err(cleanup_error) = cleanup_created_directory() {
+                message.push_str(&format!("; {cleanup_error}"));
+            }
+            return Err(message);
         }
+    };
+
+    let write_result = write_probe(&mut file)
+        .map_err(|error| format!("the log write probe could not be written: {error}"));
+    drop(file);
+    let restore_result = fs::remove_file(&probe_path)
+        .map_err(|error| format!("the temporary log probe could not be removed: {error}"));
+
+    let directory_restore_result = cleanup_created_directory();
+    let failures = [write_result, restore_result, directory_restore_result]
+        .into_iter()
+        .filter_map(Result::err)
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -353,6 +428,11 @@ fn repair_log_permissions(dir: &Path, restrict: RestrictPermissions) -> std::io:
                 if metadata.file_type().is_symlink() {
                     return Err(std::io::Error::other(
                         "the diagnostics log path must not be a symlink",
+                    ));
+                }
+                if !metadata.file_type().is_file() {
+                    return Err(std::io::Error::other(
+                        "the diagnostics log path must be a regular file",
                     ));
                 }
                 restrict(&path, 0o600)?;
@@ -763,6 +843,13 @@ mod tests {
         ))
     }
 
+    fn refuse_probe_write(_file: &mut fs::File) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            "fixture refuses the write",
+        ))
+    }
+
     /// A logger that cannot write must say so: the interface shows this text
     /// next to the log path, and `--doctor` reports the probe.
     #[test]
@@ -802,10 +889,43 @@ mod tests {
             "previous line\n"
         );
 
+        // Opening a file is not proof that a write succeeds. The failed sibling
+        // probe is reported and the pre-existing log stays untouched.
+        let failure = probe_log_writability_with(&logs, refuse_probe_write).unwrap_err();
+        assert!(failure.contains("could not be written"), "{failure}");
+        assert_eq!(
+            std::fs::read_to_string(&existing).unwrap(),
+            "previous line\n"
+        );
+
+        // A failed write to a file created by the probe leaves no residue.
+        let new_logs = dir.path().join("new-logs");
+        assert!(probe_log_writability_with(&new_logs, refuse_probe_write).is_err());
+        assert!(!new_logs.exists());
+
         // A path that cannot be a directory is reported, not ignored.
         let blocked = dir.path().join("blocked");
         std::fs::write(&blocked, b"not a directory").unwrap();
         assert!(probe_log_writability(&blocked).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_log_probe_never_removes_an_existing_log_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        let outside = dir.path().join("outside.log");
+        std::fs::write(&outside, b"outside\n").unwrap();
+        let log = logs.join("zenith.log");
+        std::os::unix::fs::symlink(&outside, &log).unwrap();
+
+        assert!(probe_log_writability(&logs).is_err());
+        assert!(std::fs::symlink_metadata(&log)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside\n");
     }
 
     #[test]
@@ -927,6 +1047,22 @@ mod tests {
             0o644,
             "the link target must keep its own mode"
         );
+    }
+
+    #[test]
+    fn a_non_file_log_path_is_refused_without_being_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("zenith.log");
+        std::fs::create_dir(&log).unwrap();
+
+        #[cfg(unix)]
+        let original_mode = mode_of(&log);
+        let error = repair_log_permissions(dir.path(), restrict_permissions).unwrap_err();
+
+        assert!(error.to_string().contains("regular file"), "{error}");
+        assert!(log.is_dir());
+        #[cfg(unix)]
+        assert_eq!(mode_of(&log), original_mode);
     }
 
     /// The repair is not advisory: when the mode cannot be fixed, the line is
