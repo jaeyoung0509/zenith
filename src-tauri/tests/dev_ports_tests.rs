@@ -70,6 +70,10 @@ mod release_integration {
         }
 
         impl zenith_lib::dev_ports::DevPortSystem for TestIntegrationSystem {
+            fn path_flavor(&self) -> zenith_lib::platform::path_algebra::PathFlavor {
+                self.real.path_flavor()
+            }
+
             fn current_owner(&self) -> ProcessOwner {
                 self.real.current_owner()
             }
@@ -121,7 +125,7 @@ mod release_integration {
             test_port: port,
         };
 
-        let listeners = list_listeners(&store, &test_sys).expect("list_listeners failed");
+        let listeners = list_listeners(&store, &test_sys, None).expect("list_listeners failed");
         assert_eq!(listeners.len(), 1);
         let dev_listener = &listeners[0];
         assert_eq!(dev_listener.pid, pid);
@@ -129,9 +133,14 @@ mod release_integration {
         assert_eq!(dev_listener.server_name, "Python http.server");
         assert!(dev_listener.can_release);
 
-        let release_res =
-            release_listener(&store, &test_sys, &dev_listener.id, ReleaseMode::Graceful)
-                .expect("release_listener failed");
+        let release_res = release_listener(
+            &store,
+            &test_sys,
+            &dev_listener.id,
+            ReleaseMode::Graceful,
+            None,
+        )
+        .expect("release_listener failed");
 
         assert_eq!(release_res.outcome, ReleaseOutcome::Released);
         assert_eq!(release_res.port, port);

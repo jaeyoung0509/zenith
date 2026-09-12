@@ -1,8 +1,30 @@
 use crate::models::ZenithError;
+use crate::platform::path_algebra;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub struct SymlinkGuard;
+
+/// The drive or UNC root a Windows path descends from, or the path itself when
+/// it has none.
+fn windows_root(text: &str) -> String {
+    let flavor = crate::platform::path_algebra::PathFlavor::Windows;
+    let canonical = crate::platform::path_algebra::canonical_separators(
+        &crate::platform::path_algebra::strip_verbatim(text, flavor),
+        flavor,
+    );
+    let trimmed = crate::platform::path_algebra::trim_trailing_separators(&canonical, flavor);
+    let mut candidate = trimmed.as_str();
+    loop {
+        if crate::platform::path_algebra::is_root(candidate, flavor) {
+            return candidate.to_string();
+        }
+        match candidate.rfind('\\') {
+            Some(index) if index > 0 => candidate = &candidate[..index],
+            _ => return trimmed,
+        }
+    }
+}
 
 impl SymlinkGuard {
     /// Checks whether the path is a symbolic link or reparse point (junction, mount point) without following it.
@@ -31,35 +53,40 @@ impl SymlinkGuard {
 
     /// Resolves the trusted base anchor for a given target path.
     /// E.g., user home directory (`/Users/username` or `C:\Users\username`), `/tmp`, or temp dir.
-    pub fn resolve_trusted_anchor(target: &Path) -> PathBuf {
-        let home = crate::platform::NativePlatformPaths::new().home();
-        if let Some(home) = home {
-            if target.starts_with(&home) {
+    ///
+    /// The anchors come from the described environment, and the comparison uses
+    /// its path rules: the host's profile is never substituted for a stated one,
+    /// and a Windows-shaped target resolves to its own drive or UNC root instead
+    /// of collapsing to the POSIX `/`.
+    pub fn resolve_trusted_anchor(
+        target: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> PathBuf {
+        let flavor = environment.flavor();
+        let text = target.to_string_lossy();
+        if let Some(home) = environment.user_home() {
+            if path_algebra::contains(&home.to_string_lossy(), &text, flavor) {
                 return home;
             }
         }
-        let temp = std::env::temp_dir();
-        if target.starts_with(&temp) {
+        let temp = environment.temp_dir();
+        if path_algebra::contains(&temp.to_string_lossy(), &text, flavor) {
             return temp;
         }
-        if target.starts_with("/private/tmp") {
-            return PathBuf::from("/private/tmp");
+        if flavor.is_windows() {
+            return PathBuf::from(windows_root(&text));
         }
-        if target.starts_with("/tmp") {
-            return PathBuf::from("/tmp");
+        if !text.starts_with('/') {
+            // A relative target has no anchor to descend from; it is returned
+            // unchanged so the component check still refuses it.
+            return target.to_path_buf();
         }
-        if target.starts_with("/private/var") {
-            return PathBuf::from("/private/var");
+        for anchor in ["/private/tmp", "/tmp", "/private/var", "/var"] {
+            if text.starts_with(anchor) {
+                return PathBuf::from(anchor);
+            }
         }
-        if target.starts_with("/var") {
-            return PathBuf::from("/var");
-        }
-        // A Windows drive/UNC root cannot be represented by the Unix `/` anchor.
-        target
-            .ancestors()
-            .last()
-            .unwrap_or(Path::new("/"))
-            .to_path_buf()
+        PathBuf::from("/")
     }
 
     /// Validates all path components from `base` down to `target`.
@@ -129,8 +156,9 @@ impl SymlinkGuard {
     pub fn validate_no_symlink_ancestors(
         target: &Path,
         trusted_root: &Path,
+        environment: &crate::platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
-        let anchor = Self::resolve_trusted_anchor(trusted_root);
+        let anchor = Self::resolve_trusted_anchor(trusted_root, environment);
         if trusted_root.starts_with(&anchor) && anchor != *trusted_root {
             Self::validate_components_between(trusted_root, &anchor)?;
         }
@@ -140,8 +168,11 @@ impl SymlinkGuard {
     }
 
     /// Validates that target has no symlink ancestors from its system anchor (home/temp/root)
-    pub fn validate_anchored_path(target: &Path) -> Result<(), ZenithError> {
-        let anchor = Self::resolve_trusted_anchor(target);
+    pub fn validate_anchored_path(
+        target: &Path,
+        environment: &crate::platform::PlatformEnvironment,
+    ) -> Result<(), ZenithError> {
+        let anchor = Self::resolve_trusted_anchor(target, environment);
         Self::validate_components_between(target, &anchor)
     }
 

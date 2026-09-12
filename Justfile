@@ -115,7 +115,9 @@ build-front:
 # Generate TypeScript bindings from Rust via Tauri Specta
 generate-bindings: ensure-dist
     cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_typescript_bindings -- --ignored --exact
-    @echo "✨ Generated TypeScript bindings at: src/lib/bindings/tauri.ts"
+    cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_platform_capability_golden -- --ignored --exact
+    cargo test --manifest-path src-tauri/Cargo.toml --lib tests::export_platform_context_golden -- --ignored --exact
+    @echo "✨ Generated TypeScript bindings and golden data at: src/lib/bindings"
 
 # Run all test suites (backend Rust, frontend Vitest, release-installer regression)
 test: test-rust test-front test-release-installer

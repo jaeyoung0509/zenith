@@ -209,6 +209,7 @@ impl TerminationSystem for RealTerminationSystem {
 pub fn execute_graceful_stop(
     lease: &StopLease,
     system: &dyn TerminationSystem,
+    environment: &crate::platform::PlatformEnvironment,
 ) -> Result<(), String> {
     // 1. Process must exist
     let info = system
@@ -234,12 +235,18 @@ pub fn execute_graceful_stop(
     let Some(current_exe) = &info.executable else {
         return Err("Cannot determine process executable path.".to_string());
     };
-    if !crate::platform::NativePlatformPaths::paths_equal(current_exe, &lease.executable) {
+    if !crate::platform::path_algebra::equal(
+        &current_exe.to_string_lossy(),
+        &lease.executable.to_string_lossy(),
+        environment.flavor(),
+    ) {
         return Err("Process executable path drift detected.".to_string());
     }
 
     // 6. Check if adapter allows termination
-    if crate::agent_activity::adapters::adapter_for_process(current_exe, &info.cmd).is_none() {
+    if crate::agent_activity::adapters::adapter_for_process(current_exe, &info.cmd, environment)
+        .is_none()
+    {
         return Err("Process is not an allowlisted agent CLI.".to_string());
     }
 
@@ -318,6 +325,11 @@ fn same_lease_identity(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// The host machine these termination fixtures describe.
+    fn test_environment() -> crate::platform::PlatformEnvironment {
+        crate::platform::PlatformEnvironment::native()
+    }
 
     struct FakeSystem {
         current_owner: ProcessOwner,
@@ -398,7 +410,7 @@ mod tests {
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
-        let res = execute_graceful_stop(&lease, &system);
+        let res = execute_graceful_stop(&lease, &system, &test_environment());
         assert!(res.is_ok());
         assert_eq!(*system.signaled.lock().unwrap(), vec![42]);
     }
@@ -425,7 +437,7 @@ mod tests {
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
-        let res = execute_graceful_stop(&lease, &system);
+        let res = execute_graceful_stop(&lease, &system, &test_environment());
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("PID reuse"));
         assert!(system.signaled.lock().unwrap().is_empty());
@@ -453,7 +465,7 @@ mod tests {
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
-        let res = execute_graceful_stop(&lease, &system);
+        let res = execute_graceful_stop(&lease, &system, &test_environment());
         assert!(res.is_err());
         let message = res.unwrap_err();
         assert!(
@@ -485,7 +497,7 @@ mod tests {
         };
 
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
-        let res = execute_graceful_stop(&lease, &system);
+        let res = execute_graceful_stop(&lease, &system, &test_environment());
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("protected"));
     }
@@ -565,7 +577,7 @@ mod tests {
         };
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
 
-        let error = execute_graceful_stop(&lease, &system).unwrap_err();
+        let error = execute_graceful_stop(&lease, &system, &test_environment()).unwrap_err();
         assert!(error.contains("working directory"));
         assert!(system.signaled.lock().unwrap().is_empty());
     }
@@ -595,7 +607,7 @@ mod tests {
 
         // The process survives the whole bounded wait, so the same verified
         // identity is force-terminated.
-        assert!(execute_graceful_stop(&lease, &system).is_ok());
+        assert!(execute_graceful_stop(&lease, &system, &test_environment()).is_ok());
         assert_eq!(*system.signaled.lock().unwrap(), vec![42]);
         assert_eq!(*system.forced.lock().unwrap(), vec![42]);
     }
@@ -630,7 +642,7 @@ mod tests {
         };
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
 
-        assert!(execute_graceful_stop(&lease, &system).is_ok());
+        assert!(execute_graceful_stop(&lease, &system, &test_environment()).is_ok());
         assert_eq!(*system.signaled.lock().unwrap(), vec![42]);
         assert!(
             system.forced.lock().unwrap().is_empty(),
@@ -661,7 +673,7 @@ mod tests {
         };
         let lease = test_lease(42, 200, "/usr/local/bin/claude", Some("/workspace/repo"));
 
-        assert!(execute_graceful_stop(&lease, &system).is_ok());
+        assert!(execute_graceful_stop(&lease, &system, &test_environment()).is_ok());
         assert_eq!(*system.forced.lock().unwrap(), vec![42]);
     }
 }

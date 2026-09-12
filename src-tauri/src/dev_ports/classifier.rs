@@ -1,3 +1,4 @@
+use crate::platform::path_algebra::{self, PathFlavor};
 use crate::process_owner::ProcessOwner;
 use std::path::{Path, PathBuf};
 
@@ -27,8 +28,15 @@ pub struct ClassificationResult {
 }
 
 /// Classifies a process listening on a port according to safety rules and positive dev-server signatures.
-pub fn classify_listener(input: &ProcessClassificationInput) -> ClassificationResult {
-    let (project_name, working_directory) = sanitize_project_context(input.cwd, input.argv);
+///
+/// `flavor` is the path vocabulary of the machine being described, so a
+/// Windows process is classified with Windows path rules on every host instead
+/// of the rules of whatever machine runs the classifier.
+pub fn classify_listener(
+    input: &ProcessClassificationInput,
+    flavor: PathFlavor,
+) -> ClassificationResult {
+    let (project_name, working_directory) = sanitize_project_context(input.cwd, input.argv, flavor);
 
     // 1. Privileged port check (ports < 1024)
     if input.port < 1024 {
@@ -466,39 +474,75 @@ pub fn matches_tool_component(component: &str, tool: &str) -> bool {
 }
 
 /// Sanitizes the working directory and project name without returning secret arguments.
+///
+/// Every step uses the stated flavor's rules: `NativePlatformPaths` applies the
+/// host's, which made a Windows working directory normalize (and split into
+/// components) as if it were a POSIX path.
 fn sanitize_project_context(
     cwd: Option<&Path>,
     argv: &[String],
+    flavor: PathFlavor,
 ) -> (Option<String>, Option<PathBuf>) {
     // Try cwd first
     if let Some(dir) = cwd {
-        let norm_dir = crate::platform::NativePlatformPaths::normalize_verbatim_path(dir);
+        let norm_dir = normalize_working_directory(dir, flavor);
         let dir_str = norm_dir.to_string_lossy();
-        if !dir_str.is_empty() && dir_str != "/" {
-            let project_name = norm_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .filter(|n| !n.is_empty() && n != ".");
-            return (project_name, Some(norm_dir));
+        if !dir_str.is_empty() && !path_algebra::is_root(&dir_str, flavor) {
+            return (flavor_last_component(&dir_str, flavor), Some(norm_dir));
         }
     }
 
     // Fallback: check argv for script paths
     for arg in argv.iter().skip(1) {
-        let path = Path::new(arg);
-        if path.is_absolute() {
-            let norm_path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
-            if let Some(parent) = norm_path.parent() {
-                let project_name = parent
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .filter(|n| !n.is_empty());
-                return (project_name, Some(parent.to_path_buf()));
-            }
+        if !path_algebra::is_absolute(arg, flavor) {
+            continue;
+        }
+        let norm_text = path_algebra::strip_verbatim(arg, flavor);
+        if let Some(parent) = flavor_parent(&norm_text, flavor) {
+            return (
+                flavor_last_component(&parent, flavor),
+                Some(PathBuf::from(parent)),
+            );
         }
     }
 
     (None, None)
+}
+
+/// Normalizes a path with the stated flavor, keeping the verbatim prefix out of
+/// the value every downstream rule compares.
+fn normalize_working_directory(path: &Path, flavor: PathFlavor) -> PathBuf {
+    PathBuf::from(path_algebra::strip_verbatim(
+        &path.to_string_lossy(),
+        flavor,
+    ))
+}
+
+/// The directory containing `path`, or `None` when it has no separator.
+fn flavor_parent(path: &str, flavor: PathFlavor) -> Option<String> {
+    let canonical = path_algebra::canonical_separators(path, flavor);
+    let trimmed = path_algebra::trim_trailing_separators(&canonical, flavor);
+    let index = trimmed.rfind(flavor.separator())?;
+    let parent = path_algebra::trim_trailing_separators(&trimmed[..index], flavor);
+    Some(if parent.is_empty() {
+        flavor.separator().to_string()
+    } else {
+        parent
+    })
+}
+
+/// The final path component, or `None` for a root or a `.`/`..` spelling.
+fn flavor_last_component(path: &str, flavor: PathFlavor) -> Option<String> {
+    let canonical = path_algebra::canonical_separators(path, flavor);
+    let trimmed = path_algebra::trim_trailing_separators(&canonical, flavor);
+    if trimmed.is_empty() || path_algebra::is_root(&trimmed, flavor) {
+        return None;
+    }
+    trimmed
+        .rsplit(flavor.separator())
+        .next()
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .map(str::to_string)
 }
 
 fn clean_process_display_name(process_name: &str, raw_command: &str) -> String {
@@ -536,7 +580,7 @@ mod tests {
             started_at: Some(1700000000),
         };
 
-        let result = classify_listener(&input);
+        let result = classify_listener(&input, PathFlavor::current());
         assert!(result.can_release);
         assert_eq!(result.server_name, "Vite");
         assert_eq!(result.project_name.as_deref(), Some("clean1"));
@@ -564,16 +608,18 @@ mod tests {
             started_at: Some(1700000000),
         };
 
-        let result = classify_listener(&input);
+        let result = classify_listener(&input, PathFlavor::current());
         assert!(result.can_release);
         assert_eq!(result.server_name, "Next.js");
         assert_eq!(result.project_name.as_deref(), Some("web-dashboard"));
         assert_eq!(result.blocked_reason, None);
     }
 
-    #[cfg(windows)]
+    /// The stated Windows flavor decides Windows path rules on every runner:
+    /// the same fixtures used to be classified with the host's rules, so a
+    /// Windows-shaped working directory only resolved on a Windows machine.
     #[test]
-    fn windows_paths_resolve_project_and_working_directory() {
+    fn windows_flavor_project_context_is_sanitized_with_the_stated_flavor() {
         let argv = vec!["node".to_string(), r"C:\dev\my-app\server.js".to_string()];
         let input = ProcessClassificationInput {
             pid: 41000,
@@ -588,7 +634,7 @@ mod tests {
             argv: &argv,
             started_at: Some(1700000000),
         };
-        let result = classify_listener(&input);
+        let result = classify_listener(&input, PathFlavor::Windows);
         assert_eq!(result.project_name.as_deref(), Some("my-app"));
         // The classifier keeps the real path; masking is applied only when the
         // IPC model is built.
@@ -600,8 +646,46 @@ mod tests {
         // Without a cwd, the absolute Windows script path still identifies the
         // project instead of being skipped by a POSIX prefix test.
         let input = ProcessClassificationInput { cwd: None, ..input };
-        let result = classify_listener(&input);
+        let result = classify_listener(&input, PathFlavor::Windows);
         assert_eq!(result.project_name.as_deref(), Some("my-app"));
+        assert_eq!(
+            result.working_directory.as_deref(),
+            Some(Path::new(r"C:\dev\my-app"))
+        );
+
+        // A verbatim prefix is stripped before the value leaves the classifier.
+        let input = ProcessClassificationInput {
+            cwd: Some(Path::new(r"\\?\C:\dev\my-app")),
+            argv: &argv,
+            ..input
+        };
+        let result = classify_listener(&input, PathFlavor::Windows);
+        assert_eq!(
+            result.working_directory.as_deref(),
+            Some(Path::new(r"C:\dev\my-app")),
+            "the verbatim prefix must not survive into the observation"
+        );
+
+        // Forward slashes are the same separators on Windows, so the project
+        // name is still the last component rather than the whole spelling.
+        let input = ProcessClassificationInput {
+            cwd: Some(Path::new("C:/dev/my-app")),
+            ..input
+        };
+        let result = classify_listener(&input, PathFlavor::Windows);
+        assert_eq!(result.project_name.as_deref(), Some("my-app"));
+
+        // POSIX rules stay exactly as they were for a POSIX process.
+        let input = ProcessClassificationInput {
+            cwd: Some(Path::new("/Users/tester/my-app")),
+            ..input
+        };
+        let result = classify_listener(&input, PathFlavor::Posix);
+        assert_eq!(result.project_name.as_deref(), Some("my-app"));
+        assert_eq!(
+            result.working_directory.as_deref(),
+            Some(Path::new("/Users/tester/my-app"))
+        );
     }
 
     #[test]
@@ -625,7 +709,7 @@ mod tests {
             argv: &argv1,
             started_at: Some(1700000000),
         };
-        let res1 = classify_listener(&input1);
+        let res1 = classify_listener(&input1, PathFlavor::current());
         assert!(res1.can_release);
         assert_eq!(res1.server_name, "Python http.server");
 
@@ -647,7 +731,7 @@ mod tests {
             argv: &argv2,
             started_at: Some(1700000000),
         };
-        let res2 = classify_listener(&input2);
+        let res2 = classify_listener(&input2, PathFlavor::current());
         assert!(res2.can_release);
         assert_eq!(res2.server_name, "Uvicorn");
     }
@@ -673,7 +757,7 @@ mod tests {
             argv: &agent_argv,
             started_at: Some(1700000000),
         };
-        let agent_result = classify_listener(&agent_input);
+        let agent_result = classify_listener(&agent_input, PathFlavor::current());
         assert!(agent_result.can_release);
         assert_eq!(agent_result.server_name, "agent-browser");
 
@@ -698,7 +782,7 @@ mod tests {
             argv: &chrome_argv,
             started_at: Some(1700000001),
         };
-        let chrome_result = classify_listener(&chrome_input);
+        let chrome_result = classify_listener(&chrome_input, PathFlavor::current());
         assert!(chrome_result.can_release);
         assert_eq!(chrome_result.server_name, "Chrome for Testing");
     }
@@ -719,7 +803,7 @@ mod tests {
             argv: &fake_agent_argv,
             started_at: Some(1700000000),
         };
-        assert!(!classify_listener(&fake_agent).can_release);
+        assert!(!classify_listener(&fake_agent, PathFlavor::current()).can_release);
 
         let chrome_argv = vec![
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
@@ -741,7 +825,7 @@ mod tests {
             argv: &chrome_argv,
             started_at: Some(1700000001),
         };
-        assert!(!classify_listener(&standard_chrome).can_release);
+        assert!(!classify_listener(&standard_chrome, PathFlavor::current()).can_release);
 
         let incomplete_testing_argv = vec![
             "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
@@ -762,7 +846,7 @@ mod tests {
             argv: &incomplete_testing_argv,
             started_at: Some(1700000002),
         };
-        assert!(!classify_listener(&incomplete_testing_browser).can_release);
+        assert!(!classify_listener(&incomplete_testing_browser, PathFlavor::current()).can_release);
 
         let helper_argv = vec![
             "/Users/apple/.agent-browser/browsers/chrome/Google Chrome for Testing.app/Contents/Frameworks/Google Chrome for Testing Framework.framework/Versions/Current/Helpers/Google Chrome for Testing Helper.app/Contents/MacOS/Google Chrome for Testing Helper".to_string(),
@@ -781,7 +865,7 @@ mod tests {
             argv: &helper_argv,
             started_at: Some(1700000003),
         };
-        assert!(!classify_listener(&testing_browser_helper).can_release);
+        assert!(!classify_listener(&testing_browser_helper, PathFlavor::current()).can_release);
     }
 
     #[test]
@@ -801,7 +885,7 @@ mod tests {
             started_at: Some(1700000000),
         };
 
-        let result = classify_listener(&input);
+        let result = classify_listener(&input, PathFlavor::current());
         assert!(!result.can_release);
         assert_eq!(
             result.blocked_reason.as_deref(),
@@ -830,7 +914,10 @@ mod tests {
                 started_at: Some(1700000000),
             };
 
-            assert!(!classify_listener(&input).can_release, "script: {script}");
+            assert!(
+                !classify_listener(&input, PathFlavor::current()).can_release,
+                "script: {script}"
+            );
         }
     }
 
@@ -864,7 +951,7 @@ mod tests {
                 started_at,
             };
 
-            let result = classify_listener(&input);
+            let result = classify_listener(&input, PathFlavor::current());
             assert!(!result.can_release);
             assert_eq!(
                 result.blocked_reason.as_deref(),
@@ -888,7 +975,7 @@ mod tests {
             argv: &[],
             started_at: Some(1700000000),
         };
-        let res_root = classify_listener(&input_root);
+        let res_root = classify_listener(&input_root, PathFlavor::current());
         assert!(!res_root.can_release);
         assert_eq!(
             res_root.blocked_reason.as_deref(),
@@ -908,7 +995,7 @@ mod tests {
             argv: &[],
             started_at: Some(1700000000),
         };
-        let res_other = classify_listener(&input_other);
+        let res_other = classify_listener(&input_other, PathFlavor::current());
         assert!(!res_other.can_release);
         assert_eq!(
             res_other.blocked_reason.as_deref(),
@@ -932,7 +1019,7 @@ mod tests {
             argv: &argv,
             started_at: Some(1700000000),
         };
-        let res = classify_listener(&input);
+        let res = classify_listener(&input, PathFlavor::current());
         assert!(!res.can_release);
         assert_eq!(
             res.blocked_reason.as_deref(),
@@ -956,7 +1043,7 @@ mod tests {
             argv: &[],
             started_at: Some(1700000000),
         };
-        let res_pg = classify_listener(&input_pg);
+        let res_pg = classify_listener(&input_pg, PathFlavor::current());
         assert!(!res_pg.can_release);
         assert_eq!(
             res_pg.blocked_reason.as_deref(),
@@ -977,7 +1064,7 @@ mod tests {
             argv: &[],
             started_at: Some(1700000000),
         };
-        assert!(!classify_listener(&input_ssh).can_release);
+        assert!(!classify_listener(&input_ssh, PathFlavor::current()).can_release);
 
         // Zenith itself
         let input_zenith = ProcessClassificationInput {
@@ -993,7 +1080,7 @@ mod tests {
             argv: &[],
             started_at: Some(1700000000),
         };
-        let res_zenith = classify_listener(&input_zenith);
+        let res_zenith = classify_listener(&input_zenith, PathFlavor::current());
         assert!(!res_zenith.can_release);
         assert_eq!(res_zenith.server_name, "Zenith");
     }
@@ -1020,7 +1107,7 @@ mod tests {
             started_at: Some(1700000000),
         };
 
-        let result = classify_listener(&input);
+        let result = classify_listener(&input, PathFlavor::current());
         assert!(result.can_release);
         assert_eq!(result.server_name, "Vite");
         assert_eq!(result.project_name.as_deref(), Some("secret-project"));

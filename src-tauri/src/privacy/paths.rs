@@ -5,18 +5,16 @@
 //! anything else is reduced to a basename with an out-of-home marker. The
 //! absolute path is never returned as a fallback.
 
-use crate::platform::NativePlatformPaths;
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::LazyLock;
 
-pub fn user_home() -> Option<PathBuf> {
-    NativePlatformPaths::new().home()
-}
-
 /// Renders a path for display without leaking the absolute location.
-pub fn display_path(path: &Path) -> String {
-    display_path_with_home(path, user_home().as_deref())
+///
+/// The mask follows the described profile: a stated machine's own home is what
+/// gets shortened, so a test or the doctor never masks with the host's.
+pub fn display_path(path: &Path, environment: &crate::platform::PlatformEnvironment) -> String {
+    display_path_with_home(path, environment.user_home().as_deref())
 }
 
 /// Pure form used by tests and by callers that already resolved the home path.
@@ -55,8 +53,11 @@ pub fn normalize_separators(value: &str) -> String {
 }
 
 /// Masks absolute paths embedded in free-form text such as log lines.
+///
+/// Log lines describe the process that wrote them, so the native profile is the
+/// one whose home is shortened here.
 pub fn mask_paths_in_text(text: &str) -> String {
-    let home = user_home();
+    let home = crate::platform::PlatformEnvironment::native().user_home();
     mask_paths_with_home(text, home.as_deref())
 }
 

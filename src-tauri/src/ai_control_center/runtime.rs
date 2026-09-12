@@ -18,6 +18,10 @@ fn unix_timestamp() -> u64 {
 pub struct AiControlRuntime {
     memory_sampler: Arc<crate::metrics::MemorySampler>,
     dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
+    /// The machine this runtime describes. Listener classification compares
+    /// process paths and masks working directories, so it needs the stated
+    /// environment rather than the host's.
+    environment: std::sync::Arc<crate::platform::PlatformEnvironment>,
     agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
     activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,
     activity_generation: Arc<AtomicU64>,
@@ -35,6 +39,7 @@ impl AiControlRuntime {
     pub fn new(
         memory_sampler: Arc<crate::metrics::MemorySampler>,
         dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
+        environment: std::sync::Arc<crate::platform::PlatformEnvironment>,
         agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
         activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,
         activity_generation: Arc<AtomicU64>,
@@ -46,6 +51,7 @@ impl AiControlRuntime {
         Self {
             memory_sampler,
             dev_port_store,
+            environment,
             agent_activity_cache,
             activity_singleflight,
             activity_generation,
@@ -125,6 +131,7 @@ impl AiControlRuntime {
                 &self.activity_singleflight,
                 &self.activity_generation,
                 &self.runtime_metrics,
+                &self.environment,
                 inactivity_threshold_secs,
                 false,
             ));
@@ -145,7 +152,8 @@ impl AiControlRuntime {
         let listeners = if preferences.autopilot.notify_on_session_completion {
             crate::dev_ports::list_listeners_with_context(
                 &self.dev_port_store,
-                &crate::dev_ports::RealDevPortSystem::default(),
+                &crate::dev_ports::RealDevPortSystem::new(self.environment.flavor()),
+                self.environment.user_home().as_deref(),
             )
             .unwrap_or_default()
         } else {
@@ -207,6 +215,7 @@ mod tests {
         Arc::new(AiControlRuntime::new(
             memory_sampler,
             Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
+            Arc::new(crate::platform::PlatformEnvironment::native()),
             agent_activity_cache,
             Arc::new(SingleFlight::new()),
             Arc::new(AtomicU64::new(1)),

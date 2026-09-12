@@ -842,8 +842,11 @@ fn test_ancestor_symlink_escape_rejection() {
 
         let target_path = symlink_dir.join("cache");
         // Verify ancestor symlink detection
-        let validation_res =
-            SymlinkGuard::validate_no_symlink_ancestors(&target_path, &trusted_root);
+        let validation_res = SymlinkGuard::validate_no_symlink_ancestors(
+            &target_path,
+            &trusted_root,
+            &PlatformEnvironment::native(),
+        );
         assert!(
             validation_res.is_err(),
             "Ancestor symlink must be rejected!"

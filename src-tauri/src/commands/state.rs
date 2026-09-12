@@ -42,3 +42,101 @@ pub struct AppState {
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
 }
+
+impl AppState {
+    /// Builds the process-wide state from the two facts the composition root
+    /// observes: the environment every component is described by and the
+    /// container host.
+    ///
+    /// Construction lives here rather than inline in `run()` so a test can
+    /// build the same state from a simulated environment and exercise the
+    /// commands' dependencies (the environment self-check, the metrics handles,
+    /// the shared caches) without a Tauri app handle.
+    pub fn new(
+        environment: Arc<crate::platform::PlatformEnvironment>,
+        container_host: crate::docker::adapter::ContainerHost,
+    ) -> Self {
+        // The catalog is loaded against the same description every other
+        // component receives, instead of building a second, unrelated native
+        // environment.
+        let registry = Arc::new(SignatureRegistry::load_or_default(
+            &environment,
+            SignatureRegistry::load_embedded_with,
+        ));
+        let awake_manager = Arc::new(KeepAwakeManager::new());
+        awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
+        let settings = Arc::new(Mutex::new(ZenithSettings::default()));
+        let last_scan = Arc::new(Mutex::new(None));
+        let credentials: Arc<dyn crate::ai_providers::CredentialStore> =
+            Arc::new(crate::ai_providers::OsCredentialStore::default());
+        let ai_collection_service =
+            Arc::new(crate::ai_providers::ProviderCollectionService::default());
+        let ai_usage_cache = Arc::new(Mutex::new(None));
+        let runtime_metrics = Arc::new(RuntimeMetrics::new());
+        let usage_singleflight = Arc::new(SingleFlight::with_metrics(runtime_metrics.clone()));
+        let usage_generation = Arc::new(AtomicU64::new(1));
+        let delete_plans = Arc::new(Mutex::new(HashMap::new()));
+        let storage_operation_gate = StorageOperationGate::default();
+        let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
+        let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
+        let memory_termination_store =
+            Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
+        let dev_port_store =
+            Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
+        let agent_activity_cache = Arc::new(Mutex::new(None));
+        let activity_singleflight = Arc::new(SingleFlight::with_metrics(runtime_metrics.clone()));
+        let activity_generation = Arc::new(AtomicU64::new(1));
+        let execution_budgets = Arc::new(ExecutionBudgets::new());
+        let ai_control_state = Arc::new(Mutex::new(
+            crate::ai_control_center::state::AiControlCenterState::default(),
+        ));
+        let ai_control_refresh_lock = Arc::new(Mutex::new(()));
+        let ai_control_runtime =
+            Arc::new(crate::ai_control_center::runtime::AiControlRuntime::new(
+                memory_sampler.clone(),
+                dev_port_store.clone(),
+                environment.clone(),
+                agent_activity_cache.clone(),
+                activity_singleflight.clone(),
+                activity_generation.clone(),
+                runtime_metrics.clone(),
+                ai_control_state.clone(),
+                awake_manager.clone(),
+                settings.clone(),
+            ));
+        let platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider> =
+            Arc::new(crate::platform::NativePlatformCapabilities::new(
+                environment.clone(),
+            ));
+
+        Self {
+            environment,
+            container_host,
+            registry,
+            awake_manager,
+            settings,
+            last_scan,
+            credentials,
+            ai_collection_service,
+            ai_usage_cache,
+            usage_singleflight,
+            usage_generation,
+            delete_plans,
+            storage_operation_gate,
+            storage_state,
+            memory_sampler,
+            memory_termination_store,
+            dev_port_store,
+            agent_activity_cache,
+            activity_singleflight,
+            activity_generation,
+            ai_control_state,
+            ai_control_refresh_lock,
+            ai_control_runtime,
+            platform_capabilities,
+            runtime_metrics,
+            execution_budgets,
+            docker_status_cache: Arc::new(Mutex::new(None)),
+        }
+    }
+}

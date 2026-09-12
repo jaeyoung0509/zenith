@@ -326,13 +326,13 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
             let root = allowed_large_file_root(environment, &target.path).ok_or_else(|| {
                 "Skipped because the file has no approved Large Files root.".to_string()
             })?;
-            validate_no_symlink_components(&target.path, &root)?;
+            validate_no_symlink_components(&target.path, &root, environment)?;
         }
         TrashScope::AppBundle => {
             let Some(root) = application_root_for_path(environment, &target.path) else {
                 return Err("Skipped because the app moved outside Applications.".to_string());
             };
-            validate_no_symlink_components(&target.path, &root)?;
+            validate_no_symlink_components(&target.path, &root, environment)?;
             if is_application_running(&target.path) {
                 return Err("Skipped because the reviewed application is running.".to_string());
             }
@@ -344,7 +344,7 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
             let root = app_data_root_for_path(environment, &target.path).ok_or_else(|| {
                 "Skipped because related data moved outside the approved Library scope.".to_string()
             })?;
-            validate_no_symlink_components(&target.path, &root)?;
+            validate_no_symlink_components(&target.path, &root, environment)?;
         }
         TrashScope::DeveloperArtifact {
             workspace_root,
@@ -441,7 +441,7 @@ fn validate_developer_artifact_target(
     {
         return Err("Skipped because the artifact moved outside its reviewed scope.".to_string());
     }
-    validate_no_symlink_components(target.path.as_path(), workspace_root)?;
+    validate_no_symlink_components(target.path.as_path(), workspace_root, environment)?;
     if !same_directory_identity(workspace_root, workspace_identity) {
         return Err("Skipped because the workspace changed after review.".to_string());
     }
@@ -576,8 +576,12 @@ fn app_data_root_for_path(environment: &PlatformEnvironment, path: &Path) -> Opt
         .find(|root| path.parent() == Some(root.as_path()))
 }
 
-fn validate_no_symlink_components(path: &Path, root: &Path) -> Result<(), String> {
-    SymlinkGuard::validate_no_symlink_ancestors(path, root)
+fn validate_no_symlink_components(
+    path: &Path,
+    root: &Path,
+    environment: &crate::platform::PlatformEnvironment,
+) -> Result<(), String> {
+    SymlinkGuard::validate_no_symlink_ancestors(path, root, environment)
         .map_err(|_| "Skipped because the reviewed path contains a symbolic link.".to_string())
 }
 
@@ -1086,7 +1090,9 @@ mod tests {
         std::os::unix::fs::symlink(&outside, trusted_root.join("redirect")).unwrap();
         let target = trusted_root.join("redirect/file.bin");
 
-        let error = validate_no_symlink_components(&target, &trusted_root).unwrap_err();
+        let environment = PlatformEnvironment::native();
+        let error =
+            validate_no_symlink_components(&target, &trusted_root, &environment).unwrap_err();
         assert!(error.contains("symbolic link"));
     }
 

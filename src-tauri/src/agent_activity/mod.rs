@@ -47,12 +47,17 @@ pub fn global_store() -> Arc<Mutex<store::AgentActivityStore>> {
         .clone()
 }
 
-pub fn collect() -> AgentActivitySnapshot {
-    collect_registry().snapshot
+pub fn collect(environment: &crate::platform::PlatformEnvironment) -> AgentActivitySnapshot {
+    collect_registry(environment).snapshot
 }
 
+/// Whether a verified agent session is active, answered for the native machine.
+///
+/// This is the Keep Awake watcher's validator, so it describes the machine the
+/// process runs on. The command surfaces read the injected environment through
+/// [`collect`] instead.
 pub fn has_active_verified_session() -> bool {
-    let snapshot = collect();
+    let snapshot = collect(&crate::platform::PlatformEnvironment::native());
     snapshot
         .projects
         .iter()
@@ -70,12 +75,15 @@ pub fn has_active_verified_session() -> bool {
         })
 }
 
-pub fn collect_registry() -> AgentActivityRegistry {
-    collect_registry_with_inactivity_threshold(DEFAULT_INACTIVITY_THRESHOLD_SECONDS)
+pub fn collect_registry(
+    environment: &crate::platform::PlatformEnvironment,
+) -> AgentActivityRegistry {
+    collect_registry_with_inactivity_threshold(DEFAULT_INACTIVITY_THRESHOLD_SECONDS, environment)
 }
 
 pub fn collect_registry_with_inactivity_threshold(
     inactivity_threshold_seconds: u64,
+    environment: &crate::platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     let observed_at = now();
     let current_owner = crate::process_owner::ProcessOwner::current();
@@ -120,6 +128,7 @@ pub fn collect_registry_with_inactivity_threshold(
         observed_at,
         &mut store_guard,
         inactivity_threshold_seconds,
+        environment,
     )
 }
 
@@ -128,6 +137,7 @@ pub fn registry_from_records(
     current_owner: crate::process_owner::ProcessOwner,
     observed_at: u64,
     store: &mut store::AgentActivityStore,
+    environment: &crate::platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     registry_from_records_with_inactivity_threshold(
         records,
@@ -135,6 +145,7 @@ pub fn registry_from_records(
         observed_at,
         store,
         DEFAULT_INACTIVITY_THRESHOLD_SECONDS,
+        environment,
     )
 }
 
@@ -144,6 +155,7 @@ fn registry_from_records_with_inactivity_threshold(
     observed_at: u64,
     store: &mut store::AgentActivityStore,
     inactivity_threshold_seconds: u64,
+    environment: &crate::platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     store.prune_active_events(observed_at);
     let previous_snapshot = store.last_successful_snapshot.clone();
@@ -158,7 +170,7 @@ fn registry_from_records_with_inactivity_threshold(
         .into_iter()
         .filter_map(|record| {
             let executable = record.executable.as_deref()?;
-            let adapter = adapters::adapter_for_process(executable, &record.cmd)?;
+            let adapter = adapters::adapter_for_process(executable, &record.cmd, environment)?;
             if record.owner != Some(current_owner.clone())
                 || record.started_at == 0
                 || record.pid <= 1
@@ -264,7 +276,10 @@ fn registry_from_records_with_inactivity_threshold(
         };
 
         // Resolve candidate project for this cwd
-        let canonical_cwd = record.cwd.as_deref().and_then(resolve_project);
+        let canonical_cwd = record
+            .cwd
+            .as_deref()
+            .and_then(|cwd| resolve_project(cwd, environment));
         if let Some((root, identity)) = canonical_cwd {
             project_roots.insert(identity.id.clone(), root.clone());
             discovered_projects.insert(identity.id.clone(), (root, identity));
@@ -393,8 +408,9 @@ fn same_project_or_directory(left: &std::path::Path, right: &std::path::Path) ->
     match (left, right) {
         (Some(left), Some(right)) if left == right => true,
         (Some(left), Some(right)) => {
-            let left_project = resolve_project(&left).map(|(root, _)| root);
-            let right_project = resolve_project(&right).map(|(root, _)| root);
+            let host = crate::platform::PlatformEnvironment::native();
+            let left_project = resolve_project(&left, &host).map(|(root, _)| root);
+            let right_project = resolve_project(&right, &host).map(|(root, _)| root);
             left_project.is_some() && left_project == right_project
         }
         _ => false,
@@ -411,6 +427,11 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The host machine these fixtures observe.
+    fn test_environment() -> crate::platform::PlatformEnvironment {
+        crate::platform::PlatformEnvironment::native()
+    }
 
     #[cfg(windows)]
     #[test]
@@ -517,7 +538,8 @@ mod tests {
             owner,
             100,
             &mut store,
-        );
+            &test_environment(),
+                );
 
         let sessions: Vec<_> = registry
             .snapshot
@@ -562,6 +584,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
+            &test_environment(),
         );
         assert!(registry.snapshot.projects.is_empty());
         assert!(registry.snapshot.unassigned_sessions.is_empty());
@@ -595,6 +618,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
+            &test_environment(),
         );
         assert_eq!(registry.snapshot.projects.len(), 1);
         assert_eq!(registry.snapshot.projects[0].sessions.len(), 2);
@@ -665,6 +689,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
+            &test_environment(),
         );
         let sessions = registry
             .snapshot
@@ -704,6 +729,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             10_000,
             &mut store,
+            &test_environment(),
         );
         assert_eq!(
             first.snapshot.projects[0].sessions[0].status,
@@ -721,6 +747,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             10_000 + DEFAULT_INACTIVITY_THRESHOLD_SECONDS,
             &mut store,
+            &test_environment(),
         );
         assert_eq!(
             second.snapshot.projects[0].sessions[0].status,
@@ -742,12 +769,14 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             100,
             &mut store,
+            &test_environment(),
         );
         let exited = registry_from_records(
             vec![],
             crate::process_owner::ProcessOwner::Unix(501),
             110,
             &mut store,
+            &test_environment(),
         );
         assert_eq!(exited.snapshot.projects.len(), 1);
         assert_eq!(
@@ -760,6 +789,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Unix(501),
             110 + store::EXITED_SESSION_RETENTION_SECS,
             &mut store,
+            &test_environment(),
         );
         assert!(expired.snapshot.projects.is_empty());
     }
@@ -780,6 +810,7 @@ mod tests {
             crate::process_owner::ProcessOwner::Windows("S-1-5-21-100".to_string()),
             100,
             &mut store,
+            &test_environment(),
         );
         assert_eq!(registry.snapshot.unassigned_sessions.len(), 1);
         assert_eq!(

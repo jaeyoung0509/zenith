@@ -33,7 +33,10 @@ pub fn get_integration_info(tool_id: &str, home_dir: &Path) -> AgentIntegrationI
         installed,
         integration_active,
         // Display paths must never leak the absolute home location across IPC.
-        config_path: Some(crate::privacy::paths::display_path(&config_path)),
+        config_path: Some(crate::privacy::paths::display_path_with_home(
+            &config_path,
+            Some(home_dir),
+        )),
         description: tool.description.to_string(),
     }
 }

@@ -5,6 +5,7 @@ use zenith_lib::docker::DockerAdapter;
 use zenith_lib::models::{
     AwakeBehavior, Category, CleanStrategy, DiskMetrics, RiskTier, Signature,
 };
+use zenith_lib::platform::path_algebra::PathFlavor;
 use zenith_lib::platform::PlatformEnvironment;
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
@@ -532,7 +533,7 @@ fn test_windows_dev_ports_classification_defense() {
         argv: &["powershell.exe".to_string()],
         started_at: Some(100),
     };
-    let res_ps = classify_listener(&input_ps);
+    let res_ps = classify_listener(&input_ps, PathFlavor::Windows);
     assert!(!res_ps.can_release);
     assert!(res_ps.blocked_reason.is_some());
 
@@ -553,7 +554,7 @@ fn test_windows_dev_ports_classification_defense() {
         ],
         started_at: Some(200),
     };
-    let res_vite = classify_listener(&input_vite);
+    let res_vite = classify_listener(&input_vite, PathFlavor::Windows);
     assert!(res_vite.can_release);
     assert_eq!(res_vite.server_name, "Vite");
 }
@@ -591,7 +592,10 @@ fn port_release_refuses_a_privileged_or_unidentified_owner_only() {
     let own = ProcessOwner::Unix(501);
 
     // A system owner is refused, and the refusal names the reason.
-    let root = classify_listener(&input(ProcessOwner::Unix(0), own.clone(), &argv));
+    let root = classify_listener(
+        &input(ProcessOwner::Unix(0), own.clone(), &argv),
+        PathFlavor::Windows,
+    );
     assert!(!root.can_release);
     assert_eq!(
         root.blocked_reason.as_deref(),
@@ -600,11 +604,10 @@ fn port_release_refuses_a_privileged_or_unidentified_owner_only() {
 
     // An unavailable identity (the sentinel `ProcessOwner::current` returns
     // when no SID can be read) fails closed on every platform.
-    let unidentified = classify_listener(&input(
-        ProcessOwner::Windows(String::new()),
-        own.clone(),
-        &argv,
-    ));
+    let unidentified = classify_listener(
+        &input(ProcessOwner::Windows(String::new()), own.clone(), &argv),
+        PathFlavor::Windows,
+    );
     assert!(!unidentified.can_release);
     assert_eq!(
         unidentified.blocked_reason.as_deref(),
@@ -612,7 +615,7 @@ fn port_release_refuses_a_privileged_or_unidentified_owner_only() {
     );
 
     // The same listener owned by the current, unprivileged user is releasable.
-    let allowed = classify_listener(&input(own.clone(), own, &argv));
+    let allowed = classify_listener(&input(own.clone(), own, &argv), PathFlavor::Windows);
     assert!(
         allowed.can_release,
         "an unprivileged same-user dev server must stay releasable: {:?}",

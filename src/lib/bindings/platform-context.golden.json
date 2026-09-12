@@ -1,0 +1,47 @@
+{
+  "linux": {
+    "app_data_label": "data directory",
+    "app_identity_label": "installed application",
+    "container_runtime_hint": null,
+    "log_directory": "~/Library/Logs/Zenith",
+    "native_caption_bar": true,
+    "overlay_title_bar": false,
+    "platform": "linux",
+    "primary_accelerator": "ctrl",
+    "quick_panel_surface_label": "system tray",
+    "releases_url": "https://github.com/jaeyoung0509/zenith/releases",
+    "reveal_label": "Show in File Manager",
+    "terminal_label": "your terminal",
+    "trash_label": "Trash"
+  },
+  "macos": {
+    "app_data_label": "Application Support",
+    "app_identity_label": "bundle identifier",
+    "container_runtime_hint": "Colima",
+    "log_directory": "~/Library/Logs/Zenith",
+    "native_caption_bar": false,
+    "overlay_title_bar": true,
+    "platform": "macos",
+    "primary_accelerator": "meta",
+    "quick_panel_surface_label": "menu bar",
+    "releases_url": "https://github.com/jaeyoung0509/zenith/releases",
+    "reveal_label": "Reveal in Finder",
+    "terminal_label": "Terminal",
+    "trash_label": "Trash"
+  },
+  "windows": {
+    "app_data_label": "AppData",
+    "app_identity_label": "installed application",
+    "container_runtime_hint": "Docker Desktop",
+    "log_directory": "~/AppData/Local/Zenith/Logs",
+    "native_caption_bar": true,
+    "overlay_title_bar": false,
+    "platform": "windows",
+    "primary_accelerator": "ctrl",
+    "quick_panel_surface_label": "notification area",
+    "releases_url": "https://github.com/jaeyoung0509/zenith/releases",
+    "reveal_label": "Show in File Explorer",
+    "terminal_label": "Windows Terminal",
+    "trash_label": "Recycle Bin"
+  }
+}

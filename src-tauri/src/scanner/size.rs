@@ -782,6 +782,44 @@ mod tests {
         assert_eq!(complete.size.logical, 1_024);
     }
 
+    /// Windows rules run on every runner: the stated flavor decides which
+    /// entries are protected, so the same fixture reports a different boundary
+    /// count for a Windows machine than for a POSIX one.
+    #[test]
+    fn windows_flavor_measurement_applies_the_stated_exclusions() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("_cacache");
+        std::fs::create_dir_all(cache.join(".git")).unwrap();
+        std::fs::write(cache.join(".git/objects"), vec![1u8; 1_024]).unwrap();
+        std::fs::create_dir_all(cache.join("con")).unwrap();
+        std::fs::write(cache.join("con/payload"), vec![2u8; 2_048]).unwrap();
+        std::fs::create_dir_all(cache.join("keep")).unwrap();
+        std::fs::write(cache.join("keep/payload"), vec![3u8; 512]).unwrap();
+        std::fs::write(cache.join("content.bin"), vec![4u8; 4_096]).unwrap();
+
+        let exclusions = vec!["keep".to_string()];
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let measured = SizeCalculator::measure_path_full(&cache, &exclusions, &windows);
+
+        assert_eq!(measured.file_count, 1, "only the readable file is counted");
+        assert_eq!(measured.size.logical, 4_096);
+        assert!(
+            measured.complete,
+            "a protected name is a deliberate boundary, not a read failure"
+        );
+        assert_eq!(
+            measured.skipped_entries, 3,
+            "the exclusion, `.git`, and the reserved device name are not measured"
+        );
+
+        // The same tree on a POSIX machine has no reserved-device rule, so the
+        // stated flavor is what decided the third boundary.
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let measured = SizeCalculator::measure_path_full(&cache, &exclusions, &posix);
+        assert_eq!(measured.skipped_entries, 2);
+        assert_eq!(measured.size.logical, 4_096 + 2_048);
+    }
+
     #[test]
     fn exclusions_resolve_through_the_stated_environment() {
         let root = tempfile::tempdir().unwrap();

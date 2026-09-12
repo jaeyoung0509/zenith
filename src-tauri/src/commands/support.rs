@@ -31,9 +31,12 @@ pub(crate) fn join_failure(context: &str, error: impl std::fmt::Display) -> Stri
     message
 }
 
-pub(super) fn user_home() -> Result<PathBuf, String> {
-    crate::platform::NativePlatformPaths::new()
-        .home()
+/// The profile of the environment the command is acting on.
+pub(super) fn user_home(
+    environment: &crate::platform::PlatformEnvironment,
+) -> Result<PathBuf, String> {
+    environment
+        .user_home()
         .ok_or_else(|| "User home directory is not available".to_string())
 }
 

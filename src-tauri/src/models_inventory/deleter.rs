@@ -101,7 +101,7 @@ impl LocalModelManager {
         }
 
         // Ancestor symlink protection
-        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root)?;
+        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root, environment)?;
 
         let report = SafeTreeDeleter::delete_path(&path, &[], environment);
         if report.is_success() || report.reclaimed_bytes > 0 {

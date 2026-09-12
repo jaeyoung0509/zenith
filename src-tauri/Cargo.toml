@@ -78,6 +78,10 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 tempfile = "3.13"
 specta-typescript = "=0.0.12"
+# `tauri::test` builds the state a command handler reads without a window, so an
+# integration test can assert the IPC surface answers from the injected
+# environment. The feature is a no-op flag and adds no dependency.
+tauri = { version = "2.0", features = ["test"] }
 
 [features]
 # Plain `cargo build` must produce a self-contained desktop binary. The

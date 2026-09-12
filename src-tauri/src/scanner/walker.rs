@@ -678,6 +678,38 @@ mod tests {
         }
     }
 
+    /// The aged walker classifies its boundaries with the stated flavor, so the
+    /// tree statistics report what a Windows machine would refuse.
+    #[test]
+    fn windows_flavor_tree_stats_report_the_stated_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("candidate.cache");
+        std::fs::create_dir_all(candidate.join(".git")).unwrap();
+        std::fs::write(candidate.join(".git/objects"), vec![1u8; 1_024]).unwrap();
+        std::fs::create_dir_all(candidate.join("nul")).unwrap();
+        std::fs::write(candidate.join("nul/payload"), vec![2u8; 2_048]).unwrap();
+        std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
+
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let stats = DirectoryScanner::measure_tree_stats(&windows, &candidate, &[], 0, 32);
+
+        assert_eq!(stats.file_count, 1);
+        assert_eq!(stats.logical, 4_096);
+        assert!(
+            stats.complete,
+            "a protected name is a deliberate boundary, not a read failure"
+        );
+        assert_eq!(
+            stats.skipped_entries, 2,
+            "`.git` and the reserved device name are not measured"
+        );
+
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let stats = DirectoryScanner::measure_tree_stats(&posix, &candidate, &[], 0, 32);
+        assert_eq!(stats.skipped_entries, 1);
+        assert_eq!(stats.logical, 4_096 + 2_048);
+    }
+
     #[test]
     fn aged_scan_fails_closed_for_trees_containing_app_bundles() {
         let root = tempfile::tempdir().unwrap();

@@ -695,8 +695,9 @@ mod tests {
     fn a_committed_fixture_round_trips_through_its_shape() {
         for fixture in [
             shape_fixture("windows", Some("D:"), ProfileShape::DriveRooted, true, true),
-            // A UNC profile names no drive, and the fixture states none.
-            shape_fixture("windows", None, ProfileShape::Unc, false, false),
+            // A UNC profile names no drive, so the machine's drive comes from
+            // the install roots every Windows machine has.
+            shape_fixture("windows", Some("C:"), ProfileShape::Unc, false, false),
             shape_fixture("posix", None, ProfileShape::PosixHome, false, true),
         ] {
             let environment = fixture.environment();

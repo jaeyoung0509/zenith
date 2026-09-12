@@ -353,10 +353,11 @@ fn validate_cache_path(
     }
     Blacklist::validate_with(&canonical, environment).map_err(|error| error.to_string())?;
     if in_profile {
-        SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home)
+        SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home, environment)
             .map_err(|error| error.to_string())?;
     } else {
-        SymlinkGuard::validate_anchored_path(&canonical).map_err(|error| error.to_string())?;
+        SymlinkGuard::validate_anchored_path(&canonical, environment)
+            .map_err(|error| error.to_string())?;
     }
     Ok(canonical)
 }
@@ -434,7 +435,9 @@ fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/opt/homebrew"),
     ];
-    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots());
+    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots(
+        environment.user_home().as_deref(),
+    ));
     if let Some(home) = environment.user_home() {
         roots.extend([
             home.join(".local/bin"),
@@ -729,7 +732,9 @@ mod tests {
     fn trusted_tool_roots_exclude_bare_user_writable_containers() {
         use crate::platform::NativePlatformPaths;
 
-        let roots = NativePlatformPaths::trusted_tool_roots();
+        let roots = NativePlatformPaths::trusted_tool_roots(
+            PlatformEnvironment::native().user_home().as_deref(),
+        );
 
         // A bare user-writable container is never a trusted executable root:
         // trust comes from a named install directory below it, so no root may be

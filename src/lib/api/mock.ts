@@ -39,7 +39,9 @@ import type {
 } from '../models/types';
 import type { nativeApi } from './native';
 import { createDevelopmentPortsMock } from './mocks/developmentPorts';
+import { previewPlatform } from './mocks/previewPlatform';
 import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
+import { goldenPlatformContextByPlatform } from '../models/platformContext';
 
 type ZenithApi = typeof nativeApi;
 
@@ -278,25 +280,11 @@ let lastMockScan: ScanResult | null = null;
 
 export const mockApi = {
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
-    return goldenCapabilitiesByPlatform.macos;
+    return goldenCapabilitiesByPlatform[previewPlatform()];
   },
 
   async getPlatformContext(): Promise<PlatformContext> {
-    return {
-      platform: 'macos',
-      log_directory: '~/Library/Logs/Zenith',
-      reveal_label: 'Reveal in Finder',
-      trash_label: 'Trash',
-      app_data_label: 'Application Support',
-      quick_panel_surface_label: 'menu bar',
-      container_runtime_hint: 'Colima',
-      native_caption_bar: false,
-      overlay_title_bar: true,
-      primary_accelerator: 'meta',
-      app_identity_label: 'bundle identifier',
-      terminal_label: 'Terminal',
-      releases_url: 'https://github.com/jaeyoung0509/zenith/releases',
-    };
+    return goldenPlatformContextByPlatform[previewPlatform()];
   },
 
   async getProjectContext(_force = false): Promise<AgentActivitySnapshot> {

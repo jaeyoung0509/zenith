@@ -11,7 +11,6 @@ use crate::models::{
     ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
 };
 use crate::models_inventory::{LocalModelManager, LocalModelScanner};
-use crate::platform::PlatformPathsProvider;
 use crate::power::ApplicationPicker;
 use crate::settings_store;
 use std::path::{Path, PathBuf};
@@ -365,10 +364,11 @@ pub async fn show_in_file_manager(path: String, state: State<'_, AppState>) -> R
             crate::models::CapabilityAccess::Inspect,
         )
         .map_err(|error| error.to_string())?;
+    let environment = state.environment.clone();
     run_blocking(
         move || {
             use crate::platform::SystemActionProvider;
-            let path_buf = expand_display_path(&path)?;
+            let path_buf = expand_display_path(&path, &environment)?;
             crate::platform::NativeSystemActions::new().reveal_path(&path_buf)
         },
         "File manager worker panicked",
@@ -378,11 +378,12 @@ pub async fn show_in_file_manager(path: String, state: State<'_, AppState>) -> R
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_in_terminal(path: String) -> Result<(), String> {
+pub async fn open_in_terminal(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let environment = state.environment.clone();
     run_blocking(
         move || {
             use crate::platform::SystemActionProvider;
-            let path_buf = expand_display_path(&path)?;
+            let path_buf = expand_display_path(&path, &environment)?;
             crate::platform::NativeSystemActions::new().open_terminal(&path_buf)
         },
         "Terminal worker panicked",
@@ -390,7 +391,10 @@ pub async fn open_in_terminal(path: String) -> Result<(), String> {
     .await
 }
 
-fn expand_display_path(path: &str) -> Result<PathBuf, String> {
+fn expand_display_path(
+    path: &str,
+    environment: &crate::platform::PlatformEnvironment,
+) -> Result<PathBuf, String> {
     let path_obj = Path::new(path);
     let normalized = crate::platform::NativePlatformPaths::normalize_verbatim_path(path_obj);
     let path_str = normalized.to_string_lossy();
@@ -398,7 +402,7 @@ fn expand_display_path(path: &str) -> Result<PathBuf, String> {
         .strip_prefix("~/")
         .or_else(|| path_str.strip_prefix("~\\"))
     {
-        let home = crate::platform::NativePlatformPaths::new()
+        let home = environment
             .user_home()
             .ok_or_else(|| "Home environment variable is not set.".to_string())?;
         home.join(relative)
@@ -510,8 +514,14 @@ pub async fn list_development_listeners(
         .map_err(|e| e.to_string())?;
 
     let store = state.dev_port_store.clone();
+    let flavor = state.environment.flavor();
+    let home = state.environment.user_home();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::dev_ports::list_listeners(&store, &crate::dev_ports::RealDevPortSystem::default())
+        crate::dev_ports::list_listeners(
+            &store,
+            &crate::dev_ports::RealDevPortSystem::new(flavor),
+            home.as_deref(),
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -534,12 +544,15 @@ pub async fn release_development_listener(
         .map_err(|e| e.to_string())?;
 
     let store = state.dev_port_store.clone();
+    let flavor = state.environment.flavor();
+    let home = state.environment.user_home();
     tauri::async_runtime::spawn_blocking(move || {
         crate::dev_ports::release_listener(
             &store,
-            &crate::dev_ports::RealDevPortSystem::default(),
+            &crate::dev_ports::RealDevPortSystem::new(flavor),
             &id,
             mode,
+            home.as_deref(),
         )
     })
     .await

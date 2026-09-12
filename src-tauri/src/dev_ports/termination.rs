@@ -6,6 +6,7 @@ use super::store::{CreateLeaseParams, DevelopmentPortStore};
 use crate::models::{
     DevelopmentListener, ReleaseDevelopmentListenerResult, ReleaseMode, ReleaseOutcome,
 };
+use crate::platform::path_algebra::{self, PathFlavor};
 use crate::process_owner::ProcessOwner;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -42,6 +43,12 @@ pub struct ProcessSnapshot {
 
 /// Abstract system trait to enable 100% deterministic unit testing without executing real commands or killing processes.
 pub trait DevPortSystem: Send + Sync {
+    /// The path vocabulary this system's process paths are spelled in.
+    ///
+    /// Classification compares working directories and executables, so a
+    /// Windows-shaped process must be classified with Windows rules even when
+    /// the classifier runs on another host.
+    fn path_flavor(&self) -> PathFlavor;
     fn current_owner(&self) -> ProcessOwner;
     fn own_pid(&self) -> u32;
     fn discover_listeners(&self) -> Result<Vec<RawListenerRecord>, String>;
@@ -53,23 +60,30 @@ pub trait DevPortSystem: Send + Sync {
 
 pub struct RealDevPortSystem {
     sys: Mutex<Option<sysinfo::System>>,
+    flavor: PathFlavor,
 }
 
 impl Default for RealDevPortSystem {
     fn default() -> Self {
-        Self::new()
+        Self::new(PathFlavor::current())
     }
 }
 
 impl RealDevPortSystem {
-    pub fn new() -> Self {
+    /// Builds the native reader for processes spelled in `flavor`'s paths.
+    pub fn new(flavor: PathFlavor) -> Self {
         Self {
             sys: Mutex::new(None),
+            flavor,
         }
     }
 }
 
 impl DevPortSystem for RealDevPortSystem {
+    fn path_flavor(&self) -> PathFlavor {
+        self.flavor
+    }
+
     fn current_owner(&self) -> ProcessOwner {
         ProcessOwner::current()
     }
@@ -352,8 +366,9 @@ pub struct ClassifiedListener {
 pub fn list_listeners(
     store: &Mutex<DevelopmentPortStore>,
     system: &dyn DevPortSystem,
+    home: Option<&std::path::Path>,
 ) -> Result<Vec<DevelopmentListener>, String> {
-    Ok(list_listeners_with_context(store, system)?
+    Ok(list_listeners_with_context(store, system, home)?
         .into_iter()
         .map(|entry| entry.listener)
         .collect())
@@ -364,6 +379,7 @@ pub fn list_listeners(
 pub fn list_listeners_with_context(
     store: &Mutex<DevelopmentPortStore>,
     system: &dyn DevPortSystem,
+    home: Option<&std::path::Path>,
 ) -> Result<Vec<ClassifiedListener>, String> {
     let raw_records = system.discover_listeners()?;
     let now = system.now();
@@ -403,19 +419,22 @@ pub fn list_listeners_with_context(
                 // will mark this listener as blocked, but we still list it so
                 // the outcome is explicit rather than silently hidden.
             }
-            let classification = classify_listener(&ProcessClassificationInput {
-                pid: record.pid,
-                owner: effective_owner.clone(),
-                current_owner: current_owner.clone(),
-                zenith_pid: own_pid,
-                port: record.port,
-                raw_command: &proc.raw_command,
-                process_name: &proc.process_name,
-                exe_path: proc.exe_path.as_deref(),
-                cwd: proc.cwd.as_deref(),
-                argv: &proc.argv,
-                started_at: Some(proc.start_time),
-            });
+            let classification = classify_listener(
+                &ProcessClassificationInput {
+                    pid: record.pid,
+                    owner: effective_owner.clone(),
+                    current_owner: current_owner.clone(),
+                    zenith_pid: own_pid,
+                    port: record.port,
+                    raw_command: &proc.raw_command,
+                    process_name: &proc.process_name,
+                    exe_path: proc.exe_path.as_deref(),
+                    cwd: proc.cwd.as_deref(),
+                    argv: &proc.argv,
+                    started_at: Some(proc.start_time),
+                },
+                system.path_flavor(),
+            );
             (
                 classification.server_name,
                 classification.project_name,
@@ -432,19 +451,22 @@ pub fn list_listeners_with_context(
                     continue;
                 }
             }
-            let classification = classify_listener(&ProcessClassificationInput {
-                pid: record.pid,
-                owner: effective_record_owner.clone(),
-                current_owner: current_owner.clone(),
-                zenith_pid: own_pid,
-                port: record.port,
-                raw_command: &record.command,
-                process_name: &record.command,
-                exe_path: None,
-                cwd: None,
-                argv: &[],
-                started_at: None,
-            });
+            let classification = classify_listener(
+                &ProcessClassificationInput {
+                    pid: record.pid,
+                    owner: effective_record_owner.clone(),
+                    current_owner: current_owner.clone(),
+                    zenith_pid: own_pid,
+                    port: record.port,
+                    raw_command: &record.command,
+                    process_name: &record.command,
+                    exe_path: None,
+                    cwd: None,
+                    argv: &[],
+                    started_at: None,
+                },
+                system.path_flavor(),
+            );
             (
                 classification.server_name,
                 classification.project_name,
@@ -488,7 +510,7 @@ pub fn list_listeners_with_context(
                 project_name,
                 working_directory: working_directory
                     .as_ref()
-                    .map(|path| crate::privacy::paths::display_path(path)),
+                    .map(|path| crate::privacy::paths::display_path_with_home(path, home)),
                 started_at,
                 can_release,
                 blocked_reason,
@@ -508,11 +530,17 @@ pub fn list_listeners_with_context(
     Ok(listeners)
 }
 
-/// Compares executable paths with platform case rules so a Windows lease
-/// recorded with different casing still revalidates.
-fn executable_paths_equal(left: &Option<PathBuf>, right: &Option<PathBuf>) -> bool {
+/// Compares executable paths with the stated flavor's rules so a Windows lease
+/// recorded with different casing still revalidates on any host.
+fn executable_paths_equal(
+    left: &Option<PathBuf>,
+    right: &Option<PathBuf>,
+    flavor: PathFlavor,
+) -> bool {
     match (left, right) {
-        (Some(left), Some(right)) => crate::platform::NativePlatformPaths::paths_equal(left, right),
+        (Some(left), Some(right)) => {
+            path_algebra::equal(&left.to_string_lossy(), &right.to_string_lossy(), flavor)
+        }
         (None, None) => true,
         _ => false,
     }
@@ -524,6 +552,7 @@ pub fn release_listener(
     system: &dyn DevPortSystem,
     lease_id: &str,
     mode: ReleaseMode,
+    home: Option<&std::path::Path>,
 ) -> Result<ReleaseDevelopmentListenerResult, String> {
     let now = system.now();
 
@@ -593,7 +622,7 @@ pub fn release_listener(
     // Verify owner SID/UID, start time, and executable path
     if proc_info.owner != Some(lease.owner.clone())
         || proc_info.start_time != lease.started_at.unwrap_or(0)
-        || !executable_paths_equal(&proc_info.exe_path, &lease.exe_path)
+        || !executable_paths_equal(&proc_info.exe_path, &lease.exe_path, system.path_flavor())
     {
         return Ok(ReleaseDevelopmentListenerResult {
             port: lease.port,
@@ -605,19 +634,22 @@ pub fn release_listener(
     // Re-run classifier on current process info
     let current_owner = system.current_owner();
     let own_pid = system.own_pid();
-    let reclassification = classify_listener(&ProcessClassificationInput {
-        pid: lease.pid,
-        owner: proc_info.owner.clone(),
-        current_owner: current_owner.clone(),
-        zenith_pid: own_pid,
-        port: lease.port,
-        raw_command: &proc_info.raw_command,
-        process_name: &proc_info.process_name,
-        exe_path: proc_info.exe_path.as_deref(),
-        cwd: proc_info.cwd.as_deref(),
-        argv: &proc_info.argv,
-        started_at: Some(proc_info.start_time),
-    });
+    let reclassification = classify_listener(
+        &ProcessClassificationInput {
+            pid: lease.pid,
+            owner: proc_info.owner.clone(),
+            current_owner: current_owner.clone(),
+            zenith_pid: own_pid,
+            port: lease.port,
+            raw_command: &proc_info.raw_command,
+            process_name: &proc_info.process_name,
+            exe_path: proc_info.exe_path.as_deref(),
+            cwd: proc_info.cwd.as_deref(),
+            argv: &proc_info.argv,
+            started_at: Some(proc_info.start_time),
+        },
+        system.path_flavor(),
+    );
 
     if !reclassification.can_release {
         return Err("This listener is protected and cannot be released.".to_string());
@@ -703,7 +735,11 @@ pub fn release_listener(
     if found_post.pid == lease.pid {
         if let Some(post_proc) = system.get_process_info(lease.pid) {
             if post_proc.start_time == lease.started_at.unwrap_or(0)
-                && executable_paths_equal(&post_proc.exe_path, &lease.exe_path)
+                && executable_paths_equal(
+                    &post_proc.exe_path,
+                    &lease.exe_path,
+                    system.path_flavor(),
+                )
                 && post_proc.owner == Some(lease.owner.clone())
             {
                 // Same process remains listening! Create a fresh lease for possible Force action.
@@ -737,7 +773,7 @@ pub fn release_listener(
                     working_directory: reclassification
                         .working_directory
                         .as_ref()
-                        .map(|path| crate::privacy::paths::display_path(path)),
+                        .map(|path| crate::privacy::paths::display_path_with_home(path, home)),
                     started_at: lease.started_at,
                     can_release: true,
                     blocked_reason: None,
@@ -769,6 +805,7 @@ mod tests {
     struct FakeDevPortSystem {
         owner: ProcessOwner,
         pid: u32,
+        flavor: PathFlavor,
         listeners: Mutex<Vec<RawListenerRecord>>,
         processes: Mutex<HashMap<u32, ProcessSnapshot>>,
         signaled_pids: Mutex<Vec<(u32, i32)>>,
@@ -786,6 +823,7 @@ mod tests {
             Self {
                 owner,
                 pid: 1000,
+                flavor: PathFlavor::current(),
                 listeners: Mutex::new(Vec::new()),
                 processes: Mutex::new(HashMap::new()),
                 signaled_pids: Mutex::new(Vec::new()),
@@ -820,6 +858,10 @@ mod tests {
     }
 
     impl DevPortSystem for FakeDevPortSystem {
+        fn path_flavor(&self) -> PathFlavor {
+            self.flavor
+        }
+
         fn current_owner(&self) -> ProcessOwner {
             self.owner.clone()
         }
@@ -893,7 +935,7 @@ mod tests {
         });
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let list = list_listeners(&store, &fake).unwrap();
+        let list = list_listeners(&store, &fake, None).unwrap();
 
         assert_eq!(list.len(), 1);
         let listener = &list[0];
@@ -901,7 +943,8 @@ mod tests {
         assert_eq!(listener.server_name, "Vite");
         assert!(listener.can_release);
 
-        let result = release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+        let result =
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful, None).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::Released);
         assert_eq!(result.port, 5173);
@@ -910,6 +953,87 @@ mod tests {
         let signals = fake.signaled_pids.lock().unwrap();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0], (32892, GRACEFUL_TERMINATION_SIGNAL));
+    }
+
+    /// The stated Windows flavor decides the path rules of the whole release
+    /// path on this runner: the working directory keeps its Windows spelling,
+    /// the project name is its last Windows component, and a lease revalidates
+    /// when the same process reports its executable in different casing.
+    #[test]
+    fn windows_flavor_termination_stays_inside_the_stated_paths() {
+        let store = Mutex::new(DevelopmentPortStore::default());
+        let fake = FakeDevPortSystem {
+            owner: ProcessOwner::Unix(501),
+            pid: 1000,
+            flavor: PathFlavor::Windows,
+            listeners: Mutex::new(Vec::new()),
+            processes: Mutex::new(HashMap::new()),
+            signaled_pids: Mutex::new(Vec::new()),
+            auto_exit_on_signal: AtomicBool::new(true),
+        };
+        let windows_snapshot = |exe: &str| ProcessSnapshot {
+            pid: 32892,
+            owner: Some(ProcessOwner::Unix(501)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from(exe)),
+            cwd: Some(PathBuf::from(r"C:\dev\my-app")),
+            argv: vec!["node".to_string(), r"C:\dev\my-app\vite.js".to_string()],
+        };
+        fake.add_listener(32892, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        fake.add_process(windows_snapshot(r"C:\Program Files\nodejs\node.exe"));
+
+        let classified = list_listeners_with_context(&store, &fake, None).unwrap();
+        assert_eq!(classified.len(), 1);
+        let listener = &classified[0].listener;
+        assert_eq!(listener.project_name.as_deref(), Some("my-app"));
+        assert_eq!(
+            classified[0].working_directory.as_deref(),
+            Some(std::path::Path::new(r"C:\dev\my-app"))
+        );
+        assert!(listener.can_release);
+        let lease_id = listener.id.clone();
+
+        // Same process, different casing: Windows folds case, POSIX does not.
+        fake.add_process(windows_snapshot(r"C:\PROGRAM FILES\NODEJS\NODE.EXE"));
+        let result =
+            release_listener(&store, &fake, &lease_id, ReleaseMode::Graceful, None).unwrap();
+        assert_eq!(result.outcome, ReleaseOutcome::Released);
+        assert_eq!(fake.signaled_pids.lock().unwrap().len(), 1);
+
+        // The same input under the POSIX flavor is a different executable, so
+        // the release refuses to signal it.
+        let stated_posix = FakeDevPortSystem::new();
+        let posix_snapshot = |exe: &str| ProcessSnapshot {
+            pid: 43000,
+            owner: Some(ProcessOwner::Unix(501)),
+            start_time: 1700000000,
+            raw_command: "node".to_string(),
+            process_name: "node".to_string(),
+            exe_path: Some(PathBuf::from(exe)),
+            cwd: Some(PathBuf::from("/Users/tester/my-app")),
+            argv: vec![
+                "node".to_string(),
+                "/Users/tester/my-app/vite.js".to_string(),
+            ],
+        };
+        stated_posix.add_listener(43000, 5173, "node", "127.0.0.1", ListenerExposure::Loopback);
+        stated_posix.add_process(posix_snapshot("/usr/local/bin/node"));
+
+        let posix_list = list_listeners(&store, &stated_posix, None).unwrap();
+        assert_eq!(posix_list.len(), 1);
+        stated_posix.add_process(posix_snapshot("/usr/local/bin/NODE"));
+        let result = release_listener(
+            &store,
+            &stated_posix,
+            &posix_list[0].id,
+            ReleaseMode::Graceful,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
+        assert!(stated_posix.signaled_pids.lock().unwrap().is_empty());
     }
 
     #[cfg(unix)]
@@ -929,9 +1053,9 @@ mod tests {
         });
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        let listener = list_listeners(&store, &fake, None).unwrap().remove(0);
 
-        let error = release_listener(&store, &fake, &listener.id, ReleaseMode::Force)
+        let error = release_listener(&store, &fake, &listener.id, ReleaseMode::Force, None)
             .expect_err("a listing lease must never authorize SIGKILL");
 
         assert!(error.contains("failed graceful-release"));
@@ -966,12 +1090,12 @@ mod tests {
         });
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let list = list_listeners(&store, &fake).unwrap();
+        let list = list_listeners(&store, &fake, None).unwrap();
         let listener = &list[0];
 
         // Graceful release attempt -> process ignores SIGTERM
         let res_graceful =
-            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful, None).unwrap();
 
         assert_eq!(res_graceful.outcome, ReleaseOutcome::StillListening);
         assert!(res_graceful.listener.is_some());
@@ -981,7 +1105,7 @@ mod tests {
         // Now perform Force release on the fresh lease
         fake.auto_exit_on_signal.store(true, Ordering::SeqCst);
         let res_force =
-            release_listener(&store, &fake, &fresh_listener.id, ReleaseMode::Force).unwrap();
+            release_listener(&store, &fake, &fresh_listener.id, ReleaseMode::Force, None).unwrap();
 
         assert_eq!(res_force.outcome, ReleaseOutcome::Released);
 
@@ -1007,7 +1131,7 @@ mod tests {
         });
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let list = list_listeners(&store, &fake).unwrap();
+        let list = list_listeners(&store, &fake, None).unwrap();
         let listener = &list[0];
 
         // Simulate PID reuse: PID 32892 was recycled by OS and now has start_time 1700009999
@@ -1022,7 +1146,8 @@ mod tests {
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
 
-        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
+        let result =
+            release_listener(&store, &fake, &listener.id, initial_release_mode(), None).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
@@ -1044,7 +1169,7 @@ mod tests {
         });
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let list = list_listeners(&store, &fake).unwrap();
+        let list = list_listeners(&store, &fake, None).unwrap();
         let listener = &list[0];
 
         // Port handoff: PID 22222 is now listening on 5173
@@ -1057,7 +1182,8 @@ mod tests {
             ListenerExposure::Loopback,
         );
 
-        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
+        let result =
+            release_listener(&store, &fake, &listener.id, initial_release_mode(), None).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
@@ -1088,13 +1214,14 @@ mod tests {
         }
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let listeners = list_listeners(&store, &fake).unwrap();
+        let listeners = list_listeners(&store, &fake, None).unwrap();
         let loopback = listeners
             .iter()
             .find(|listener| listener.pid == 11111)
             .unwrap();
 
-        let result = release_listener(&store, &fake, &loopback.id, initial_release_mode()).unwrap();
+        let result =
+            release_listener(&store, &fake, &loopback.id, initial_release_mode(), None).unwrap();
 
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert_eq!(
@@ -1125,13 +1252,13 @@ mod tests {
         });
 
         let store = Mutex::new(DevelopmentPortStore::default());
-        let list = list_listeners(&store, &fake).unwrap();
+        let list = list_listeners(&store, &fake, None).unwrap();
         let listener = &list[0];
 
         assert!(!listener.can_release);
 
-        let err =
-            release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap_err();
+        let err = release_listener(&store, &fake, &listener.id, initial_release_mode(), None)
+            .unwrap_err();
         assert!(err.contains("protected"));
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1140,7 +1267,7 @@ mod tests {
     fn stale_lease_is_rejected_without_signaling() {
         let fake = FakeDevPortSystem::new();
         let store = Mutex::new(DevelopmentPortStore::default());
-        let result = release_listener(&store, &fake, "missing-lease", initial_release_mode());
+        let result = release_listener(&store, &fake, "missing-lease", initial_release_mode(), None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("expired"));
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
@@ -1161,10 +1288,11 @@ mod tests {
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
         let store = Mutex::new(DevelopmentPortStore::default());
-        let listener = list_listeners(&store, &fake).unwrap().remove(0);
-        let first = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
+        let listener = list_listeners(&store, &fake, None).unwrap().remove(0);
+        let first =
+            release_listener(&store, &fake, &listener.id, initial_release_mode(), None).unwrap();
         assert_eq!(first.outcome, ReleaseOutcome::Released);
-        let second = release_listener(&store, &fake, &listener.id, initial_release_mode());
+        let second = release_listener(&store, &fake, &listener.id, initial_release_mode(), None);
         assert!(second.is_err());
     }
 
@@ -1183,7 +1311,7 @@ mod tests {
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
         let store = Mutex::new(DevelopmentPortStore::default());
-        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        let listener = list_listeners(&store, &fake, None).unwrap().remove(0);
         fake.add_process(ProcessSnapshot {
             pid: 32892,
             owner: Some(ProcessOwner::Unix(502)),
@@ -1194,7 +1322,8 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/apple/app")),
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
-        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
+        let result =
+            release_listener(&store, &fake, &listener.id, initial_release_mode(), None).unwrap();
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1214,7 +1343,7 @@ mod tests {
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
         let store = Mutex::new(DevelopmentPortStore::default());
-        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        let listener = list_listeners(&store, &fake, None).unwrap().remove(0);
         fake.add_process(ProcessSnapshot {
             pid: 32892,
             owner: Some(ProcessOwner::Unix(501)),
@@ -1225,7 +1354,8 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/apple/app")),
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
-        let result = release_listener(&store, &fake, &listener.id, initial_release_mode()).unwrap();
+        let result =
+            release_listener(&store, &fake, &listener.id, initial_release_mode(), None).unwrap();
         assert_eq!(result.outcome, ReleaseOutcome::OwnershipChanged);
         assert!(fake.signaled_pids.lock().unwrap().is_empty());
     }
@@ -1246,7 +1376,8 @@ mod tests {
                 argv: &["node".to_string(), "vite.js".to_string()],
                 started_at: Some(1700000000),
             };
-            let result = crate::dev_ports::classifier::classify_listener(&input);
+            let result =
+                crate::dev_ports::classifier::classify_listener(&input, PathFlavor::current());
             assert!(!result.can_release, "pid {pid} must be blocked");
         }
     }
@@ -1261,6 +1392,7 @@ mod tests {
         let fake = FakeDevPortSystem {
             owner: current.clone(),
             pid: 1000,
+            flavor: PathFlavor::current(),
             listeners: Mutex::new(Vec::new()),
             processes: Mutex::new(HashMap::new()),
             signaled_pids: Mutex::new(Vec::new()),
@@ -1279,7 +1411,7 @@ mod tests {
         });
         let store = Mutex::new(DevelopmentPortStore::default());
         // Other-SID listeners are never listed for the current owner.
-        assert!(list_listeners(&store, &fake).unwrap().is_empty());
+        assert!(list_listeners(&store, &fake, None).unwrap().is_empty());
     }
 
     #[cfg(windows)]
@@ -1299,12 +1431,12 @@ mod tests {
             argv: vec!["node".to_string(), "vite.js".to_string()],
         });
         let store = Mutex::new(DevelopmentPortStore::default());
-        let listener = list_listeners(&store, &fake).unwrap().remove(0);
+        let listener = list_listeners(&store, &fake, None).unwrap().remove(0);
 
         // Graceful no longer short-circuits: the platform adapter receives the
         // graceful signal and attempts the shared window/console chain.
         let graceful =
-            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful).unwrap();
+            release_listener(&store, &fake, &listener.id, ReleaseMode::Graceful, None).unwrap();
         assert_eq!(graceful.outcome, ReleaseOutcome::Released);
         assert_eq!(
             fake.signaled_pids.lock().unwrap().as_slice(),
