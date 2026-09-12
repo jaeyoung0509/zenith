@@ -831,6 +831,8 @@ export const mockApi = {
           safe_bytes: intensiveBytes,
           rebuild_bytes: 0,
           manual_bytes: 0,
+          skipped_entry_count: 0,
+          incomplete_item_count: 0,
         };
 
         if (intensiveCleanup) {
@@ -887,6 +889,8 @@ export const mockApi = {
               safe_bytes: 3.2 * 1024 * 1024 * 1024,
               rebuild_bytes: 0,
               manual_bytes: 0,
+              skipped_entry_count: 0,
+              incomplete_item_count: 0,
             },
             {
               category: 'developer',
@@ -925,6 +929,8 @@ export const mockApi = {
               safe_bytes: 3.1 * 1024 * 1024 * 1024,
               rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
               manual_bytes: 0,
+              skipped_entry_count: 0,
+              incomplete_item_count: 0,
             },
             ...(intensiveCleanup ? [intensiveCategory] : []),
           ],
@@ -932,6 +938,8 @@ export const mockApi = {
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
+          skipped_entry_count: 0,
+          incomplete_item_count: 0,
         };
 
         lastMockScan = result;
@@ -1026,6 +1034,8 @@ export const mockApi = {
                 finished_at: Math.floor(Date.now() / 1000),
                 total_reclaimed_bytes: plan.expected_reclaim_bytes,
                 total_failed_bytes: 0,
+                partial_count: 0,
+                failed_count: 0,
                 items,
                 actual_disk_free_delta: plan.expected_reclaim_bytes,
               };
@@ -1075,6 +1085,8 @@ export const mockApi = {
             finished_at: Math.floor(Date.now() / 1000),
             total_reclaimed_bytes: 500 * 1024 * 1024,
             total_failed_bytes: 0,
+            partial_count: 0,
+            failed_count: 0,
             items: [
               {
                 item_id: 'mock-safe-item',

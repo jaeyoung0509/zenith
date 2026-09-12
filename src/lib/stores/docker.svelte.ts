@@ -1,5 +1,5 @@
 import type { DockerStatus } from '../models/types';
-import { tauriGetDockerStatus, tauriPruneDocker } from '../utils/tauri';
+import { refusalForPreview, tauriGetDockerStatus, tauriPruneDocker } from '../utils/tauri';
 
 class DockerStore {
   status = $state<DockerStatus | null>(null);
@@ -20,6 +20,11 @@ class DockerStore {
   }
 
   async pruneTarget(signatureId: string): Promise<number> {
+    const refusal = refusalForPreview('Pruning Docker data');
+    if (refusal) {
+      this.error = refusal;
+      return 0;
+    }
     this.isPruning = true;
     this.error = null;
     try {

@@ -45,6 +45,20 @@ export function isTauri(): boolean {
   return nativeBridgePresent();
 }
 
+/**
+ * The refusal for work that mutates state while the interface serves preview
+ * data.
+ *
+ * Preview mode answers commands from the fixture layer, so a destructive call
+ * would report success for work that never happened. A destructive dispatch
+ * calls this first, shows the returned message, and never reaches the mock;
+ * native mode returns `null` and the backend keeps its own validation.
+ */
+export function refusalForPreview(action: string): string | null {
+  if (isTauri()) return null;
+  return `${action} is unavailable while Zenith is showing preview data.`;
+}
+
 export function apiBridgeSnapshot(): ApiBridgeSnapshot {
   return {
     mode: mode ?? (nativeBridgePresent() ? 'native' : 'preview'),

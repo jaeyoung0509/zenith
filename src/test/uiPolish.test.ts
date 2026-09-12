@@ -134,6 +134,10 @@ describe('cleanup result feedback', () => {
     finished_at: 2,
     total_reclaimed_bytes: success ? 1024 : 0,
     total_failed_bytes: success ? 0 : 1024,
+    // The backend counts what it could not fully clean; a `partial` target
+    // reclaimed bytes, a `failed` one reclaimed nothing.
+    partial_count: status === 'partial' ? 1 : 0,
+    failed_count: status === 'failed' ? 1 : 0,
     items: [
       {
         item_id: 'item-1',
@@ -171,6 +175,49 @@ describe('cleanup result feedback', () => {
     expect(failed.body).toContain('No storage was reclaimed');
     expect(failed.body).not.toContain('Clean Complete');
     expect(failed.body).not.toContain('Free space delta');
+
+    expect(success.body).not.toContain('target(s) partially cleaned');
+    expect(partial.body).toContain('1 target(s) partially cleaned, 0 failed');
+    expect(failed.body).toContain('0 target(s) partially cleaned, 1 failed');
+  });
+
+  it('reports a run that both partially cleaned and failed targets', () => {
+    const mixed: CleanResult = {
+      ...result('partial', true, '2 file(s) could not be removed: busy'),
+      partial_count: 1,
+      failed_count: 1,
+      items: [
+        {
+          item_id: 'item-1',
+          name: 'Partial cache',
+          path: '/tmp/partial-cache',
+          status: 'partial',
+          success: true,
+          bytes_reclaimed: 1024,
+          failure_reason: null,
+          error_message: '2 file(s) could not be removed: busy',
+        },
+        {
+          item_id: 'item-2',
+          name: 'Locked cache',
+          path: '/tmp/locked-cache',
+          status: 'failed',
+          success: false,
+          bytes_reclaimed: 0,
+          failure_reason: 'in_use' as CleanFailureReason,
+          error_message: 'Sharing violation (file in use by another process): os error 32',
+        },
+      ],
+    };
+
+    const rendered = render(CleanResultModal, {
+      props: { result: mixed, onClose: () => undefined },
+    });
+
+    expect(rendered.body).toContain('Clean Partially Complete');
+    expect(rendered.body).toContain('1 target(s) partially cleaned, 1 failed');
+    expect(rendered.body).toContain('1 item(s) partially cleaned');
+    expect(rendered.body).toContain('1 item(s) failed');
   });
 
   it('reflects intensive cleanup capability availability honestly in Settings', async () => {

@@ -1,4 +1,5 @@
 import {
+  refusalForPreview,
   tauriListDevelopmentListeners,
   tauriReleaseDevelopmentListener,
 } from '../utils/tauri';
@@ -48,6 +49,12 @@ export class DevelopmentPortsStore {
   ): Promise<ReleaseDevelopmentListenerResult> {
     if (this.releasingId) {
       throw new Error('Another release operation is in progress');
+    }
+
+    const refusal = refusalForPreview('Stopping a development server');
+    if (refusal) {
+      this.error = refusal;
+      throw new Error(refusal);
     }
 
     this.releasingId = listener.id;

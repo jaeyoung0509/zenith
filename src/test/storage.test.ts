@@ -239,6 +239,8 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       finished_at: 1005,
       total_reclaimed_bytes: 1024 * 1024 * 50,
       total_failed_bytes: 0,
+      partial_count: 0,
+      failed_count: 0,
       actual_disk_free_delta: 1024 * 1024 * 50,
       items: [
         {

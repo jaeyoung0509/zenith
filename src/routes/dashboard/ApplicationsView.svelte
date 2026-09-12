@@ -17,6 +17,7 @@
     selectedAppTrashBytes,
   } from '../../lib/utils/storageManagement';
   import {
+    refusalForPreview,
     tauriExecuteTrashPlan,
     tauriGetInstalledApps,
     tauriInspectAppUninstall,
@@ -217,6 +218,11 @@
 
   async function executeUninstall() {
     if (!plan || !inspection) return;
+    const refusal = refusalForPreview('Deleting an application');
+    if (refusal) {
+      error = refusal;
+      return;
+    }
     isExecuting = true;
     error = null;
     const appId = inspection.app.id;

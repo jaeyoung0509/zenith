@@ -1,4 +1,4 @@
-import { api, isTauri } from '../api';
+import { api, isTauri, refusalForPreview } from '../api';
 import { storageApi } from '../api/storage';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type {
@@ -54,7 +54,7 @@ import type {
   IngestedAgentEvent,
 } from '../models/types';
 
-export { isTauri };
+export { isTauri, refusalForPreview };
 
 export function tauriGetProjectContext(force = false): Promise<AgentActivitySnapshot> {
   return api.getProjectContext(force);

@@ -218,6 +218,37 @@ describe('SettingsStore persistence and lifecycle', () => {
     );
   });
 
+  it('a failed load reports an error and does not count as loaded', async () => {
+    mockGetSettings.mockRejectedValueOnce(new Error('Settings file is unreadable'));
+    await store.load();
+
+    expect(store.error).toBe('Settings could not be loaded.');
+
+    // A failed load is not a completed load: the store re-reads instead of
+    // serving in-memory defaults to every later caller.
+    await store.load();
+    expect(mockGetSettings).toHaveBeenCalledTimes(2);
+    expect(store.error).toBeNull();
+    expect(store.settings.clean_docker).toBe(true);
+    expect(await store.save({ clean_docker: false })).toBe(true);
+  });
+
+  it('save is refused before a successful load', async () => {
+    mockGetSettings.mockRejectedValueOnce(new Error('Settings file is unreadable'));
+    await store.load();
+
+    expect(store.error).toBe('Settings could not be loaded.');
+    expect(await store.save({ theme: 'dark' })).toBe(false);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+    expect(store.error).toBe('Settings could not be loaded, so nothing was saved.');
+
+    // Once a load succeeds the store is writable again.
+    await store.load(true);
+    expect(store.error).toBeNull();
+    expect(await store.save({ theme: 'dark' })).toBe(true);
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('responds to system theme changes via matchMedia listener', () => {
     const root = mockDocument.documentElement;
     store.applyTheme('system');

@@ -1,5 +1,5 @@
 import type { LocalModelItem } from '../models/types';
-import { tauriDeleteLocalModel, tauriGetLocalModels } from '../utils/tauri';
+import { refusalForPreview, tauriDeleteLocalModel, tauriGetLocalModels } from '../utils/tauri';
 
 class LocalModelsStore {
   models = $state<LocalModelItem[]>([]);
@@ -24,6 +24,11 @@ class LocalModelsStore {
   }
 
   async deleteModel(model: LocalModelItem): Promise<boolean> {
+    const refusal = refusalForPreview('Deleting a local model');
+    if (refusal) {
+      this.error = refusal;
+      return false;
+    }
     this.isDeleting = true;
     this.error = null;
     try {

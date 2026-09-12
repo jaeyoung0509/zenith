@@ -135,15 +135,26 @@ export class SettingsStore {
       this.settings = normalized;
       this.persistedSettings = serializeSettingsSnapshot(normalized);
       this.hasLoaded = true;
+      this.error = null;
       this.applyTheme(this.settings.theme);
     } catch {
-      this.persistedSettings = serializeSettingsSnapshot(this.settings);
+      // A failed load used to look exactly like a successful one whose values
+      // happened to be the defaults, so the next save wrote those defaults over
+      // whatever the backend actually holds. Record the failure instead and
+      // leave `persistedSettings` untouched: `save` refuses without a snapshot.
+      this.error = 'Settings could not be loaded.';
+      this.hasLoaded = false;
     } finally {
       this.isLoading = false;
     }
   }
 
   async save(partial: Partial<ZenithSettings>): Promise<boolean> {
+    if (this.persistedSettings === null) {
+      this.error = 'Settings could not be loaded, so nothing was saved.';
+      return false;
+    }
+
     const revision = ++this.saveRevision;
     const previousSettings = this.settings;
     this.settings = { ...this.settings, ...partial };

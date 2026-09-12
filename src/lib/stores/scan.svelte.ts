@@ -8,6 +8,7 @@ import type {
   ZenithSettings,
 } from '../models/types';
 import {
+  refusalForPreview,
   tauriCreatePlan,
   tauriExecuteClean,
   tauriGetLastScan,
@@ -435,6 +436,11 @@ export class ScanStore {
 
   async quickCleanSafe(): Promise<CleanResult | null> {
     if (this.isCleaning || this.isScanning) return null;
+    const refusal = refusalForPreview('Cleaning');
+    if (refusal) {
+      this.error = refusal;
+      return null;
+    }
     this.updateFreshness();
     if (!this.canClean) {
       this.error = 'Scan results are out of date. Scan again and review the new results before cleaning.';
@@ -498,6 +504,11 @@ export class ScanStore {
 
   async cleanItems(items: ScanItem[]): Promise<CleanResult | null> {
     if (this.isCleaning || this.isScanning) return null;
+    const refusal = refusalForPreview('Cleaning');
+    if (refusal) {
+      this.error = refusal;
+      return null;
+    }
     this.updateFreshness();
     if (!this.canClean) {
       this.error = 'Scan results are out of date. Scan again and review the new results before cleaning.';
