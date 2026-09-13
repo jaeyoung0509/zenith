@@ -3,6 +3,7 @@ use crate::large_files::FileIdentity;
 use crate::models::AppInstallSource;
 use crate::models::{
     AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
+    ObservationQuality,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::safety::Blacklist;
@@ -19,6 +20,8 @@ use uuid::Uuid;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+const MAX_INCOMPLETE_REASONS: usize = 32;
+
 #[derive(Debug, Clone)]
 pub struct AppRecord {
     pub app: InstalledApp,
@@ -26,11 +29,35 @@ pub struct AppRecord {
     pub identity: FileIdentity,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPathMeasurement {
+    pub logical_size: u64,
+    pub allocated_size: u64,
+    pub complete: bool,
+    pub incomplete_reason: Option<String>,
+    pub skipped_entries: u64,
+}
+
+impl AppPathMeasurement {
+    pub fn quality(&self) -> ObservationQuality {
+        if self.complete && self.skipped_entries == 0 {
+            ObservationQuality::Fresh
+        } else if self.logical_size > 0 || self.allocated_size > 0 {
+            ObservationQuality::Partial
+        } else {
+            ObservationQuality::Unavailable
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppInventory {
     pub inventory_id: String,
     pub records: HashMap<String, AppRecord>,
     pub created_at: u64,
+    pub quality: ObservationQuality,
+    pub skipped_entry_count: u64,
+    pub incomplete_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,16 +76,37 @@ pub struct AppInspectionRecord {
     pub created_at: u64,
 }
 
+/// Filesystem probe seam for application discovery and size inspection.
+/// Allows deterministic testing of permission and I/O failures without altering host permissions.
+pub trait AppFsProbe: Send + Sync {
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<fs::Metadata> {
+        fs::symlink_metadata(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> std::io::Result<fs::ReadDir> {
+        fs::read_dir(path)
+    }
+}
+
+pub struct NativeAppFsProbe;
+
+impl AppFsProbe for NativeAppFsProbe {}
+
 pub struct ApplicationScanner;
 
 impl ApplicationScanner {
     pub fn scan(environment: &PlatformEnvironment) -> AppInventory {
+        Self::scan_with(environment, &NativeAppFsProbe)
+    }
+
+    pub fn scan_with<P: AppFsProbe>(environment: &PlatformEnvironment, probe: &P) -> AppInventory {
         // Windows has no reviewed application-bundle inventory: bundles,
         // their related data, and the uninstall review that consumes them are
         // macOS concepts. The refusal is stated by the environment's flavor so
         // it is provable on any runner, and a native Windows process states
         // Windows.
         if environment.flavor().is_windows() {
+            let _ = probe;
             return empty_inventory();
         }
 
@@ -70,6 +118,9 @@ impl ApplicationScanner {
         #[cfg(not(target_os = "windows"))]
         {
             let mut records = HashMap::new();
+            let mut skipped_entry_count = 0u64;
+            let mut incomplete_reasons = Vec::new();
+            let mut observed_roots = 0u64;
 
             // The reviewed system root and the stated profile's own folder are
             // the only places an application bundle is inventoried from.
@@ -79,6 +130,18 @@ impl ApplicationScanner {
             }
             if let Some(home) = environment.user_home() {
                 roots.push(home.join("Applications"));
+            }
+            if roots.is_empty() {
+                return AppInventory {
+                    inventory_id: Uuid::new_v4().to_string(),
+                    records,
+                    created_at: unix_timestamp(),
+                    quality: ObservationQuality::Unavailable,
+                    skipped_entry_count: 1,
+                    incomplete_reasons: vec![
+                        "Could not resolve any application discovery roots".to_string()
+                    ],
+                };
             }
 
             let mut system = System::new_all();
@@ -90,26 +153,83 @@ impl ApplicationScanner {
                 .collect::<Vec<_>>();
 
             for root in roots {
-                if fs::symlink_metadata(&root)
-                    .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
-                    .unwrap_or(true)
-                {
+                let meta = match probe.symlink_metadata(&root) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            skipped_entry_count = skipped_entry_count.saturating_add(1);
+                            if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                                incomplete_reasons.push(format!(
+                                    "Could not read root metadata {}: {e}",
+                                    root.display()
+                                ));
+                            }
+                        } else {
+                            observed_roots = observed_roots.saturating_add(1);
+                        }
+                        continue;
+                    }
+                };
+                if meta.file_type().is_symlink() {
+                    // Symlink exclusion is an intentional scope boundary, not
+                    // a failed observation.
+                    observed_roots = observed_roots.saturating_add(1);
                     continue;
                 }
-                let Ok(entries) = fs::read_dir(root) else {
+                if !meta.is_dir() {
+                    skipped_entry_count = skipped_entry_count.saturating_add(1);
+                    if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                        incomplete_reasons.push(format!(
+                            "Application root is not a directory: {}",
+                            root.display()
+                        ));
+                    }
                     continue;
+                }
+                let entries = match probe.read_dir(&root) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        skipped_entry_count = skipped_entry_count.saturating_add(1);
+                        if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                            incomplete_reasons.push(format!(
+                                "Could not read application root directory {}: {e}",
+                                root.display()
+                            ));
+                        }
+                        continue;
+                    }
                 };
-                for entry in entries.flatten() {
+                observed_roots = observed_roots.saturating_add(1);
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            skipped_entry_count = skipped_entry_count.saturating_add(1);
+                            if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                                incomplete_reasons
+                                    .push(format!("Could not read application entry: {e}"));
+                            }
+                            continue;
+                        }
+                    };
                     let path = entry.path();
                     if path.extension().and_then(|value| value.to_str()) != Some("app") {
                         continue;
                     }
 
                     let Some(identity) = FileIdentity::from_path(&path) else {
+                        skipped_entry_count = skipped_entry_count.saturating_add(1);
+                        if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                            incomplete_reasons.push(format!(
+                                "Could not determine file identity for {}",
+                                path.display()
+                            ));
+                        }
                         continue;
                     };
 
-                    let metadata = read_bundle_metadata(&path);
+                    let bundle_obs = read_bundle_metadata(&path);
+                    let metadata = bundle_obs.metadata;
                     let name = metadata
                         .display_name
                         .clone()
@@ -120,7 +240,39 @@ impl ApplicationScanner {
                         })
                         .unwrap_or_else(|| "Unknown App".to_string());
 
-                    let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
+                    let measurement = measure_path_without_symlinks_with(&path, probe);
+                    let size_quality = measurement.quality();
+                    let mut app_incomplete_reason = measurement.incomplete_reason.clone();
+                    let mut app_skipped_entries = measurement.skipped_entries;
+
+                    let has_bundle_incomplete = bundle_obs.incomplete_reason.is_some();
+                    if let Some(reason) = bundle_obs.incomplete_reason {
+                        app_skipped_entries = app_skipped_entries.saturating_add(1);
+                        if app_incomplete_reason.is_none() {
+                            app_incomplete_reason = Some(reason.clone());
+                        }
+                        if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                            incomplete_reasons.push(reason);
+                        }
+                    }
+
+                    let quality =
+                        if has_bundle_incomplete || size_quality != ObservationQuality::Fresh {
+                            ObservationQuality::Partial
+                        } else {
+                            ObservationQuality::Fresh
+                        };
+
+                    if quality != ObservationQuality::Fresh {
+                        skipped_entry_count =
+                            skipped_entry_count.saturating_add(app_skipped_entries.max(1));
+                        if let Some(reason) = &measurement.incomplete_reason {
+                            if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                                incomplete_reasons.push(reason.clone());
+                            }
+                        }
+                    }
+
                     let is_system_protected =
                         is_zenith_identity(&name, metadata.bundle_id.as_deref());
                     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -148,9 +300,10 @@ impl ApplicationScanner {
                         version: metadata.version,
                         display_path: path.to_string_lossy().to_string(),
                         executable_name: metadata.executable,
-                        logical_size,
-                        allocated_size,
-                        modified_at: fs::metadata(&path)
+                        logical_size: measurement.logical_size,
+                        allocated_size: measurement.allocated_size,
+                        modified_at: probe
+                            .symlink_metadata(&path)
                             .ok()
                             .and_then(|value| value.modified().ok())
                             .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
@@ -158,6 +311,10 @@ impl ApplicationScanner {
                         install_source: detect_install_source(&path),
                         is_running,
                         is_system_protected,
+                        quality,
+                        size_quality,
+                        incomplete_reason: app_incomplete_reason,
+                        skipped_entries: app_skipped_entries,
                     };
                     records.insert(
                         id,
@@ -170,10 +327,21 @@ impl ApplicationScanner {
                 }
             }
 
+            let inventory_quality = if skipped_entry_count == 0 {
+                ObservationQuality::Fresh
+            } else if observed_roots > 0 {
+                ObservationQuality::Partial
+            } else {
+                ObservationQuality::Unavailable
+            };
+
             AppInventory {
                 inventory_id: Uuid::new_v4().to_string(),
                 records,
                 created_at: unix_timestamp(),
+                quality: inventory_quality,
+                skipped_entry_count,
+                incomplete_reasons,
             }
         }
     }
@@ -182,6 +350,15 @@ impl ApplicationScanner {
         environment: &PlatformEnvironment,
         inventory: &AppInventory,
         app_id: &str,
+    ) -> Result<AppInspectionRecord, String> {
+        Self::inspect_with(environment, inventory, app_id, &NativeAppFsProbe)
+    }
+
+    pub fn inspect_with<P: AppFsProbe>(
+        environment: &PlatformEnvironment,
+        inventory: &AppInventory,
+        app_id: &str,
+        probe: &P,
     ) -> Result<AppInspectionRecord, String> {
         let record = inventory
             .records
@@ -257,20 +434,39 @@ impl ApplicationScanner {
         ];
 
         for (root, kind) in roots {
-            if fs::symlink_metadata(&root)
-                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
-                .unwrap_or(true)
-            {
-                if root.exists() {
-                    incomplete = true;
+            match probe.symlink_metadata(&root) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() || !meta.is_dir() {
+                        continue;
+                    }
                 }
-                continue;
+                Err(err) => {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        incomplete = true;
+                        if warnings.len() < MAX_INCOMPLETE_REASONS {
+                            warnings.push(format!(
+                                "Could not access related data directory {}: {err}",
+                                root.display()
+                            ));
+                        }
+                    }
+                    continue;
+                }
             }
-            let Ok(entries) = fs::read_dir(&root) else {
-                if root.exists() {
-                    incomplete = true;
+            let entries = match probe.read_dir(&root) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        incomplete = true;
+                        if warnings.len() < MAX_INCOMPLETE_REASONS {
+                            warnings.push(format!(
+                                "Could not read related data directory {}: {err}",
+                                root.display()
+                            ));
+                        }
+                    }
+                    continue;
                 }
-                continue;
             };
             for entry in entries {
                 let Ok(entry) = entry else {
@@ -278,12 +474,27 @@ impl ApplicationScanner {
                     continue;
                 };
                 let path = entry.path();
-                if Blacklist::is_blacklisted_with(&path, environment)
-                    || fs::symlink_metadata(&path)
-                        .map(|m| m.file_type().is_symlink())
-                        .unwrap_or(true)
-                {
+                if Blacklist::is_blacklisted_with(&path, environment) {
                     continue;
+                }
+                match probe.symlink_metadata(&path) {
+                    Ok(m) => {
+                        if m.file_type().is_symlink() {
+                            continue;
+                        }
+                    }
+                    Err(err) => {
+                        if err.kind() != std::io::ErrorKind::NotFound {
+                            incomplete = true;
+                            if warnings.len() < MAX_INCOMPLETE_REASONS {
+                                warnings.push(format!(
+                                    "Could not read metadata for {}: {err}",
+                                    path.display()
+                                ));
+                            }
+                        }
+                        continue;
+                    }
                 }
                 let filename = entry.file_name().to_string_lossy().to_string();
                 let Some((confidence, evidence)) =
@@ -292,9 +503,14 @@ impl ApplicationScanner {
                     continue;
                 };
                 let Some(identity) = FileIdentity::from_path(&path) else {
+                    incomplete = true;
                     continue;
                 };
-                let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
+                let measurement = measure_path_without_symlinks_with(&path, probe);
+                let quality = measurement.quality();
+                if quality != ObservationQuality::Fresh {
+                    incomplete = true;
+                }
                 let id = Uuid::new_v4().to_string();
                 let selected_by_default = confidence == AppRelatedConfidence::High;
                 let item = AppRelatedItem {
@@ -304,9 +520,12 @@ impl ApplicationScanner {
                     kind,
                     confidence,
                     evidence,
-                    logical_size,
-                    allocated_size,
+                    logical_size: measurement.logical_size,
+                    allocated_size: measurement.allocated_size,
                     selected_by_default,
+                    quality,
+                    incomplete_reason: measurement.incomplete_reason,
+                    skipped_entries: measurement.skipped_entries,
                 };
                 related.insert(
                     id,
@@ -319,6 +538,14 @@ impl ApplicationScanner {
             }
         }
 
+        if let Some(reason) = &record.app.incomplete_reason {
+            incomplete = true;
+            if warnings.len() < MAX_INCOMPLETE_REASONS {
+                warnings.push(format!(
+                    "Application bundle observation was partial: {reason}"
+                ));
+            }
+        }
         if bundle_id.is_none() {
             warnings.push("This app has no readable CFBundleIdentifier. Only exact app-name matches are shown and none are selected automatically.".to_string());
         }
@@ -363,6 +590,9 @@ fn empty_inventory() -> AppInventory {
         inventory_id: Uuid::new_v4().to_string(),
         records: HashMap::new(),
         created_at: unix_timestamp(),
+        quality: ObservationQuality::Fresh,
+        skipped_entry_count: 0,
+        incomplete_reasons: Vec::new(),
     }
 }
 
@@ -370,23 +600,65 @@ fn is_zenith_identity(name: &str, bundle_id: Option<&str>) -> bool {
     name == "Zenith" || bundle_id == Some("com.zenith.desktop")
 }
 
-fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
-    let Ok(root_metadata) = fs::symlink_metadata(path) else {
-        return (0, 0);
+const MAX_APP_WALK_DEPTH: usize = 32;
+
+#[cfg(test)]
+fn measure_path_without_symlinks(path: &Path) -> AppPathMeasurement {
+    measure_path_without_symlinks_with(path, &NativeAppFsProbe)
+}
+
+fn measure_path_without_symlinks_with<P: AppFsProbe>(path: &Path, probe: &P) -> AppPathMeasurement {
+    let root_metadata = match probe.symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            return AppPathMeasurement {
+                logical_size: 0,
+                allocated_size: 0,
+                complete: false,
+                incomplete_reason: Some(format!(
+                    "Could not read root metadata for {}: {e}",
+                    path.display()
+                )),
+                skipped_entries: 1,
+            };
+        }
     };
     if root_metadata.file_type().is_symlink() {
-        return (0, 0);
+        return AppPathMeasurement {
+            logical_size: 0,
+            allocated_size: 0,
+            complete: false,
+            incomplete_reason: Some(format!(
+                "Refusing to follow root symlink: {}",
+                path.display()
+            )),
+            skipped_entries: 1,
+        };
     }
 
     #[cfg(unix)]
     let root_device = root_metadata.dev();
     let mut logical_size = 0u64;
     let mut allocated_size = 0u64;
-    let mut stack = vec![path.to_path_buf()];
+    let mut complete = true;
+    let mut incomplete_reason = None;
+    let mut skipped_entries = 0u64;
+    let mut stack = vec![(path.to_path_buf(), 0usize)];
 
-    while let Some(current) = stack.pop() {
-        let Ok(metadata) = fs::symlink_metadata(&current) else {
-            continue;
+    while let Some((current, depth)) = stack.pop() {
+        let metadata = match probe.symlink_metadata(&current) {
+            Ok(m) => m,
+            Err(e) => {
+                skipped_entries = skipped_entries.saturating_add(1);
+                complete = false;
+                if incomplete_reason.is_none() {
+                    incomplete_reason = Some(format!(
+                        "Could not read metadata for {}: {e}",
+                        current.display()
+                    ));
+                }
+                continue;
+            }
         };
         if metadata.file_type().is_symlink() {
             continue;
@@ -415,13 +687,59 @@ fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
             continue;
         }
         if metadata.is_dir() {
-            if let Ok(entries) = fs::read_dir(&current) {
-                stack.extend(entries.flatten().map(|entry| entry.path()));
+            if depth >= MAX_APP_WALK_DEPTH {
+                skipped_entries = skipped_entries.saturating_add(1);
+                complete = false;
+                if incomplete_reason.is_none() {
+                    incomplete_reason = Some(format!(
+                        "Directory depth limit exceeded at {}",
+                        current.display()
+                    ));
+                }
+                continue;
+            }
+
+            match probe.read_dir(&current) {
+                Ok(entries) => {
+                    for entry in entries {
+                        match entry {
+                            Ok(entry) => {
+                                stack.push((entry.path(), depth + 1));
+                            }
+                            Err(e) => {
+                                skipped_entries = skipped_entries.saturating_add(1);
+                                complete = false;
+                                if incomplete_reason.is_none() {
+                                    incomplete_reason = Some(format!(
+                                        "Could not read directory entry in {}: {e}",
+                                        current.display()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    skipped_entries = skipped_entries.saturating_add(1);
+                    complete = false;
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(format!(
+                            "Could not read directory {}: {e}",
+                            current.display()
+                        ));
+                    }
+                }
             }
         }
     }
 
-    (logical_size, allocated_size)
+    AppPathMeasurement {
+        logical_size,
+        allocated_size,
+        complete,
+        incomplete_reason,
+        skipped_entries,
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -434,20 +752,52 @@ struct BundleMetadata {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn read_bundle_metadata(path: &Path) -> BundleMetadata {
+struct BundleMetadataObservation {
+    metadata: BundleMetadata,
+    incomplete_reason: Option<String>,
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_bundle_metadata(path: &Path) -> BundleMetadataObservation {
     let plist_path = path.join("Contents/Info.plist");
-    let Ok(value) = Value::from_file(plist_path) else {
-        return BundleMetadata::default();
-    };
-    let Some(dict) = value.as_dictionary() else {
-        return BundleMetadata::default();
-    };
-    let get = |key: &str| dict.get(key).and_then(Value::as_string).map(str::to_string);
-    BundleMetadata {
-        display_name: get("CFBundleDisplayName").or_else(|| get("CFBundleName")),
-        bundle_id: get("CFBundleIdentifier"),
-        version: get("CFBundleShortVersionString").or_else(|| get("CFBundleVersion")),
-        executable: get("CFBundleExecutable"),
+    match Value::from_file(&plist_path) {
+        Ok(value) => {
+            let Some(dict) = value.as_dictionary() else {
+                return BundleMetadataObservation {
+                    metadata: BundleMetadata::default(),
+                    incomplete_reason: Some(format!(
+                        "Info.plist in {} is not a valid dictionary",
+                        path.display()
+                    )),
+                };
+            };
+            let get = |key: &str| dict.get(key).and_then(Value::as_string).map(str::to_string);
+            BundleMetadataObservation {
+                metadata: BundleMetadata {
+                    display_name: get("CFBundleDisplayName").or_else(|| get("CFBundleName")),
+                    bundle_id: get("CFBundleIdentifier"),
+                    version: get("CFBundleShortVersionString").or_else(|| get("CFBundleVersion")),
+                    executable: get("CFBundleExecutable"),
+                },
+                incomplete_reason: None,
+            }
+        }
+        Err(err) => {
+            let reason = match fs::symlink_metadata(&plist_path) {
+                Ok(_) => format!("Failed to parse Info.plist in {}: {err}", path.display()),
+                Err(metadata_error) if metadata_error.kind() == std::io::ErrorKind::NotFound => {
+                    format!("Missing Info.plist in {}", path.display())
+                }
+                Err(metadata_error) => format!(
+                    "Could not inspect Info.plist in {}: {metadata_error}",
+                    path.display()
+                ),
+            };
+            BundleMetadataObservation {
+                metadata: BundleMetadata::default(),
+                incomplete_reason: Some(reason),
+            }
+        }
     }
 }
 
@@ -515,6 +865,52 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use std::sync::Arc;
 
+    #[cfg(not(target_os = "windows"))]
+    #[derive(Default)]
+    struct FailingAppFsProbe {
+        metadata_failure: Option<PathBuf>,
+        read_dir_failure: Option<PathBuf>,
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl super::AppFsProbe for FailingAppFsProbe {
+        fn symlink_metadata(&self, path: &Path) -> std::io::Result<fs::Metadata> {
+            if self.metadata_failure.as_deref() == Some(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated metadata refusal",
+                ));
+            }
+            fs::symlink_metadata(path)
+        }
+
+        fn read_dir(&self, path: &Path) -> std::io::Result<fs::ReadDir> {
+            if self.read_dir_failure.as_deref() == Some(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated directory refusal",
+                ));
+            }
+            fs::read_dir(path)
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn write_test_bundle(bundle: &Path, name: &str) {
+        let contents = bundle.join("Contents");
+        fs::create_dir_all(&contents).unwrap();
+        fs::write(
+            contents.join("Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleName</key><string>{name}</string><key>CFBundleIdentifier</key><string>com.example.{name}</string></dict></plist>"#
+            ),
+        )
+        .unwrap();
+        fs::write(contents.join("payload.bin"), b"visible payload").unwrap();
+    }
+
     /// A POSIX environment stating the reviewed system root and the profile.
     #[cfg(not(target_os = "windows"))]
     fn environment_with_roots(system_root: &Path, home: &Path) -> PlatformEnvironment {
@@ -572,6 +968,18 @@ mod tests {
         assert!(!inventory.inventory_id.is_empty());
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn unresolved_posix_application_roots_report_unavailable_inventory() {
+        let inventory =
+            ApplicationScanner::scan(&PlatformEnvironment::simulated(PathFlavor::Posix));
+
+        assert!(inventory.records.is_empty());
+        assert_eq!(inventory.quality, ObservationQuality::Unavailable);
+        assert_eq!(inventory.skipped_entry_count, 1);
+        assert!(inventory.incomplete_reasons[0].contains("resolve"));
+    }
+
     #[test]
     fn exact_bundle_identifier_is_high_confidence() {
         let (confidence, _) = match_candidate(
@@ -622,6 +1030,10 @@ mod tests {
             install_source: AppInstallSource::ApplicationBundle,
             is_running: false,
             is_system_protected: false,
+            quality: ObservationQuality::Fresh,
+            size_quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entries: 0,
         };
         assert!(is_zenith_app(&app));
     }
@@ -649,8 +1061,157 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, bundle.join("Contents/escape")).unwrap();
 
-        let (logical, allocated) = measure_path_without_symlinks(&bundle);
-        assert_eq!(logical, 4096 + 1024);
-        assert!(allocated > 0);
+        let measurement = measure_path_without_symlinks(&bundle);
+        assert_eq!(measurement.logical_size, 4096 + 1024);
+        assert!(measurement.allocated_size > 0);
+        assert!(measurement.complete);
+        assert_eq!(measurement.quality(), ObservationQuality::Fresh);
+        assert_eq!(measurement.skipped_entries, 0);
+    }
+
+    #[test]
+    fn unreadable_root_reports_unavailable_measurement() {
+        let nonexistent = PathBuf::from("/nonexistent/path/for/test/Example.app");
+        let measurement = measure_path_without_symlinks(&nonexistent);
+        assert_eq!(measurement.quality(), ObservationQuality::Unavailable);
+        assert_eq!(measurement.logical_size, 0);
+        assert!(!measurement.complete);
+        assert!(measurement.incomplete_reason.is_some());
+        assert_eq!(measurement.skipped_entries, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_scan_with_symlinked_root_treats_it_as_an_intentional_exclusion() {
+        let temp = tempfile::tempdir().unwrap();
+        let real_apps = temp.path().join("real_apps");
+        fs::create_dir_all(&real_apps).unwrap();
+        let symlink_root = temp.path().join("Applications");
+
+        std::os::unix::fs::symlink(&real_apps, &symlink_root).unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(temp.path());
+        let inventory = ApplicationScanner::scan(&environment);
+
+        assert_eq!(inventory.skipped_entry_count, 0);
+        assert_eq!(inventory.quality, ObservationQuality::Fresh);
+        assert!(inventory.incomplete_reasons.is_empty());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn app_scan_retains_readable_records_when_another_root_cannot_be_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let system_root = temp.path().join("system-applications");
+        let profile = temp.path().join("profile");
+        let profile_apps = profile.join("Applications");
+        fs::create_dir_all(&system_root).unwrap();
+        write_test_bundle(&profile_apps.join("Readable.app"), "Readable");
+
+        let environment = environment_with_roots(&system_root, &profile);
+        let probe = FailingAppFsProbe {
+            read_dir_failure: Some(system_root.clone()),
+            ..Default::default()
+        };
+        let inventory = ApplicationScanner::scan_with(&environment, &probe);
+
+        assert_eq!(inventory.records.len(), 1);
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+        assert_eq!(inventory.skipped_entry_count, 1);
+        assert!(inventory
+            .incomplete_reasons
+            .iter()
+            .any(|reason| reason.contains(&system_root.display().to_string())));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn app_scan_retains_bundle_with_lower_bound_size_when_child_metadata_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let system_root = temp.path().join("system-applications");
+        let profile = temp.path().join("profile");
+        let bundle = profile.join("Applications/Partial.app");
+        fs::create_dir_all(&system_root).unwrap();
+        write_test_bundle(&bundle, "Partial");
+        let refused_child = bundle.join("Contents/refused.bin");
+        fs::write(&refused_child, vec![7; 4_096]).unwrap();
+
+        let environment = environment_with_roots(&system_root, &profile);
+        let probe = FailingAppFsProbe {
+            metadata_failure: Some(refused_child),
+            ..Default::default()
+        };
+        let inventory = ApplicationScanner::scan_with(&environment, &probe);
+
+        assert_eq!(inventory.records.len(), 1);
+        let app = &inventory.records.values().next().unwrap().app;
+        assert_eq!(app.size_quality, ObservationQuality::Partial);
+        assert!(app.allocated_size > 0);
+        assert_eq!(app.skipped_entries, 1);
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_scan_with_corrupt_info_plist_marks_app_and_inventory_partial() {
+        let temp = tempfile::tempdir().unwrap();
+        let apps = temp.path().join("Applications");
+        let bundle = apps.join("Broken.app");
+        let contents = bundle.join("Contents");
+        fs::create_dir_all(&contents).unwrap();
+        fs::write(contents.join("Info.plist"), b"invalid binary or xml plist").unwrap();
+        fs::write(contents.join("payload.bin"), b"binary").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(temp.path());
+        let inventory = ApplicationScanner::scan(&environment);
+
+        assert_eq!(inventory.records.len(), 1);
+        let record = inventory.records.values().next().unwrap();
+        assert_eq!(record.app.quality, ObservationQuality::Partial);
+        assert_eq!(record.app.size_quality, ObservationQuality::Fresh);
+        assert!(record
+            .app
+            .incomplete_reason
+            .as_deref()
+            .unwrap()
+            .contains("Failed to parse Info.plist"));
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+        assert!(inventory.skipped_entry_count >= 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_inspect_with_unreadable_related_root_reports_incomplete_and_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let apps = home.join("Applications");
+        let bundle = apps.join("Simple.app");
+        let contents = bundle.join("Contents");
+        fs::create_dir_all(&contents).unwrap();
+        fs::write(contents.join("payload.bin"), b"binary").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(home);
+        let inventory = ApplicationScanner::scan(&environment);
+        assert_eq!(inventory.records.len(), 1);
+        let app_id = inventory.records.keys().next().unwrap();
+
+        let library = home.join("Library");
+        let app_support = library.join("Application Support");
+        fs::create_dir_all(&app_support).unwrap();
+
+        let probe = FailingAppFsProbe {
+            read_dir_failure: Some(app_support),
+            ..Default::default()
+        };
+
+        let inspection =
+            ApplicationScanner::inspect_with(&environment, &inventory, app_id, &probe).unwrap();
+
+        assert!(inspection.inspection.incomplete);
+        assert!(inspection
+            .inspection
+            .warnings
+            .iter()
+            .any(|w| w.contains("Could not read related data directory")));
     }
 }

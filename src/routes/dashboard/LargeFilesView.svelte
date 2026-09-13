@@ -414,7 +414,7 @@
             · {trashResult.failed_count + trashResult.skipped_count} not moved
           {/if}
         </span>
-        <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)}</span>
+        <span class="font-mono text-muted-foreground">{trashResult.size_is_lower_bound ? '≥ ' : ''}{formatBytes(trashResult.moved_allocated_size)}</span>
       </div>
     </Card>
   {/if}
@@ -437,7 +437,7 @@
             </span>
           </div>
           <p class="text-xs text-muted-foreground mt-1">
-            {plan.item_count} selected item{plan.item_count === 1 ? '' : 's'} · {formatBytes(plan.allocated_size)} allocated
+            {plan.item_count} selected item{plan.item_count === 1 ? '' : 's'} · {plan.size_is_lower_bound ? '≥ ' : ''}{formatBytes(plan.allocated_size)} allocated
           </p>
         </div>
         <div class="flex items-center gap-2">

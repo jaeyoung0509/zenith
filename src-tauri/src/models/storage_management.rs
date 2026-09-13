@@ -1,3 +1,4 @@
+use crate::models::ObservationQuality;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -141,6 +142,25 @@ pub struct InstalledApp {
     pub install_source: AppInstallSource,
     pub is_running: bool,
     pub is_system_protected: bool,
+    #[serde(default)]
+    pub quality: ObservationQuality,
+    #[serde(default)]
+    pub size_quality: ObservationQuality,
+    #[serde(default)]
+    pub incomplete_reason: Option<String>,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_entries: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct InstalledAppInventory {
+    pub apps: Vec<InstalledApp>,
+    pub quality: ObservationQuality,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_entry_count: u64,
+    pub incomplete_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -182,6 +202,13 @@ pub struct AppRelatedItem {
     #[specta(type = u64)]
     pub allocated_size: u64,
     pub selected_by_default: bool,
+    #[serde(default)]
+    pub quality: ObservationQuality,
+    #[serde(default)]
+    pub incomplete_reason: Option<String>,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_entries: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -206,6 +233,8 @@ pub struct TrashPlanPreview {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub expires_at: u64,
+    #[serde(default)]
+    pub size_is_lower_bound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -224,4 +253,6 @@ pub struct TrashResult {
     #[specta(type = u64)]
     pub moved_allocated_size: u64,
     pub items: Vec<TrashItemResult>,
+    #[serde(default)]
+    pub size_is_lower_bound: bool,
 }

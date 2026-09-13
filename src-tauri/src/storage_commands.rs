@@ -8,7 +8,7 @@ use crate::developer_artifacts::{
 use crate::large_files::{LargeFileInventory, LargeFileScanner};
 use crate::models::{
     AppUninstallInspection, DeveloperArtifactScanEvent, DeveloperArtifactScanResult,
-    DeveloperWorkspace, InstalledApp, LargeFileScanEvent, LargeFileScanRequest,
+    DeveloperWorkspace, InstalledAppInventory, LargeFileScanEvent, LargeFileScanRequest,
     LargeFileScanResult, TrashPlanPreview, TrashResult,
 };
 use crate::trash_manager::{TrashExecutor, TrashPlan, TrashPlanner};
@@ -474,7 +474,9 @@ pub fn prepare_large_file_trash(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<InstalledApp>, String> {
+pub async fn get_installed_apps(
+    state: State<'_, AppState>,
+) -> Result<InstalledAppInventory, String> {
     state
         .platform_capabilities
         .capabilities()
@@ -493,6 +495,9 @@ pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<Instal
     })
     .await
     .map_err(|error| join_failure("Application inventory worker panicked", error))?;
+    let quality = inventory.quality;
+    let skipped_entry_count = inventory.skipped_entry_count;
+    let incomplete_reasons = inventory.incomplete_reasons.clone();
     let mut apps = inventory
         .records
         .values()
@@ -507,7 +512,12 @@ pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<Instal
         .app_inventory
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Some(inventory);
-    Ok(apps)
+    Ok(InstalledAppInventory {
+        apps,
+        quality,
+        skipped_entry_count,
+        incomplete_reasons,
+    })
 }
 
 #[tauri::command]

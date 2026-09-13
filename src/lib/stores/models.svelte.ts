@@ -1,11 +1,22 @@
-import type { LocalModelItem } from '../models/types';
+import type { LocalModelItem, ObservationQuality } from '../models/types';
 import { refusalForPreview, tauriDeleteLocalModel, tauriGetLocalModels } from '../utils/tauri';
 
 class LocalModelsStore {
   models = $state<LocalModelItem[]>([]);
+  quality = $state<ObservationQuality>('fresh');
+  skippedEntryCount = $state<number>(0);
+  incompleteReasons = $state<string[]>([]);
   isLoading = $state(false);
   isDeleting = $state(false);
   error = $state<string | null>(null);
+
+  isPartial = $derived.by(() => {
+    return this.quality === 'partial' || this.models.some((m) => m.quality === 'partial');
+  });
+
+  isUnavailable = $derived.by(() => {
+    return this.quality === 'unavailable';
+  });
 
   totalBytes = $derived.by(() => {
     return this.models.reduce((acc, m) => acc + m.size_bytes, 0);
@@ -15,7 +26,11 @@ class LocalModelsStore {
     this.isLoading = true;
     this.error = null;
     try {
-      this.models = await tauriGetLocalModels();
+      const inventory = await tauriGetLocalModels();
+      this.models = inventory.items;
+      this.quality = inventory.quality;
+      this.skippedEntryCount = inventory.skipped_entry_count;
+      this.incompleteReasons = inventory.incomplete_reasons;
     } catch (e: any) {
       this.error = e?.toString() || 'Failed to scan local models';
     } finally {

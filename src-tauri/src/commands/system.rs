@@ -6,7 +6,7 @@ use crate::docker::DockerAdapter;
 use crate::metrics::{DiskMetricsCollector, MemoryInspector};
 use crate::models::{
     AwakeBehavior, AwakeRule, AwakeState, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, LocalModelItem, MemoryMetrics, MemoryTerminationMode,
+    DiskVolume, DockerStatus, LocalModelInventory, MemoryMetrics, MemoryTerminationMode,
     MemoryTerminationResult, PlatformCapabilities, PlatformContext,
     ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
 };
@@ -183,7 +183,7 @@ pub async fn prune_docker_target(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_local_models(state: State<'_, AppState>) -> Result<Vec<LocalModelItem>, String> {
+pub async fn get_local_models(state: State<'_, AppState>) -> Result<LocalModelInventory, String> {
     state
         .platform_capabilities
         .capabilities()

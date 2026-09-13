@@ -1,4 +1,4 @@
-use crate::models::{LocalModelItem, ModelSource};
+use crate::models::{LocalModelInventory, LocalModelItem, ModelSource, ObservationQuality};
 use crate::platform::PlatformEnvironment;
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
@@ -6,234 +6,584 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+const MAX_INCOMPLETE_REASONS: usize = 32;
+
+#[derive(Default)]
+pub struct ModelDiscoverySink {
+    pub items: Vec<LocalModelItem>,
+    pub skipped_entries: u64,
+    pub incomplete_reasons: Vec<String>,
+    observed_scopes: u64,
+}
+
+impl ModelDiscoverySink {
+    pub fn record_failure(&mut self, reason: String) {
+        self.record_skipped(1, Some(reason));
+    }
+
+    pub fn record_skipped(&mut self, skipped: u64, reason: Option<String>) {
+        self.skipped_entries = self.skipped_entries.saturating_add(skipped);
+        if let Some(reason) = reason {
+            if self.incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                self.incomplete_reasons.push(reason);
+            }
+        }
+    }
+
+    fn record_observed_scope(&mut self) {
+        self.observed_scopes = self.observed_scopes.saturating_add(1);
+    }
+}
+
+enum OllamaSizeObservation {
+    Exact(u64),
+    Unavailable(String),
+}
+
 pub struct LocalModelScanner;
 
 impl LocalModelScanner {
-    /// Resolves one model search root through the environment's own path rules
-    /// and keeps it only when the stated machine actually has that directory.
-    fn resolve_root(pattern: &str, environment: &PlatformEnvironment) -> Option<PathBuf> {
-        SignatureLoader::expand_path(pattern, environment).filter(|root| root.exists())
+    /// Resolves one model search root through the environment's own path rules.
+    /// Distinguishes normal absence (NotFound) from access/permission errors and symlinks,
+    /// recording failures into the discovery sink so partial/unavailable observation is preserved.
+    fn resolve_root(
+        pattern: &str,
+        environment: &PlatformEnvironment,
+        provider_name: &str,
+        sink: &mut ModelDiscoverySink,
+    ) -> Option<PathBuf> {
+        let root = match SignatureLoader::expand_path(pattern, environment) {
+            Some(root) => root,
+            None => {
+                sink.record_failure(format!(
+                    "Could not resolve {provider_name} discovery root for pattern '{pattern}'"
+                ));
+                return None;
+            }
+        };
+        match crate::safety::SymlinkGuard::is_symlink_metadata(&root) {
+            Ok(true) => {
+                // Symlink exclusion is an intentional scan boundary, not an
+                // observation failure. Treat the configured scope as inspected
+                // without following it.
+                sink.record_observed_scope();
+                None
+            }
+            Ok(false) => match fs::symlink_metadata(&root) {
+                Ok(meta) => {
+                    if !meta.is_dir() {
+                        sink.record_failure(format!(
+                            "{provider_name} root {} is not a directory",
+                            root.display()
+                        ));
+                        None
+                    } else {
+                        Some(root)
+                    }
+                }
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        sink.record_observed_scope();
+                        None
+                    } else {
+                        sink.record_failure(format!(
+                            "Could not access {provider_name} root {}: {err}",
+                            root.display()
+                        ));
+                        None
+                    }
+                }
+            },
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    sink.record_observed_scope();
+                    None
+                } else {
+                    sink.record_failure(format!(
+                        "Could not inspect symlink metadata for {provider_name} root {}: {err}",
+                        root.display()
+                    ));
+                    None
+                }
+            }
+        }
+    }
+
+    /// Inspects a model candidate entry fail-closed against symbolic links and junctions.
+    /// Returns the metadata if the path is a safe directory or file.
+    /// Deliberately returns `None` for symlinks (excluding them), and records a failure on access errors.
+    fn inspect_model_entry(
+        path: &Path,
+        provider_name: &str,
+        sink: &mut ModelDiscoverySink,
+    ) -> Option<fs::Metadata> {
+        match crate::safety::SymlinkGuard::is_symlink_metadata(path) {
+            Ok(true) => None,
+            Ok(false) => match fs::symlink_metadata(path) {
+                Ok(meta) => Some(meta),
+                Err(err) => {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        sink.record_failure(format!(
+                            "Could not read metadata for {provider_name} entry {}: {err}",
+                            path.display()
+                        ));
+                    }
+                    None
+                }
+            },
+            Err(err) => {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    sink.record_failure(format!(
+                        "Could not inspect symlink metadata for {provider_name} entry {}: {err}",
+                        path.display()
+                    ));
+                }
+                None
+            }
+        }
     }
 
     /// Discovers all local models across Ollama, HuggingFace Hub, LM Studio, and Apple MLX.
     ///
     /// Every root is resolved through the stated environment, so a relocated or
     /// redirected profile is honored instead of the literal `~` spelling.
-    pub fn scan_all_models(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
-        let mut models = Vec::new();
+    pub fn scan_all_models(environment: &PlatformEnvironment) -> LocalModelInventory {
+        let mut sink = ModelDiscoverySink::default();
 
-        // 1. Ollama models
-        models.extend(Self::scan_ollama(environment));
+        Self::scan_ollama_into(environment, &mut sink);
+        Self::scan_huggingface_into(environment, &mut sink);
+        Self::scan_lmstudio_into(environment, &mut sink);
+        Self::scan_mlx_into(environment, &mut sink);
 
-        // 2. HuggingFace Hub models
-        models.extend(Self::scan_huggingface(environment));
-
-        // 3. LM Studio models
-        models.extend(Self::scan_lmstudio(environment));
-
-        // 4. Apple MLX models
-        models.extend(Self::scan_mlx(environment));
-
-        models
-    }
-
-    /// Scans Ollama manifest directory to identify installed models and their sizes.
-    pub fn scan_ollama(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
-        let manifests_root = match Self::resolve_root("~/.ollama/models/manifests", environment) {
-            Some(root) => root,
-            None => return Vec::new(),
+        let quality = if sink.skipped_entries == 0 {
+            ObservationQuality::Fresh
+        } else if sink.observed_scopes > 0 {
+            ObservationQuality::Partial
+        } else {
+            ObservationQuality::Unavailable
         };
 
-        let mut models = Vec::new();
+        LocalModelInventory {
+            items: sink.items,
+            quality,
+            skipped_entry_count: sink.skipped_entries,
+            incomplete_reasons: sink.incomplete_reasons,
+        }
+    }
+
+    pub fn scan_ollama(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let mut sink = ModelDiscoverySink::default();
+        Self::scan_ollama_into(environment, &mut sink);
+        sink.items
+    }
+
+    pub fn scan_huggingface(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let mut sink = ModelDiscoverySink::default();
+        Self::scan_huggingface_into(environment, &mut sink);
+        sink.items
+    }
+
+    pub fn scan_lmstudio(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let mut sink = ModelDiscoverySink::default();
+        Self::scan_lmstudio_into(environment, &mut sink);
+        sink.items
+    }
+
+    pub fn scan_mlx(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
+        let mut sink = ModelDiscoverySink::default();
+        Self::scan_mlx_into(environment, &mut sink);
+        sink.items
+    }
+
+    pub fn scan_ollama_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
+        let manifests_root =
+            match Self::resolve_root("~/.ollama/models/manifests", environment, "Ollama", sink) {
+                Some(root) => root,
+                None => return,
+            };
+
         // Ollama manifests structure: ~/.ollama/models/manifests/registry.ollama.ai/library/<model>/<tag>
-        if let Ok(registries) = fs::read_dir(&manifests_root) {
-            for reg in registries.flatten() {
-                if !reg.path().is_dir() {
+        let registries = match fs::read_dir(&manifests_root) {
+            Ok(r) => r,
+            Err(e) => {
+                sink.record_failure(format!(
+                    "Could not read Ollama manifests directory {}: {e}",
+                    manifests_root.display()
+                ));
+                return;
+            }
+        };
+        sink.record_observed_scope();
+
+        for reg in registries {
+            let reg = match reg {
+                Ok(r) => r,
+                Err(e) => {
+                    sink.record_failure(format!("Could not read Ollama registry entry: {e}"));
                     continue;
                 }
-                if let Ok(namespaces) = fs::read_dir(reg.path()) {
-                    for ns in namespaces.flatten() {
-                        if !ns.path().is_dir() {
+            };
+            let reg_path = reg.path();
+            let reg_meta = match Self::inspect_model_entry(&reg_path, "Ollama registry", sink) {
+                Some(m) => m,
+                None => continue,
+            };
+            if !reg_meta.is_dir() {
+                continue;
+            }
+
+            let namespaces = match fs::read_dir(&reg_path) {
+                Ok(ns) => ns,
+                Err(e) => {
+                    sink.record_failure(format!(
+                        "Could not read Ollama namespace directory {}: {e}",
+                        reg_path.display()
+                    ));
+                    continue;
+                }
+            };
+
+            for ns in namespaces {
+                let ns = match ns {
+                    Ok(n) => n,
+                    Err(e) => {
+                        sink.record_failure(format!("Could not read Ollama namespace entry: {e}"));
+                        continue;
+                    }
+                };
+                let ns_path = ns.path();
+                let ns_meta = match Self::inspect_model_entry(&ns_path, "Ollama namespace", sink) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                if !ns_meta.is_dir() {
+                    continue;
+                }
+
+                let model_dirs = match fs::read_dir(&ns_path) {
+                    Ok(md) => md,
+                    Err(e) => {
+                        sink.record_failure(format!(
+                            "Could not read Ollama model directory {}: {e}",
+                            ns_path.display()
+                        ));
+                        continue;
+                    }
+                };
+
+                for md in model_dirs {
+                    let md = match md {
+                        Ok(m) => m,
+                        Err(e) => {
+                            sink.record_failure(format!("Could not read Ollama model entry: {e}"));
                             continue;
                         }
-                        if let Ok(model_dirs) = fs::read_dir(ns.path()) {
-                            for md in model_dirs.flatten() {
-                                if !md.path().is_dir() {
-                                    continue;
-                                }
-                                let model_name = md.file_name().to_string_lossy().to_string();
-                                if let Ok(tags) = fs::read_dir(md.path()) {
-                                    for tag in tags.flatten() {
-                                        let tag_name =
-                                            tag.file_name().to_string_lossy().to_string();
-                                        let full_name = format!("{}:{}", model_name, tag_name);
-                                        let path = tag.path();
+                    };
+                    let md_path = md.path();
+                    let md_meta = match Self::inspect_model_entry(&md_path, "Ollama model", sink) {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    if !md_meta.is_dir() {
+                        continue;
+                    }
 
-                                        // Read manifest JSON to calculate layer sizes
-                                        let size_bytes = Self::compute_ollama_model_size(&path);
-                                        let last_modified = fs::metadata(&path)
-                                            .ok()
-                                            .and_then(|m| m.modified().ok())
-                                            .and_then(|t| {
-                                                t.duration_since(SystemTime::UNIX_EPOCH).ok()
-                                            })
-                                            .map(|d| d.as_secs());
-
-                                        models.push(LocalModelItem {
-                                            id: format!("ollama.{}", full_name),
-                                            name: full_name,
-                                            source: ModelSource::Ollama,
-                                            path: path.to_string_lossy().to_string(),
-                                            size_bytes,
-                                            format: Some("GGUF".to_string()),
-                                            parameter_size: None,
-                                            quantization: None,
-                                            last_modified,
-                                        });
-                                    }
-                                }
-                            }
+                    let model_name = md.file_name().to_string_lossy().to_string();
+                    let tags = match fs::read_dir(&md_path) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            sink.record_failure(format!(
+                                "Could not read Ollama tags directory {}: {e}",
+                                md_path.display()
+                            ));
+                            continue;
                         }
+                    };
+
+                    for tag in tags {
+                        let tag = match tag {
+                            Ok(t) => t,
+                            Err(e) => {
+                                sink.record_failure(format!(
+                                    "Could not read Ollama tag entry: {e}"
+                                ));
+                                continue;
+                            }
+                        };
+                        let path = tag.path();
+                        let tag_meta = match Self::inspect_model_entry(&path, "Ollama tag", sink) {
+                            Some(meta) => meta,
+                            None => continue,
+                        };
+
+                        let tag_name = tag.file_name().to_string_lossy().to_string();
+                        let full_name = format!("{}:{}", model_name, tag_name);
+
+                        // Read manifest JSON to calculate layer sizes
+                        let size_observation = Self::compute_ollama_model_size(&path);
+                        let (size_bytes, quality, incomplete_reason, skipped_entries) =
+                            match size_observation {
+                                OllamaSizeObservation::Exact(size) => {
+                                    (size, ObservationQuality::Fresh, None, 0)
+                                }
+                                OllamaSizeObservation::Unavailable(reason) => {
+                                    sink.record_failure(reason.clone());
+                                    (0, ObservationQuality::Unavailable, Some(reason), 1)
+                                }
+                            };
+
+                        let last_modified = tag_meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs());
+
+                        sink.items.push(LocalModelItem {
+                            id: format!("ollama.{}", full_name),
+                            name: full_name,
+                            source: ModelSource::Ollama,
+                            path: path.to_string_lossy().to_string(),
+                            size_bytes,
+                            format: Some("GGUF".to_string()),
+                            parameter_size: None,
+                            quantization: None,
+                            last_modified,
+                            quality,
+                            incomplete_reason,
+                            skipped_entries,
+                        });
                     }
                 }
             }
         }
-
-        models
     }
 
-    fn compute_ollama_model_size(manifest_path: &Path) -> u64 {
+    fn compute_ollama_model_size(manifest_path: &Path) -> OllamaSizeObservation {
         let content = match fs::read_to_string(manifest_path) {
             Ok(c) => c,
-            Err(_) => return 0,
+            Err(e) => {
+                return OllamaSizeObservation::Unavailable(format!(
+                    "Could not read Ollama manifest {}: {e}",
+                    manifest_path.display()
+                ));
+            }
         };
 
         let val: serde_json::Value = match serde_json::from_str(&content) {
             Ok(v) => v,
-            Err(_) => return 0,
+            Err(e) => {
+                return OllamaSizeObservation::Unavailable(format!(
+                    "Could not parse Ollama manifest {}: {e}",
+                    manifest_path.display()
+                ));
+            }
         };
 
+        let unavailable = |detail: &str| {
+            OllamaSizeObservation::Unavailable(format!(
+                "Could not measure Ollama manifest {}: {detail}",
+                manifest_path.display()
+            ))
+        };
+        let Some(layers) = val.get("layers").and_then(|layers| layers.as_array()) else {
+            return unavailable("missing or invalid layers array");
+        };
         let mut total_size = 0u64;
-
-        if let Some(layers) = val.get("layers").and_then(|l| l.as_array()) {
-            for layer in layers {
-                if let Some(size) = layer.get("size").and_then(|s| s.as_u64()) {
-                    total_size += size;
-                }
-            }
+        for layer in layers {
+            let Some(size) = layer.get("size").and_then(|size| size.as_u64()) else {
+                return unavailable("a layer is missing a valid size");
+            };
+            let Some(next) = total_size.checked_add(size) else {
+                return unavailable("layer sizes overflow u64");
+            };
+            total_size = next;
         }
 
-        // Add config layer size
-        if let Some(cfg) = val
+        let Some(config_size) = val
             .get("config")
             .and_then(|c| c.get("size"))
             .and_then(|s| s.as_u64())
-        {
-            total_size += cfg;
-        }
+        else {
+            return unavailable("missing or invalid config size");
+        };
+        let Some(total_size) = total_size.checked_add(config_size) else {
+            return unavailable("layer and config sizes overflow u64");
+        };
 
-        total_size
+        OllamaSizeObservation::Exact(total_size)
     }
 
     /// Scans HuggingFace Hub snapshots.
-    pub fn scan_huggingface(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
-        let hf_root = match Self::resolve_root("~/.cache/huggingface/hub", environment) {
+    pub fn scan_huggingface_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
+        let hf_root = match Self::resolve_root(
+            "~/.cache/huggingface/hub",
+            environment,
+            "HuggingFace",
+            sink,
+        ) {
             Some(root) => root,
-            None => return Vec::new(),
+            None => return,
         };
 
-        let mut models = Vec::new();
-        if let Ok(entries) = fs::read_dir(&hf_root) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("models--") {
-                    let clean_name = name.trim_start_matches("models--").replace("--", "/");
-                    let path = entry.path();
-                    let size = SizeCalculator::measure_path_logged(&path, &[], environment).size;
-                    let last_modified = fs::metadata(&path)
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs());
+        let entries = match fs::read_dir(&hf_root) {
+            Ok(e) => e,
+            Err(err) => {
+                sink.record_failure(format!(
+                    "Could not read HuggingFace hub root {}: {err}",
+                    hf_root.display()
+                ));
+                return;
+            }
+        };
+        sink.record_observed_scope();
 
-                    models.push(LocalModelItem {
-                        id: format!("hf.{}", clean_name),
-                        name: clean_name,
-                        source: ModelSource::HuggingFace,
-                        path: path.to_string_lossy().to_string(),
-                        size_bytes: size.reclaimable(),
-                        format: Some("safetensors / PyTorch".to_string()),
-                        parameter_size: None,
-                        quantization: None,
-                        last_modified,
-                    });
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    sink.record_failure(format!(
+                        "Could not read HuggingFace hub entry in {}: {err}",
+                        hf_root.display()
+                    ));
+                    continue;
                 }
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("models--") {
+                let path = entry.path();
+                let meta = match Self::inspect_model_entry(&path, "HuggingFace model", sink) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                if !meta.is_dir() {
+                    continue;
+                }
+                let clean_name = name.trim_start_matches("models--").replace("--", "/");
+                let measurement = SizeCalculator::measure_path_logged(&path, &[], environment);
+                let quality = if measurement.complete && measurement.skipped_entries == 0 {
+                    ObservationQuality::Fresh
+                } else if measurement.size.reclaimable() > 0 {
+                    ObservationQuality::Partial
+                } else {
+                    ObservationQuality::Unavailable
+                };
+                if quality != ObservationQuality::Fresh {
+                    sink.record_skipped(
+                        measurement.skipped_entries.max(1),
+                        measurement.incomplete_reason.clone(),
+                    );
+                }
+                let last_modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+
+                sink.items.push(LocalModelItem {
+                    id: format!("hf.{}", clean_name),
+                    name: clean_name,
+                    source: ModelSource::HuggingFace,
+                    path: path.to_string_lossy().to_string(),
+                    size_bytes: measurement.size.reclaimable(),
+                    format: Some("safetensors / PyTorch".to_string()),
+                    parameter_size: None,
+                    quantization: None,
+                    last_modified,
+                    quality,
+                    incomplete_reason: measurement.incomplete_reason,
+                    skipped_entries: measurement.skipped_entries,
+                });
             }
         }
-        models
     }
 
     /// Scans LM Studio downloaded models directory.
-    pub fn scan_lmstudio(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
-        let lm_root = match Self::resolve_root("~/.cache/lm-studio/models", environment) {
-            Some(root) => root,
-            None => return Vec::new(),
-        };
+    pub fn scan_lmstudio_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
+        let lm_root =
+            match Self::resolve_root("~/.cache/lm-studio/models", environment, "LM Studio", sink) {
+                Some(root) => root,
+                None => return,
+            };
 
-        let mut models = Vec::new();
-        Self::collect_gguf_files(
-            &lm_root,
-            &lm_root,
-            ModelSource::LmStudio,
-            "lmstudio",
-            &mut models,
-        );
-        models
+        if Self::collect_gguf_files(&lm_root, &lm_root, ModelSource::LmStudio, "lmstudio", sink) {
+            sink.record_observed_scope();
+        }
     }
 
     /// Scans MLX model weights directory.
-    pub fn scan_mlx(environment: &PlatformEnvironment) -> Vec<LocalModelItem> {
-        let mlx_root = match Self::resolve_root("~/.cache/mlx", environment) {
+    pub fn scan_mlx_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
+        let mlx_root = match Self::resolve_root("~/.cache/mlx", environment, "Apple MLX", sink) {
             Some(root) => root,
-            None => return Vec::new(),
+            None => return,
         };
 
-        let mut models = Vec::new();
-        if let Ok(entries) = fs::read_dir(&mlx_root) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let meta = match fs::symlink_metadata(&path) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                if meta.file_type().is_symlink() {
+        let entries = match fs::read_dir(&mlx_root) {
+            Ok(e) => e,
+            Err(err) => {
+                sink.record_failure(format!(
+                    "Could not read Apple MLX root {}: {err}",
+                    mlx_root.display()
+                ));
+                return;
+            }
+        };
+        sink.record_observed_scope();
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    sink.record_failure(format!(
+                        "Could not read Apple MLX entry in {}: {err}",
+                        mlx_root.display()
+                    ));
                     continue;
                 }
+            };
+            let path = entry.path();
+            let meta = match Self::inspect_model_entry(&path, "Apple MLX model", sink) {
+                Some(m) => m,
+                None => continue,
+            };
 
-                if meta.is_dir() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let size = SizeCalculator::measure_path_logged(&path, &[], environment).size;
-                    let last_modified = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs());
-
-                    models.push(LocalModelItem {
-                        id: format!("mlx.{}", name),
-                        name,
-                        source: ModelSource::Mlx,
-                        path: path.to_string_lossy().to_string(),
-                        size_bytes: size.reclaimable(),
-                        format: Some("MLX 4-bit / 8-bit".to_string()),
-                        parameter_size: None,
-                        quantization: None,
-                        last_modified,
-                    });
+            if meta.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let measurement = SizeCalculator::measure_path_logged(&path, &[], environment);
+                let quality = if measurement.complete && measurement.skipped_entries == 0 {
+                    ObservationQuality::Fresh
+                } else if measurement.size.reclaimable() > 0 {
+                    ObservationQuality::Partial
+                } else {
+                    ObservationQuality::Unavailable
+                };
+                if quality != ObservationQuality::Fresh {
+                    sink.record_skipped(
+                        measurement.skipped_entries.max(1),
+                        measurement.incomplete_reason.clone(),
+                    );
                 }
+                let last_modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+
+                sink.items.push(LocalModelItem {
+                    id: format!("mlx.{}", name),
+                    name,
+                    source: ModelSource::Mlx,
+                    path: path.to_string_lossy().to_string(),
+                    size_bytes: measurement.size.reclaimable(),
+                    format: Some("MLX 4-bit / 8-bit".to_string()),
+                    parameter_size: None,
+                    quantization: None,
+                    last_modified,
+                    quality,
+                    incomplete_reason: measurement.incomplete_reason,
+                    skipped_entries: measurement.skipped_entries,
+                });
             }
         }
-        models
     }
 
     fn collect_gguf_files(
@@ -241,59 +591,78 @@ impl LocalModelScanner {
         root: &Path,
         source: ModelSource,
         prefix: &str,
-        out: &mut Vec<LocalModelItem>,
-    ) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let meta = match fs::symlink_metadata(&path) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
+        sink: &mut ModelDiscoverySink,
+    ) -> bool {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(err) => {
+                sink.record_failure(format!(
+                    "Could not read LM Studio directory {}: {err}",
+                    dir.display()
+                ));
+                return false;
+            }
+        };
 
-                // Anti-symlink protection: NEVER follow symlinks in local model scanning
-                if meta.file_type().is_symlink() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    sink.record_failure(format!(
+                        "Could not read LM Studio entry in {}: {err}",
+                        dir.display()
+                    ));
                     continue;
                 }
+            };
+            let path = entry.path();
+            let meta = match Self::inspect_model_entry(&path, "LM Studio entry", sink) {
+                Some(m) => m,
+                None => continue,
+            };
 
-                if meta.is_dir() {
-                    Self::collect_gguf_files(&path, root, source, prefix, out);
-                } else if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
-                    let file_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    let size = meta.len();
-                    let last_modified = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs());
+            if meta.is_dir() {
+                let _ = Self::collect_gguf_files(&path, root, source, prefix, sink);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let size = meta.len();
+                let last_modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
 
-                    let rel_path = path.strip_prefix(root).unwrap_or(&path);
-                    let unique_id = format!("{}:{}", prefix, rel_path.to_string_lossy());
+                let rel_path = path.strip_prefix(root).unwrap_or(&path);
+                let unique_id = format!("{}:{}", prefix, rel_path.to_string_lossy());
 
-                    out.push(LocalModelItem {
-                        id: unique_id,
-                        name: file_name,
-                        source,
-                        path: path.to_string_lossy().to_string(),
-                        size_bytes: size,
-                        format: Some("GGUF".to_string()),
-                        parameter_size: None,
-                        quantization: None,
-                        last_modified,
-                    });
-                }
+                sink.items.push(LocalModelItem {
+                    id: unique_id,
+                    name: file_name,
+                    source,
+                    path: path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    format: Some("GGUF".to_string()),
+                    parameter_size: None,
+                    quantization: None,
+                    last_modified,
+                    quality: ObservationQuality::Fresh,
+                    incomplete_reason: None,
+                    skipped_entries: 0,
+                });
             }
         }
+        true
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::LocalModelScanner;
+    use crate::models::ObservationQuality;
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::{KnownFolder, PlatformEnvironment};
     use std::path::{Path, PathBuf};
@@ -371,7 +740,7 @@ mod tests {
         );
 
         assert_eq!(
-            LocalModelScanner::scan_all_models(&environment).len(),
+            LocalModelScanner::scan_all_models(&environment).items.len(),
             4,
             "one model per source is discovered through the stated home"
         );
@@ -385,10 +754,18 @@ mod tests {
 
         // The `~` spelling resolves through the stated profile and its own
         // separators, not through whatever home the host happens to have.
+        let mut sink = super::ModelDiscoverySink::default();
         assert!(
-            LocalModelScanner::resolve_root("~/.ollama/models/manifests", &environment).is_none(),
+            LocalModelScanner::resolve_root(
+                "~/.ollama/models/manifests",
+                &environment,
+                "Ollama",
+                &mut sink
+            )
+            .is_none(),
             "the stated machine has no Ollama install"
         );
+        assert_eq!(sink.skipped_entries, 0);
         assert_eq!(
             crate::signatures::SignatureLoader::expand_path(
                 "~/.ollama/models/manifests",
@@ -397,7 +774,9 @@ mod tests {
             Some(PathBuf::from(r"D:\Users\me\.ollama\models\manifests"))
         );
         assert!(
-            LocalModelScanner::scan_all_models(&environment).is_empty(),
+            LocalModelScanner::scan_all_models(&environment)
+                .items
+                .is_empty(),
             "a stated Windows profile must not fall back to the host profile"
         );
     }
@@ -406,6 +785,133 @@ mod tests {
     fn missing_roots_yield_no_models_instead_of_host_paths() {
         let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
             .with_home(Path::new("/nonexistent-zenith-test-home"));
-        assert!(LocalModelScanner::scan_all_models(&environment).is_empty());
+        assert!(LocalModelScanner::scan_all_models(&environment)
+            .items
+            .is_empty());
+    }
+
+    #[test]
+    fn unresolvable_model_root_records_failure_and_marks_inventory_unavailable() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+        assert!(inventory.items.is_empty());
+        assert_eq!(inventory.quality, ObservationQuality::Unavailable);
+        assert!(inventory.skipped_entry_count >= 1);
+        assert!(inventory
+            .incomplete_reasons
+            .iter()
+            .any(|r| r.contains("Could not resolve")));
+    }
+
+    #[test]
+    fn corrupted_ollama_manifest_is_not_reported_as_zero_bytes_and_marks_inventory_partial() {
+        let home = tempfile::tempdir().unwrap();
+        let ollama = home
+            .path()
+            .join(".ollama/models/manifests/registry.ollama.ai/library/corrupt");
+        std::fs::create_dir_all(&ollama).unwrap();
+        std::fs::write(ollama.join("badtag"), b"not valid json").unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+
+        assert_eq!(inventory.items.len(), 1);
+        let item = &inventory.items[0];
+        assert_eq!(item.id, "ollama.corrupt:badtag");
+        assert_eq!(item.name, "corrupt:badtag");
+        assert_eq!(item.size_bytes, 0);
+        assert_eq!(item.quality, ObservationQuality::Unavailable);
+        assert!(item.incomplete_reason.is_some());
+        assert_eq!(item.skipped_entries, 1);
+
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+        assert!(inventory.skipped_entry_count >= 1);
+        assert!(!inventory.incomplete_reasons.is_empty());
+    }
+
+    #[test]
+    fn structurally_invalid_ollama_manifest_is_not_reported_as_exact_zero_bytes() {
+        let home = tempfile::tempdir().unwrap();
+        let ollama = home
+            .path()
+            .join(".ollama/models/manifests/registry.ollama.ai/library/invalid");
+        std::fs::create_dir_all(&ollama).unwrap();
+        std::fs::write(ollama.join("badtag"), br#"{"layers":[{}],"config":{}}"#).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+
+        assert_eq!(inventory.items.len(), 1);
+        assert_eq!(inventory.items[0].quality, ObservationQuality::Unavailable);
+        assert!(inventory.items[0]
+            .incomplete_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("valid size")));
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+    }
+
+    #[test]
+    fn a_failed_scope_and_known_empty_scopes_produce_partial_empty_inventory() {
+        let home = tempfile::tempdir().unwrap();
+        let manifests = home.path().join(".ollama/models/manifests");
+        std::fs::create_dir_all(manifests.parent().unwrap()).unwrap();
+        std::fs::write(&manifests, b"not a directory").unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+
+        assert!(inventory.items.is_empty());
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+        assert!(inventory.skipped_entry_count >= 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn huggingface_scan_excludes_symlinked_model_entry() {
+        let home = tempfile::tempdir().unwrap();
+        let hf_hub = home.path().join(".cache/huggingface/hub");
+        let target_dir = home.path().join("external_target");
+        std::fs::create_dir_all(&hf_hub).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("model.bin"), b"payload").unwrap();
+
+        let symlink_entry = hf_hub.join("models--fake--escaped");
+        std::os::unix::fs::symlink(&target_dir, &symlink_entry).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let items = LocalModelScanner::scan_huggingface(&environment);
+        assert!(
+            items.is_empty(),
+            "symlinked HuggingFace model entry must be excluded from inventory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_model_root_is_an_intentional_exclusion_not_an_io_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let real_manifests = home.path().join("real_manifests");
+        std::fs::create_dir_all(&real_manifests).unwrap();
+        let symlink_root = home.path().join(".ollama/models/manifests");
+        std::fs::create_dir_all(symlink_root.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_manifests, &symlink_root).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let mut sink = super::ModelDiscoverySink::default();
+        let resolved = LocalModelScanner::resolve_root(
+            "~/.ollama/models/manifests",
+            &environment,
+            "Ollama",
+            &mut sink,
+        );
+        assert!(resolved.is_none());
+        assert_eq!(sink.skipped_entries, 0);
+        assert!(sink.incomplete_reasons.is_empty());
+        assert_eq!(sink.observed_scopes, 1);
     }
 }

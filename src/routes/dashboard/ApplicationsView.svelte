@@ -4,6 +4,7 @@
     AppRelatedConfidence,
     AppUninstallInspection,
     InstalledApp,
+    ObservationQuality,
     TrashPlanPreview,
     TrashResult,
   } from '../../lib/models/types';
@@ -14,6 +15,7 @@
   import { getVirtualWindow } from '../../lib/utils/virtualList';
   import {
     defaultRelatedIds,
+    isSelectedAppTrashLowerBound,
     selectedAppTrashBytes,
   } from '../../lib/utils/storageManagement';
   import {
@@ -42,20 +44,49 @@
 
   interface Props {
     onBack: () => void;
+    initialApps?: InstalledApp[];
+    initialInventoryQuality?: ObservationQuality;
+    initialSkippedEntryCount?: number;
+    initialIncompleteReasons?: string[];
+    initialInspection?: AppUninstallInspection | null;
+    initialPlan?: TrashPlanPreview | null;
+    initialTrashResult?: TrashResult | null;
   }
 
-  let { onBack }: Props = $props();
+  let {
+    onBack,
+    initialApps = [],
+    initialInventoryQuality = 'fresh',
+    initialSkippedEntryCount = 0,
+    initialIncompleteReasons = [],
+    initialInspection = null,
+    initialPlan = null,
+    initialTrashResult = null,
+  }: Props = $props();
 
-  let apps = $state<InstalledApp[]>([]);
+  // svelte-ignore state_referenced_locally
+  let apps = $state<InstalledApp[]>(initialApps);
+  // svelte-ignore state_referenced_locally
+  let inventoryQuality = $state<ObservationQuality>(initialInventoryQuality);
+  // svelte-ignore state_referenced_locally
+  let skippedEntryCount = $state<number>(initialSkippedEntryCount);
+  // svelte-ignore state_referenced_locally
+  let incompleteReasons = $state<string[]>(initialIncompleteReasons);
   let query = $state('');
   let isLoading = $state(false);
   let isInspecting = $state(false);
   let isPreparing = $state(false);
   let isExecuting = $state(false);
-  let inspection = $state<AppUninstallInspection | null>(null);
-  let selectedRelatedIds = $state<string[]>([]);
-  let plan = $state<TrashPlanPreview | null>(null);
-  let trashResult = $state<TrashResult | null>(null);
+  // svelte-ignore state_referenced_locally
+  let inspection = $state<AppUninstallInspection | null>(initialInspection);
+  // svelte-ignore state_referenced_locally
+  let selectedRelatedIds = $state<string[]>(
+    initialInspection ? defaultRelatedIds(initialInspection) : []
+  );
+  // svelte-ignore state_referenced_locally
+  let plan = $state<TrashPlanPreview | null>(initialPlan);
+  // svelte-ignore state_referenced_locally
+  let trashResult = $state<TrashResult | null>(initialTrashResult);
   let error = $state<string | null>(null);
   let revealError = $state<string | null>(null);
 
@@ -114,6 +145,9 @@
   let selectedBytes = $derived(
     inspection ? selectedAppTrashBytes(inspection, selectedRelatedIds) : 0
   );
+  let isSelectedLowerBound = $derived(
+    inspection ? isSelectedAppTrashLowerBound(inspection, selectedRelatedIds) : false
+  );
 
   function confidenceLabel(confidence: AppRelatedConfidence): string {
     switch (confidence) {
@@ -151,7 +185,11 @@
     plan = null;
     trashResult = null;
     try {
-      apps = await tauriGetInstalledApps();
+      const inventory = await tauriGetInstalledApps();
+      apps = inventory.apps;
+      inventoryQuality = inventory.quality;
+      skippedEntryCount = inventory.skipped_entry_count;
+      incompleteReasons = inventory.incomplete_reasons;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -297,6 +335,20 @@
     </div>
   {/if}
 
+  {#if inventoryQuality === 'unavailable'}
+    <InlineNotice
+      variant="error"
+      title="Application discovery unavailable"
+      message={incompleteReasons[0] || 'Application directories could not be read.'}
+    />
+  {:else if inventoryQuality === 'partial'}
+    <InlineNotice
+      variant="warning"
+      title="Partial application discovery"
+      message={`Some application folders or metadata could not be fully read (${skippedEntryCount} skipped item${skippedEntryCount === 1 ? '' : 's'}). The application list and sizes below may be incomplete.`}
+    />
+  {/if}
+
   {#if error}
     <div class="p-3.5 rounded-xl bg-destructive/15 border border-destructive/30 text-destructive flex items-center gap-2.5 text-xs">
       <AlertCircle size={16} class="shrink-0" />
@@ -318,7 +370,7 @@
             · {trashResult.failed_count + trashResult.skipped_count} not moved
           {/if}
         </span>
-        <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)}</span>
+        <span class="font-mono text-muted-foreground">{trashResult.size_is_lower_bound ? '≥ ' : ''}{formatBytes(trashResult.moved_allocated_size)}</span>
       </div>
     </Card>
   {/if}
@@ -357,7 +409,19 @@
         {#if isLoading}
           <div class="py-10 text-center text-xs text-muted-foreground">Loading applications…</div>
         {:else if filteredApps.length === 0}
-          <div class="py-10 text-center text-xs text-muted-foreground">No applications found.</div>
+          {#if inventoryQuality === 'unavailable'}
+            <div class="py-10 text-center text-xs text-destructive">
+              Application discovery failed. Could not read application directories.
+            </div>
+          {:else if query}
+            <div class="py-10 text-center text-xs text-muted-foreground">No applications found matching "{query}".</div>
+          {:else if inventoryQuality === 'partial'}
+            <div class="py-10 text-center text-xs text-warning">
+              No applications discovered. Some application locations were inaccessible.
+            </div>
+          {:else}
+            <div class="py-10 text-center text-xs text-muted-foreground">No applications found.</div>
+          {/if}
         {:else}
           <div style={`height: ${appWindow.offsetTop}px`}></div>
           <div class="space-y-1">
@@ -382,7 +446,14 @@
                       {/if}
                     </div>
                     <div class="text-caption text-muted-foreground font-mono truncate mt-0.5">
-                      {formatBytes(app.allocated_size)}{app.version ? ` · ${app.version}` : ''}
+                      {#if app.size_quality === 'partial'}
+                        ≥ {formatBytes(app.allocated_size)}
+                      {:else if app.size_quality === 'unavailable'}
+                        Size unavailable
+                      {:else}
+                        {formatBytes(app.allocated_size)}
+                      {/if}
+                      {app.version ? ` · ${app.version}` : ''}
                     </div>
                   </div>
                 </div>
@@ -409,7 +480,15 @@
                 {inspection.app.bundle_id ?? `No ${platformContextStore.appIdentityLabel}`}
               </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
-                <span>{formatBytes(inspection.app.allocated_size)} app bundle</span>
+                <span>
+                  {#if inspection.app.size_quality === 'partial'}
+                    ≥ {formatBytes(inspection.app.allocated_size)} app bundle (partial)
+                  {:else if inspection.app.size_quality === 'unavailable'}
+                    App bundle size unavailable
+                  {:else}
+                    {formatBytes(inspection.app.allocated_size)} app bundle
+                  {/if}
+                </span>
                 {#if inspection.app.modified_at}
                   <span>Modified {formatTimeAgo(inspection.app.modified_at)}</span>
                 {/if}
@@ -466,7 +545,7 @@
                     </span>
                   </div>
                   <p class="text-xs text-muted-foreground mt-1">
-                    App bundle plus reviewed data: {plan.item_count} items · {formatBytes(plan.allocated_size)}
+                    App bundle plus reviewed data: {plan.item_count} items · {plan.size_is_lower_bound ? '≥ ' : ''}{formatBytes(plan.allocated_size)}
                   </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
@@ -496,7 +575,7 @@
               <div>
                 <div class="text-xs font-medium">Ready to review this uninstall?</div>
                 <p class="text-meta text-muted-foreground mt-1">
-                  {formatBytes(selectedBytes)} selected for review. You can adjust related {platformContextStore.appDataLabel} below before creating the one-shot {platformContextStore.trashLabel} plan.
+                  {isSelectedLowerBound ? '≥ ' : ''}{formatBytes(selectedBytes)} selected for review. You can adjust related {platformContextStore.appDataLabel} below before creating the one-shot {platformContextStore.trashLabel} plan.
                 </p>
               </div>
               <Button
@@ -554,7 +633,15 @@
                         <p class="text-caption text-muted-foreground font-mono break-all mt-1">{item.display_path}</p>
                         <p class="text-caption text-muted-foreground mt-1">{item.evidence}</p>
                       </div>
-                      <span class="text-caption font-mono shrink-0">{formatBytes(item.allocated_size)}</span>
+                      <span class="text-caption font-mono shrink-0">
+                        {#if item.quality === 'partial'}
+                          ≥ {formatBytes(item.allocated_size)}
+                        {:else if item.quality === 'unavailable'}
+                          Size unavailable
+                        {:else}
+                          {formatBytes(item.allocated_size)}
+                        {/if}
+                      </span>
                     </div>
                   </label>
                 {/each}

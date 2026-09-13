@@ -8,6 +8,7 @@ import type {
   DeveloperArtifactScanResult,
   DeveloperWorkspace,
   InstalledApp,
+  InstalledAppInventory,
   LargeFileItem,
   LargeFileScanEvent,
   LargeFileScanRequest,
@@ -15,6 +16,7 @@ import type {
   TrashPlanPreview,
   TrashResult,
 } from '../models/types';
+import { isSelectedAppTrashLowerBound } from '../utils/storageManagement';
 type CommandResult<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
 
 async function unwrap<T, E>(promise: Promise<CommandResult<T, E>>): Promise<T> {
@@ -31,7 +33,10 @@ export interface StorageManagementApi {
     onEvent: (event: LargeFileScanEvent) => void
   ): Promise<LargeFileScanResult>;
   cancelLargeFileScan(scanId: string): Promise<void>;
-  prepareLargeFileTrash(scanId: string, selectedItemIds: string[]): Promise<TrashPlanPreview>;
+  prepareLargeFileTrash(
+    scanId: string,
+    selectedItemIds: string[]
+  ): Promise<TrashPlanPreview>;
   /** Reveals a scanned file; the backend resolves the path from its inventory. */
   revealLargeFile(itemId: string): Promise<void>;
   pickDeveloperWorkspace(): Promise<DeveloperWorkspace | null>;
@@ -45,7 +50,7 @@ export interface StorageManagementApi {
     scanId: string,
     selectedItemIds: string[]
   ): Promise<TrashPlanPreview>;
-  getInstalledApps(): Promise<InstalledApp[]>;
+  getInstalledApps(): Promise<InstalledAppInventory>;
   inspectAppUninstall(appId: string): Promise<AppUninstallInspection>;
   prepareAppUninstall(
     inspectionId: string,
@@ -305,6 +310,10 @@ const mockApps: InstalledApp[] = [
     install_source: 'application_bundle',
     is_running: false,
     is_system_protected: false,
+    quality: 'fresh',
+    size_quality: 'fresh',
+    incomplete_reason: null,
+    skipped_entries: 0,
   },
   {
     id: 'app-docker',
@@ -319,6 +328,10 @@ const mockApps: InstalledApp[] = [
     install_source: 'application_bundle',
     is_running: true,
     is_system_protected: false,
+    quality: 'fresh',
+    size_quality: 'fresh',
+    incomplete_reason: null,
+    skipped_entries: 0,
   },
   {
     id: 'app-obsidian',
@@ -333,6 +346,10 @@ const mockApps: InstalledApp[] = [
     install_source: 'application_bundle',
     is_running: false,
     is_system_protected: false,
+    quality: 'fresh',
+    size_quality: 'fresh',
+    incomplete_reason: null,
+    skipped_entries: 0,
   },
 ];
 
@@ -367,6 +384,9 @@ function inspectionFor(app: InstalledApp): AppUninstallInspection {
         logical_size: 420 * MIB,
         allocated_size: 424 * MIB,
         selected_by_default: true,
+        quality: 'fresh',
+        incomplete_reason: null,
+        skipped_entries: 0,
       },
       {
         id: `${app.id}-cache`,
@@ -378,6 +398,9 @@ function inspectionFor(app: InstalledApp): AppUninstallInspection {
         logical_size: 168 * MIB,
         allocated_size: 170 * MIB,
         selected_by_default: true,
+        quality: 'fresh',
+        incomplete_reason: null,
+        skipped_entries: 0,
       },
       {
         id: `${app.id}-name`,
@@ -389,6 +412,9 @@ function inspectionFor(app: InstalledApp): AppUninstallInspection {
         logical_size: 18 * MIB,
         allocated_size: 18 * MIB,
         selected_by_default: false,
+        quality: 'fresh',
+        incomplete_reason: null,
+        skipped_entries: 0,
       },
     ],
     incomplete: false,
@@ -467,6 +493,7 @@ const mockStorageApi: StorageManagementApi = {
       logical_size: selected.reduce((sum, item) => sum + item.logical_size, 0),
       allocated_size: selected.reduce((sum, item) => sum + item.allocated_size, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      size_is_lower_bound: false,
     };
     mockPlans.set(planId, { preview, itemIds: selected.map((item) => item.id) });
     return preview;
@@ -610,13 +637,19 @@ const mockStorageApi: StorageManagementApi = {
       logical_size: selected.reduce((sum, item) => sum + item.logical_bytes, 0),
       allocated_size: selected.reduce((sum, item) => sum + item.allocated_bytes, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      size_is_lower_bound: selected.some((item) => item.status === 'measurement_incomplete'),
     };
     mockPlans.set(planId, { preview, itemIds: selected.map((item) => item.id) });
     return preview;
   },
 
-  async getInstalledApps() {
-    return mockApps.map((app) => ({ ...app }));
+  async getInstalledApps(): Promise<InstalledAppInventory> {
+    return {
+      apps: mockApps.map((app) => ({ ...app })),
+      quality: 'fresh',
+      skipped_entry_count: 0,
+      incomplete_reasons: [],
+    };
   },
 
   async inspectAppUninstall(appId) {
@@ -643,6 +676,7 @@ const mockStorageApi: StorageManagementApi = {
         inspection.app.allocated_size +
         selectedRelated.reduce((sum, item) => sum + item.allocated_size, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      size_is_lower_bound: isSelectedAppTrashLowerBound(inspection, selectedRelatedIds),
     };
     mockPlans.set(planId, {
       preview,
@@ -665,6 +699,7 @@ const mockStorageApi: StorageManagementApi = {
         success: true,
         message: 'Moved to Trash',
       })),
+      size_is_lower_bound: plan.preview.size_is_lower_bound ?? false,
     };
   },
 };

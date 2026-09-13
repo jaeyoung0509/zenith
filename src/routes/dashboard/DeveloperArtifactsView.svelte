@@ -577,7 +577,7 @@
         <span class={`font-medium ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'text-warning' : 'text-success'}`}>
           Moved {trashResult.moved_count} artifact{trashResult.moved_count === 1 ? '' : 's'} to {platformContextStore.trashLabel}
         </span>
-        <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)} · empty {platformContextStore.trashLabel} to reclaim</span>
+        <span class="font-mono text-muted-foreground">{trashResult.size_is_lower_bound ? '≥ ' : ''}{formatBytes(trashResult.moved_allocated_size)} · empty {platformContextStore.trashLabel} to reclaim</span>
       </div>
     </Card>
   {/if}
@@ -590,7 +590,7 @@
             Generated-folder review ready
             <span class="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-caption text-muted-foreground">{formatCountdown(remainingSecs)}</span>
           </div>
-          <p class="mt-1 text-xs text-muted-foreground">{plan.item_count} selected artifact{plan.item_count === 1 ? '' : 's'} · {formatBytes(plan.allocated_size)} allocated</p>
+          <p class="mt-1 text-xs text-muted-foreground">{plan.item_count} selected artifact{plan.item_count === 1 ? '' : 's'} · {plan.size_is_lower_bound ? '≥ ' : ''}{formatBytes(plan.allocated_size)} allocated</p>
         </div>
         <div class="flex items-center gap-2">
           <Button variant="ghost" size="sm" onclick={() => { plan = null; partialCleanupConfirmed = false; }}>Cancel</Button>
