@@ -15,6 +15,7 @@ import {
   tauriQuickCleanSafe,
   tauriScan,
 } from '../utils/tauri';
+import { cleanableBytes, isCleanable } from '../utils/cleanup';
 
 /** How the in-flight (or most recent) scan was started. Drives auto-refresh copy. */
 export type ScanTrigger = 'auto' | 'manual';
@@ -160,6 +161,11 @@ export class ScanStore {
   private acceptScan(scan: ScanResult) {
     this.lastScan = scan;
     this.invalidated = false;
+    // A successfully accepted scan supersedes any earlier message, so an
+    // item-level gap never survives as a stale destructive banner. The durable
+    // `quality`/`incomplete_reasons` state is the warning surface for a partial
+    // result; `error` stays reserved for a refused or failed operation.
+    this.error = null;
     this.syncSelectionFromScan(scan);
     this.updateFreshness();
   }
@@ -181,7 +187,7 @@ export class ScanStore {
         for (const item of cat.items) {
           if (this.selectedMap[item.id]) {
             selectedCount++;
-            const bytes = item.size.allocated ?? item.size.logical;
+            const bytes = cleanableBytes(item);
             if (item.risk === 'safe') {
               safeSelectedBytes += bytes;
               reclaimableBytes += bytes;
@@ -267,11 +273,12 @@ export class ScanStore {
     const scanAllowsSelection = scan.quality === 'fresh' || scan.quality === 'partial';
     for (const cat of scan.categories) {
       for (const item of cat.items) {
-        // Auto-select only safe items with non-zero size (never manual), and only if fresh/complete
+        // Auto-select only cleanable safe items, and only if the item's own
+        // observation is fresh: a partial item stays manually selectable.
         newMap[item.id] = scanAllowsSelection
           && item.risk === 'safe'
-          && (item.size.allocated ?? item.size.logical) > 0
-          && item.quality === 'fresh';
+          && item.quality === 'fresh'
+          && isCleanable(item);
       }
     }
     this.selectedMap = newMap;
@@ -288,15 +295,13 @@ export class ScanStore {
 
   toggleItem(id: string) {
     const item = this.findItem(id);
-    if (!this.canClean || !item || item.risk === 'manual'
-      || (item.quality !== 'fresh' && item.quality !== 'partial')) return;
+    if (!this.canClean || !item || !isCleanable(item)) return;
     this.selectedMap[id] = !this.selectedMap[id];
   }
 
   setItemSelected(id: string, selected: boolean) {
     const item = this.findItem(id);
-    if (!this.canClean || !item || item.risk === 'manual'
-      || (selected && item.quality !== 'fresh' && item.quality !== 'partial')) return;
+    if (!this.canClean || !item || (selected && !isCleanable(item))) return;
     this.selectedMap[id] = selected;
   }
 
@@ -306,9 +311,10 @@ export class ScanStore {
     if (!cat) return;
 
     for (const item of cat.items) {
-      if (item.risk !== 'manual'
-        && (!select || item.quality === 'fresh' || item.quality === 'partial')) {
-        this.selectedMap[item.id] = select;
+      if (select) {
+        if (isCleanable(item)) this.selectedMap[item.id] = true;
+      } else if (item.risk !== 'manual') {
+        this.selectedMap[item.id] = false;
       }
     }
   }
@@ -331,10 +337,9 @@ export class ScanStore {
   }
 
   isQuickCleanEligible(category: Category, item: ScanItem, settings: ZenithSettings): boolean {
-    const bytes = item.size.allocated ?? item.size.logical;
     return item.risk === 'safe'
-      && bytes > 0
       && item.quality === 'fresh'
+      && isCleanable(item)
       && this.quickCleanCategoryEnabled(category, settings);
   }
 
@@ -344,7 +349,7 @@ export class ScanStore {
     for (const category of this.lastScan.categories) {
       for (const item of category.items) {
         if (this.isQuickCleanEligible(category.category, item, settings)) {
-          total += item.size.allocated ?? item.size.logical;
+          total += cleanableBytes(item);
         }
       }
     }
@@ -356,8 +361,8 @@ export class ScanStore {
     for (const cat of this.lastScan.categories) {
       for (const item of cat.items) {
         this.selectedMap[item.id] = item.risk === 'safe'
-          && (item.size.allocated ?? item.size.logical) > 0
-          && item.quality === 'fresh';
+          && item.quality === 'fresh'
+          && isCleanable(item);
       }
     }
   }
@@ -415,9 +420,6 @@ export class ScanStore {
           case 'Finished':
             this.currentCategory = null;
             this.currentScanningItem = null;
-            break;
-          case 'Error':
-            this.error = event.message;
             break;
         }
       }, categories);

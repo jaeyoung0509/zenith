@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import type {
     DeveloperArtifact,
     DeveloperArtifactStatus,
     DeveloperArtifactScanEvent,
     DeveloperArtifactScanResult,
+    DeveloperArtifactUninspected,
+    DeveloperArtifactUninspectedReason,
     DeveloperWorkspace,
     TrashPlanPreview,
     TrashResult,
@@ -40,9 +42,15 @@
 
   interface Props {
     onBack: () => void;
+    /**
+     * The last scan result, when the route reopens this view with one. It seeds
+     * the review list and the uninspected notice so a partial scan is explained
+     * before the next scan finishes.
+     */
+    initialResult?: DeveloperArtifactScanResult | null;
   }
 
-  let { onBack }: Props = $props();
+  let { onBack, initialResult = null }: Props = $props();
 
   onMount(() => {
     void platformContextStore.load();
@@ -52,8 +60,12 @@
 
   let workspaces = $state<DeveloperWorkspace[]>([]);
   let selectedWorkspaceIds = $state<string[]>([]);
-  let items = $state<DeveloperArtifact[]>([]);
-  let scanResult = $state<DeveloperArtifactScanResult | null>(null);
+  // The last result seeds this view once; every scan after that owns the state,
+  // so the prop read is intentionally untracked.
+  const seed = untrack(() => initialResult);
+  let items = $state<DeveloperArtifact[]>(seed?.items ?? []);
+  let scanResult = $state<DeveloperArtifactScanResult | null>(seed);
+  let uninspected = $state<DeveloperArtifactUninspected[]>(seed?.uninspected ?? []);
   let plan = $state<TrashPlanPreview | null>(null);
   let trashResult = $state<TrashResult | null>(null);
   let selectedIds = $state<string[]>([]);
@@ -63,9 +75,9 @@
   let isExecuting = $state(false);
   let activeScanId = $state<string | null>(null);
   let activeWorkspace = $state('');
-  let discoveredCount = $state(0);
-  let measuredCount = $state(0);
-  let skippedEntries = $state(0);
+  let discoveredCount = $state(seed?.discovered_count ?? 0);
+  let measuredCount = $state(seed?.measured_count ?? 0);
+  let skippedEntries = $state(seed?.skipped_entries ?? 0);
   let error = $state<string | null>(null);
   let revealError = $state<string | null>(null);
   let now = $state(Date.now());
@@ -194,6 +206,17 @@
     }
   }
 
+  function uninspectedReasonLabel(reason: DeveloperArtifactUninspectedReason): string {
+    return reason === 'permission_denied'
+      ? 'The operating system refused access, so this folder was not inspected.'
+      : 'This folder could not be read, so it was not inspected.';
+  }
+
+  function uninspectedStatusLabel(entry: DeveloperArtifactUninspected): string {
+    if (entry.retryable) return 'Permission refused · retry allowed';
+    return 'Unreadable';
+  }
+
   async function addWorkspace() {
     error = null;
     try {
@@ -238,9 +261,23 @@
         measuredCount = event.measured_count;
         skippedEntries = event.skipped_entries;
         break;
+      case 'uninspected':
+        if (!uninspected.some((entry) => entry.path === event.path)) {
+          uninspected = [
+            ...uninspected,
+            {
+              path: event.path,
+              name: event.name,
+              reason: event.reason,
+              retryable: event.retryable,
+            },
+          ];
+        }
+        break;
       case 'finished':
         scanResult = event.result;
         items = event.result.items;
+        uninspected = event.result.uninspected ?? [];
         discoveredCount = event.result.discovered_count;
         measuredCount = event.result.measured_count;
         skippedEntries = event.result.skipped_entries;
@@ -265,6 +302,7 @@
     resetReview();
     scanResult = null;
     items = [];
+    uninspected = [];
     selectedIds = [];
     activeScanId = null;
     activeWorkspace = '';
@@ -301,6 +339,11 @@
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
+  }
+
+  /** Re-runs the scan that reported the uninspected folders. */
+  async function rescanAfterUninspected() {
+    await runScan(selectedWorkspaceIds);
   }
 
   async function cancelScan() {
@@ -472,6 +515,59 @@
     </div>
   {/if}
 
+  {#if uninspected.length > 0}
+    <div role="status" data-testid="developer-artifact-uninspected-notice">
+      <Card class="space-y-3 border-warning/30 bg-warning/5 p-4">
+        <div class="flex items-start gap-2.5">
+          <AlertCircle size={16} class="mt-0.5 shrink-0 text-warning" />
+          <div class="min-w-0 flex-1 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-xs font-medium text-warning">
+                {uninspected.length} folder{uninspected.length === 1 ? '' : 's'} could not be inspected
+              </span>
+              <span class="text-meta text-warning/90">Result is partial</span>
+            </div>
+            <p class="text-meta text-muted-foreground">
+              Projects inside these folders were not measured, so their build output and dependencies are missing from this result.
+            </p>
+            <div class="space-y-1.5">
+              {#each uninspected as entry (entry.path)}
+                <div class="rounded-lg border border-border/70 bg-background/60 p-2.5 text-caption">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="font-medium text-foreground">{entry.name}</span>
+                    <span class={`rounded border px-1.5 py-0.5 ${entry.retryable ? 'border-warning/30 bg-warning/10 text-warning' : 'border-border bg-secondary text-muted-foreground'}`}>
+                      {uninspectedStatusLabel(entry)}
+                    </span>
+                  </div>
+                  <div class="mt-1 truncate font-mono text-muted-foreground" title={entry.path}>{entry.path}</div>
+                  <p class="mt-1 text-muted-foreground">
+                    {uninspectedReasonLabel(entry.reason)}
+                    {entry.retryable ? ' Allow access, then scan again.' : ''}
+                  </p>
+                </div>
+              {/each}
+            </div>
+            {#if uninspected.some((entry) => entry.retryable && entry.reason === 'permission_denied')}
+              <p class="text-meta text-muted-foreground">
+                On macOS, allow Zenith under System Settings → Privacy &amp; Security → Files and Folders, then scan again.
+              </p>
+            {/if}
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-1.5"
+              onclick={rescanAfterUninspected}
+              disabled={isScanning || selectedWorkspaceIds.length === 0}
+            >
+              {#if isScanning}<DeletingDots size="sm" />{:else}<RefreshCw size={13} />{/if}
+              Scan again
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  {/if}
+
   {#if trashResult}
     <Card class={`p-4 ${trashResult.failed_count + trashResult.skipped_count > 0 ? 'border-warning/30 bg-warning/5' : 'border-success/30 bg-success/5'}`}>
       <div class="flex items-center justify-between gap-3 text-xs">
@@ -538,7 +634,7 @@
       <h2 class="text-sm font-semibold">Reviewable project artifacts</h2>
       <p class="mt-0.5 text-meta text-muted-foreground">
         {#if scanResult}
-          {items.length} candidate{items.length === 1 ? '' : 's'} · {measuredCount} measured{scanResult.cancelled ? ' · scan cancelled' : ''}{scanResult.truncated ? ' · result cap reached' : ''}
+          {items.length} candidate{items.length === 1 ? '' : 's'} · {measuredCount} measured{uninspected.length > 0 ? ` · ${uninspected.length} uninspected` : ''}{scanResult.cancelled ? ' · scan cancelled' : ''}{scanResult.truncated ? ' · result cap reached' : ''}
         {:else}
           Rust, Node, Python, Java/Kotlin, PHP, Ruby, .NET, C/C++, Swift, Dart, Elixir, Terraform, and Go markers are supported.
         {/if}

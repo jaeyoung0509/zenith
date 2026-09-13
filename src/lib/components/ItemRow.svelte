@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
+  import { isCleanable } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import { platformContextStore } from '../stores/platformContext.svelte';
   import { canReveal, revealUnavailableReason, runReveal } from '../utils/reveal';
@@ -26,7 +27,17 @@
   });
   let isUnavailable = $derived(item.quality !== 'fresh' && item.quality !== 'partial');
   let isManual = $derived(item.risk === 'manual' || cacheMetadata.management_mode === 'advisory');
+  let cleanable = $derived(isCleanable(item));
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual && !isUnavailable);
+  // An item that cannot be cleaned must not present a reclaimable amount: its
+  // size is informational, exactly like an `informational` size semantics.
+  let sizePrefix = $derived.by(() => {
+    if (!cleanable || cacheMetadata.size_semantics === 'informational') return '~ ';
+    if (item.quality === 'partial' || cacheMetadata.size_semantics === 'conservative_lower_bound') {
+      return '≥ ';
+    }
+    return '';
+  });
   let revealError = $state<string | null>(null);
 
   function handleToggle() {
@@ -63,7 +74,7 @@
         checked={isSelected}
         disabled={!scanStore.canClean || isUnavailable}
         onchange={handleToggle}
-        ariaLabel={isUnavailable ? `${item.name} is inaccessible` : `Select ${item.name}`}
+        ariaLabel={isUnavailable ? `${item.name} is inaccessible and cannot be cleaned` : `Select ${item.name}`}
         title={isUnavailable ? (item.incomplete_reason ?? 'Inaccessible: cleanup blocked') : undefined}
         class="mt-0.5 shrink-0"
       />
@@ -130,7 +141,7 @@
       <span role="alert" class="text-caption text-destructive">{revealError}</span>
     {/if}
     <span class="w-[12ch] whitespace-nowrap text-right text-xs font-mono tabular-nums font-semibold text-foreground">
-      {item.quality === 'partial' || cacheMetadata.size_semantics === 'conservative_lower_bound' ? '≥ ' : cacheMetadata.size_semantics === 'informational' ? '~ ' : ''}{formatBytes(item.size.allocated ?? item.size.logical)}
+      {sizePrefix}{formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
 
     <Button

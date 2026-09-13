@@ -68,10 +68,7 @@ impl ToctouGuard {
     /// Verifies that the filesystem identity matches what was recorded during scanning.
     pub fn verify(path: &Path, expected: &FileIdentity) -> Result<(), ZenithError> {
         if !path.exists() && !crate::safety::SymlinkGuard::is_symlink(path) {
-            return Err(ZenithError::Io(format!(
-                "Path {} does not exist",
-                path.display()
-            )));
+            return Err(ZenithError::Missing(path.display().to_string()));
         }
 
         let current = match Self::capture(path) {
@@ -234,5 +231,43 @@ pub fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
         let identity = windows_identity_from_handle(handle);
         CloseHandle(handle);
         identity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToctouGuard;
+    use crate::models::ZenithError;
+
+    /// An identity check that races with a deletion reports absence rather than
+    /// a generic I/O error, so the caller can classify it as already-absent.
+    #[test]
+    fn verify_on_a_missing_path_reports_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("gone.dat");
+        std::fs::write(&target, b"x").unwrap();
+        let identity = ToctouGuard::capture(&target).expect("capture identity");
+        std::fs::remove_file(&target).unwrap();
+
+        match ToctouGuard::verify(&target, &identity) {
+            Err(ZenithError::Missing(_)) => {}
+            other => panic!("expected ZenithError::Missing, got {other:?}"),
+        }
+    }
+
+    /// A present path whose identity changed is still a change, never absence.
+    #[test]
+    fn verify_on_a_replaced_path_still_reports_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("payload.bin");
+        std::fs::write(&target, b"v1").unwrap();
+        let identity = ToctouGuard::capture(&target).expect("capture identity");
+        std::fs::remove_file(&target).unwrap();
+        std::fs::write(&target, b"v2").unwrap();
+
+        assert!(matches!(
+            ToctouGuard::verify(&target, &identity),
+            Err(ZenithError::ChangedSinceScan(_))
+        ));
     }
 }

@@ -117,6 +117,26 @@ impl ScanItem {
             ObservationQuality::Fresh | ObservationQuality::Partial
         )
     }
+
+    /// Bytes this item would reclaim when cleaned, and zero when it cannot be
+    /// cleaned at all.
+    ///
+    /// Every total — the risk buckets, the category and scan sums, and the
+    /// frontend's selection summary — is derived from this, so an item whose
+    /// observation cannot support a cleanup never contributes a byte that only
+    /// looks reclaimable.
+    pub fn cleanable_bytes(&self) -> u64 {
+        if self.allows_cleanup() {
+            self.size.reclaimable()
+        } else {
+            0
+        }
+    }
+
+    /// Whether this item is a cleanup candidate a user could select.
+    pub fn is_cleanable_candidate(&self) -> bool {
+        self.allows_cleanup() && self.risk != RiskTier::Manual && self.cleanable_bytes() > 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -248,9 +268,6 @@ pub enum ScanEvent {
     },
     Finished {
         result: ScanResult,
-    },
-    Error {
-        message: String,
     },
 }
 

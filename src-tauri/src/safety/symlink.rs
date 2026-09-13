@@ -275,6 +275,9 @@ impl SymlinkGuard {
         environment: &crate::platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         let canonical = fs::canonicalize(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return ZenithError::Missing(path.display().to_string());
+            }
             ZenithError::ChangedSinceScan(format!(
                 "Could not verify canonical location for {}: {}",
                 path.display(),
@@ -289,6 +292,9 @@ impl SymlinkGuard {
     /// fails closed instead of reporting "not a symlink".
     pub fn is_symlink_strict(path: &Path) -> Result<bool, ZenithError> {
         let meta = fs::symlink_metadata(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return ZenithError::Missing(path.display().to_string());
+            }
             ZenithError::ChangedSinceScan(format!(
                 "Could not read link metadata for {}: {}",
                 path.display(),
@@ -477,10 +483,18 @@ mod tests {
         let environment = crate::platform::PlatformEnvironment::native();
         assert!(SymlinkGuard::validate_symlink_target(&missing, &environment).is_ok());
 
-        // Mutation-side helpers must fail closed instead of mistaking an
-        // unreadable path for a verified-safe one.
-        assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
-        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment).is_err());
+        // Mutation-side helpers never mistake a missing path for a
+        // verified-safe one: they report the distinct absence signal, which
+        // callers classify as already-absent. Any other metadata failure still
+        // returns `ChangedSinceScan` and fails closed.
+        assert!(matches!(
+            SymlinkGuard::is_symlink_strict(&missing),
+            Err(ZenithError::Missing(_))
+        ));
+        assert!(matches!(
+            SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment),
+            Err(ZenithError::Missing(_))
+        ));
     }
 
     #[cfg(unix)]

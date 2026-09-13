@@ -113,6 +113,47 @@ pub struct DeveloperArtifact {
     pub selected_by_default: bool,
 }
 
+/// Why a directory the scan wanted to inspect was left uninspected.
+///
+/// The scan cannot separate "the user answered Don't Allow" from "the read was
+/// refused or cancelled": both reach the app as the same access refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DeveloperArtifactUninspectedReason {
+    /// The operating system refused access to the folder, including a denied
+    /// or cancelled folder-access prompt.
+    PermissionDenied,
+    /// The folder could not be read for any other I/O reason.
+    Unreadable,
+}
+
+impl DeveloperArtifactUninspectedReason {
+    pub fn user_message(self, name: &str) -> String {
+        match self {
+            Self::PermissionDenied => format!(
+                "{} was not inspected because the operating system refused access. Allow access in System Settings, then scan again.",
+                name
+            ),
+            Self::Unreadable => {
+                format!("{} was not inspected because it could not be read.", name)
+            }
+        }
+    }
+}
+
+/// A directory the whole-home scan could not inspect.
+///
+/// Recorded so a partial scan names what it missed and offers a retry, instead
+/// of folding a refused folder into an anonymous skip counter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct DeveloperArtifactUninspected {
+    pub path: String,
+    pub name: String,
+    pub reason: DeveloperArtifactUninspectedReason,
+    /// Whether granting access and scanning again can include this directory.
+    pub retryable: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct DeveloperArtifactScanResult {
     pub scan_id: String,
@@ -128,6 +169,10 @@ pub struct DeveloperArtifactScanResult {
     pub skipped_entries: u64,
     pub cancelled: bool,
     pub truncated: bool,
+    /// Directories the walk could not inspect, with the reason and whether a
+    /// retry can include them.
+    #[serde(default)]
+    pub uninspected: Vec<DeveloperArtifactUninspected>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -169,6 +214,14 @@ pub enum DeveloperArtifactScanEvent {
     },
     WorkspaceFinished {
         workspace_id: String,
+    },
+    /// A directory the walk could not inspect, reported while the scan runs so
+    /// a refused folder is visible without waiting for the final result.
+    Uninspected {
+        path: String,
+        name: String,
+        reason: DeveloperArtifactUninspectedReason,
+        retryable: bool,
     },
     Finished {
         result: DeveloperArtifactScanResult,

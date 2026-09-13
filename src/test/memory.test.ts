@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render } from 'svelte/server';
 import { filterProcesses } from '../lib/utils/memory';
-import type { ProcessMemory } from '../lib/models/types';
-import { MemoryStore } from '../lib/stores/memory.svelte';
+import type { MemoryMetrics, ProcessMemory } from '../lib/models/types';
+import { MemoryStore, memoryStore } from '../lib/stores/memory.svelte';
+import MemoryView from '../routes/dashboard/MemoryView.svelte';
 
 afterEach(() => {
   vi.useRealTimers();
+  memoryStore.memory = null;
 });
 
 describe('MemoryStore polling lifecycle', () => {
@@ -141,5 +144,119 @@ describe('filterProcesses memory search utility', () => {
     expect(filteredTick2).toHaveLength(2);
     expect(filteredTick2.map((p) => p.name)).toEqual(['Ollama Runner', 'Ollama CLI']);
     expect(filteredTick2[0].memory_bytes).toBe(1024 * 1024 * 1500);
+  });
+
+  it('matches processes by parent name so a group can be found by what started it', () => {
+    const processes: ProcessMemory[] = [
+      {
+        pid: 700,
+        pids: [700, 701],
+        name: 'rust-analyzer',
+        memory_bytes: 1024 * 1024 * 400,
+        process_count: 2,
+        can_terminate: false,
+        termination_lease_id: null,
+        parent_process_names: ['Warp'],
+        ownership: 'observed',
+      },
+      {
+        pid: 800,
+        pids: [800],
+        name: 'node',
+        memory_bytes: 1024 * 1024 * 200,
+        process_count: 1,
+        can_terminate: false,
+        termination_lease_id: null,
+        parent_process_names: ['Cursor'],
+        ownership: 'observed',
+      },
+    ];
+
+    expect(filterProcesses(processes, 'warp').map((p) => p.name)).toEqual(['rust-analyzer']);
+    expect(filterProcesses(processes, 'CURS').map((p) => p.name)).toEqual(['node']);
+    // Name and PID matching still work alongside the parent match.
+    expect(filterProcesses(processes, 'rust').map((p) => p.name)).toEqual(['rust-analyzer']);
+    expect(filterProcesses(processes, '800').map((p) => p.name)).toEqual(['node']);
+  });
+});
+
+describe('MemoryView process provenance', () => {
+  function metricsFixture(topProcesses: ProcessMemory[]): MemoryMetrics {
+    return {
+      total_bytes: 16 * 1024 * 1024 * 1024,
+      used_bytes: 8 * 1024 * 1024 * 1024,
+      available_bytes: 8 * 1024 * 1024 * 1024,
+      free_bytes: 4 * 1024 * 1024 * 1024,
+      compressed_bytes: 0,
+      swap_used_bytes: 0,
+      swap_total_bytes: 0,
+      pressure: 'normal',
+      top_processes: topProcesses,
+      timestamp: 1,
+    };
+  }
+
+  function processFixture(overrides: Partial<ProcessMemory> = {}): ProcessMemory {
+    return {
+      pid: 700,
+      pids: [700, 701, 702],
+      name: 'rust-analyzer',
+      memory_bytes: 1024 * 1024 * 400,
+      process_count: 3,
+      can_terminate: false,
+      termination_lease_id: null,
+      parent_process_names: [],
+      ownership: 'observed',
+      ...overrides,
+    };
+  }
+
+  it('labels the process list as an observation of the system snapshot', () => {
+    memoryStore.memory = metricsFixture([processFixture()]);
+    const { body } = render(MemoryView);
+
+    expect(body).toContain('Zenith observes these processes');
+    expect(body).not.toContain('Started by Zenith');
+  });
+
+  it('shows the snapshot parent of an observed process without claiming Zenith started it', () => {
+    memoryStore.memory = metricsFixture([
+      processFixture({ parent_process_names: ['Warp'], ownership: 'observed' }),
+    ]);
+    const { body } = render(MemoryView);
+
+    expect(body).toContain('parent: Warp');
+    expect(body).not.toContain('Started by Zenith');
+  });
+
+  it('shows the provenance chip for a process traced to Zenith', () => {
+    memoryStore.memory = metricsFixture([
+      processFixture({
+        name: 'Node.js',
+        parent_process_names: ['Zenith'],
+        ownership: 'zenith_child',
+      }),
+    ]);
+    const { body } = render(MemoryView);
+
+    expect(body).toContain('Started by Zenith');
+  });
+
+  it('renders no parent attribution and no placeholder when the snapshot resolved none', () => {
+    memoryStore.memory = metricsFixture([processFixture({ parent_process_names: [] })]);
+    const { body } = render(MemoryView);
+
+    expect(body).not.toContain('parent:');
+    expect(body.toLowerCase()).not.toContain('unknown');
+    expect(body).not.toContain('Started by Zenith');
+  });
+
+  it('joins multiple snapshot parents in the order the backend reported them', () => {
+    memoryStore.memory = metricsFixture([
+      processFixture({ parent_process_names: ['Warp', 'Zenith'], ownership: 'observed' }),
+    ]);
+    const { body } = render(MemoryView);
+
+    expect(body).toContain('parent: Warp, Zenith');
   });
 });

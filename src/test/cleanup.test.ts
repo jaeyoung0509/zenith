@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { ScanItem } from '../lib/models/types';
-import { filterAndSortCleanupItems } from '../lib/utils/cleanup';
+import type { ScanItem, ZenithSettings } from '../lib/models/types';
+import {
+  cleanableBytes,
+  filterAndSortCleanupItems,
+  isCleanable,
+  presentedItems,
+  reclaimableBytes,
+  riskCounts,
+} from '../lib/utils/cleanup';
 import { cleanOutcome } from '../lib/utils/cleanResult';
+import { scanStore } from '../lib/stores/scan.svelte';
 
 function item(overrides: Partial<ScanItem>): ScanItem {
   return {
@@ -30,6 +38,48 @@ function item(overrides: Partial<ScanItem>): ScanItem {
     ...overrides,
   };
 }
+
+/** Settings that enable every cleanup category, used by the store tests. */
+const allCategoriesEnabledSettings: ZenithSettings = {
+  launch_at_login: false,
+  clean_ai_tools: true,
+  clean_developer_tools: true,
+  clean_docker: true,
+  clean_local_models: false,
+  include_rebuild_caches: true, // Even if include_rebuild_caches is true, Quick Clean must be Safe only!
+  intensive_cleanup: true,
+  theme: 'system',
+  excluded_signatures: [],
+  quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'],
+  quick_panel_ai_providers: [],
+  ai_accounts_quota_providers: ['codex'],
+  dashboard_tabs: ['storage'],
+  dashboard_tabs_revision: 1,
+  sidebar_collapsed: false,
+  awake_rules: [],
+  ai_control: {
+    budgets: [],
+    manual_usage: [],
+    autopilot: {
+      keep_awake_for_verified_sessions: false,
+      keep_awake_ac_only: true,
+      notify_on_battery: false,
+      notify_on_memory_pressure: false,
+      notify_on_session_completion: false,
+      recommendation_cooldown_seconds: 900,
+    },
+    dismissed_findings: [],
+    audit_retention_days: 30,
+  },
+  agent_notifications: {
+    enabled: false,
+    notify_on_turn_completed: true,
+    notify_on_approval_or_input: true,
+    notify_on_possibly_inactive: true,
+    hide_project_basename: false,
+    inactivity_threshold_minutes: 15,
+  },
+};
 
 describe('filterAndSortCleanupItems', () => {
   it('hides nonexistent and empty signature locations', () => {
@@ -72,6 +122,116 @@ describe('filterAndSortCleanupItems', () => {
       'name'
     );
     expect(result.map((entry) => entry.id)).toEqual(['ollama']);
+  });
+
+  it('returns exactly the presented rows, so a row count and the header count agree', () => {
+    const items = [
+      item({ id: 'small', size: { logical: 10, allocated: 10 } }),
+      item({ id: 'large', size: { logical: 100, allocated: 100 } }),
+      item({ id: 'missing', exists: false }),
+      item({ id: 'empty', size: { logical: 0, allocated: 0 } }),
+      item({
+        id: 'blocked',
+        quality: 'unavailable',
+        size: { logical: 5, allocated: 5 },
+      }),
+    ];
+
+    const sorted = filterAndSortCleanupItems(items, 'all', '', 'size');
+    const expected = presentedItems(items)
+      .slice()
+      .sort(
+        (left, right) =>
+          reclaimableBytes(right) - reclaimableBytes(left) || left.name.localeCompare(right.name)
+      )
+      .map((entry) => entry.id);
+
+    expect(sorted.map((entry) => entry.id)).toEqual(expected);
+    expect(sorted.length).toBe(presentedItems(items).length);
+  });
+});
+
+describe('presentation predicates and selection', () => {
+  it('presents unmeasurable rows but never counts or selects them as cleanable', () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+
+    const fresh = item({
+      id: 'fresh-cache',
+      name: 'Fresh cache',
+      size: { logical: 4096, allocated: 4096 },
+    });
+    const unavailable = item({
+      id: 'unavailable-cache',
+      name: 'Unavailable cache',
+      quality: 'unavailable',
+      incomplete_reason: 'Protected application bundle encountered',
+      cache_metadata: {
+        provider: 'Zenith',
+        management_mode: 'zenith',
+        artifact_kind: 'download_cache',
+        consequence: '',
+        size_semantics: 'conservative_lower_bound',
+        last_used_confidence: 'unknown',
+      },
+      size: { logical: 198_600_000, allocated: 198_600_000 },
+    });
+    const empty = item({
+      id: 'empty-cache',
+      name: 'Empty cache',
+      size: { logical: 0, allocated: 0 },
+    });
+    const items = [fresh, unavailable, empty];
+
+    // A row is presented for what it can measure and for what it must explain,
+    // never for a complete observation of an empty path.
+    expect(presentedItems(items).map((entry) => entry.id)).toEqual([
+      'fresh-cache',
+      'unavailable-cache',
+    ]);
+    expect(riskCounts(items)).toEqual({ all: 2, safe: 2, rebuild: 0, manual: 0 });
+    expect(isCleanable(unavailable)).toBe(false);
+    expect(cleanableBytes(unavailable)).toBe(0);
+
+    const scan = {
+      scan_id: 'presentation-1',
+      valid_for_seconds: 300,
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
+      total_bytes: 4096,
+      safe_bytes: 4096,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+      quality: 'partial' as const,
+      incomplete_reasons: ['Protected application bundle encountered'],
+      categories: [
+        {
+          category: 'system' as const,
+          display_name: 'System',
+          total_bytes: 4096,
+          safe_bytes: 4096,
+          rebuild_bytes: 0,
+          manual_bytes: 0,
+          quality: 'partial' as const,
+          items,
+        },
+      ],
+    };
+
+    scanStore.lastScan = scan;
+    scanStore.syncSelectionFromScan(scan);
+
+    expect(scanStore.selectedMap['fresh-cache']).toBe(true);
+    expect(scanStore.selectedMap['unavailable-cache']).toBe(false);
+    expect(scanStore.selectedMap['empty-cache']).toBe(false);
+
+    // An inaccessible row refuses selection instead of contributing nothing.
+    scanStore.toggleItem('unavailable-cache');
+    expect(scanStore.selectedMap['unavailable-cache']).toBe(false);
+
+    expect(scanStore.quickCleanableBytes(allCategoriesEnabledSettings)).toBe(4096);
+    expect(scanStore.selectionSummary.safeSelectedBytes).toBe(4096);
+    expect(scanStore.selectionSummary.reclaimableBytes).toBe(4096);
+    expect(scanStore.selectionSummary.selectedCount).toBe(1);
   });
 });
 
@@ -140,8 +300,7 @@ describe('cleanOutcome', () => {
 });
 
 describe('quick clean eligibility and predicate consistency', () => {
-  it('strictly selects only safe risk items and honors category toggle settings', async () => {
-    const { scanStore } = await import('../lib/stores/scan.svelte');
+  it('strictly selects only safe risk items and honors category toggle settings', () => {
 
     const mockScan = {
       scan_id: 'scan-123',
@@ -186,59 +345,18 @@ describe('quick clean eligibility and predicate consistency', () => {
 
     scanStore.lastScan = mockScan;
 
-    const allEnabledSettings = {
-      launch_at_login: false,
-      clean_ai_tools: true,
-      clean_developer_tools: true,
-      clean_docker: true,
-      clean_local_models: false,
-      include_rebuild_caches: true, // Even if include_rebuild_caches is true, Quick Clean must be Safe only!
-      intensive_cleanup: true,
-      theme: 'system',
-      excluded_signatures: [],
-      quick_panel_sections: ['cleanup', 'storage', 'memory', 'ai_usage'] as any,
-      quick_panel_ai_providers: [],
-      ai_accounts_quota_providers: ['codex' as const],
-      dashboard_tabs: ['storage'] as any,
-      dashboard_tabs_revision: 1,
-      sidebar_collapsed: false,
-      awake_rules: [],
-      ai_control: {
-        budgets: [],
-        manual_usage: [],
-        autopilot: {
-          keep_awake_for_verified_sessions: false,
-          keep_awake_ac_only: true,
-          notify_on_battery: false,
-          notify_on_memory_pressure: false,
-          notify_on_session_completion: false,
-          recommendation_cooldown_seconds: 900,
-        },
-        dismissed_findings: [],
-        audit_retention_days: 30,
-      },
-      agent_notifications: {
-        enabled: false,
-        notify_on_turn_completed: true,
-        notify_on_approval_or_input: true,
-        notify_on_possibly_inactive: true,
-        hide_project_basename: false,
-        inactivity_threshold_minutes: 15,
-      },
-    };
-
     // Calculate bytes
-    const cleanableBytes = scanStore.quickCleanableBytes(allEnabledSettings);
+    const cleanableBytes = scanStore.quickCleanableBytes(allCategoriesEnabledSettings);
     expect(cleanableBytes).toBe(1500); // 1000 (ai-safe) + 500 (dev-safe)
 
     // Select defaults
-    scanStore.selectQuickCleanDefaults(allEnabledSettings);
+    scanStore.selectQuickCleanDefaults(allCategoriesEnabledSettings);
     expect(scanStore.selectedMap['ai-safe']).toBe(true);
     expect(scanStore.selectedMap['dev-safe']).toBe(true);
     expect(scanStore.selectedMap['ai-rebuild']).toBe(false); // rebuild NEVER selected in quick clean
 
     // If AI category disabled in settings
-    const aiDisabledSettings = { ...allEnabledSettings, clean_ai_tools: false };
+    const aiDisabledSettings = { ...allCategoriesEnabledSettings, clean_ai_tools: false };
     expect(scanStore.quickCleanableBytes(aiDisabledSettings)).toBe(500);
 
     scanStore.selectQuickCleanDefaults(aiDisabledSettings);
@@ -248,8 +366,7 @@ describe('quick clean eligibility and predicate consistency', () => {
 });
 
 describe('scanStore selectionSummary', () => {
-  it('computes selection metrics in a single pass across safe, rebuild, and manual items', async () => {
-    const { scanStore } = await import('../lib/stores/scan.svelte');
+  it('computes selection metrics in a single pass across safe, rebuild, and manual items', () => {
 
     const mockScan = {
       scan_id: 'summary-test-1',
@@ -306,7 +423,7 @@ describe('scanStore selectionSummary', () => {
     expect(summary.safeSelectedBytes).toBe(1500);
     expect(summary.rebuildSelectedBytes).toBe(2000);
     expect(summary.reclaimableBytes).toBe(3500); // safe + rebuild
-    expect(summary.manualSelectedBytes).toBe(1000);
+    expect(summary.manualSelectedBytes).toBe(0); // manual resources are never a cleanable byte
     expect(summary.manualSelectedCount).toBe(1);
 
     // Verify getter parity

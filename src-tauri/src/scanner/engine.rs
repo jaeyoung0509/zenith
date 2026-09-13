@@ -33,6 +33,60 @@ fn aggregate_quality(
     }
 }
 
+/// The retained items and reclaimable bytes of one category.
+///
+/// Every byte total is derived from `ScanItem::cleanable_bytes` in `push`, so
+/// the category total always equals the sum of its risk buckets and an item
+/// whose observation cannot support a cleanup contributes to neither.
+#[derive(Default)]
+struct CategoryAccumulator {
+    items: Vec<ScanItem>,
+    total_bytes: u64,
+    safe_bytes: u64,
+    rebuild_bytes: u64,
+    manual_bytes: u64,
+}
+
+impl CategoryAccumulator {
+    /// Accounts one scanned item, or drops it when it is not worth retaining.
+    ///
+    /// Returns the retained item so the caller can stream it to the frontend.
+    fn push(&mut self, item: ScanItem) -> Option<&ScanItem> {
+        let bytes = item.cleanable_bytes();
+        // An item that is absent, or a complete observation of an empty path,
+        // carries nothing a user could act on.
+        let is_empty_fresh = item.quality == ObservationQuality::Fresh && bytes == 0;
+        if !item.exists || is_empty_fresh {
+            return None;
+        }
+
+        self.total_bytes += bytes;
+        match item.risk {
+            RiskTier::Safe => self.safe_bytes += bytes,
+            RiskTier::Rebuild => self.rebuild_bytes += bytes,
+            RiskTier::Manual => self.manual_bytes += bytes,
+        }
+
+        if !item.allows_cleanup() {
+            // An item whose observation cannot support a cleanup is reported
+            // once, through its own `quality` and through the scan's durable
+            // `incomplete_reasons`. It never becomes a second, destructive
+            // error surface in the middle of a scan that otherwise succeeded.
+            crate::diagnostics::log_error(
+                "scanner",
+                &format!(
+                    "Could not fully inspect {}: {}",
+                    item.name,
+                    item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
+                ),
+            );
+        }
+
+        self.items.push(item);
+        self.items.last()
+    }
+}
+
 impl ScanEngine {
     /// Executes a full or filtered scan across all categories, emitting streaming events.
     ///
@@ -81,11 +135,7 @@ impl ScanEngine {
         for &category in target_categories {
             on_event(ScanEvent::CategoryStarted { category });
 
-            let mut category_items: Vec<ScanItem> = Vec::new();
-            let mut category_total_bytes = 0u64;
-            let mut cat_safe = 0u64;
-            let mut cat_rebuild = 0u64;
-            let mut cat_manual = 0u64;
+            let mut accumulator = CategoryAccumulator::default();
 
             // 1. Scan filesystem signatures for this category
             let signatures = registry.by_category_for_mode(category, intensive_cleanup);
@@ -96,43 +146,22 @@ impl ScanEngine {
                 let items =
                     DirectoryScanner::scan_signature_with_pool(sig, directory_pool, environment);
                 for item in items {
-                    let bytes = item.size.reclaimable();
-                    // Preserve items that encountered errors or partial observations even if 0 bytes.
-                    let is_empty_fresh = item.quality == ObservationQuality::Fresh && bytes == 0;
-                    if !item.exists || is_empty_fresh {
-                        continue;
+                    if let Some(retained) = accumulator.push(item) {
+                        on_event(ScanEvent::ItemFound {
+                            item: retained.clone(),
+                        });
                     }
-                    category_total_bytes += bytes;
-
-                    match item.risk {
-                        RiskTier::Safe => cat_safe += bytes,
-                        RiskTier::Rebuild => cat_rebuild += bytes,
-                        RiskTier::Manual => cat_manual += bytes,
-                    }
-
-                    if item.quality != ObservationQuality::Fresh {
-                        let message = format!(
-                            "Could not fully inspect {}: {}",
-                            item.name,
-                            item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
-                        );
-                        crate::diagnostics::log_error("scanner", &message);
-                        on_event(ScanEvent::Error { message });
-                    }
-
-                    on_event(ScanEvent::ItemFound { item: item.clone() });
-                    category_items.push(item);
                 }
             }
 
             // 2. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Developer {
                 for item in CacheProviderRegistry::scan_items(registry, environment) {
-                    let bytes = item.size.reclaimable();
-                    category_total_bytes += bytes;
-                    cat_rebuild += bytes;
-                    on_event(ScanEvent::ItemFound { item: item.clone() });
-                    category_items.push(item);
+                    if let Some(retained) = accumulator.push(item) {
+                        on_event(ScanEvent::ItemFound {
+                            item: retained.clone(),
+                        });
+                    }
                 }
             }
 
@@ -142,21 +171,15 @@ impl ScanEngine {
                     .into_iter()
                     .chain(OrbStackAdapter::scan_items(environment));
                 for item in adapter_items {
-                    let bytes = item.size.reclaimable();
-                    category_total_bytes += bytes;
-
-                    match item.risk {
-                        RiskTier::Safe => cat_safe += bytes,
-                        RiskTier::Rebuild => cat_rebuild += bytes,
-                        RiskTier::Manual => cat_manual += bytes,
+                    if let Some(retained) = accumulator.push(item) {
+                        on_event(ScanEvent::ItemFound {
+                            item: retained.clone(),
+                        });
                     }
-
-                    on_event(ScanEvent::ItemFound { item: item.clone() });
-                    category_items.push(item);
                 }
             }
 
-            category_items.sort_by(|left, right| {
+            accumulator.items.sort_by(|left, right| {
                 right
                     .size
                     .reclaimable()
@@ -164,33 +187,35 @@ impl ScanEngine {
                     .then_with(|| left.name.cmp(&right.name))
             });
 
-            total_bytes += category_total_bytes;
-            safe_bytes += cat_safe;
-            rebuild_bytes += cat_rebuild;
-            manual_bytes += cat_manual;
+            total_bytes += accumulator.total_bytes;
+            safe_bytes += accumulator.safe_bytes;
+            rebuild_bytes += accumulator.rebuild_bytes;
+            manual_bytes += accumulator.manual_bytes;
 
-            let cat_quality = aggregate_quality(category_items.iter().map(|item| item.quality));
+            let cat_quality = aggregate_quality(accumulator.items.iter().map(|item| item.quality));
             // Both counts describe the items this category retains, so a scan
             // that could not read every entry says so instead of reporting a
             // smaller, clean-looking total.
-            let cat_skipped_entry_count: u64 = category_items
+            let cat_skipped_entry_count: u64 = accumulator
+                .items
                 .iter()
                 .map(|item| item.skipped_entry_count)
                 .sum();
-            let cat_incomplete_item_count = category_items
+            let cat_incomplete_item_count = accumulator
+                .items
                 .iter()
-                .filter(|item| item.quality != ObservationQuality::Fresh)
+                .filter(|item| !item.allows_cleanup())
                 .count() as u64;
 
-            let cat_item_count = category_items.len();
+            let cat_item_count = accumulator.items.len();
             category_results.push(CategoryResult {
                 category,
                 display_name: category.display_name().to_string(),
-                items: category_items,
-                total_bytes: category_total_bytes,
-                safe_bytes: cat_safe,
-                rebuild_bytes: cat_rebuild,
-                manual_bytes: cat_manual,
+                items: accumulator.items,
+                total_bytes: accumulator.total_bytes,
+                safe_bytes: accumulator.safe_bytes,
+                rebuild_bytes: accumulator.rebuild_bytes,
+                manual_bytes: accumulator.manual_bytes,
                 quality: cat_quality,
                 skipped_entry_count: cat_skipped_entry_count,
                 incomplete_item_count: cat_incomplete_item_count,
@@ -200,7 +225,7 @@ impl ScanEngine {
 
             on_event(ScanEvent::CategoryFinished {
                 category,
-                bytes: category_total_bytes,
+                bytes: accumulator.total_bytes,
                 item_count: cat_item_count,
             });
         }
@@ -249,7 +274,9 @@ impl ScanEngine {
 #[cfg(test)]
 mod tests {
     use super::{aggregate_quality, ScanEngine};
-    use crate::models::{Category, CleanStrategy, ObservationQuality, RiskTier, Signature};
+    use crate::models::{
+        Category, CleanStrategy, ObservationQuality, RiskTier, ScanEvent, Signature,
+    };
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
     use crate::signatures::SignatureRegistry;
@@ -372,7 +399,11 @@ mod tests {
         assert_eq!(aged.skipped_entry_count, 3);
 
         assert_eq!(result.skipped_entry_count, 6);
-        assert_eq!(result.incomplete_item_count, 2);
+        assert_eq!(
+            result.incomplete_item_count, 1,
+            "only the inaccessible aged candidate cannot be cleaned; the partial \
+             cache is still cleanable, so it is not an incomplete item"
+        );
     }
 
     /// The per-category counters are what the category cards and the freshness
@@ -448,6 +479,104 @@ mod tests {
         assert_eq!(
             aggregate_quality([ObservationQuality::Fresh, ObservationQuality::Unavailable]),
             ObservationQuality::Partial
+        );
+    }
+
+    /// Every byte total in a category comes from the same item set, so an
+    /// uninspectable item is retained for the user without inflating any total
+    /// and without becoming a second, destructive error surface.
+    #[test]
+    fn category_totals_exclude_uncleanable_items_and_emit_no_error_event() {
+        let fixture = tempfile::tempdir().unwrap();
+        let plain_root = fixture.path().join("plain-cache");
+        let aged_root = fixture.path().join("aged-cache");
+        std::fs::create_dir(&plain_root).unwrap();
+        std::fs::write(plain_root.join("data.bin"), vec![1u8; 4_096]).unwrap();
+        cache_fixture(&aged_root.join("candidate.cache"));
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.consistency.plain",
+            "Plain cache",
+            Category::System,
+            &plain_root,
+            vec![],
+            None,
+        ));
+        registry.register(signature(
+            "test.consistency.aged",
+            "Aged cache",
+            Category::System,
+            &aged_root,
+            vec![],
+            Some(0),
+        ));
+
+        let mut events = Vec::new();
+        let result = ScanEngine::scan(
+            &registry,
+            Some(&[Category::System]),
+            &[],
+            false,
+            &scan_environment(),
+            |event| events.push(event),
+        );
+
+        let system = result
+            .categories
+            .iter()
+            .find(|category| category.category == Category::System)
+            .expect("the system category is scanned");
+        let cleanable = system
+            .items
+            .iter()
+            .find(|item| item.signature_id == "test.consistency.plain")
+            .expect("the cleanable cache is retained");
+        let blocked = system
+            .items
+            .iter()
+            .find(|item| item.signature_id == "test.consistency.aged")
+            .expect("the uninspectable aged candidate is retained for observability");
+
+        assert!(
+            blocked.size.reclaimable() > 0,
+            "the blocked item still reports what it could measure"
+        );
+        assert!(!blocked.allows_cleanup());
+        assert_eq!(blocked.cleanable_bytes(), 0);
+
+        assert_eq!(
+            system.total_bytes,
+            system.safe_bytes + system.rebuild_bytes + system.manual_bytes,
+            "the category total is the sum of its risk buckets"
+        );
+        assert_eq!(system.total_bytes, cleanable.size.reclaimable());
+        assert_eq!(system.safe_bytes, cleanable.size.reclaimable());
+        assert_eq!(system.rebuild_bytes, 0);
+        assert_eq!(system.manual_bytes, 0);
+        assert_eq!(system.incomplete_item_count, 1);
+
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|event| match event {
+                ScanEvent::Started { .. } => "started",
+                ScanEvent::CategoryStarted { .. } => "category_started",
+                ScanEvent::ItemFound { .. } => "item_found",
+                ScanEvent::CategoryFinished { .. } => "category_finished",
+                ScanEvent::Finished { .. } => "finished",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "started",
+                "category_started",
+                "item_found",
+                "item_found",
+                "category_finished",
+                "finished",
+            ],
+            "an item-level measurement gap is never a destructive scan event"
         );
     }
 }

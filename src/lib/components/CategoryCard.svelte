@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { CategoryResult } from '../models/types';
   import { formatBytes } from '../utils/format';
+  import { cleanableBytes, isCleanable, presentedItems, riskCounts } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import Card from './Card.svelte';
-  import Badge from './Badge.svelte';
   import Checkbox from './Checkbox.svelte';
   import {
     Bot,
@@ -31,10 +31,13 @@
 
   let Icon = $derived(icons[categoryResult.category] || Boxes);
 
-  let cleanableItems = $derived(
-    categoryResult.items.filter((i) => i.risk !== 'manual'
-      && (i.quality === 'fresh' || i.quality === 'partial'))
-  );
+  // The card and its detail view read the same presented set and the same
+  // per-risk counts, so a card can never advertise a location the detail view
+  // omits (or vice versa).
+  let presented = $derived(presentedItems(categoryResult.items));
+  let tabs = $derived(riskCounts(categoryResult.items));
+
+  let cleanableItems = $derived(categoryResult.items.filter(isCleanable));
 
   let allSelected = $derived.by(() => {
     if (cleanableItems.length === 0) return false;
@@ -43,9 +46,7 @@
 
   let selectedBytes = $derived.by(() => {
     return cleanableItems.reduce((acc, i) => {
-      return scanStore.selectedMap[i.id]
-        ? acc + (i.size.allocated ?? i.size.logical)
-        : acc;
+      return scanStore.selectedMap[i.id] ? acc + cleanableBytes(i) : acc;
     }, 0);
   });
 
@@ -111,21 +112,21 @@
         </div>
         <div class="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground font-mono">
-            {categoryResult.items.length} items
+            {presented.length} items
           </span>
-          {#if categoryResult.safe_bytes > 0}
+          {#if tabs.safe > 0}
             <span class="shrink-0 whitespace-nowrap text-meta text-success font-mono">
-              Safe: {formatBytes(categoryResult.safe_bytes)}
+              Safe: {tabs.safe}
             </span>
           {/if}
-          {#if categoryResult.rebuild_bytes > 0}
+          {#if tabs.rebuild > 0}
             <span class="shrink-0 whitespace-nowrap text-meta text-warning font-mono">
-              • Rebuild: {formatBytes(categoryResult.rebuild_bytes)}
+              • Rebuild: {tabs.rebuild}
             </span>
           {/if}
-          {#if categoryResult.manual_bytes > 0}
+          {#if tabs.manual > 0}
             <span class="shrink-0 whitespace-nowrap text-meta text-destructive font-mono">
-              • Manual: {formatBytes(categoryResult.manual_bytes)}
+              • Manual: {tabs.manual}
             </span>
           {/if}
           {#if (categoryResult.skipped_entry_count ?? 0) > 0}

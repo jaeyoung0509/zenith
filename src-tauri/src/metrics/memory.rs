@@ -4,7 +4,7 @@ use crate::metrics::memory_termination::{
 };
 use crate::models::{
     MemoryMetrics, MemoryPressure, MemoryTerminationMode, MemoryTerminationOutcome,
-    MemoryTerminationResult, ProcessMemory,
+    MemoryTerminationResult, ProcessMemory, ProcessOwnership,
 };
 use crate::process_owner::ProcessOwner;
 use std::collections::HashMap;
@@ -145,12 +145,24 @@ impl MemorySampler {
                 HashMap::new();
             let mut termination_candidates: HashMap<String, Vec<MemoryLeaseMember>> =
                 HashMap::new();
+            // Provenance for the displayed groups comes from this same snapshot:
+            // one entry per observed pid with its normalized display name and its
+            // direct parent, so no second lookup is needed to explain a group.
+            let mut captured: HashMap<u32, CapturedProcess> =
+                HashMap::with_capacity(sys.processes().len());
 
             for (pid, process) in sys.processes() {
                 let pid_u32 = pid.as_u32();
                 let raw_name = process.name().to_string_lossy();
                 let norm_name = MemoryInspector::normalize_process_name(&raw_name, process.exe());
                 let mem = process.memory();
+                captured.insert(
+                    pid_u32,
+                    (
+                        norm_name.clone(),
+                        process.parent().map(|parent| parent.as_u32()),
+                    ),
+                );
                 // Collect candidate members in this same pass.
                 let member = MemoryInspector::termination_member(
                     pid_u32,
@@ -183,12 +195,21 @@ impl MemorySampler {
                 members.sort_by_key(|member| member.pid);
             }
 
+            // Parent edges derived from the captured table once, so each displayed
+            // group's ancestry can be walked without re-reading the process table.
+            let parent_links: HashMap<u32, u32> = captured
+                .iter()
+                .filter_map(|(pid, (_, parent))| parent.map(|parent| (*pid, parent)))
+                .collect();
+
             let mut top_processes: Vec<ProcessMemory> = process_groups
                 .into_iter()
                 .map(
                     |(name, (memory_bytes, process_count, _first_pid, mut pids, can_terminate))| {
                         pids.sort_unstable();
                         let representative_pid = pids.first().copied().unwrap_or(0);
+                        let (parent_process_names, ownership) =
+                            group_provenance(&pids, &captured, &parent_links, own_pid);
                         ProcessMemory {
                             pid: representative_pid,
                             pids,
@@ -197,6 +218,8 @@ impl MemorySampler {
                             memory_bytes,
                             process_count,
                             termination_lease_id: None,
+                            parent_process_names,
+                            ownership,
                         }
                     },
                 )
@@ -1082,11 +1105,85 @@ impl MemoryInspector {
     }
 }
 
+/// Maximum number of parent edges walked when tracing a displayed group member
+/// back to this Zenith process. The bound keeps a cyclic or otherwise hostile
+/// process table from turning provenance into an unbounded walk.
+const MAX_ANCESTRY_HOPS: usize = 8;
+
+/// One process as captured by a single `refresh_processes` pass: its normalized
+/// display name and its direct parent pid, both straight from the OS snapshot.
+type CapturedProcess = (String, Option<u32>);
+
+/// True when `target` is a strict ancestor of `start` in the captured parent
+/// links, walking at most `max_hops` parent edges.
+///
+/// Semantics pinned by the tests:
+/// - a pid is not its own ancestor, so `start == target` is false;
+/// - a chain exactly `max_hops` edges long reaches `target`, a longer one does not;
+/// - a pid absent from `parents` ends the chain (`false`), and the hop bound
+///   makes a parent cycle terminate rather than loop.
+fn ancestry_reaches(start: u32, target: u32, parents: &HashMap<u32, u32>, max_hops: usize) -> bool {
+    if start == target {
+        return false;
+    }
+    let mut current = start;
+    for _ in 0..max_hops {
+        let Some(&parent) = parents.get(&current) else {
+            return false;
+        };
+        if parent == target {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// Derives a displayed group's origin from the same captured snapshot as its
+/// memory figures: the distinct, sorted names of the members' direct parents,
+/// and whether every member traces back to this Zenith process.
+///
+/// `parent_process_names` lists exactly the parents the snapshot resolved, and
+/// stays empty when it resolved none. `ownership` is `ZenithChild` only when
+/// every member has Zenith as a strict ancestor, so one untraceable member
+/// leaves the group `Observed` and the view never claims a partial match.
+fn group_provenance(
+    members: &[u32],
+    captured: &HashMap<u32, CapturedProcess>,
+    parent_links: &HashMap<u32, u32>,
+    zenith_pid: u32,
+) -> (Vec<String>, ProcessOwnership) {
+    let mut parent_process_names: Vec<String> = Vec::new();
+    for member in members {
+        let Some((_, Some(parent))) = captured.get(member) else {
+            continue;
+        };
+        if let Some((name, _)) = captured.get(parent) {
+            parent_process_names.push(name.clone());
+        }
+    }
+    parent_process_names.sort();
+    parent_process_names.dedup();
+
+    let owned = !members.is_empty()
+        && members
+            .iter()
+            .all(|member| ancestry_reaches(*member, zenith_pid, parent_links, MAX_ANCESTRY_HOPS));
+
+    let ownership = if owned {
+        ProcessOwnership::ZenithChild
+    } else {
+        ProcessOwnership::Observed
+    };
+    (parent_process_names, ownership)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        supervise_memory_observation, MemoryInspector, MemoryObservation, MemorySampler,
-        MemoryTerminationSystem, RealMemorySystem,
+        ancestry_reaches, group_provenance, supervise_memory_observation, MemoryInspector,
+        MemoryObservation, MemorySampler, MemoryTerminationSystem, RealMemorySystem,
+        MAX_ANCESTRY_HOPS,
     };
     use crate::collection::Admission;
     use crate::metrics::memory_termination::{
@@ -1094,6 +1191,7 @@ mod tests {
     };
     use crate::models::{
         MemoryMetrics, MemoryPressure, MemoryTerminationMode, MemoryTerminationOutcome,
+        ProcessOwnership,
     };
     use crate::process_owner::ProcessOwner;
     use std::collections::{HashMap, HashSet};
@@ -1872,5 +1970,139 @@ mod tests {
             .singleflight
             .complete(&retry_entry, Ok(Arc::new(observation_fixture())))
             .await;
+    }
+
+    /// Builds a captured-table fixture so provenance can be tested without a
+    /// live process table.
+    fn captured_table(entries: &[(u32, &str, Option<u32>)]) -> HashMap<u32, (String, Option<u32>)> {
+        entries
+            .iter()
+            .map(|(pid, name, parent)| (*pid, ((*name).to_string(), *parent)))
+            .collect()
+    }
+
+    fn link_table(captured: &HashMap<u32, (String, Option<u32>)>) -> HashMap<u32, u32> {
+        captured
+            .iter()
+            .filter_map(|(pid, (_, parent))| parent.map(|parent| (*pid, parent)))
+            .collect()
+    }
+
+    #[test]
+    fn ancestry_reaches_treats_the_direct_parent_edge_as_one_hop() {
+        let parents = HashMap::from([(5_u32, 1_u32)]);
+        assert!(ancestry_reaches(5, 1, &parents, MAX_ANCESTRY_HOPS));
+        assert!(ancestry_reaches(5, 1, &parents, 1));
+    }
+
+    #[test]
+    fn ancestry_reaches_walks_multiple_generations() {
+        let parents = HashMap::from([(5_u32, 4_u32), (4, 3), (3, 1)]);
+        assert!(ancestry_reaches(5, 1, &parents, MAX_ANCESTRY_HOPS));
+        // Every intermediate pid except the start can itself be a target.
+        assert!(ancestry_reaches(5, 4, &parents, MAX_ANCESTRY_HOPS));
+        assert!(ancestry_reaches(4, 1, &parents, MAX_ANCESTRY_HOPS));
+    }
+
+    #[test]
+    fn ancestry_reaches_is_false_for_self_because_a_pid_is_not_its_own_ancestor() {
+        let parents = HashMap::from([(5_u32, 5_u32)]);
+        assert!(!ancestry_reaches(7, 7, &parents, MAX_ANCESTRY_HOPS));
+        assert!(!ancestry_reaches(5, 5, &parents, MAX_ANCESTRY_HOPS));
+    }
+
+    #[test]
+    fn ancestry_reaches_terminates_false_on_a_parent_cycle() {
+        let parents = HashMap::from([(10_u32, 11_u32), (11, 10)]);
+        assert!(!ancestry_reaches(10, 99, &parents, MAX_ANCESTRY_HOPS));
+        // A cycle whose target really is an ancestor still resolves.
+        assert!(ancestry_reaches(10, 11, &parents, MAX_ANCESTRY_HOPS));
+    }
+
+    #[test]
+    fn ancestry_reaches_is_false_for_a_pid_absent_from_the_table() {
+        let parents = HashMap::from([(5_u32, 1_u32)]);
+        assert!(!ancestry_reaches(42, 1, &parents, MAX_ANCESTRY_HOPS));
+        // A member whose parent is missing ends the chain rather than guessing.
+        let dangling = HashMap::from([(5_u32, 42_u32)]);
+        assert!(!ancestry_reaches(5, 1, &dangling, MAX_ANCESTRY_HOPS));
+    }
+
+    #[test]
+    fn ancestry_reaches_accepts_a_chain_exactly_at_the_hop_bound_and_rejects_one_past_it() {
+        // 5 -> 4 -> 3 -> 2 -> 1, so the target is exactly 4 parent edges away.
+        let parents = HashMap::from([(5_u32, 4_u32), (4, 3), (3, 2), (2, 1)]);
+        assert!(ancestry_reaches(5, 1, &parents, 4));
+        assert!(!ancestry_reaches(5, 1, &parents, 3));
+        // Zero hops examines no parent edge at all.
+        assert!(!ancestry_reaches(5, 1, &parents, 0));
+    }
+
+    #[test]
+    fn group_with_every_member_traced_to_zenith_is_zenith_child() {
+        let captured = captured_table(&[
+            (100, "Zenith", None),
+            (101, "Node.js", Some(100)),
+            (102, "Node.js", Some(100)),
+        ]);
+        let links = link_table(&captured);
+        assert_eq!(
+            group_provenance(&[101, 102], &captured, &links, 100),
+            (vec!["Zenith".to_string()], ProcessOwnership::ZenithChild)
+        );
+    }
+
+    #[test]
+    fn mixed_group_is_observed_because_a_partial_match_never_claims_ownership() {
+        let captured = captured_table(&[
+            (100, "Zenith", None),
+            (101, "Node.js", Some(100)),
+            (200, "rust-analyzer", Some(300)),
+        ]);
+        let links = link_table(&captured);
+        let (names, ownership) = group_provenance(&[101, 200], &captured, &links, 100);
+        assert_eq!(ownership, ProcessOwnership::Observed);
+        // Only the resolvable parent is reported; the unknown pid adds nothing.
+        assert_eq!(names, vec!["Zenith".to_string()]);
+    }
+
+    #[test]
+    fn group_reports_every_distinct_parent_name_sorted() {
+        let captured = captured_table(&[
+            (100, "Zenith", None),
+            (105, "Warp", None),
+            (101, "rust-analyzer", Some(105)),
+            (102, "rust-analyzer", Some(100)),
+            (103, "rust-analyzer", Some(105)),
+        ]);
+        let links = link_table(&captured);
+        let (names, ownership) = group_provenance(&[101, 102, 103], &captured, &links, 100);
+        assert_eq!(
+            names,
+            vec!["Warp".to_string(), "Zenith".to_string()],
+            "parents are de-duplicated and sorted"
+        );
+        assert_eq!(ownership, ProcessOwnership::Observed);
+    }
+
+    #[test]
+    fn member_with_unresolved_parent_contributes_no_name_and_does_not_own_the_group() {
+        let captured = captured_table(&[(200, "rust-analyzer", Some(555))]);
+        let links = link_table(&captured);
+        assert_eq!(
+            group_provenance(&[200], &captured, &links, 100),
+            (Vec::new(), ProcessOwnership::Observed)
+        );
+    }
+
+    #[test]
+    fn group_containing_the_zenith_process_itself_is_not_owned() {
+        let captured = captured_table(&[(100, "Zenith", None), (101, "Node.js", Some(100))]);
+        let links = link_table(&captured);
+        assert_eq!(
+            group_provenance(&[100], &captured, &links, 100),
+            (Vec::new(), ProcessOwnership::Observed),
+            "a process is not its own child, even though it is the Zenith pid"
+        );
     }
 }

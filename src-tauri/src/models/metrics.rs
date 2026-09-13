@@ -18,6 +18,20 @@ impl MemoryPressure {
     }
 }
 
+/// How Zenith relates to a process group it is displaying.
+///
+/// The grouping is an observation of the system process table. `ZenithChild`
+/// is only ever reported when the same fresh snapshot shows this Zenith process
+/// in every member's parent chain, so the view never implies Zenith started a
+/// process it merely observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessOwnership {
+    #[default]
+    Observed,
+    ZenithChild,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ProcessMemory {
     pub pid: u32,
@@ -31,6 +45,13 @@ pub struct ProcessMemory {
     pub can_terminate: bool,
     #[serde(default)]
     pub termination_lease_id: Option<String>,
+    /// Names of the processes that directly started the group's members,
+    /// de-duplicated and sorted. Empty when the snapshot cannot resolve a
+    /// parent for every instance, so a mixed group claims no single origin.
+    #[serde(default)]
+    pub parent_process_names: Vec<String>,
+    #[serde(default)]
+    pub ownership: ProcessOwnership,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

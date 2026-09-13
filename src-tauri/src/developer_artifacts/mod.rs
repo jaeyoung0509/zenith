@@ -1,7 +1,8 @@
 use crate::large_files::FileIdentity;
 use crate::models::{
     DeveloperArtifact, DeveloperArtifactKind, DeveloperArtifactScanEvent,
-    DeveloperArtifactScanResult, DeveloperArtifactStatus, DeveloperEcosystem, DeveloperWorkspace,
+    DeveloperArtifactScanResult, DeveloperArtifactStatus, DeveloperArtifactUninspected,
+    DeveloperArtifactUninspectedReason, DeveloperEcosystem, DeveloperWorkspace,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::platform::path_algebra;
@@ -58,6 +59,7 @@ pub struct DeveloperArtifactInventory {
     pub skipped_entries: u64,
     pub cancelled: bool,
     pub truncated: bool,
+    pub uninspected: Vec<DeveloperArtifactUninspected>,
 }
 
 impl DeveloperArtifactInventory {
@@ -103,13 +105,14 @@ struct TreeStats {
     cancelled: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ScanProgress {
     discovered_count: u64,
     measured_count: u64,
     skipped_entries: u64,
     cancelled: bool,
     truncated: bool,
+    uninspected: Vec<DeveloperArtifactUninspected>,
 }
 
 impl TreeStats {
@@ -133,6 +136,49 @@ enum MeasurementMessage {
     },
 }
 
+/// The outcome of probing a folder the operating system gates behind a user
+/// consent prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderAccess {
+    /// The platform does not gate this folder, or it is not present.
+    NotGated,
+    /// The folder was read; the walk may enter it without a new prompt.
+    Granted,
+    /// Access was refused, including a denied or cancelled folder-access
+    /// prompt.
+    Denied,
+}
+
+/// Probes the user's Downloads folder before the scan takes the storage gate.
+///
+/// macOS resolves `~/Downloads` consent on the first read and parks the calling
+/// thread until the user answers. Probing on a thread that holds no gate keeps
+/// that wait off the lock every other storage operation queues behind, and the
+/// answer is passed into the walk so it never blocks on the same prompt twice.
+///
+/// The probe cannot distinguish "Don't Allow" from a cancelled prompt: both
+/// arrive as the same access refusal, so both report [`FolderAccess::Denied`].
+/// Returns [`FolderAccess::NotGated`] on every non-macOS platform.
+pub fn probe_downloads_access(environment: &PlatformEnvironment) -> FolderAccess {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(downloads) = environment.content_dir("downloads") else {
+            return FolderAccess::NotGated;
+        };
+        match fs::read_dir(&downloads) {
+            Ok(_) => FolderAccess::Granted,
+            // A missing folder raises no prompt, so it is not a refusal.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => FolderAccess::NotGated,
+            Err(_) => FolderAccess::Denied,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = environment;
+        FolderAccess::NotGated
+    }
+}
+
 pub struct DeveloperArtifactScanner;
 
 impl DeveloperArtifactScanner {
@@ -140,6 +186,7 @@ impl DeveloperArtifactScanner {
         environment: &PlatformEnvironment,
         workspace_ids: &[String],
         workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+        downloads_access: FolderAccess,
         cancel: Arc<AtomicBool>,
         on_event: F,
     ) -> Result<DeveloperArtifactInventory, String>
@@ -147,12 +194,13 @@ impl DeveloperArtifactScanner {
         F: FnMut(DeveloperArtifactScanEvent),
     {
         let workspaces = workspace_snapshot(workspace_ids, workspaces_store)?;
-        Self::scan_workspaces(environment, &workspaces, cancel, on_event)
+        Self::scan_workspaces(environment, &workspaces, downloads_access, cancel, on_event)
     }
 
     pub fn scan_workspaces<F>(
         environment: &PlatformEnvironment,
         workspaces: &[DeveloperWorkspaceRecord],
+        downloads_access: FolderAccess,
         cancel: Arc<AtomicBool>,
         mut on_event: F,
     ) -> Result<DeveloperArtifactInventory, String>
@@ -173,6 +221,8 @@ impl DeveloperArtifactScanner {
         let mut discovered_count = 0u64;
         let mut skipped_entries = 0u64;
         let mut truncated = false;
+        let mut uninspected: Vec<DeveloperArtifactUninspected> = Vec::new();
+        let mut uninspected_seen: HashSet<PathBuf> = HashSet::new();
 
         for workspace in workspaces {
             if cancel.load(Ordering::Relaxed) {
@@ -186,6 +236,7 @@ impl DeveloperArtifactScanner {
                         skipped_entries,
                         cancelled: true,
                         truncated,
+                        uninspected,
                     },
                     &mut on_event,
                 );
@@ -215,12 +266,15 @@ impl DeveloperArtifactScanner {
             discover_workspace(
                 environment,
                 workspace,
+                downloads_access,
                 &cancel,
                 &mut candidates,
                 &mut discovered_count,
                 &mut skipped_entries,
                 &mut truncated,
                 &mut seen_paths,
+                &mut uninspected,
+                &mut uninspected_seen,
                 &mut on_event,
             );
             on_event(DeveloperArtifactScanEvent::WorkspaceFinished {
@@ -238,6 +292,7 @@ impl DeveloperArtifactScanner {
                         skipped_entries,
                         cancelled: true,
                         truncated,
+                        uninspected,
                     },
                     &mut on_event,
                 );
@@ -317,6 +372,7 @@ impl DeveloperArtifactScanner {
                 skipped_entries,
                 cancelled,
                 truncated,
+                uninspected,
             },
             &mut on_event,
         )
@@ -352,6 +408,7 @@ impl DeveloperArtifactScanner {
             skipped_entries: progress.skipped_entries,
             cancelled: progress.cancelled,
             truncated: progress.truncated,
+            uninspected: progress.uninspected,
         };
         if progress.cancelled {
             on_event(DeveloperArtifactScanEvent::Cancelled {
@@ -388,6 +445,7 @@ pub fn result_from_inventory(
         skipped_entries: inventory.skipped_entries,
         cancelled: inventory.cancelled,
         truncated: inventory.truncated,
+        uninspected: inventory.uninspected.clone(),
     }
 }
 
@@ -645,12 +703,15 @@ fn workspace_root_scope_refusal(
 fn discover_workspace<F>(
     environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
+    downloads_access: FolderAccess,
     cancel: &AtomicBool,
     candidates: &mut Vec<Candidate>,
     discovered_count: &mut u64,
     skipped_entries: &mut u64,
     truncated: &mut bool,
     seen_paths: &mut HashSet<PathBuf>,
+    uninspected: &mut Vec<DeveloperArtifactUninspected>,
+    uninspected_seen: &mut HashSet<PathBuf>,
     on_event: &mut F,
 ) where
     F: FnMut(DeveloperArtifactScanEvent),
@@ -668,9 +729,42 @@ fn discover_workspace<F>(
             *skipped_entries = skipped_entries.saturating_add(1);
             continue;
         }
+        if downloads_access == FolderAccess::Denied
+            && is_downloads_directory(environment, &directory)
+        {
+            // The gate already parked on this folder: reading it here would
+            // wait on the same prompt a second time, inside the storage gate.
+            record_uninspected(
+                uninspected,
+                uninspected_seen,
+                on_event,
+                &directory,
+                DeveloperArtifactUninspectedReason::PermissionDenied,
+                true,
+            );
+            *skipped_entries = skipped_entries.saturating_add(1);
+            continue;
+        }
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
-            Err(_) => {
+            Err(error) => {
+                // A refused directory is reported by name instead of being
+                // folded into the anonymous skip counter, so a partial scan
+                // can say what it missed and offer a retry.
+                let (reason, retryable) = match error.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        (DeveloperArtifactUninspectedReason::PermissionDenied, true)
+                    }
+                    _ => (DeveloperArtifactUninspectedReason::Unreadable, false),
+                };
+                record_uninspected(
+                    uninspected,
+                    uninspected_seen,
+                    on_event,
+                    &directory,
+                    reason,
+                    retryable,
+                );
                 *skipped_entries = skipped_entries.saturating_add(1);
                 continue;
             }
@@ -1299,6 +1393,57 @@ fn should_skip_discovery_directory(name: &str) -> bool {
     )
 }
 
+/// True when the walk reached the platform's Downloads folder.
+///
+/// The direct comparison covers the ordinary case and, importantly, the denied
+/// case: a refused folder cannot be resolved, so the canonical comparison below
+/// would fail closed on the very directory it is meant to recognize.
+fn is_downloads_directory(environment: &PlatformEnvironment, path: &Path) -> bool {
+    let Some(downloads) = environment.content_dir("downloads") else {
+        return false;
+    };
+    if path == downloads {
+        return true;
+    }
+    match (fs::canonicalize(path), fs::canonicalize(&downloads)) {
+        (Ok(path), Ok(downloads)) => path == downloads,
+        _ => false,
+    }
+}
+
+/// Records a directory the walk could not inspect and reports it once.
+fn record_uninspected<F>(
+    uninspected: &mut Vec<DeveloperArtifactUninspected>,
+    seen: &mut HashSet<PathBuf>,
+    on_event: &mut F,
+    directory: &Path,
+    reason: DeveloperArtifactUninspectedReason,
+    retryable: bool,
+) where
+    F: FnMut(DeveloperArtifactScanEvent),
+{
+    if !seen.insert(directory.to_path_buf()) {
+        return;
+    }
+    let name = directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| directory.to_string_lossy().into_owned());
+    let path = directory.to_string_lossy().into_owned();
+    on_event(DeveloperArtifactScanEvent::Uninspected {
+        path: path.clone(),
+        name: name.clone(),
+        reason,
+        retryable,
+    });
+    uninspected.push(DeveloperArtifactUninspected {
+        path,
+        name,
+        reason,
+        retryable,
+    });
+}
+
 fn should_skip_protected_discovery_path(
     environment: &PlatformEnvironment,
     workspace: &DeveloperWorkspaceRecord,
@@ -1619,6 +1764,7 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::description::KnownFolder;
     use std::fs;
 
     /// A simulated environment whose profile is the stated directory.
@@ -1753,6 +1899,7 @@ mod tests {
         let inventory = DeveloperArtifactScanner::scan_workspaces(
             &environment,
             std::slice::from_ref(&workspace),
+            FolderAccess::NotGated,
             Arc::new(AtomicBool::new(false)),
             |event| events.push(event),
         )
@@ -1794,6 +1941,7 @@ mod tests {
         let inventory = DeveloperArtifactScanner::scan_workspaces(
             &environment,
             std::slice::from_ref(&workspace),
+            FolderAccess::NotGated,
             Arc::new(AtomicBool::new(false)),
             |_| {},
         )
@@ -1804,6 +1952,238 @@ mod tests {
         assert_eq!(artifact.project_name, "rust-app");
         assert_eq!(artifact.kind, DeveloperArtifactKind::CargoTarget);
         assert!(inventory.skipped_entries >= 3);
+    }
+
+    /// A whole-home workspace over the stated directory.
+    fn whole_home_workspace(root: &Path) -> DeveloperWorkspaceRecord {
+        let mut workspace = workspace_record(root);
+        workspace.whole_home = true;
+        workspace
+    }
+
+    /// An environment that states `root/Downloads` as the platform's Downloads
+    /// folder, the way a real profile resolves it.
+    fn environment_with_downloads(root: &Path) -> PlatformEnvironment {
+        environment_with_home(root)
+            .with_known_folder(KnownFolder::Downloads, root.join("Downloads"))
+    }
+
+    /// Seeds a recognizable Node project inside `Downloads`, so a scan that
+    /// inspects the folder has something measurable to find.
+    fn seed_downloads_project(root: &Path, name: &str) {
+        let project = root.join("Downloads").join(name);
+        fs::create_dir_all(project.join("node_modules")).unwrap();
+        fs::write(project.join("package.json"), "{}\n").unwrap();
+        fs::write(project.join("node_modules/package.json"), "{}\n").unwrap();
+    }
+
+    fn scan_recording_events(
+        environment: &PlatformEnvironment,
+        workspace: &DeveloperWorkspaceRecord,
+        downloads_access: FolderAccess,
+    ) -> (DeveloperArtifactInventory, Vec<DeveloperArtifactScanEvent>) {
+        let mut events = Vec::new();
+        let inventory = DeveloperArtifactScanner::scan_workspaces(
+            environment,
+            std::slice::from_ref(workspace),
+            downloads_access,
+            Arc::new(AtomicBool::new(false)),
+            |event| events.push(event),
+        )
+        .unwrap();
+        (inventory, events)
+    }
+
+    #[test]
+    fn whole_home_scan_inspects_downloads_when_access_is_granted() {
+        let temp = tempfile::tempdir().unwrap();
+        seed_downloads_project(temp.path(), "cloned-app");
+        let environment = environment_with_downloads(temp.path());
+        let workspace = whole_home_workspace(temp.path());
+
+        let (inventory, events) =
+            scan_recording_events(&environment, &workspace, FolderAccess::Granted);
+
+        assert_eq!(inventory.records.len(), 1);
+        let artifact = &inventory.records.values().next().unwrap().artifact;
+        assert_eq!(artifact.project_name, "cloned-app");
+        assert_eq!(artifact.kind, DeveloperArtifactKind::NodeModules);
+        assert!(artifact.allocated_bytes > 0);
+        assert!(inventory.uninspected.is_empty());
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, DeveloperArtifactScanEvent::Uninspected { .. })));
+    }
+
+    #[test]
+    fn denied_downloads_is_reported_as_uninspected_and_the_scan_completes() {
+        let temp = tempfile::tempdir().unwrap();
+        seed_downloads_project(temp.path(), "cloned-app");
+        let safe_project = temp.path().join("work/rust-app");
+        fs::create_dir_all(safe_project.join("target")).unwrap();
+        fs::write(safe_project.join("Cargo.toml"), "[package]\nname='safe'\n").unwrap();
+        fs::write(safe_project.join("target/output.bin"), [1u8]).unwrap();
+        let environment = environment_with_downloads(temp.path());
+        let workspace = whole_home_workspace(temp.path());
+
+        let (inventory, events) =
+            scan_recording_events(&environment, &workspace, FolderAccess::Denied);
+
+        assert!(!inventory.cancelled);
+        assert_eq!(inventory.records.len(), 1);
+        let record = inventory.records.values().next().unwrap();
+        assert_eq!(record.artifact.project_name, "rust-app");
+        assert_eq!(inventory.uninspected.len(), 1);
+        let entry = &inventory.uninspected[0];
+        assert_eq!(entry.name, "Downloads");
+        assert_eq!(PathBuf::from(&entry.path), temp.path().join("Downloads"));
+        assert_eq!(
+            entry.reason,
+            DeveloperArtifactUninspectedReason::PermissionDenied
+        );
+        assert!(entry.retryable);
+        assert!(inventory.skipped_entries >= 1);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            DeveloperArtifactScanEvent::Uninspected {
+                name,
+                reason: DeveloperArtifactUninspectedReason::PermissionDenied,
+                retryable: true,
+                ..
+            } if name == "Downloads"
+        )));
+        let finished = events
+            .iter()
+            .find_map(|event| match event {
+                DeveloperArtifactScanEvent::Finished { result } => Some(result.clone()),
+                _ => None,
+            })
+            .expect("the scan must finish after a denial");
+        assert_eq!(finished.uninspected, inventory.uninspected);
+    }
+
+    /// First-run denial and the Allow-then-rescan retry path, driven on the
+    /// same home so the retry cannot pass by scanning a fresh fixture.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_downloads_denial_then_retry_inspects_the_same_home() {
+        let temp = tempfile::tempdir().unwrap();
+        seed_downloads_project(temp.path(), "cloned-app");
+        let environment = environment_with_downloads(temp.path());
+        let workspace = whole_home_workspace(temp.path());
+
+        let (denied, _) = scan_recording_events(&environment, &workspace, FolderAccess::Denied);
+        assert_eq!(denied.records.len(), 0);
+        assert_eq!(denied.uninspected.len(), 1);
+        assert!(denied.uninspected[0].retryable);
+
+        let (retried, _) = scan_recording_events(&environment, &workspace, FolderAccess::Granted);
+        assert_eq!(retried.records.len(), 1);
+        let record = retried.records.values().next().unwrap();
+        assert_eq!(record.artifact.project_name, "cloned-app");
+        assert!(retried.uninspected.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_is_reported_as_a_retryable_permission_denial() {
+        let temp = tempfile::tempdir().unwrap();
+        let safe_project = temp.path().join("work/rust-app");
+        fs::create_dir_all(safe_project.join("target")).unwrap();
+        fs::write(safe_project.join("Cargo.toml"), "[package]\nname='safe'\n").unwrap();
+        fs::write(safe_project.join("target/output.bin"), [1u8]).unwrap();
+        let locked = temp.path().join("work/locked");
+        fs::create_dir_all(locked.join("target")).unwrap();
+        fs::write(locked.join("Cargo.toml"), "[package]\nname='locked'\n").unwrap();
+        let restore = PermissionRestore::make_unreadable(&locked);
+        let environment = environment_with_home(temp.path());
+        let workspace = whole_home_workspace(temp.path());
+
+        let inventory = DeveloperArtifactScanner::scan_workspaces(
+            &environment,
+            std::slice::from_ref(&workspace),
+            FolderAccess::NotGated,
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(!inventory.cancelled);
+        assert_eq!(inventory.records.len(), 1);
+        let record = inventory.records.values().next().unwrap();
+        assert_eq!(record.artifact.project_name, "rust-app");
+        assert_eq!(inventory.uninspected.len(), 1);
+        assert_eq!(PathBuf::from(&inventory.uninspected[0].path), locked);
+        assert_eq!(inventory.uninspected[0].name, "locked");
+        assert_eq!(
+            inventory.uninspected[0].reason,
+            DeveloperArtifactUninspectedReason::PermissionDenied
+        );
+        assert!(inventory.uninspected[0].retryable);
+        assert!(inventory.skipped_entries >= 1);
+        drop(restore);
+    }
+
+    /// Restores a directory's mode when the test ends, so the temporary
+    /// directory can still be removed after an assertion panics.
+    #[cfg(unix)]
+    struct PermissionRestore {
+        path: PathBuf,
+        mode: u32,
+    }
+
+    #[cfg(unix)]
+    impl PermissionRestore {
+        fn make_unreadable(path: &Path) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(path).unwrap().permissions().mode();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
+            Self {
+                path: path.to_path_buf(),
+                mode,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PermissionRestore {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode));
+        }
+    }
+
+    #[test]
+    fn probing_without_a_stated_downloads_folder_reports_no_gate() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            probe_downloads_access(&environment_with_home(temp.path())),
+            FolderAccess::NotGated
+        );
+        // Stated but absent: a missing folder raises no prompt.
+        let absent = environment_with_downloads(temp.path());
+        assert_eq!(probe_downloads_access(&absent), FolderAccess::NotGated);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_probe_reports_granted_and_denied_for_a_stated_downloads_folder() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let downloads = temp.path().join("Downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let environment = environment_with_downloads(temp.path());
+        assert_eq!(probe_downloads_access(&environment), FolderAccess::Granted);
+
+        let mode = fs::metadata(&downloads).unwrap().permissions().mode();
+        let restore = PermissionRestore {
+            path: downloads.clone(),
+            mode,
+        };
+        fs::set_permissions(&downloads, fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(probe_downloads_access(&environment), FolderAccess::Denied);
+        drop(restore);
     }
 
     #[test]

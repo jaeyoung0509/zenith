@@ -332,6 +332,12 @@ impl SafeTreeDeleter {
             return report;
         }
         if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root, environment) {
+            // A root that vanished after the tolerant metadata read above is
+            // already in the desired state, so the empty report is the honest
+            // answer rather than a mutation failure.
+            if crate::safety::is_already_absent(&e) {
+                return report;
+            }
             report.errors.push(e.to_string());
             return report;
         }
@@ -407,6 +413,11 @@ impl SafeTreeDeleter {
             return report;
         }
         if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(root, environment) {
+            // A root that vanished during the strict check is already gone, so
+            // the empty report is the honest answer rather than a failure.
+            if crate::safety::is_already_absent(&e) {
+                return report;
+            }
             report.errors.push(e.to_string());
             return report;
         }
@@ -461,6 +472,13 @@ impl SafeTreeDeleter {
 
             let metadata = match fs::symlink_metadata(&child_path) {
                 Ok(m) => m,
+                // A vanished entry is already in the desired state: the
+                // deletion postcondition holds, so it is a neutral skip rather
+                // than an error. Nothing was reclaimed.
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    report.skipped_files += 1;
+                    continue;
+                }
                 Err(e) => {
                     report
                         .errors
@@ -476,6 +494,12 @@ impl SafeTreeDeleter {
             if let Err(error) =
                 SymlinkGuard::validate_canonical_blacklist_strict(&child_path, environment)
             {
+                // Same neutrality as the metadata arm above: the entry is gone,
+                // so there is nothing to mutate and nothing to report.
+                if crate::safety::is_already_absent(&error) {
+                    report.skipped_files += 1;
+                    continue;
+                }
                 report
                     .errors
                     .push(format!("{}: {}", child_path.display(), error));
@@ -496,6 +520,11 @@ impl SafeTreeDeleter {
                     Ok(()) => {
                         report.reclaimed_bytes += bytes;
                         report.deleted_files += 1;
+                    }
+                    // The entry vanished between verification and unlink. It is
+                    // already gone, so nothing was reclaimed and nothing failed.
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        report.skipped_files += 1;
                     }
                     Err(e) => {
                         report
@@ -543,6 +572,12 @@ impl SafeTreeDeleter {
             // implicitly by removing it; only restore on failure.
             match Self::unlink_via_parent(dir_file, file_name, true) {
                 Ok(()) => {}
+                // The child directory vanished after its contents were walked.
+                // It is already gone, so this is neutral and needs no
+                // permission restore.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    report.skipped_files += 1;
+                }
                 Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
                     Self::restore_directory_permissions(&child_path, child_permissions, report);
                 }
@@ -605,6 +640,12 @@ impl SafeTreeDeleter {
 
         let metadata = match fs::symlink_metadata(path) {
             Ok(m) => m,
+            // A vanished entry is already in the desired state: the deletion
+            // postcondition holds, so it is a neutral skip instead of an error.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                report.skipped_files += 1;
+                return;
+            }
             Err(e) => {
                 report.errors.push(format!("{}: {}", path.display(), e));
                 return;
@@ -620,6 +661,12 @@ impl SafeTreeDeleter {
         // permission change or deletion. Symlink entries are still removed as
         // links, never traversed. Canonicalization failure fails closed.
         if let Err(error) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
+            // The entry is gone, so there is nothing to mutate and nothing to
+            // report: absence is neutral here too.
+            if crate::safety::is_already_absent(&error) {
+                report.skipped_files += 1;
+                return;
+            }
             report.errors.push(format!("{}: {}", path.display(), error));
             return;
         }
@@ -652,6 +699,12 @@ impl SafeTreeDeleter {
                     Ok(()) => {
                         report.reclaimed_bytes += bytes;
                         report.deleted_files += 1;
+                    }
+                    // Either the parent or the entry itself vanished after
+                    // verification. The deletion postcondition already holds,
+                    // so this is a neutral skip: nothing reclaimed, no error.
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        report.skipped_files += 1;
                     }
                     Err(e) => {
                         report.errors.push(format!("{}: {}", path.display(), e));
@@ -724,6 +777,11 @@ impl SafeTreeDeleter {
             let remove_result = Self::remove_dir_via_verified_parent(path);
             match remove_result {
                 Ok(()) => {}
+                // The directory (or its parent) vanished between the walk and
+                // the removal. It is already gone, so this is neutral.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    report.skipped_files += 1;
+                }
                 Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
                     Self::restore_directory_permissions(path, permissions, report);
                 }
@@ -737,6 +795,13 @@ impl SafeTreeDeleter {
 
         let entries = match fs::read_dir(path) {
             Ok(e) => e,
+            // The directory vanished after its metadata was read. It is already
+            // gone, so the walk treats it as a neutral skip instead of pushing
+            // a failure that would fail the whole target closed.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                report.skipped_files += 1;
+                return;
+            }
             Err(e) => {
                 report.errors.push(format!("{}: {}", path.display(), e));
                 Self::restore_directory_permissions(path, permissions, report);
@@ -1236,6 +1301,7 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ZenithError;
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
 
@@ -1340,12 +1406,84 @@ mod tests {
     }
 
     #[test]
-    fn symlink_metadata_failure_fails_closed() {
+    fn symlink_metadata_absence_reports_missing() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist-link");
-        assert!(SymlinkGuard::is_symlink_strict(&missing).is_err());
+        assert!(matches!(
+            SymlinkGuard::is_symlink_strict(&missing),
+            Err(ZenithError::Missing(_))
+        ));
         let environment = crate::platform::PlatformEnvironment::native();
-        assert!(SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment).is_err());
+        assert!(matches!(
+            SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment),
+            Err(ZenithError::Missing(_))
+        ));
+    }
+
+    /// A nested entry that vanished before the walk reached it is already in
+    /// the desired state: it is counted as skipped, never as an error, so the
+    /// surrounding target stays successful.
+    #[test]
+    fn vanished_entry_is_a_neutral_skip_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("vanished.bin");
+
+        let mut report = TreeDeleteReport::default();
+        SafeTreeDeleter::delete_entry(&missing, dir.path(), &[], &environment(), &mut report);
+
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert_eq!(report.skipped_files, 1);
+        assert_eq!(report.deleted_files, 0);
+        assert_eq!(report.reclaimed_bytes, 0);
+    }
+
+    /// A child that vanished before the walk reached it must not fail the whole
+    /// recursive target, and its bytes must not be claimed as reclaimed.
+    #[cfg(unix)]
+    #[test]
+    fn vanished_child_is_excluded_from_recursive_reclaim() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        std::fs::create_dir(&root).unwrap();
+        let vanished = root.join("gone.bin");
+        std::fs::write(&vanished, vec![7u8; 64 * 1024]).unwrap();
+        let kept = root.join("kept.bin");
+        std::fs::write(&kept, vec![7u8; 8 * 1024]).unwrap();
+        let nested_dir = root.join("nested");
+        std::fs::create_dir(&nested_dir).unwrap();
+        let nested = nested_dir.join("inner.bin");
+        std::fs::write(&nested, vec![7u8; 4 * 1024]).unwrap();
+
+        let expected_bytes = std::fs::metadata(&kept).unwrap().blocks() * 512
+            + std::fs::metadata(&nested).unwrap().blocks() * 512;
+
+        std::fs::remove_file(&vanished).unwrap();
+
+        let report = SafeTreeDeleter::delete_contents(&root, &[], &environment());
+        assert!(report.is_success(), "errors: {:?}", report.errors);
+        assert!(report.errors.is_empty());
+        assert_eq!(report.reclaimed_bytes, expected_bytes);
+        assert!(!kept.exists());
+        assert!(!nested_dir.exists());
+        // `delete_contents` preserves the cache root itself.
+        assert!(root.is_dir());
+    }
+
+    /// Removing an already-absent path is a success report, not an error.
+    #[test]
+    fn delete_path_on_an_already_removed_path_is_a_success_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("already-gone");
+        std::fs::create_dir(&missing).unwrap();
+        std::fs::remove_dir(&missing).unwrap();
+
+        let report = SafeTreeDeleter::delete_path(&missing, &[], &environment());
+        assert!(report.is_success());
+        assert!(report.errors.is_empty());
+        assert_eq!(report.reclaimed_bytes, 0);
+        assert_eq!(report.deleted_files, 0);
     }
 
     #[test]
