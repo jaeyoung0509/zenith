@@ -865,12 +865,14 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use std::sync::Arc;
 
+    #[cfg(not(target_os = "windows"))]
     #[derive(Default)]
     struct FailingAppFsProbe {
         metadata_failure: Option<PathBuf>,
         read_dir_failure: Option<PathBuf>,
     }
 
+    #[cfg(not(target_os = "windows"))]
     impl super::AppFsProbe for FailingAppFsProbe {
         fn symlink_metadata(&self, path: &Path) -> std::io::Result<fs::Metadata> {
             if self.metadata_failure.as_deref() == Some(path) {
