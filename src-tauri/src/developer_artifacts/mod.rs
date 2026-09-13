@@ -3,6 +3,7 @@ use crate::models::{
     DeveloperArtifact, DeveloperArtifactKind, DeveloperArtifactScanEvent,
     DeveloperArtifactScanResult, DeveloperArtifactStatus, DeveloperArtifactUninspected,
     DeveloperArtifactUninspectedReason, DeveloperEcosystem, DeveloperWorkspace,
+    ReviewedFileIdentity,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::platform::path_algebra;
@@ -15,7 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use zenith_core::domain::identity::ReviewedFileIdentity;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;

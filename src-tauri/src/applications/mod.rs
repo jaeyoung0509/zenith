@@ -3,7 +3,7 @@ use crate::large_files::identity_from_path;
 use crate::models::AppInstallSource;
 use crate::models::{
     AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
-    ObservationQuality,
+    ObservationQuality, ReviewedFileIdentity,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::safety::Blacklist;
@@ -16,7 +16,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(not(target_os = "windows"))]
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
-use zenith_core::domain::identity::ReviewedFileIdentity;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;

@@ -4,7 +4,8 @@ use crate::large_files::{
     allowed_large_file_root, identity_from_path, is_allowed_large_file_path, LargeFileInventory,
 };
 use crate::models::{
-    DeveloperArtifactKind, DeveloperArtifactStatus, TrashItemResult, TrashPlanPreview, TrashResult,
+    DeveloperArtifactKind, DeveloperArtifactStatus, ReviewedFileIdentity, TrashItemResult,
+    TrashPlanPreview, TrashResult,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard};
@@ -13,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
-use zenith_core::domain::identity::ReviewedFileIdentity;
 
 const PLAN_TTL_SECS: u64 = 300;
 
@@ -635,12 +635,12 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::FileIdentity;
     use crate::platform::description::KnownFolder;
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::paths::SimulatedPaths;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use zenith_core::domain::identity::FileIdentity;
 
     /// A POSIX environment stating exactly the profile the test means.
     fn posix_environment(home: &Path) -> PlatformEnvironment {

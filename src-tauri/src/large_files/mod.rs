@@ -1,5 +1,6 @@
 use crate::models::{
-    LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
+    FileIdentity, LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest,
+    LargeFileScanResult, ReviewedFileIdentity,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::platform::path_algebra;
@@ -10,7 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use zenith_core::domain::identity::{FileIdentity, ReviewedFileIdentity};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;

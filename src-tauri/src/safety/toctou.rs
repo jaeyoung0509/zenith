@@ -1,7 +1,6 @@
-use crate::models::{CleanupIdentity, ZenithError};
+use crate::models::{CleanupIdentity, FileIdentity, ModifiedStamp, ZenithError};
 use std::fs;
 use std::path::Path;
-use zenith_core::domain::identity::{FileIdentity, ModifiedStamp};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;

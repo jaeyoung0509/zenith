@@ -114,26 +114,12 @@ impl CanonicalPath {
         }
     }
 
-    /// Reinterprets a value that is already the output of a canonicalization.
-    ///
-    /// Callers that resolve through an injected inspector rather than
-    /// `std::fs` use this to keep the type without resolving twice. The
-    /// resolved argument is the caller's assertion; it is named so that the
-    /// assertion is visible at the call site.
-    pub fn from_resolved(resolved: PathBuf) -> Self {
-        Self(resolved)
-    }
-
     pub fn as_path(&self) -> &Path {
         &self.0
     }
 
     pub fn into_path_buf(self) -> PathBuf {
         self.0
-    }
-
-    pub fn join(&self, segment: impl AsRef<Path>) -> Self {
-        Self(self.0.join(segment))
     }
 }
 

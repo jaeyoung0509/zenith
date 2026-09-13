@@ -58,7 +58,9 @@ pub use zenith_core::application::dto::storage::{
 pub use zenith_core::domain::category::Category;
 pub use zenith_core::domain::cleanup::{CleanStrategy, DeletePlan, DeleteTarget};
 pub use zenith_core::domain::error::{ZenithError, ZenithResult};
-pub use zenith_core::domain::identity::CleanupIdentity;
+pub use zenith_core::domain::identity::{
+    CleanupIdentity, FileIdentity, ModifiedStamp, ReviewedFileIdentity,
+};
 pub use zenith_core::domain::observation::ObservationQuality;
 pub use zenith_core::domain::paths::{AbsolutePath, CanonicalPath, PathViolation};
 pub use zenith_core::domain::platform::{
