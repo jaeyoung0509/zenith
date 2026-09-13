@@ -1,6 +1,13 @@
 [package]
 name = "zenith-desktop"
 description = "Zenith - cross-platform AI & Developer System Manager"
+# The desktop adapter is an application, not a library anyone installs, and it
+# depends on `zenith-core` by path. `cargo deny` refuses a version-less
+# dependency on a publishable crate for the right reason — a wildcard
+# requirement reaching crates.io would resolve to anything — so the crate
+# states that it is not published rather than restating a version that the
+# path already fixes.
+publish = false
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

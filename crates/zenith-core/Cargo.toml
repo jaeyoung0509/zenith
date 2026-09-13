@@ -1,6 +1,9 @@
 [package]
 name = "zenith-core"
 description = "Zenith product semantics: scanning, cleanup safety, storage policy, and platform capability description, with no desktop-framework dependency."
+# Workspace-internal: the version is inherited from the application it ships
+# with, so publishing it independently would publish a version nobody chose.
+publish = false
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

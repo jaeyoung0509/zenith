@@ -48,6 +48,13 @@ ignore = [
 # would require upstream majors that are not available yet.
 multiple-versions = "deny"
 wildcards = "deny"
+# A path dependency inside this workspace omits its version because the path
+# already fixes which crate is used, and the two members share one version in
+# the root `[workspace.package]` table. Restating it here would be a second
+# copy for `just bump-patch` to keep synchronized. This exception is narrow:
+# it applies only to dependencies that are also path dependencies, so an
+# external crate can still never be pulled in with a `*` requirement.
+allow-wildcard-paths = true
 deny = [
     { crate = "openssl", reason = "Zenith uses rustls; a plaintext-TLS stack must not enter the graph.", use-instead = "rustls" },
     { crate = "openssl-sys", reason = "Zenith uses rustls; a plaintext-TLS stack must not enter the graph.", use-instead = "rustls" },
