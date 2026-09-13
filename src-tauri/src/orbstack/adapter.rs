@@ -1,4 +1,7 @@
-use crate::models::{Category, FileSize, ObservationQuality, RiskTier, ScanItem};
+use crate::models::{
+    derive_cleanup_disposition, Category, CleanupEligibility, FileSize, ObservationQuality,
+    RiskTier, ScanItem,
+};
 use crate::platform::description::PlatformEnvironment;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,6 +60,16 @@ impl OrbStackAdapter {
             .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
 
+        let size = FileSize::new(logical, Some(allocated));
+        let disposition = derive_cleanup_disposition(
+            RiskTier::Manual,
+            ObservationQuality::Fresh,
+            &Default::default(),
+            &size,
+            None,
+        );
+        let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
+
         Some(ScanItem {
             id: "container.orbstack.storage".to_string(),
             signature_id: "adapter.orbstack.storage".to_string(),
@@ -64,18 +77,19 @@ impl OrbStackAdapter {
             category: Category::Container,
             risk: RiskTier::Manual,
             path: path.to_string_lossy().to_string(),
-            size: FileSize::new(logical, Some(allocated)),
+            size,
             file_count: 1,
             description:
                 "Active container and Linux VM data. Inspect or compact it in OrbStack; Zenith will not delete it."
                     .to_string(),
             cache_metadata: Default::default(),
-            is_selected: false,
+            is_selected,
             last_modified,
             exists: true,
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
             skipped_entry_count: 0,
+            disposition,
         })
     }
 }

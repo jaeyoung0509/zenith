@@ -4,8 +4,9 @@ use std::path::Path;
 use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
-    CacheMetadata, CacheSizeSemantics, Category, CategoryResult, CleanFailureReason, CleanStrategy,
-    FileSize, ObservationQuality, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
+    derive_cleanup_disposition, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category,
+    CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, FileSize,
+    ObservationQuality, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
 };
 use zenith_lib::platform::path_algebra::PathFlavor;
 use zenith_lib::platform::paths::SimulatedPaths;
@@ -359,24 +360,16 @@ fn test_symlink_safety_and_no_escape() {
 fn test_safety_planner_rejects_unknown_signatures() {
     let registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
 
-    let fake_item = ScanItem {
-        id: "unknown.signature.123".to_string(),
-        signature_id: "unknown.signature.123".to_string(),
-        name: "Fake Cache".to_string(),
-        category: Category::Ai,
-        risk: RiskTier::Safe,
-        path: "/tmp/fake-cache".to_string(),
-        size: FileSize::new(1024, Some(1024)),
-        file_count: 1,
-        description: "fake".to_string(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let fake_item = ScanItem::mock(
+        "unknown.signature.123",
+        "unknown.signature.123",
+        "Fake Cache",
+        Category::Ai,
+        RiskTier::Safe,
+        "/tmp/fake-cache",
+        FileSize::new(1024, Some(1024)),
+        1,
+    );
 
     let plan_res = SafetyPlanner::create_plan(&[fake_item], &registry);
     assert!(plan_res.is_err());
@@ -393,24 +386,16 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
     let forged_path = dir.path().join("codex-forged");
     fs::create_dir(&forged_path).unwrap();
 
-    let forged_item = ScanItem {
-        id: "system.developer_temp.0.codex-forged".into(),
-        signature_id: "system.developer_temp".into(),
-        name: "Forged temp item".into(),
-        category: Category::System,
-        risk: RiskTier::Safe,
-        path: forged_path.to_string_lossy().into_owned(),
-        size: FileSize::new(1024, Some(1024)),
-        file_count: 1,
-        description: "must not be planned".into(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let forged_item = ScanItem::mock(
+        "system.developer_temp.0.codex-forged",
+        "system.developer_temp",
+        "Forged temp item",
+        Category::System,
+        RiskTier::Safe,
+        forged_path.to_string_lossy().into_owned(),
+        FileSize::new(1024, Some(1024)),
+        1,
+    );
 
     let result = SafetyPlanner::create_plan(&[forged_item], &registry);
     assert!(matches!(result, Err(ZenithError::SignatureMismatch(_))));
@@ -457,24 +442,16 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         reclaimable_is_lower_bound: false,
     });
 
-    let scan_item = ScanItem {
-        id: "test.delete-contents".to_string(),
-        signature_id: "test.delete-contents".to_string(),
-        name: "Cargo Registry Cache".to_string(),
-        category: Category::Developer,
-        risk: RiskTier::Safe,
-        path: cache_root.to_string_lossy().to_string(),
-        size: FileSize::new(2048, Some(2048)),
-        file_count: 2,
-        description: "test".to_string(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let scan_item = ScanItem::mock(
+        "test.delete-contents",
+        "test.delete-contents",
+        "Cargo Registry Cache",
+        Category::Developer,
+        RiskTier::Safe,
+        cache_root.to_string_lossy().to_string(),
+        FileSize::new(2048, Some(2048)),
+        2,
+    );
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets.len(), 1);
@@ -617,6 +594,7 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             display_name: "Developer".into(),
             items: vec![],
             total_bytes: 0,
+            cleanable_bytes: 0,
             safe_bytes: 0,
             rebuild_bytes: 0,
             manual_bytes: 0,
@@ -625,6 +603,7 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             incomplete_item_count: 0,
         }],
         total_bytes: 0,
+        cleanable_bytes: 0,
         safe_bytes: 0,
         rebuild_bytes: 0,
         manual_bytes: 0,
@@ -683,24 +662,17 @@ fn manual_strategy_never_enters_generic_cleaner() {
         consequence: String::new(),
         reclaimable_is_lower_bound: false,
     });
-    let item = ScanItem {
-        id: "test.manual-model".into(),
-        signature_id: "test.manual-model".into(),
-        name: "Manual model".into(),
-        category: Category::Model,
-        risk: RiskTier::Manual,
-        path: model_root.to_string_lossy().into_owned(),
-        size: FileSize::new(1, Some(1)),
-        file_count: 1,
-        description: "adapter-only".into(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let mut item = ScanItem::mock(
+        "test.manual-model",
+        "test.manual-model",
+        "Manual model",
+        Category::Model,
+        RiskTier::Manual,
+        model_root.to_string_lossy().into_owned(),
+        FileSize::new(1, Some(1)),
+        1,
+    );
+    item.is_selected = true;
 
     assert!(matches!(
         SafetyPlanner::create_plan(&[item], &registry),
@@ -717,24 +689,17 @@ fn npm_cache_selection_plans_provider_cleanup_without_deleting_fixture() {
     let payload = cache.join("keep.bin");
     fs::write(&payload, b"fixture").unwrap();
     let registry = SignatureRegistry::load_embedded().unwrap();
-    let item = ScanItem {
-        id: "dev.npm.cache".into(),
-        signature_id: "dev.npm.cache".into(),
-        name: "npm Cache".into(),
-        category: Category::Developer,
-        risk: RiskTier::Rebuild,
-        path: cache.to_string_lossy().into_owned(),
-        size: FileSize::new(7, Some(7)),
-        file_count: 1,
-        description: "fixture".into(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let mut item = ScanItem::mock(
+        "dev.npm.cache",
+        "dev.npm.cache",
+        "npm Cache",
+        Category::Developer,
+        RiskTier::Rebuild,
+        cache.to_string_lossy().into_owned(),
+        FileSize::new(7, Some(7)),
+        1,
+    );
+    item.is_selected = true;
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].strategy, CleanStrategy::ExternalCommand);
@@ -771,24 +736,17 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         consequence: String::new(),
         reclaimable_is_lower_bound: false,
     });
-    let item = ScanItem {
-        id: "test.unknown-provider".into(),
-        signature_id: "test.unknown-provider".into(),
-        name: "Unknown provider".into(),
-        category: Category::Developer,
-        risk: RiskTier::Rebuild,
-        path: cache_root.to_string_lossy().into_owned(),
-        size: FileSize::new(14, Some(14)),
-        file_count: 1,
-        description: "test".into(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let mut item = ScanItem::mock(
+        "test.unknown-provider",
+        "test.unknown-provider",
+        "Unknown provider",
+        Category::Developer,
+        RiskTier::Rebuild,
+        cache_root.to_string_lossy().into_owned(),
+        FileSize::new(14, Some(14)),
+        1,
+    );
+    item.is_selected = true;
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
     assert!(!result.items[0].success);
@@ -931,24 +889,16 @@ fn test_signature_root_itself_symlink_rejection() {
 #[test]
 fn test_docker_prune_target_can_create_plan() {
     let registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
-    let docker_item = ScanItem {
-        id: "container.docker.builder".to_string(),
-        signature_id: "container.docker.builder".to_string(),
-        name: "Docker Build Cache".to_string(),
-        category: Category::Container,
-        risk: RiskTier::Safe,
-        path: "docker://buildkit/cache".to_string(),
-        size: FileSize::new(1024 * 1024, Some(1024 * 1024)),
-        file_count: 1,
-        description: "Docker build cache".to_string(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let docker_item = ScanItem::mock(
+        "container.docker.builder",
+        "container.docker.builder",
+        "Docker Build Cache",
+        Category::Container,
+        RiskTier::Safe,
+        "docker://buildkit/cache",
+        FileSize::new(1024 * 1024, Some(1024 * 1024)),
+        1,
+    );
 
     let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
         .expect("DockerPrune target must successfully create a plan");
@@ -988,24 +938,16 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         reclaimable_is_lower_bound: false,
     });
 
-    let scan_item = ScanItem {
-        id: "test.stale_temp.0.active_tool_cache".into(),
-        signature_id: "test.stale_temp".into(),
-        name: "active_tool_cache".into(),
-        category: Category::Developer,
-        risk: RiskTier::Safe,
-        path: temp_child.to_string_lossy().into_owned(),
-        size: FileSize::new(1024, Some(1024)),
-        file_count: 1,
-        description: "test".into(),
-        cache_metadata: Default::default(),
-        is_selected: true,
-        last_modified: None,
-        exists: true,
-        quality: ObservationQuality::Fresh,
-        incomplete_reason: None,
-        skipped_entry_count: 0,
-    };
+    let scan_item = ScanItem::mock(
+        "test.stale_temp.0.active_tool_cache",
+        "test.stale_temp",
+        "active_tool_cache",
+        Category::Developer,
+        RiskTier::Safe,
+        temp_child.to_string_lossy().into_owned(),
+        FileSize::new(1024, Some(1024)),
+        1,
+    );
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets[0].min_age_days, Some(3));
@@ -1093,12 +1035,13 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     use zenith_lib::commands::select_quick_clean_safe_candidates;
     use zenith_lib::models::ZenithSettings;
 
-    let scan = ScanResult {
+    let mut scan = ScanResult {
         scan_id: "test-scan-123".to_string(),
         valid_for_seconds: 60,
         started_at: 1000,
         finished_at: 1005,
         total_bytes: 1500,
+        cleanable_bytes: 1000,
         safe_bytes: 600,
         rebuild_bytes: 400,
         manual_bytes: 500,
@@ -1107,65 +1050,42 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 category: Category::Developer,
                 display_name: "Developer".to_string(),
                 total_bytes: 600,
+                cleanable_bytes: 600,
                 safe_bytes: 200,
                 rebuild_bytes: 400,
                 manual_bytes: 0,
                 quality: ObservationQuality::Fresh,
                 items: vec![
-                    ScanItem {
-                        id: "dev.safe.nonzero".to_string(),
-                        signature_id: "dev.signature".to_string(),
-                        name: "Safe Dev Cache".to_string(),
-                        category: Category::Developer,
-                        risk: RiskTier::Safe,
-                        path: "/tmp/dev-cache".to_string(),
-                        size: FileSize::new(200, Some(200)),
-                        file_count: 5,
-                        description: "test".to_string(),
-                        cache_metadata: Default::default(),
-                        is_selected: true,
-                        last_modified: None,
-                        exists: true,
-                        quality: ObservationQuality::Fresh,
-                        incomplete_reason: None,
-                        skipped_entry_count: 0,
-                    },
-                    ScanItem {
-                        id: "dev.safe.zero".to_string(),
-                        signature_id: "dev.signature".to_string(),
-                        name: "Zero Byte Cache".to_string(),
-                        category: Category::Developer,
-                        risk: RiskTier::Safe,
-                        path: "/tmp/dev-zero".to_string(),
-                        size: FileSize::new(0, Some(0)),
-                        file_count: 0,
-                        description: "test".to_string(),
-                        cache_metadata: Default::default(),
-                        is_selected: true,
-                        last_modified: None,
-                        exists: true,
-                        quality: ObservationQuality::Fresh,
-                        incomplete_reason: None,
-                        skipped_entry_count: 0,
-                    },
-                    ScanItem {
-                        id: "dev.rebuild".to_string(),
-                        signature_id: "dev.signature".to_string(),
-                        name: "Rebuild Dev Cache".to_string(),
-                        category: Category::Developer,
-                        risk: RiskTier::Rebuild,
-                        path: "/tmp/dev-rebuild".to_string(),
-                        size: FileSize::new(400, Some(400)),
-                        file_count: 10,
-                        description: "test".to_string(),
-                        cache_metadata: Default::default(),
-                        is_selected: true,
-                        last_modified: None,
-                        exists: true,
-                        quality: ObservationQuality::Fresh,
-                        incomplete_reason: None,
-                        skipped_entry_count: 0,
-                    },
+                    ScanItem::mock(
+                        "dev.safe.nonzero",
+                        "dev.signature",
+                        "Safe Dev Cache",
+                        Category::Developer,
+                        RiskTier::Safe,
+                        "/tmp/dev-cache",
+                        FileSize::new(200, Some(200)),
+                        5,
+                    ),
+                    ScanItem::mock(
+                        "dev.safe.zero",
+                        "dev.signature",
+                        "Zero Byte Cache",
+                        Category::Developer,
+                        RiskTier::Safe,
+                        "/tmp/dev-zero",
+                        FileSize::new(0, Some(0)),
+                        0,
+                    ),
+                    ScanItem::mock(
+                        "dev.rebuild",
+                        "dev.signature",
+                        "Rebuild Dev Cache",
+                        Category::Developer,
+                        RiskTier::Rebuild,
+                        "/tmp/dev-rebuild",
+                        FileSize::new(400, Some(400)),
+                        10,
+                    ),
                 ],
                 incomplete_item_count: 0,
                 skipped_entry_count: 0,
@@ -1174,28 +1094,21 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 category: Category::System,
                 display_name: "System".to_string(),
                 total_bytes: 400,
+                cleanable_bytes: 400,
                 safe_bytes: 400,
                 rebuild_bytes: 0,
                 manual_bytes: 0,
                 quality: ObservationQuality::Fresh,
-                items: vec![ScanItem {
-                    id: "sys.safe.nonzero".to_string(),
-                    signature_id: "sys.signature".to_string(),
-                    name: "System Logs".to_string(),
-                    category: Category::System,
-                    risk: RiskTier::Safe,
-                    path: "/tmp/sys-logs".to_string(),
-                    size: FileSize::new(400, Some(400)),
-                    file_count: 8,
-                    description: "test".to_string(),
-                    cache_metadata: Default::default(),
-                    is_selected: true,
-                    last_modified: None,
-                    exists: true,
-                    quality: ObservationQuality::Fresh,
-                    incomplete_reason: None,
-                    skipped_entry_count: 0,
-                }],
+                items: vec![ScanItem::mock(
+                    "sys.safe.nonzero",
+                    "sys.signature",
+                    "System Logs",
+                    Category::System,
+                    RiskTier::Safe,
+                    "/tmp/sys-logs",
+                    FileSize::new(400, Some(400)),
+                    8,
+                )],
                 incomplete_item_count: 0,
                 skipped_entry_count: 0,
             },
@@ -1203,28 +1116,21 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 category: Category::Model,
                 display_name: "Model".to_string(),
                 total_bytes: 500,
+                cleanable_bytes: 0,
                 safe_bytes: 0,
                 rebuild_bytes: 0,
                 manual_bytes: 500,
                 quality: ObservationQuality::Fresh,
-                items: vec![ScanItem {
-                    id: "model.manual".to_string(),
-                    signature_id: "model.signature".to_string(),
-                    name: "Manual Model".to_string(),
-                    category: Category::Model,
-                    risk: RiskTier::Manual,
-                    path: "/tmp/model".to_string(),
-                    size: FileSize::new(500, Some(500)),
-                    file_count: 1,
-                    description: "test".to_string(),
-                    cache_metadata: Default::default(),
-                    is_selected: true,
-                    last_modified: None,
-                    exists: true,
-                    quality: ObservationQuality::Fresh,
-                    incomplete_reason: None,
-                    skipped_entry_count: 0,
-                }],
+                items: vec![ScanItem::mock(
+                    "model.manual",
+                    "model.signature",
+                    "Manual Model",
+                    Category::Model,
+                    RiskTier::Manual,
+                    "/tmp/model",
+                    FileSize::new(500, Some(500)),
+                    1,
+                )],
                 incomplete_item_count: 0,
                 skipped_entry_count: 0,
             },
@@ -1247,6 +1153,14 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     };
     let candidates2 = select_quick_clean_safe_candidates(&scan, &disabled_dev_settings);
     assert_eq!(candidates2, vec!["sys.safe.nonzero"]);
+
+    // A detached permission flag must not survive a change in the captured
+    // facts, even if an internally inconsistent scan reaches Quick Clean.
+    let stale = &mut scan.categories[0].items[0];
+    stale.quality = ObservationQuality::Unavailable;
+    stale.incomplete_reason = Some("Access was revoked".into());
+    let candidates3 = select_quick_clean_safe_candidates(&scan, &default_settings);
+    assert_eq!(candidates3, vec!["sys.safe.nonzero"]);
 }
 
 #[test]
@@ -1342,6 +1256,19 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
     use zenith_lib::commands::select_quick_clean_safe_candidates;
     use zenith_lib::models::ZenithSettings;
 
+    let partial_size = FileSize::new(500, Some(500));
+    let partial_metadata = CacheMetadata {
+        size_semantics: CacheSizeSemantics::ConservativeLowerBound,
+        ..Default::default()
+    };
+    let partial_reason = Some("Permission denied in subtree".to_string());
+    let partial_disposition = derive_cleanup_disposition(
+        RiskTier::Safe,
+        ObservationQuality::Partial,
+        &partial_metadata,
+        &partial_size,
+        partial_reason.as_deref(),
+    );
     let partial_item = ScanItem {
         id: "dev.partial.item".to_string(),
         signature_id: "dev.signature".to_string(),
@@ -1349,21 +1276,32 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         category: Category::Developer,
         risk: RiskTier::Safe,
         path: "/tmp/partial-cache".to_string(),
-        size: FileSize::new(500, Some(500)),
+        size: partial_size,
         file_count: 5,
         description: "Partial cache".to_string(),
-        cache_metadata: CacheMetadata {
-            size_semantics: CacheSizeSemantics::ConservativeLowerBound,
-            ..Default::default()
-        },
-        is_selected: false,
+        cache_metadata: partial_metadata,
+        is_selected: partial_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
         quality: ObservationQuality::Partial,
-        incomplete_reason: Some("Permission denied in subtree".to_string()),
+        incomplete_reason: partial_reason,
         skipped_entry_count: 0,
+        disposition: partial_disposition,
     };
 
+    let unavailable_size = FileSize::new(0, Some(0));
+    let unavailable_metadata = CacheMetadata {
+        size_semantics: CacheSizeSemantics::Informational,
+        ..Default::default()
+    };
+    let unavailable_reason = Some("Failed to access directory".to_string());
+    let unavailable_disposition = derive_cleanup_disposition(
+        RiskTier::Safe,
+        ObservationQuality::Unavailable,
+        &unavailable_metadata,
+        &unavailable_size,
+        unavailable_reason.as_deref(),
+    );
     let unavailable_item = ScanItem {
         id: "sys.unavailable.item".to_string(),
         signature_id: "sys.signature".to_string(),
@@ -1371,19 +1309,17 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         category: Category::System,
         risk: RiskTier::Safe,
         path: "/tmp/unavailable-logs".to_string(),
-        size: FileSize::new(0, Some(0)),
+        size: unavailable_size,
         file_count: 0,
         description: "Inaccessible".to_string(),
-        cache_metadata: CacheMetadata {
-            size_semantics: CacheSizeSemantics::Informational,
-            ..Default::default()
-        },
-        is_selected: false,
+        cache_metadata: unavailable_metadata,
+        is_selected: unavailable_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
         quality: ObservationQuality::Unavailable,
-        incomplete_reason: Some("Failed to access directory".to_string()),
+        incomplete_reason: unavailable_reason,
         skipped_entry_count: 0,
+        disposition: unavailable_disposition,
     };
 
     // 1. Cleanup permission invariants
@@ -1405,6 +1341,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         started_at: 1000,
         finished_at: 1005,
         total_bytes: 500,
+        cleanable_bytes: 500,
         safe_bytes: 500,
         rebuild_bytes: 0,
         manual_bytes: 0,
@@ -1412,6 +1349,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
             category: Category::Developer,
             display_name: "Developer".to_string(),
             total_bytes: 500,
+            cleanable_bytes: 500,
             safe_bytes: 500,
             rebuild_bytes: 0,
             manual_bytes: 0,
@@ -1484,6 +1422,249 @@ fn unix_parent_replacement_between_validation_and_unlink_leaves_outside_untouche
     };
     assert_ne!(res, 0, "stale descriptor unlink must fail");
     assert_eq!(fs::read(&outside_target).unwrap(), b"outside");
+}
+
+#[test]
+fn test_cleanup_eligibility_matrix_and_byte_semantics() {
+    struct TestCase {
+        risk: RiskTier,
+        quality: ObservationQuality,
+        management: CacheManagementMode,
+        reason: Option<&'static str>,
+        expected_eligibility: CleanupEligibility,
+        expected_cleanable: Option<u64>,
+    }
+
+    let cases = vec![
+        TestCase {
+            risk: RiskTier::Safe,
+            quality: ObservationQuality::Fresh,
+            management: CacheManagementMode::Zenith,
+            reason: None,
+            expected_eligibility: CleanupEligibility::AutoCleanable,
+            expected_cleanable: Some(100),
+        },
+        TestCase {
+            risk: RiskTier::Safe,
+            quality: ObservationQuality::Partial,
+            management: CacheManagementMode::Zenith,
+            reason: Some("Permission denied in subtree"),
+            expected_eligibility: CleanupEligibility::Reviewable,
+            expected_cleanable: Some(100),
+        },
+        TestCase {
+            risk: RiskTier::Safe,
+            quality: ObservationQuality::Unavailable,
+            management: CacheManagementMode::Zenith,
+            reason: Some("Directory inaccessible"),
+            expected_eligibility: CleanupEligibility::Blocked,
+            expected_cleanable: None,
+        },
+        TestCase {
+            risk: RiskTier::Safe,
+            quality: ObservationQuality::Fresh,
+            management: CacheManagementMode::Advisory,
+            reason: None,
+            expected_eligibility: CleanupEligibility::Advisory,
+            expected_cleanable: None,
+        },
+        TestCase {
+            risk: RiskTier::Rebuild,
+            quality: ObservationQuality::Fresh,
+            management: CacheManagementMode::Zenith,
+            reason: None,
+            expected_eligibility: CleanupEligibility::Reviewable,
+            expected_cleanable: Some(100),
+        },
+        TestCase {
+            risk: RiskTier::Rebuild,
+            quality: ObservationQuality::Fresh,
+            management: CacheManagementMode::ToolManaged,
+            reason: None,
+            expected_eligibility: CleanupEligibility::Reviewable,
+            expected_cleanable: Some(100),
+        },
+        TestCase {
+            risk: RiskTier::Rebuild,
+            quality: ObservationQuality::Partial,
+            management: CacheManagementMode::ToolManaged,
+            reason: Some("Prune warning"),
+            expected_eligibility: CleanupEligibility::Reviewable,
+            expected_cleanable: Some(100),
+        },
+        TestCase {
+            risk: RiskTier::Rebuild,
+            quality: ObservationQuality::Unavailable,
+            management: CacheManagementMode::ToolManaged,
+            reason: Some("Tool not installed"),
+            expected_eligibility: CleanupEligibility::Blocked,
+            expected_cleanable: None,
+        },
+        TestCase {
+            risk: RiskTier::Manual,
+            quality: ObservationQuality::Fresh,
+            management: CacheManagementMode::Zenith,
+            reason: None,
+            expected_eligibility: CleanupEligibility::Blocked,
+            expected_cleanable: None,
+        },
+        TestCase {
+            risk: RiskTier::Manual,
+            quality: ObservationQuality::Unavailable,
+            management: CacheManagementMode::Zenith,
+            reason: Some("Disk unreadable"),
+            expected_eligibility: CleanupEligibility::Blocked,
+            expected_cleanable: None,
+        },
+    ];
+
+    for tc in cases {
+        let size = FileSize::new(100, Some(100));
+        let metadata = CacheMetadata {
+            management_mode: tc.management,
+            ..Default::default()
+        };
+        let disposition =
+            derive_cleanup_disposition(tc.risk, tc.quality, &metadata, &size, tc.reason);
+        assert_eq!(
+            disposition.eligibility, tc.expected_eligibility,
+            "failed eligibility for {:?}/{:?}/{:?}",
+            tc.risk, tc.quality, tc.management
+        );
+        assert_eq!(
+            disposition.cleanable_bytes, tc.expected_cleanable,
+            "failed cleanable_bytes for {:?}/{:?}/{:?}",
+            tc.risk, tc.quality, tc.management
+        );
+
+        let item = ScanItem {
+            id: "test.item".into(),
+            signature_id: "test.sig".into(),
+            name: "Test Item".into(),
+            category: Category::Developer,
+            risk: tc.risk,
+            path: "/tmp/test".into(),
+            size,
+            file_count: 1,
+            description: "test".into(),
+            cache_metadata: metadata,
+            is_selected: disposition.eligibility == CleanupEligibility::AutoCleanable,
+            last_modified: None,
+            exists: true,
+            quality: tc.quality,
+            incomplete_reason: tc.reason.map(str::to_string),
+            skipped_entry_count: 0,
+            disposition,
+        };
+
+        assert_eq!(
+            item.allows_cleanup(),
+            matches!(
+                tc.expected_eligibility,
+                CleanupEligibility::AutoCleanable | CleanupEligibility::Reviewable
+            )
+        );
+        assert_eq!(item.cleanable_bytes(), tc.expected_cleanable.unwrap_or(0));
+        assert!(item.cleanable_bytes() <= item.observed_bytes());
+    }
+}
+
+#[test]
+fn test_nested_protected_app_bundle_fails_closed() {
+    use zenith_lib::commands::select_quick_clean_safe_candidates;
+    use zenith_lib::models::ZenithSettings;
+
+    let size = FileSize::new(5000, Some(5000));
+    let reason = Some(
+        "Protected system or application bundle detected: /tmp/cache/Payload/Malicious.app"
+            .to_string(),
+    );
+    let metadata = CacheMetadata::default();
+    let disposition = derive_cleanup_disposition(
+        RiskTier::Safe,
+        ObservationQuality::Partial,
+        &metadata,
+        &size,
+        reason.as_deref(),
+    );
+
+    assert_eq!(disposition.eligibility, CleanupEligibility::Blocked);
+    assert_eq!(disposition.cleanable_bytes, None);
+    assert!(disposition
+        .reason
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Protected"));
+
+    let mut item = ScanItem {
+        id: "test.nested_app".into(),
+        signature_id: "dev.signature".into(),
+        name: "Nested App Item".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        path: "/tmp/cache".into(),
+        size,
+        file_count: 10,
+        description: "test".into(),
+        cache_metadata: metadata,
+        is_selected: false,
+        last_modified: None,
+        exists: true,
+        quality: ObservationQuality::Partial,
+        incomplete_reason: reason,
+        skipped_entry_count: 0,
+        disposition,
+    };
+
+    assert!(!item.allows_cleanup());
+    assert_eq!(item.cleanable_bytes(), 0);
+    assert_eq!(item.observed_bytes(), 5000);
+
+    // Quick clean must NOT include it
+    let scan = ScanResult {
+        scan_id: "nested-app-scan".into(),
+        valid_for_seconds: 60,
+        started_at: 1000,
+        finished_at: 1005,
+        total_bytes: 5000,
+        cleanable_bytes: 0,
+        safe_bytes: 0,
+        rebuild_bytes: 0,
+        manual_bytes: 0,
+        categories: vec![CategoryResult {
+            category: Category::Developer,
+            display_name: "Developer".into(),
+            total_bytes: 5000,
+            cleanable_bytes: 0,
+            safe_bytes: 0,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+            quality: ObservationQuality::Partial,
+            items: vec![item.clone()],
+            skipped_entry_count: 0,
+            incomplete_item_count: 1,
+        }],
+        quality: ObservationQuality::Partial,
+        incomplete_reasons: vec!["Protected system or application bundle detected".into()],
+        skipped_entry_count: 0,
+        incomplete_item_count: 1,
+    };
+
+    let settings = ZenithSettings::default();
+    let candidates = select_quick_clean_safe_candidates(&scan, &settings);
+    assert!(
+        candidates.is_empty(),
+        "Blocked nested app item must never be quick-cleaned"
+    );
+
+    // Planning even if forced selected must fail closed
+    item.is_selected = true;
+    let registry = SignatureRegistry::load_embedded().unwrap();
+    let plan_res = SafetyPlanner::create_plan(&[item], &registry);
+    assert!(
+        matches!(plan_res, Err(ZenithError::InvalidPlan(_))),
+        "Planning must reject items that do not allow cleanup"
+    );
 }
 
 #[cfg(windows)]

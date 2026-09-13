@@ -42,6 +42,7 @@ import { createDevelopmentPortsMock } from './mocks/developmentPorts';
 import { previewPlatform } from './mocks/previewPlatform';
 import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
 import { goldenPlatformContextByPlatform } from '../models/platformContext';
+import { cleanableBytes, isCleanable } from '../utils/cleanup';
 
 type ZenithApi = typeof nativeApi;
 
@@ -722,6 +723,11 @@ export const mockApi = {
             last_modified: null,
             exists: true,
             quality: 'fresh',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              reason: null,
+              cleanable_bytes: 2.1 * 1024 * 1024 * 1024,
+            },
           },
         });
         onEvent({
@@ -736,11 +742,16 @@ export const mockApi = {
             size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
             file_count: 140,
             description: 'Session diagnostic logs',
-            cache_metadata: { provider: 'Claude Code', management_mode: 'zenith', artifact_kind: 'log', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
+            cache_metadata: { provider: 'Claude Code', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
             is_selected: true,
             last_modified: null,
             exists: true,
             quality: 'fresh',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              reason: null,
+              cleanable_bytes: 1.1 * 1024 * 1024 * 1024,
+            },
           },
         });
         onEvent({ type: 'CategoryFinished', category: 'ai', bytes: 3.2 * 1024 * 1024 * 1024, item_count: 2 });
@@ -765,6 +776,11 @@ export const mockApi = {
             last_modified: null,
             exists: true,
             quality: 'fresh',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              reason: null,
+              cleanable_bytes: 3.1 * 1024 * 1024 * 1024,
+            },
           },
         });
         onEvent({
@@ -784,6 +800,11 @@ export const mockApi = {
             last_modified: null,
             exists: true,
             quality: 'fresh',
+            disposition: {
+              eligibility: 'reviewable',
+              reason: null,
+              cleanable_bytes: 2.0 * 1024 * 1024 * 1024,
+            },
           },
         });
         onEvent({ type: 'CategoryFinished', category: 'developer', bytes: 5.1 * 1024 * 1024 * 1024, item_count: 2 });
@@ -800,6 +821,7 @@ export const mockApi = {
           }
         }
         const intensiveBytes = 1.4 * 1024 * 1024 * 1024;
+        const blockedBytes = 198.6 * 1024 * 1024;
         const intensiveItem: ScanItem = {
           id: 'system.intensive.user_app_caches.mock-app',
           signature_id: 'system.intensive.user_app_caches',
@@ -811,6 +833,11 @@ export const mockApi = {
           file_count: 2400,
           description: 'Third-party cache inactive for at least 7 days',
           cache_metadata: { provider: 'Zenith', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'approximate' },
+          disposition: {
+            eligibility: 'auto_cleanable',
+            cleanable_bytes: intensiveBytes,
+            reason: null,
+          },
           is_selected: true,
           last_modified: Math.floor(Date.now() / 1000) - 8 * 86400,
           exists: true,
@@ -823,7 +850,7 @@ export const mockApi = {
           category: 'system',
           risk: 'safe',
           path: '~/Library/Caches/com.example.bundled-cache',
-          size: { logical: 198.6 * 1024 * 1024, allocated: 198.6 * 1024 * 1024 },
+          size: { logical: blockedBytes, allocated: blockedBytes },
           file_count: 0,
           description: 'Third-party cache inactive for at least 7 days',
           cache_metadata: {
@@ -833,6 +860,12 @@ export const mockApi = {
             consequence: '',
             size_semantics: 'informational',
             last_used_confidence: 'approximate',
+          },
+          disposition: {
+            eligibility: 'blocked',
+            cleanable_bytes: null,
+            reason:
+              'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
           },
           is_selected: false,
           last_modified: Math.floor(Date.now() / 1000) - 9 * 86400,
@@ -846,9 +879,10 @@ export const mockApi = {
           category: 'system',
           display_name: 'System',
           items: [intensiveItem, blockedItem],
-          // The uninspectable item contributes no cleanable byte: totals and
-          // risk buckets come from the same predicate the UI selects with.
-          total_bytes: intensiveBytes,
+          // Detected bytes retain the blocked observation while cleanable and
+          // Safe buckets contain only actionable bytes.
+          total_bytes: intensiveBytes + blockedBytes,
+          cleanable_bytes: intensiveBytes,
           safe_bytes: intensiveBytes,
           rebuild_bytes: 0,
           manual_bytes: 0,
@@ -864,7 +898,7 @@ export const mockApi = {
           onEvent({
             type: 'CategoryFinished',
             category: 'system',
-            bytes: intensiveBytes,
+            bytes: intensiveCategory.total_bytes,
             item_count: 2,
           });
         }
@@ -889,6 +923,11 @@ export const mockApi = {
                   size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
                   file_count: 3200,
                   description: 'V8 code cache and GPU shader cache',
+                  disposition: {
+                    eligibility: 'auto_cleanable',
+                    cleanable_bytes: 2.1 * 1024 * 1024 * 1024,
+                    reason: null,
+                  },
                   is_selected: true,
                   last_modified: null,
                   exists: true,
@@ -904,6 +943,11 @@ export const mockApi = {
                   size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
                   file_count: 140,
                   description: 'Session diagnostic logs',
+                  disposition: {
+                    eligibility: 'auto_cleanable',
+                    cleanable_bytes: 1.1 * 1024 * 1024 * 1024,
+                    reason: null,
+                  },
                   is_selected: true,
                   last_modified: null,
                   exists: true,
@@ -911,6 +955,7 @@ export const mockApi = {
                 },
               ],
               total_bytes: 3.2 * 1024 * 1024 * 1024,
+              cleanable_bytes: 3.2 * 1024 * 1024 * 1024,
               safe_bytes: 3.2 * 1024 * 1024 * 1024,
               rebuild_bytes: 0,
               manual_bytes: 0,
@@ -932,6 +977,11 @@ export const mockApi = {
                   size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
                   file_count: 12000,
                   description: 'Compiled packages cache',
+                  disposition: {
+                    eligibility: 'auto_cleanable',
+                    cleanable_bytes: 3.1 * 1024 * 1024 * 1024,
+                    reason: null,
+                  },
                   is_selected: true,
                   last_modified: null,
                   exists: true,
@@ -947,6 +997,11 @@ export const mockApi = {
                   size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
                   file_count: 850,
                   description: 'Downloaded crates archive',
+                  disposition: {
+                    eligibility: 'reviewable',
+                    cleanable_bytes: 2.0 * 1024 * 1024 * 1024,
+                    reason: null,
+                  },
                   is_selected: false,
                   last_modified: null,
                   exists: true,
@@ -954,6 +1009,7 @@ export const mockApi = {
                 },
               ],
               total_bytes: 5.1 * 1024 * 1024 * 1024,
+              cleanable_bytes: 5.1 * 1024 * 1024 * 1024,
               safe_bytes: 3.1 * 1024 * 1024 * 1024,
               rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
               manual_bytes: 0,
@@ -963,7 +1019,10 @@ export const mockApi = {
             },
             ...(intensiveCleanup ? [intensiveCategory] : []),
           ],
-          total_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
+          total_bytes:
+            8.3 * 1024 * 1024 * 1024 +
+            (intensiveCleanup ? intensiveBytes + blockedBytes : 0),
+          cleanable_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
@@ -992,31 +1051,32 @@ export const mockApi = {
   },
 
   async createPlan(_scanId: string, items: ScanItem[]): Promise<PlanPreview> {
+    if (items.length === 0 || items.some((item) => !isCleanable(item))) {
+      throw new Error('Selected item is not eligible for cleanup');
+    }
+    const bytesFor = (item: ScanItem) => cleanableBytes(item);
     return {
       id: 'mock-plan-1',
       targets: items.map((i) => ({
         item_id: i.id,
         name: i.name,
-        expected_bytes: i.size.allocated ?? i.size.logical,
+        expected_bytes: bytesFor(i),
         risk: i.risk,
       })),
-      expected_reclaim_bytes: items.reduce(
-        (acc, i) => acc + (i.size.allocated ?? i.size.logical),
-        0
-      ),
+      expected_reclaim_bytes: items.reduce((acc, i) => acc + bytesFor(i), 0),
       risk: {
         safe_count: items.filter((i) => i.risk === 'safe').length,
         rebuild_count: items.filter((i) => i.risk === 'rebuild').length,
         manual_count: items.filter((i) => i.risk === 'manual').length,
         safe_bytes: items
           .filter((i) => i.risk === 'safe')
-          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+          .reduce((acc, i) => acc + bytesFor(i), 0),
         rebuild_bytes: items
           .filter((i) => i.risk === 'rebuild')
-          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+          .reduce((acc, i) => acc + bytesFor(i), 0),
         manual_bytes: items
           .filter((i) => i.risk === 'manual')
-          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+          .reduce((acc, i) => acc + bytesFor(i), 0),
       },
       expires_at: Math.floor(Date.now() / 1000) + 300,
     };

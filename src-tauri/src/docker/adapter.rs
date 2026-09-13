@@ -1,6 +1,7 @@
 use crate::models::{
-    Category, DockerContainerItem, DockerImageItem, DockerOverview, DockerStatus, DockerVolumeItem,
-    FileSize, ObservationQuality, RiskTier, ScanItem, ZenithError,
+    derive_cleanup_disposition, Category, CleanupEligibility, DockerContainerItem, DockerImageItem,
+    DockerOverview, DockerStatus, DockerVolumeItem, FileSize, ObservationQuality, RiskTier,
+    ScanItem, ZenithError,
 };
 use crate::platform::description::{PlatformEnvironment, ToolResolution};
 use crate::tooling;
@@ -237,6 +238,15 @@ impl DockerAdapter {
         let dangling_count = images.iter().filter(|i| i.is_dangling).count();
 
         if dangling_count > 0 {
+            let size = FileSize::new(dangling_size, Some(dangling_size));
+            let disposition = derive_cleanup_disposition(
+                RiskTier::Safe,
+                ObservationQuality::Fresh,
+                &Default::default(),
+                &size,
+                None,
+            );
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.dangling_images".to_string(),
                 signature_id: "container.docker.dangling_images".to_string(),
@@ -244,20 +254,33 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Safe,
                 path: "docker://images/dangling".to_string(),
-                size: FileSize::new(dangling_size, Some(dangling_size)),
+                size,
                 file_count: dangling_count,
                 description: format!("{dangling_count} untagged intermediate image layers"),
                 cache_metadata: Default::default(),
-                is_selected: true,
+                is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
+                disposition,
             });
         }
 
         if overview.build_cache.reclaimable_bytes > 0 {
+            let size = FileSize::new(
+                overview.build_cache.reclaimable_bytes,
+                Some(overview.build_cache.reclaimable_bytes),
+            );
+            let disposition = derive_cleanup_disposition(
+                RiskTier::Safe,
+                ObservationQuality::Fresh,
+                &Default::default(),
+                &size,
+                None,
+            );
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.builder".to_string(),
                 signature_id: "container.docker.builder".to_string(),
@@ -265,24 +288,34 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Safe,
                 path: "docker://buildkit/cache".to_string(),
-                size: FileSize::new(
-                    overview.build_cache.reclaimable_bytes,
-                    Some(overview.build_cache.reclaimable_bytes),
-                ),
+                size,
                 file_count: 0,
                 description: "Reusable BuildKit build cache layers".to_string(),
                 cache_metadata: Default::default(),
-                is_selected: true,
+                is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
+                disposition,
             });
         }
 
         if overview.images.reclaimable_bytes > 0 {
             let unused_count = images.iter().filter(|i| !i.is_in_use).count();
+            let size = FileSize::new(
+                overview.images.reclaimable_bytes,
+                Some(overview.images.reclaimable_bytes),
+            );
+            let disposition = derive_cleanup_disposition(
+                RiskTier::Rebuild,
+                ObservationQuality::Fresh,
+                &Default::default(),
+                &size,
+                None,
+            );
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.unused_images".to_string(),
                 signature_id: "container.docker.unused_images".to_string(),
@@ -290,24 +323,34 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Rebuild,
                 path: "docker://images/unused".to_string(),
-                size: FileSize::new(
-                    overview.images.reclaimable_bytes,
-                    Some(overview.images.reclaimable_bytes),
-                ),
+                size,
                 file_count: unused_count,
                 description: "Images not referenced by any running or stopped container"
                     .to_string(),
                 cache_metadata: Default::default(),
-                is_selected: false,
+                is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
+                disposition,
             });
         }
 
         if overview.containers.reclaimable_bytes > 0 {
+            let size = FileSize::new(
+                overview.containers.reclaimable_bytes,
+                Some(overview.containers.reclaimable_bytes),
+            );
+            let disposition = derive_cleanup_disposition(
+                RiskTier::Rebuild,
+                ObservationQuality::Fresh,
+                &Default::default(),
+                &size,
+                None,
+            );
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.stopped_containers".to_string(),
                 signature_id: "container.docker.stopped_containers".to_string(),
@@ -315,23 +358,33 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Rebuild,
                 path: "docker://containers/stopped".to_string(),
-                size: FileSize::new(
-                    overview.containers.reclaimable_bytes,
-                    Some(overview.containers.reclaimable_bytes),
-                ),
+                size,
                 file_count: 0,
                 description: "Exited containers holding read-write layer state".to_string(),
                 cache_metadata: Default::default(),
-                is_selected: false,
+                is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
+                disposition,
             });
         }
 
         if overview.volumes.reclaimable_bytes > 0 {
+            let size = FileSize::new(
+                overview.volumes.reclaimable_bytes,
+                Some(overview.volumes.reclaimable_bytes),
+            );
+            let disposition = derive_cleanup_disposition(
+                RiskTier::Manual,
+                ObservationQuality::Fresh,
+                &Default::default(),
+                &size,
+                None,
+            );
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.unused_volumes".to_string(),
                 signature_id: "container.docker.unused_volumes".to_string(),
@@ -339,19 +392,17 @@ impl DockerAdapter {
                 category: Category::Container,
                 risk: RiskTier::Manual,
                 path: "docker://volumes/unused".to_string(),
-                size: FileSize::new(
-                    overview.volumes.reclaimable_bytes,
-                    Some(overview.volumes.reclaimable_bytes),
-                ),
+                size,
                 file_count: 0,
                 description: "Anonymous and orphaned persistent storage volumes".to_string(),
                 cache_metadata: Default::default(),
-                is_selected: false,
+                is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
+                disposition,
             });
         }
 

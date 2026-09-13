@@ -33,15 +33,15 @@ fn aggregate_quality(
     }
 }
 
-/// The retained items and reclaimable bytes of one category.
+/// The retained items and byte populations of one category.
 ///
-/// Every byte total is derived from `ScanItem::cleanable_bytes` in `push`, so
-/// the category total always equals the sum of its risk buckets and an item
-/// whose observation cannot support a cleanup contributes to neither.
+/// `total_bytes` is the observed footprint, including blocked/advisory rows;
+/// `cleanable_bytes` and the Safe/Rebuild buckets include only eligible bytes.
 #[derive(Default)]
 struct CategoryAccumulator {
     items: Vec<ScanItem>,
     total_bytes: u64,
+    cleanable_bytes: u64,
     safe_bytes: u64,
     rebuild_bytes: u64,
     manual_bytes: u64,
@@ -51,20 +51,27 @@ impl CategoryAccumulator {
     /// Accounts one scanned item, or drops it when it is not worth retaining.
     ///
     /// Returns the retained item so the caller can stream it to the frontend.
-    fn push(&mut self, item: ScanItem) -> Option<&ScanItem> {
+    fn push(&mut self, mut item: ScanItem) -> Option<&ScanItem> {
+        item.disposition = item.derive_disposition();
         let bytes = item.cleanable_bytes();
+        let observed = item.observed_bytes();
         // An item that is absent, or a complete observation of an empty path,
         // carries nothing a user could act on.
-        let is_empty_fresh = item.quality == ObservationQuality::Fresh && bytes == 0;
+        let is_empty_fresh = item.quality == ObservationQuality::Fresh && observed == 0;
         if !item.exists || is_empty_fresh {
             return None;
         }
 
-        self.total_bytes += bytes;
-        match item.risk {
-            RiskTier::Safe => self.safe_bytes += bytes,
-            RiskTier::Rebuild => self.rebuild_bytes += bytes,
-            RiskTier::Manual => self.manual_bytes += bytes,
+        self.total_bytes += observed;
+        self.cleanable_bytes += bytes;
+        if item.disposition.eligibility.is_cleanable() {
+            match item.risk {
+                RiskTier::Safe => self.safe_bytes += bytes,
+                RiskTier::Rebuild => self.rebuild_bytes += bytes,
+                RiskTier::Manual => {}
+            }
+        } else if item.risk == RiskTier::Manual {
+            self.manual_bytes += observed;
         }
 
         if !item.allows_cleanup() {
@@ -77,7 +84,11 @@ impl CategoryAccumulator {
                 &format!(
                     "Could not fully inspect {}: {}",
                     item.name,
-                    item.incomplete_reason.as_deref().unwrap_or("Inaccessible")
+                    item.disposition
+                        .reason
+                        .as_deref()
+                        .or(item.incomplete_reason.as_deref())
+                        .unwrap_or("Inaccessible")
                 ),
             );
         }
@@ -123,6 +134,7 @@ impl ScanEngine {
 
         let mut category_results = Vec::new();
         let mut total_bytes = 0u64;
+        let mut cleanable_bytes = 0u64;
         let mut safe_bytes = 0u64;
         let mut rebuild_bytes = 0u64;
         let mut manual_bytes = 0u64;
@@ -182,12 +194,13 @@ impl ScanEngine {
             accumulator.items.sort_by(|left, right| {
                 right
                     .size
-                    .reclaimable()
-                    .cmp(&left.size.reclaimable())
+                    .observed_bytes()
+                    .cmp(&left.size.observed_bytes())
                     .then_with(|| left.name.cmp(&right.name))
             });
 
             total_bytes += accumulator.total_bytes;
+            cleanable_bytes += accumulator.cleanable_bytes;
             safe_bytes += accumulator.safe_bytes;
             rebuild_bytes += accumulator.rebuild_bytes;
             manual_bytes += accumulator.manual_bytes;
@@ -213,6 +226,7 @@ impl ScanEngine {
                 display_name: category.display_name().to_string(),
                 items: accumulator.items,
                 total_bytes: accumulator.total_bytes,
+                cleanable_bytes: accumulator.cleanable_bytes,
                 safe_bytes: accumulator.safe_bytes,
                 rebuild_bytes: accumulator.rebuild_bytes,
                 manual_bytes: accumulator.manual_bytes,
@@ -254,6 +268,7 @@ impl ScanEngine {
             finished_at,
             categories: category_results,
             total_bytes,
+            cleanable_bytes,
             safe_bytes,
             rebuild_bytes,
             manual_bytes,
@@ -482,11 +497,10 @@ mod tests {
         );
     }
 
-    /// Every byte total in a category comes from the same item set, so an
-    /// uninspectable item is retained for the user without inflating any total
-    /// and without becoming a second, destructive error surface.
+    /// Observed and cleanable totals remain distinct, so an uninspectable item
+    /// stays visible without becoming actionable or a second error surface.
     #[test]
-    fn category_totals_exclude_uncleanable_items_and_emit_no_error_event() {
+    fn category_totals_separate_observed_and_cleanable_bytes_and_emit_no_error_event() {
         let fixture = tempfile::tempdir().unwrap();
         let plain_root = fixture.path().join("plain-cache");
         let aged_root = fixture.path().join("aged-cache");
@@ -539,19 +553,23 @@ mod tests {
             .expect("the uninspectable aged candidate is retained for observability");
 
         assert!(
-            blocked.size.reclaimable() > 0,
+            blocked.size.observed_bytes() > 0,
             "the blocked item still reports what it could measure"
         );
         assert!(!blocked.allows_cleanup());
         assert_eq!(blocked.cleanable_bytes(), 0);
+        assert_eq!(
+            blocked.disposition.eligibility,
+            crate::models::CleanupEligibility::Blocked
+        );
 
         assert_eq!(
             system.total_bytes,
-            system.safe_bytes + system.rebuild_bytes + system.manual_bytes,
-            "the category total is the sum of its risk buckets"
+            cleanable.size.observed_bytes() + blocked.size.observed_bytes(),
+            "detected bytes include retained blocked observations"
         );
-        assert_eq!(system.total_bytes, cleanable.size.reclaimable());
-        assert_eq!(system.safe_bytes, cleanable.size.reclaimable());
+        assert_eq!(system.cleanable_bytes, cleanable.size.observed_bytes());
+        assert_eq!(system.safe_bytes, cleanable.size.observed_bytes());
         assert_eq!(system.rebuild_bytes, 0);
         assert_eq!(system.manual_bytes, 0);
         assert_eq!(system.incomplete_item_count, 1);

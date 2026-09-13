@@ -43,6 +43,7 @@ export const commands = {
 	finished_at: number,
 	categories: CategoryResult_Serialize[],
 	total_bytes: number,
+	cleanable_bytes: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
@@ -595,6 +596,7 @@ export type CategoryResult_Deserialize = {
 	display_name: string,
 	items: ScanItem_Deserialize[],
 	total_bytes: number,
+	cleanable_bytes?: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
@@ -610,6 +612,7 @@ export type CategoryResult_Serialize = {
 	display_name: string,
 	items: ScanItem_Serialize[],
 	total_bytes: number,
+	cleanable_bytes: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
@@ -691,6 +694,22 @@ export type CleanResult_Serialize = {
 };
 
 export type CleanStatus = "success" | "partial" | "failed";
+
+export type CleanupDisposition = CleanupDisposition_Serialize | CleanupDisposition_Deserialize;
+
+export type CleanupDisposition_Deserialize = {
+	eligibility: CleanupEligibility,
+	reason?: string | null,
+	cleanable_bytes?: number | null,
+};
+
+export type CleanupDisposition_Serialize = {
+	eligibility: CleanupEligibility,
+	reason: string | null,
+	cleanable_bytes: number | null,
+};
+
+export type CleanupEligibility = "auto_cleanable" | "reviewable" | "blocked" | "advisory";
 
 export type ControlCenterQuickSummary = ControlCenterQuickSummary_Serialize | ControlCenterQuickSummary_Deserialize;
 
@@ -1945,6 +1964,7 @@ export type ScanItem_Deserialize = {
 	file_count: number,
 	description: string,
 	cache_metadata?: CacheMetadata,
+	disposition?: CleanupDisposition_Deserialize,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -1969,6 +1989,7 @@ export type ScanItem_Serialize = {
 	file_count: number,
 	description: string,
 	cache_metadata: CacheMetadata,
+	disposition: CleanupDisposition_Serialize,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -1992,6 +2013,7 @@ export type ScanResult_Deserialize = {
 	finished_at: number,
 	categories: CategoryResult_Deserialize[],
 	total_bytes: number,
+	cleanable_bytes?: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,
@@ -2011,6 +2033,7 @@ export type ScanResult_Serialize = {
 	finished_at: number,
 	categories: CategoryResult_Serialize[],
 	total_bytes: number,
+	cleanable_bytes: number,
 	safe_bytes: number,
 	rebuild_bytes: number,
 	manual_bytes: number,

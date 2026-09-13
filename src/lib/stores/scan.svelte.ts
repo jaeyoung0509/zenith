@@ -15,7 +15,7 @@ import {
   tauriQuickCleanSafe,
   tauriScan,
 } from '../utils/tauri';
-import { cleanableBytes, isCleanable } from '../utils/cleanup';
+import { cleanableBytes, isAutoCleanable, isCleanable } from '../utils/cleanup';
 
 /** How the in-flight (or most recent) scan was started. Drives auto-refresh copy. */
 export type ScanTrigger = 'auto' | 'manual';
@@ -275,10 +275,7 @@ export class ScanStore {
       for (const item of cat.items) {
         // Auto-select only cleanable safe items, and only if the item's own
         // observation is fresh: a partial item stays manually selectable.
-        newMap[item.id] = scanAllowsSelection
-          && item.risk === 'safe'
-          && item.quality === 'fresh'
-          && isCleanable(item);
+        newMap[item.id] = scanAllowsSelection && isAutoCleanable(item);
       }
     }
     this.selectedMap = newMap;
@@ -337,9 +334,8 @@ export class ScanStore {
   }
 
   isQuickCleanEligible(category: Category, item: ScanItem, settings: ZenithSettings): boolean {
-    return item.risk === 'safe'
-      && item.quality === 'fresh'
-      && isCleanable(item)
+    return isAutoCleanable(item)
+      && cleanableBytes(item) > 0
       && this.quickCleanCategoryEnabled(category, settings);
   }
 
@@ -360,9 +356,7 @@ export class ScanStore {
     if (!this.lastScan || !this.canClean) return;
     for (const cat of this.lastScan.categories) {
       for (const item of cat.items) {
-        this.selectedMap[item.id] = item.risk === 'safe'
-          && item.quality === 'fresh'
-          && isCleanable(item);
+        this.selectedMap[item.id] = isAutoCleanable(item);
       }
     }
   }
