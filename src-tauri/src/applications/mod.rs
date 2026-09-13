@@ -1034,6 +1034,7 @@ mod tests {
         assert!(inventory.skipped_entry_count >= 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn app_inspect_with_unreadable_related_root_reports_incomplete_and_warning() {
         struct FailingAppSupportProbe {
