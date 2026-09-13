@@ -13,8 +13,8 @@ impl LocalModelManager {
         environment: &PlatformEnvironment,
         model_id: &str,
     ) -> Result<Option<u64>, ZenithError> {
-        let models = LocalModelScanner::scan_all_models(environment);
-        let model = Self::resolve_by_id(&models, model_id)?;
+        let inventory = LocalModelScanner::scan_all_models(environment);
+        let model = Self::resolve_by_id(&inventory.items, model_id)?;
         match model.source {
             ModelSource::Ollama => Self::delete_ollama(environment, model),
             ModelSource::HuggingFace => {
@@ -148,6 +148,9 @@ mod tests {
             parameter_size: None,
             quantization: None,
             last_modified: None,
+            quality: crate::models::ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entries: 0,
         }
     }
 

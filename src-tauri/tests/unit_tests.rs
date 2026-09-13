@@ -639,3 +639,78 @@ fn test_real_ipc_model_rejects_unsafe_u64_values() {
     let error = serde_json::to_string(&metrics).unwrap_err().to_string();
     assert!(error.contains("Number.MAX_SAFE_INTEGER"));
 }
+
+#[test]
+fn test_local_model_and_app_inventory_serialization_enforces_safe_integers() {
+    use zenith_lib::models::{
+        AppInstallSource, InstalledApp, InstalledAppInventory, LocalModelInventory, LocalModelItem,
+        ModelSource, ObservationQuality,
+    };
+
+    let safe_model = LocalModelInventory {
+        items: vec![LocalModelItem {
+            id: "test".into(),
+            name: "test".into(),
+            source: ModelSource::Ollama,
+            path: "/path".into(),
+            size_bytes: 42,
+            format: None,
+            parameter_size: None,
+            quantization: None,
+            last_modified: Some(100),
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entries: 0,
+        }],
+        quality: ObservationQuality::Fresh,
+        skipped_entry_count: 0,
+        incomplete_reasons: Vec::new(),
+    };
+    let json = serde_json::to_string(&safe_model).expect("safe model serializes");
+    assert!(json.contains("\"size_bytes\":42"));
+
+    let unsafe_model = LocalModelInventory {
+        items: vec![],
+        quality: ObservationQuality::Partial,
+        skipped_entry_count: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        incomplete_reasons: Vec::new(),
+    };
+    let error = serde_json::to_string(&unsafe_model)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Number.MAX_SAFE_INTEGER"));
+
+    let safe_app = InstalledAppInventory {
+        apps: vec![InstalledApp {
+            id: "app".into(),
+            name: "App".into(),
+            bundle_id: None,
+            version: None,
+            display_path: "/Applications/App.app".into(),
+            executable_name: None,
+            logical_size: 100,
+            allocated_size: 1024,
+            modified_at: None,
+            install_source: AppInstallSource::ApplicationBundle,
+            is_running: false,
+            is_system_protected: false,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entries: 0,
+        }],
+        quality: ObservationQuality::Fresh,
+        skipped_entry_count: 0,
+        incomplete_reasons: Vec::new(),
+    };
+    let app_json = serde_json::to_string(&safe_app).expect("safe app serializes");
+    assert!(app_json.contains("\"logical_size\":100"));
+
+    let unsafe_app = InstalledAppInventory {
+        apps: vec![],
+        quality: ObservationQuality::Partial,
+        skipped_entry_count: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        incomplete_reasons: Vec::new(),
+    };
+    let app_error = serde_json::to_string(&unsafe_app).unwrap_err().to_string();
+    assert!(app_error.contains("Number.MAX_SAFE_INTEGER"));
+}

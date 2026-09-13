@@ -8,6 +8,7 @@ import type {
   DeveloperArtifactScanResult,
   DeveloperWorkspace,
   InstalledApp,
+  InstalledAppInventory,
   LargeFileItem,
   LargeFileScanEvent,
   LargeFileScanRequest,
@@ -31,7 +32,10 @@ export interface StorageManagementApi {
     onEvent: (event: LargeFileScanEvent) => void
   ): Promise<LargeFileScanResult>;
   cancelLargeFileScan(scanId: string): Promise<void>;
-  prepareLargeFileTrash(scanId: string, selectedItemIds: string[]): Promise<TrashPlanPreview>;
+  prepareLargeFileTrash(
+    scanId: string,
+    selectedItemIds: string[]
+  ): Promise<TrashPlanPreview>;
   /** Reveals a scanned file; the backend resolves the path from its inventory. */
   revealLargeFile(itemId: string): Promise<void>;
   pickDeveloperWorkspace(): Promise<DeveloperWorkspace | null>;
@@ -45,7 +49,7 @@ export interface StorageManagementApi {
     scanId: string,
     selectedItemIds: string[]
   ): Promise<TrashPlanPreview>;
-  getInstalledApps(): Promise<InstalledApp[]>;
+  getInstalledApps(): Promise<InstalledAppInventory>;
   inspectAppUninstall(appId: string): Promise<AppUninstallInspection>;
   prepareAppUninstall(
     inspectionId: string,
@@ -305,6 +309,9 @@ const mockApps: InstalledApp[] = [
     install_source: 'application_bundle',
     is_running: false,
     is_system_protected: false,
+    quality: 'fresh',
+    incomplete_reason: null,
+    skipped_entries: 0,
   },
   {
     id: 'app-docker',
@@ -319,6 +326,9 @@ const mockApps: InstalledApp[] = [
     install_source: 'application_bundle',
     is_running: true,
     is_system_protected: false,
+    quality: 'fresh',
+    incomplete_reason: null,
+    skipped_entries: 0,
   },
   {
     id: 'app-obsidian',
@@ -333,6 +343,9 @@ const mockApps: InstalledApp[] = [
     install_source: 'application_bundle',
     is_running: false,
     is_system_protected: false,
+    quality: 'fresh',
+    incomplete_reason: null,
+    skipped_entries: 0,
   },
 ];
 
@@ -367,6 +380,9 @@ function inspectionFor(app: InstalledApp): AppUninstallInspection {
         logical_size: 420 * MIB,
         allocated_size: 424 * MIB,
         selected_by_default: true,
+        quality: 'fresh',
+        incomplete_reason: null,
+        skipped_entries: 0,
       },
       {
         id: `${app.id}-cache`,
@@ -378,6 +394,9 @@ function inspectionFor(app: InstalledApp): AppUninstallInspection {
         logical_size: 168 * MIB,
         allocated_size: 170 * MIB,
         selected_by_default: true,
+        quality: 'fresh',
+        incomplete_reason: null,
+        skipped_entries: 0,
       },
       {
         id: `${app.id}-name`,
@@ -389,6 +408,9 @@ function inspectionFor(app: InstalledApp): AppUninstallInspection {
         logical_size: 18 * MIB,
         allocated_size: 18 * MIB,
         selected_by_default: false,
+        quality: 'fresh',
+        incomplete_reason: null,
+        skipped_entries: 0,
       },
     ],
     incomplete: false,
@@ -615,8 +637,13 @@ const mockStorageApi: StorageManagementApi = {
     return preview;
   },
 
-  async getInstalledApps() {
-    return mockApps.map((app) => ({ ...app }));
+  async getInstalledApps(): Promise<InstalledAppInventory> {
+    return {
+      apps: mockApps.map((app) => ({ ...app })),
+      quality: 'fresh',
+      skipped_entry_count: 0,
+      incomplete_reasons: [],
+    };
   },
 
   async inspectAppUninstall(appId) {

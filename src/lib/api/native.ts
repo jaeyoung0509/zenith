@@ -24,6 +24,7 @@ import type {
   DiskVolume,
   DockerStatus,
   LocalModelItem,
+  LocalModelInventory,
   MemoryMetrics,
   MemoryTerminationMode,
   MemoryTerminationResult,
@@ -222,7 +223,7 @@ export const nativeApi = {
     return await unwrap(commands.pruneDockerTarget(signatureId));
   },
 
-  async getLocalModels(): Promise<LocalModelItem[]> {
+  async getLocalModels(): Promise<LocalModelInventory> {
     return await unwrap(commands.getLocalModels());
   },
 

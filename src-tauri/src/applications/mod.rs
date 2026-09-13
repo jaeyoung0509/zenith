@@ -3,6 +3,7 @@ use crate::large_files::FileIdentity;
 use crate::models::AppInstallSource;
 use crate::models::{
     AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
+    ObservationQuality,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::safety::Blacklist;
@@ -26,11 +27,35 @@ pub struct AppRecord {
     pub identity: FileIdentity,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPathMeasurement {
+    pub logical_size: u64,
+    pub allocated_size: u64,
+    pub complete: bool,
+    pub incomplete_reason: Option<String>,
+    pub skipped_entries: u64,
+}
+
+impl AppPathMeasurement {
+    pub fn quality(&self) -> ObservationQuality {
+        if self.complete && self.skipped_entries == 0 {
+            ObservationQuality::Fresh
+        } else if self.logical_size > 0 || self.allocated_size > 0 {
+            ObservationQuality::Partial
+        } else {
+            ObservationQuality::Unavailable
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppInventory {
     pub inventory_id: String,
     pub records: HashMap<String, AppRecord>,
     pub created_at: u64,
+    pub quality: ObservationQuality,
+    pub skipped_entry_count: u64,
+    pub incomplete_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +95,8 @@ impl ApplicationScanner {
         #[cfg(not(target_os = "windows"))]
         {
             let mut records = HashMap::new();
+            let mut skipped_entry_count = 0u64;
+            let mut incomplete_reasons = Vec::new();
 
             // The reviewed system root and the stated profile's own folder are
             // the only places an application bundle is inventoried from.
@@ -90,22 +117,60 @@ impl ApplicationScanner {
                 .collect::<Vec<_>>();
 
             for root in roots {
-                if fs::symlink_metadata(&root)
-                    .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
-                    .unwrap_or(true)
-                {
+                let meta = match fs::symlink_metadata(&root) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            skipped_entry_count = skipped_entry_count.saturating_add(1);
+                            incomplete_reasons.push(format!(
+                                "Could not read root metadata {}: {e}",
+                                root.display()
+                            ));
+                        }
+                        continue;
+                    }
+                };
+                if meta.file_type().is_symlink() {
+                    skipped_entry_count = skipped_entry_count.saturating_add(1);
+                    incomplete_reasons
+                        .push(format!("Application root is a symlink: {}", root.display()));
                     continue;
                 }
-                let Ok(entries) = fs::read_dir(root) else {
+                if !meta.is_dir() {
                     continue;
+                }
+                let entries = match fs::read_dir(&root) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        skipped_entry_count = skipped_entry_count.saturating_add(1);
+                        incomplete_reasons.push(format!(
+                            "Could not read application root directory {}: {e}",
+                            root.display()
+                        ));
+                        continue;
+                    }
                 };
-                for entry in entries.flatten() {
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            skipped_entry_count = skipped_entry_count.saturating_add(1);
+                            incomplete_reasons
+                                .push(format!("Could not read application entry: {e}"));
+                            continue;
+                        }
+                    };
                     let path = entry.path();
                     if path.extension().and_then(|value| value.to_str()) != Some("app") {
                         continue;
                     }
 
                     let Some(identity) = FileIdentity::from_path(&path) else {
+                        skipped_entry_count = skipped_entry_count.saturating_add(1);
+                        incomplete_reasons.push(format!(
+                            "Could not determine file identity for {}",
+                            path.display()
+                        ));
                         continue;
                     };
 
@@ -120,7 +185,16 @@ impl ApplicationScanner {
                         })
                         .unwrap_or_else(|| "Unknown App".to_string());
 
-                    let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
+                    let measurement = measure_path_without_symlinks(&path);
+                    let quality = measurement.quality();
+                    if quality != ObservationQuality::Fresh {
+                        skipped_entry_count =
+                            skipped_entry_count.saturating_add(measurement.skipped_entries.max(1));
+                        if let Some(reason) = &measurement.incomplete_reason {
+                            incomplete_reasons.push(reason.clone());
+                        }
+                    }
+
                     let is_system_protected =
                         is_zenith_identity(&name, metadata.bundle_id.as_deref());
                     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -148,8 +222,8 @@ impl ApplicationScanner {
                         version: metadata.version,
                         display_path: path.to_string_lossy().to_string(),
                         executable_name: metadata.executable,
-                        logical_size,
-                        allocated_size,
+                        logical_size: measurement.logical_size,
+                        allocated_size: measurement.allocated_size,
                         modified_at: fs::metadata(&path)
                             .ok()
                             .and_then(|value| value.modified().ok())
@@ -158,6 +232,9 @@ impl ApplicationScanner {
                         install_source: detect_install_source(&path),
                         is_running,
                         is_system_protected,
+                        quality,
+                        incomplete_reason: measurement.incomplete_reason,
+                        skipped_entries: measurement.skipped_entries,
                     };
                     records.insert(
                         id,
@@ -170,10 +247,21 @@ impl ApplicationScanner {
                 }
             }
 
+            let inventory_quality = if skipped_entry_count == 0 {
+                ObservationQuality::Fresh
+            } else if !records.is_empty() {
+                ObservationQuality::Partial
+            } else {
+                ObservationQuality::Unavailable
+            };
+
             AppInventory {
                 inventory_id: Uuid::new_v4().to_string(),
                 records,
                 created_at: unix_timestamp(),
+                quality: inventory_quality,
+                skipped_entry_count,
+                incomplete_reasons,
             }
         }
     }
@@ -292,9 +380,14 @@ impl ApplicationScanner {
                     continue;
                 };
                 let Some(identity) = FileIdentity::from_path(&path) else {
+                    incomplete = true;
                     continue;
                 };
-                let (logical_size, allocated_size) = measure_path_without_symlinks(&path);
+                let measurement = measure_path_without_symlinks(&path);
+                let quality = measurement.quality();
+                if quality != ObservationQuality::Fresh {
+                    incomplete = true;
+                }
                 let id = Uuid::new_v4().to_string();
                 let selected_by_default = confidence == AppRelatedConfidence::High;
                 let item = AppRelatedItem {
@@ -304,9 +397,12 @@ impl ApplicationScanner {
                     kind,
                     confidence,
                     evidence,
-                    logical_size,
-                    allocated_size,
+                    logical_size: measurement.logical_size,
+                    allocated_size: measurement.allocated_size,
                     selected_by_default,
+                    quality,
+                    incomplete_reason: measurement.incomplete_reason,
+                    skipped_entries: measurement.skipped_entries,
                 };
                 related.insert(
                     id,
@@ -363,6 +459,9 @@ fn empty_inventory() -> AppInventory {
         inventory_id: Uuid::new_v4().to_string(),
         records: HashMap::new(),
         created_at: unix_timestamp(),
+        quality: ObservationQuality::Fresh,
+        skipped_entry_count: 0,
+        incomplete_reasons: Vec::new(),
     }
 }
 
@@ -370,23 +469,60 @@ fn is_zenith_identity(name: &str, bundle_id: Option<&str>) -> bool {
     name == "Zenith" || bundle_id == Some("com.zenith.desktop")
 }
 
-fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
-    let Ok(root_metadata) = fs::symlink_metadata(path) else {
-        return (0, 0);
+const MAX_APP_WALK_DEPTH: usize = 32;
+
+fn measure_path_without_symlinks(path: &Path) -> AppPathMeasurement {
+    let root_metadata = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            return AppPathMeasurement {
+                logical_size: 0,
+                allocated_size: 0,
+                complete: false,
+                incomplete_reason: Some(format!(
+                    "Could not read root metadata for {}: {e}",
+                    path.display()
+                )),
+                skipped_entries: 1,
+            };
+        }
     };
     if root_metadata.file_type().is_symlink() {
-        return (0, 0);
+        return AppPathMeasurement {
+            logical_size: 0,
+            allocated_size: 0,
+            complete: false,
+            incomplete_reason: Some(format!(
+                "Refusing to follow root symlink: {}",
+                path.display()
+            )),
+            skipped_entries: 1,
+        };
     }
 
     #[cfg(unix)]
     let root_device = root_metadata.dev();
     let mut logical_size = 0u64;
     let mut allocated_size = 0u64;
-    let mut stack = vec![path.to_path_buf()];
+    let mut complete = true;
+    let mut incomplete_reason = None;
+    let mut skipped_entries = 0u64;
+    let mut stack = vec![(path.to_path_buf(), 0usize)];
 
-    while let Some(current) = stack.pop() {
-        let Ok(metadata) = fs::symlink_metadata(&current) else {
-            continue;
+    while let Some((current, depth)) = stack.pop() {
+        let metadata = match fs::symlink_metadata(&current) {
+            Ok(m) => m,
+            Err(e) => {
+                skipped_entries = skipped_entries.saturating_add(1);
+                complete = false;
+                if incomplete_reason.is_none() {
+                    incomplete_reason = Some(format!(
+                        "Could not read metadata for {}: {e}",
+                        current.display()
+                    ));
+                }
+                continue;
+            }
         };
         if metadata.file_type().is_symlink() {
             continue;
@@ -415,13 +551,59 @@ fn measure_path_without_symlinks(path: &Path) -> (u64, u64) {
             continue;
         }
         if metadata.is_dir() {
-            if let Ok(entries) = fs::read_dir(&current) {
-                stack.extend(entries.flatten().map(|entry| entry.path()));
+            if depth >= MAX_APP_WALK_DEPTH {
+                skipped_entries = skipped_entries.saturating_add(1);
+                complete = false;
+                if incomplete_reason.is_none() {
+                    incomplete_reason = Some(format!(
+                        "Directory depth limit exceeded at {}",
+                        current.display()
+                    ));
+                }
+                continue;
+            }
+
+            match fs::read_dir(&current) {
+                Ok(entries) => {
+                    for entry in entries {
+                        match entry {
+                            Ok(entry) => {
+                                stack.push((entry.path(), depth + 1));
+                            }
+                            Err(e) => {
+                                skipped_entries = skipped_entries.saturating_add(1);
+                                complete = false;
+                                if incomplete_reason.is_none() {
+                                    incomplete_reason = Some(format!(
+                                        "Could not read directory entry in {}: {e}",
+                                        current.display()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    skipped_entries = skipped_entries.saturating_add(1);
+                    complete = false;
+                    if incomplete_reason.is_none() {
+                        incomplete_reason = Some(format!(
+                            "Could not read directory {}: {e}",
+                            current.display()
+                        ));
+                    }
+                }
             }
         }
     }
 
-    (logical_size, allocated_size)
+    AppPathMeasurement {
+        logical_size,
+        allocated_size,
+        complete,
+        incomplete_reason,
+        skipped_entries,
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -622,6 +804,9 @@ mod tests {
             install_source: AppInstallSource::ApplicationBundle,
             is_running: false,
             is_system_protected: false,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entries: 0,
         };
         assert!(is_zenith_app(&app));
     }
@@ -649,8 +834,46 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, bundle.join("Contents/escape")).unwrap();
 
-        let (logical, allocated) = measure_path_without_symlinks(&bundle);
-        assert_eq!(logical, 4096 + 1024);
-        assert!(allocated > 0);
+        let measurement = measure_path_without_symlinks(&bundle);
+        assert_eq!(measurement.logical_size, 4096 + 1024);
+        assert!(measurement.allocated_size > 0);
+        assert!(measurement.complete);
+        assert_eq!(measurement.quality(), ObservationQuality::Fresh);
+        assert_eq!(measurement.skipped_entries, 0);
+    }
+
+    #[test]
+    fn unreadable_root_reports_unavailable_measurement() {
+        let nonexistent = PathBuf::from("/nonexistent/path/for/test/Example.app");
+        let measurement = measure_path_without_symlinks(&nonexistent);
+        assert_eq!(measurement.quality(), ObservationQuality::Unavailable);
+        assert_eq!(measurement.logical_size, 0);
+        assert!(!measurement.complete);
+        assert!(measurement.incomplete_reason.is_some());
+        assert_eq!(measurement.skipped_entries, 1);
+    }
+
+    #[test]
+    fn app_scan_with_symlinked_root_reports_incomplete_reason_and_skipped_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let real_apps = temp.path().join("real_apps");
+        fs::create_dir_all(&real_apps).unwrap();
+        let symlink_root = temp.path().join("Applications");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_apps, &symlink_root).unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(temp.path());
+        let inventory = ApplicationScanner::scan(&environment);
+
+        #[cfg(unix)]
+        {
+            assert!(inventory.skipped_entry_count >= 1);
+            assert_eq!(inventory.quality, ObservationQuality::Unavailable);
+            assert!(inventory
+                .incomplete_reasons
+                .iter()
+                .any(|r| r.contains("symlink")));
+        }
     }
 }

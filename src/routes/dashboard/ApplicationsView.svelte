@@ -4,6 +4,7 @@
     AppRelatedConfidence,
     AppUninstallInspection,
     InstalledApp,
+    ObservationQuality,
     TrashPlanPreview,
     TrashResult,
   } from '../../lib/models/types';
@@ -47,6 +48,9 @@
   let { onBack }: Props = $props();
 
   let apps = $state<InstalledApp[]>([]);
+  let inventoryQuality = $state<ObservationQuality>('fresh');
+  let skippedEntryCount = $state<number>(0);
+  let incompleteReasons = $state<string[]>([]);
   let query = $state('');
   let isLoading = $state(false);
   let isInspecting = $state(false);
@@ -151,7 +155,11 @@
     plan = null;
     trashResult = null;
     try {
-      apps = await tauriGetInstalledApps();
+      const inventory = await tauriGetInstalledApps();
+      apps = inventory.apps;
+      inventoryQuality = inventory.quality;
+      skippedEntryCount = inventory.skipped_entry_count;
+      incompleteReasons = inventory.incomplete_reasons;
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -297,6 +305,20 @@
     </div>
   {/if}
 
+  {#if inventoryQuality === 'unavailable'}
+    <InlineNotice
+      variant="error"
+      title="Application discovery unavailable"
+      message={incompleteReasons[0] || 'Application directories could not be read.'}
+    />
+  {:else if inventoryQuality === 'partial'}
+    <InlineNotice
+      variant="warning"
+      title="Partial application discovery"
+      message={`Some application folders or metadata could not be fully read (${skippedEntryCount} skipped item${skippedEntryCount === 1 ? '' : 's'}). The application list and sizes below may be incomplete.`}
+    />
+  {/if}
+
   {#if error}
     <div class="p-3.5 rounded-xl bg-destructive/15 border border-destructive/30 text-destructive flex items-center gap-2.5 text-xs">
       <AlertCircle size={16} class="shrink-0" />
@@ -357,7 +379,19 @@
         {#if isLoading}
           <div class="py-10 text-center text-xs text-muted-foreground">Loading applications…</div>
         {:else if filteredApps.length === 0}
-          <div class="py-10 text-center text-xs text-muted-foreground">No applications found.</div>
+          {#if inventoryQuality === 'unavailable'}
+            <div class="py-10 text-center text-xs text-destructive">
+              Application discovery failed. Could not read application directories.
+            </div>
+          {:else if query}
+            <div class="py-10 text-center text-xs text-muted-foreground">No applications found matching "{query}".</div>
+          {:else if inventoryQuality === 'partial'}
+            <div class="py-10 text-center text-xs text-warning">
+              No applications discovered. Some application locations were inaccessible.
+            </div>
+          {:else}
+            <div class="py-10 text-center text-xs text-muted-foreground">No applications found.</div>
+          {/if}
         {:else}
           <div style={`height: ${appWindow.offsetTop}px`}></div>
           <div class="space-y-1">
@@ -382,7 +416,14 @@
                       {/if}
                     </div>
                     <div class="text-caption text-muted-foreground font-mono truncate mt-0.5">
-                      {formatBytes(app.allocated_size)}{app.version ? ` · ${app.version}` : ''}
+                      {#if app.quality === 'partial'}
+                        ≥ {formatBytes(app.allocated_size)}
+                      {:else if app.quality === 'unavailable'}
+                        Size unavailable
+                      {:else}
+                        {formatBytes(app.allocated_size)}
+                      {/if}
+                      {app.version ? ` · ${app.version}` : ''}
                     </div>
                   </div>
                 </div>
@@ -409,7 +450,15 @@
                 {inspection.app.bundle_id ?? `No ${platformContextStore.appIdentityLabel}`}
               </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
-                <span>{formatBytes(inspection.app.allocated_size)} app bundle</span>
+                <span>
+                  {#if inspection.app.quality === 'partial'}
+                    ≥ {formatBytes(inspection.app.allocated_size)} app bundle (partial)
+                  {:else if inspection.app.quality === 'unavailable'}
+                    App bundle size unavailable
+                  {:else}
+                    {formatBytes(inspection.app.allocated_size)} app bundle
+                  {/if}
+                </span>
                 {#if inspection.app.modified_at}
                   <span>Modified {formatTimeAgo(inspection.app.modified_at)}</span>
                 {/if}
@@ -554,7 +603,15 @@
                         <p class="text-caption text-muted-foreground font-mono break-all mt-1">{item.display_path}</p>
                         <p class="text-caption text-muted-foreground mt-1">{item.evidence}</p>
                       </div>
-                      <span class="text-caption font-mono shrink-0">{formatBytes(item.allocated_size)}</span>
+                      <span class="text-caption font-mono shrink-0">
+                        {#if item.quality === 'partial'}
+                          ≥ {formatBytes(item.allocated_size)}
+                        {:else if item.quality === 'unavailable'}
+                          Size unavailable
+                        {:else}
+                          {formatBytes(item.allocated_size)}
+                        {/if}
+                      </span>
                     </div>
                   </label>
                 {/each}

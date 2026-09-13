@@ -130,7 +130,12 @@ describe('native mode', () => {
   it('passes a destructive dispatch through to the command', async () => {
     nativeWindow();
     vi.mocked(tauriUtils.tauriDeleteLocalModel).mockResolvedValue(undefined as never);
-    vi.mocked(tauriUtils.tauriGetLocalModels).mockResolvedValue([]);
+    vi.mocked(tauriUtils.tauriGetLocalModels).mockResolvedValue({
+      items: [],
+      quality: 'fresh',
+      skipped_entry_count: 0,
+      incomplete_reasons: [],
+    });
 
     expect(refusalForPreview('Deleting a local model')).toBeNull();
     await expect(
@@ -158,7 +163,12 @@ describe('native mode', () => {
     vi.mocked(tauriUtils.tauriDeleteLocalModel).mockRejectedValue(
       new Error('Model deletion was partial')
     );
-    vi.mocked(tauriUtils.tauriGetLocalModels).mockResolvedValue([]);
+    vi.mocked(tauriUtils.tauriGetLocalModels).mockResolvedValue({
+      items: [],
+      quality: 'fresh',
+      skipped_entry_count: 0,
+      incomplete_reasons: [],
+    });
 
     await expect(localModelsStore.deleteModel(localModelsStore.models[0])).resolves.toBe(false);
 

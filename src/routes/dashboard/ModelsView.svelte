@@ -84,7 +84,15 @@
     icon={Boxes}
   >
     {#snippet badge()}
-      <Badge variant="outline" class="font-mono">{formatBytes(totalBytes)}</Badge>
+      <Badge variant="outline" class="font-mono">
+        {#if localModelsStore.isUnavailable}
+          Unavailable
+        {:else if localModelsStore.isPartial}
+          ≥ {formatBytes(totalBytes)}
+        {:else}
+          {formatBytes(totalBytes)}
+        {/if}
+      </Badge>
     {/snippet}
 
     {#snippet actions()}
@@ -107,6 +115,20 @@
       title="Model Scanner Error"
       message={localModelsStore.error}
       onDismiss={() => (localModelsStore.error = null)}
+    />
+  {/if}
+
+  {#if localModelsStore.isUnavailable}
+    <InlineNotice
+      variant="destructive"
+      title="Model discovery unavailable"
+      message={localModelsStore.incompleteReasons[0] || 'Local model directories could not be read.'}
+    />
+  {:else if localModelsStore.isPartial}
+    <InlineNotice
+      variant="warning"
+      title="Partial model discovery"
+      message={`Some model directories or files could not be read (${localModelsStore.skippedEntryCount} skipped item${localModelsStore.skippedEntryCount === 1 ? '' : 's'}). Displayed model sizes are lower bounds.`}
     />
   {/if}
 
@@ -167,7 +189,13 @@
 
           <div class="flex items-center gap-3 shrink-0">
             <span class="text-xs font-mono font-bold text-foreground">
-              {formatBytes(model.size_bytes)}
+              {#if model.quality === 'partial'}
+                ≥ {formatBytes(model.size_bytes)}
+              {:else if model.quality === 'unavailable'}
+                Unavailable
+              {:else}
+                {formatBytes(model.size_bytes)}
+              {/if}
             </span>
 
             <Button
@@ -200,11 +228,31 @@
       {/each}
     </div>
   {:else}
-    <EmptyState
-      icon={Boxes}
-      title="No local models detected"
-      description="Ollama, HuggingFace Hub, or LM Studio model weights will appear here once downloaded."
-    />
+    {#if localModelsStore.isUnavailable}
+      <EmptyState
+        icon={Boxes}
+        title="Local model discovery unavailable"
+        description="Could not access local model directories. Check file permissions and retry."
+      />
+    {:else if searchQuery.trim()}
+      <EmptyState
+        icon={Boxes}
+        title="No matching models"
+        description={`No local models found matching "${searchQuery}".`}
+      />
+    {:else if localModelsStore.isPartial}
+      <EmptyState
+        icon={Boxes}
+        title="No complete models discovered"
+        description="Some model directories were unreadable or skipped during discovery."
+      />
+    {:else}
+      <EmptyState
+        icon={Boxes}
+        title="No local models detected"
+        description="Ollama, HuggingFace Hub, or LM Studio model weights will appear here once downloaded."
+      />
+    {/if}
   {/if}
 
   <!-- Delete Confirmation Modal -->

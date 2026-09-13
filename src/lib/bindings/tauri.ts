@@ -69,7 +69,7 @@ export const commands = {
 	openStorageSettings: () => typedError<null, string>(__TAURI_INVOKE("open_storage_settings")),
 	getDockerStatus: () => typedError<DockerStatus_Serialize, string>(__TAURI_INVOKE("get_docker_status")),
 	pruneDockerTarget: (signatureId: string) => typedError<number, string>(__TAURI_INVOKE("prune_docker_target", { signatureId })),
-	getLocalModels: () => typedError<LocalModelItem_Serialize[], string>(__TAURI_INVOKE("get_local_models")),
+	getLocalModels: () => typedError<LocalModelInventory_Serialize, string>(__TAURI_INVOKE("get_local_models")),
 	/**
 	 *  Deletes one local model and reports the bytes it reclaimed.
 	 *  `None` means the model was deleted but the reclaimed amount could not be
@@ -124,7 +124,7 @@ export const commands = {
 	startDeveloperArtifactScan: (workspaceIds: string[], onEvent: Channel<DeveloperArtifactScanEvent_Deserialize>) => typedError<DeveloperArtifactScanResult_Serialize, string>(__TAURI_INVOKE("start_developer_artifact_scan", { workspaceIds, onEvent })),
 	cancelDeveloperArtifactScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_developer_artifact_scan", { scanId })),
 	prepareDeveloperArtifactCleanup: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_developer_artifact_cleanup", { scanId, selectedItemIds })),
-	getInstalledApps: () => typedError<InstalledApp_Serialize[], string>(__TAURI_INVOKE("get_installed_apps")),
+	getInstalledApps: () => typedError<InstalledAppInventory_Serialize, string>(__TAURI_INVOKE("get_installed_apps")),
 	inspectAppUninstall: (appId: string) => typedError<AppUninstallInspection_Serialize, string>(__TAURI_INVOKE("inspect_app_uninstall", { appId })),
 	prepareAppUninstall: (inspectionId: string, selectedRelatedIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_app_uninstall", { inspectionId, selectedRelatedIds })),
 	executeTrashPlan: (planId: string) => typedError<TrashResult_Serialize, string>(__TAURI_INVOKE("execute_trash_plan", { planId })),
@@ -396,6 +396,9 @@ export type AppRelatedItem_Deserialize = {
 	logical_size: number,
 	allocated_size: number,
 	selected_by_default: boolean,
+	quality?: ObservationQuality,
+	incomplete_reason?: string | null,
+	skipped_entries?: number,
 };
 
 export type AppRelatedItem_Serialize = {
@@ -408,6 +411,9 @@ export type AppRelatedItem_Serialize = {
 	logical_size: number,
 	allocated_size: number,
 	selected_by_default: boolean,
+	quality: ObservationQuality,
+	incomplete_reason: string | null,
+	skipped_entries: number,
 };
 
 export type AppRelatedKind = "app_bundle" | "application_support" | "cache" | "log" | "preference" | "saved_state" | "container" | "group_container" | "application_scripts" | "http_storage" | "web_kit";
@@ -1189,6 +1195,22 @@ export type IngestedAgentEvent_Serialize = {
 
 export type InstalledApp = InstalledApp_Serialize | InstalledApp_Deserialize;
 
+export type InstalledAppInventory = InstalledAppInventory_Serialize | InstalledAppInventory_Deserialize;
+
+export type InstalledAppInventory_Deserialize = {
+	apps: InstalledApp_Deserialize[],
+	quality: ObservationQuality,
+	skipped_entry_count: number,
+	incomplete_reasons: string[],
+};
+
+export type InstalledAppInventory_Serialize = {
+	apps: InstalledApp_Serialize[],
+	quality: ObservationQuality,
+	skipped_entry_count: number,
+	incomplete_reasons: string[],
+};
+
 export type InstalledApp_Deserialize = {
 	id: string,
 	name: string,
@@ -1202,6 +1224,9 @@ export type InstalledApp_Deserialize = {
 	install_source: AppInstallSource,
 	is_running: boolean,
 	is_system_protected: boolean,
+	quality?: ObservationQuality,
+	incomplete_reason?: string | null,
+	skipped_entries?: number,
 };
 
 export type InstalledApp_Serialize = {
@@ -1217,6 +1242,9 @@ export type InstalledApp_Serialize = {
 	install_source: AppInstallSource,
 	is_running: boolean,
 	is_system_protected: boolean,
+	quality: ObservationQuality,
+	incomplete_reason: string | null,
+	skipped_entries: number,
 };
 
 /**
@@ -1324,6 +1352,22 @@ export type LocalAlertBudget = {
 	enabled?: boolean,
 };
 
+export type LocalModelInventory = LocalModelInventory_Serialize | LocalModelInventory_Deserialize;
+
+export type LocalModelInventory_Deserialize = {
+	items: LocalModelItem_Deserialize[],
+	quality: ObservationQuality,
+	skipped_entry_count: number,
+	incomplete_reasons: string[],
+};
+
+export type LocalModelInventory_Serialize = {
+	items: LocalModelItem_Serialize[],
+	quality: ObservationQuality,
+	skipped_entry_count: number,
+	incomplete_reasons: string[],
+};
+
 export type LocalModelItem = LocalModelItem_Serialize | LocalModelItem_Deserialize;
 
 export type LocalModelItem_Deserialize = {
@@ -1336,6 +1380,9 @@ export type LocalModelItem_Deserialize = {
 	parameter_size: string | null,
 	quantization: string | null,
 	last_modified: number | null,
+	quality?: ObservationQuality,
+	incomplete_reason?: string | null,
+	skipped_entries?: number,
 };
 
 export type LocalModelItem_Serialize = {
@@ -1348,6 +1395,9 @@ export type LocalModelItem_Serialize = {
 	parameter_size: string | null,
 	quantization: string | null,
 	last_modified: number | null,
+	quality: ObservationQuality,
+	incomplete_reason: string | null,
+	skipped_entries: number,
 };
 
 export type ManualProviderUsage = ManualProviderUsage_Serialize | ManualProviderUsage_Deserialize;

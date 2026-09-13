@@ -25,10 +25,12 @@ import type {
   DiskVolume,
   DockerStatus,
   InstalledApp,
+  InstalledAppInventory,
   LargeFileScanEvent,
   LargeFileScanRequest,
   LargeFileScanResult,
   LocalModelItem,
+  LocalModelInventory,
   MemoryMetrics,
   MemoryTerminationMode,
   MemoryTerminationResult,
@@ -213,7 +215,7 @@ export function tauriPruneDocker(signatureId: string): Promise<number> {
   return api.pruneDocker(signatureId);
 }
 
-export function tauriGetLocalModels(): Promise<LocalModelItem[]> {
+export function tauriGetLocalModels(): Promise<LocalModelInventory> {
   return api.getLocalModels();
 }
 
@@ -342,7 +344,7 @@ export function tauriPrepareDeveloperArtifactCleanup(
   return storageApi.prepareDeveloperArtifactCleanup(scanId, selectedItemIds);
 }
 
-export function tauriGetInstalledApps(): Promise<InstalledApp[]> {
+export function tauriGetInstalledApps(): Promise<InstalledAppInventory> {
   return storageApi.getInstalledApps();
 }
 
