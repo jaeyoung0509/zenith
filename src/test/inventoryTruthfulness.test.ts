@@ -178,6 +178,7 @@ describe('Inventory Truthfulness (#196)', () => {
       is_running: false,
       is_system_protected: false,
       quality: 'fresh',
+      size_quality: 'fresh',
       incomplete_reason: null,
       skipped_entries: 0,
     };
@@ -232,18 +233,34 @@ describe('Inventory Truthfulness (#196)', () => {
       expect(isSelectedAppTrashLowerBound(baseInspection, ['related-1'])).toBe(false);
     });
 
-    it('returns true when app itself is partial, regardless of selected related items', () => {
+    it('returns true when app size itself is partial, regardless of selected related items', () => {
       const partialAppInspection: AppUninstallInspection = {
         ...baseInspection,
         app: {
           ...baseApp,
           quality: 'partial',
+          size_quality: 'partial',
           incomplete_reason: 'Unreadable bundle resource',
           skipped_entries: 1,
         },
       };
       expect(isSelectedAppTrashLowerBound(partialAppInspection, [])).toBe(true);
       expect(isSelectedAppTrashLowerBound(partialAppInspection, ['related-1'])).toBe(true);
+    });
+
+    it('returns false when app has quality partial (e.g. plist error) but size_quality fresh and selected items fresh', () => {
+      const metadataPartialAppInspection: AppUninstallInspection = {
+        ...baseInspection,
+        app: {
+          ...baseApp,
+          quality: 'partial',
+          size_quality: 'fresh',
+          incomplete_reason: 'Corrupt Info.plist',
+          skipped_entries: 1,
+        },
+      };
+      expect(isSelectedAppTrashLowerBound(metadataPartialAppInspection, [])).toBe(false);
+      expect(isSelectedAppTrashLowerBound(metadataPartialAppInspection, ['related-1'])).toBe(false);
     });
   });
 
@@ -272,6 +289,7 @@ describe('Inventory Truthfulness (#196)', () => {
       is_running: false,
       is_system_protected: false,
       quality: 'partial',
+      size_quality: 'partial',
       incomplete_reason: 'Unreadable framework',
       skipped_entries: 2,
     };
@@ -290,8 +308,28 @@ describe('Inventory Truthfulness (#196)', () => {
       is_running: false,
       is_system_protected: false,
       quality: 'fresh',
+      size_quality: 'fresh',
       incomplete_reason: null,
       skipped_entries: 0,
+    };
+
+    const metadataPartialApp: InstalledApp = {
+      id: 'app-metadata-partial',
+      name: 'Metadata Partial App',
+      bundle_id: 'com.test.metadatapartial',
+      version: '1.0.0',
+      display_path: '/Applications/Metadata Partial App.app',
+      executable_name: 'Metadata Partial App',
+      logical_size: 40_000_000,
+      allocated_size: 45_000_000,
+      modified_at: 1700000000,
+      install_source: 'application_bundle',
+      is_running: false,
+      is_system_protected: false,
+      quality: 'partial',
+      size_quality: 'fresh',
+      incomplete_reason: 'Corrupted Info.plist',
+      skipped_entries: 1,
     };
 
     it('renders lower bound prefix ≥ for partial app in installed list', () => {
@@ -305,6 +343,18 @@ describe('Inventory Truthfulness (#196)', () => {
       expect(rendered.body).toContain('Partial App');
       expect(rendered.body).toContain('≥');
       expect(rendered.body).toContain('Fresh App');
+    });
+
+    it('does not render lower bound prefix ≥ when app has quality partial but size_quality fresh', () => {
+      const rendered = render(ApplicationsView, {
+        props: {
+          onBack: vi.fn(),
+          initialApps: [metadataPartialApp],
+        },
+      });
+
+      expect(rendered.body).toContain('Metadata Partial App');
+      expect(rendered.body).not.toContain('≥');
     });
 
     it('renders lower bound prefix ≥ on partial app bundle and related items in detail pane', () => {

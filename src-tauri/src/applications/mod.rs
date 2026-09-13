@@ -76,6 +76,22 @@ pub struct AppInspectionRecord {
     pub created_at: u64,
 }
 
+/// Filesystem probe seam for inspecting application-related data directories.
+/// Allows deterministic testing of permission and I/O failures without altering host permissions.
+pub trait AppFsProbe: Send + Sync {
+    fn symlink_metadata(&self, path: &Path) -> std::io::Result<fs::Metadata> {
+        fs::symlink_metadata(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> std::io::Result<fs::ReadDir> {
+        fs::read_dir(path)
+    }
+}
+
+pub struct NativeAppFsProbe;
+
+impl AppFsProbe for NativeAppFsProbe {}
+
 pub struct ApplicationScanner;
 
 impl ApplicationScanner {
@@ -199,9 +215,11 @@ impl ApplicationScanner {
                         .unwrap_or_else(|| "Unknown App".to_string());
 
                     let measurement = measure_path_without_symlinks(&path);
+                    let size_quality = measurement.quality();
                     let mut app_incomplete_reason = measurement.incomplete_reason.clone();
                     let mut app_skipped_entries = measurement.skipped_entries;
 
+                    let has_bundle_incomplete = bundle_obs.incomplete_reason.is_some();
                     if let Some(reason) = bundle_obs.incomplete_reason {
                         app_skipped_entries = app_skipped_entries.saturating_add(1);
                         if app_incomplete_reason.is_none() {
@@ -212,13 +230,12 @@ impl ApplicationScanner {
                         }
                     }
 
-                    let quality = if app_incomplete_reason.is_some()
-                        || measurement.quality() != ObservationQuality::Fresh
-                    {
-                        ObservationQuality::Partial
-                    } else {
-                        ObservationQuality::Fresh
-                    };
+                    let quality =
+                        if has_bundle_incomplete || size_quality != ObservationQuality::Fresh {
+                            ObservationQuality::Partial
+                        } else {
+                            ObservationQuality::Fresh
+                        };
 
                     if quality != ObservationQuality::Fresh {
                         skipped_entry_count =
@@ -268,6 +285,7 @@ impl ApplicationScanner {
                         is_running,
                         is_system_protected,
                         quality,
+                        size_quality,
                         incomplete_reason: app_incomplete_reason,
                         skipped_entries: app_skipped_entries,
                     };
@@ -305,6 +323,15 @@ impl ApplicationScanner {
         environment: &PlatformEnvironment,
         inventory: &AppInventory,
         app_id: &str,
+    ) -> Result<AppInspectionRecord, String> {
+        Self::inspect_with(environment, inventory, app_id, &NativeAppFsProbe)
+    }
+
+    pub fn inspect_with<P: AppFsProbe>(
+        environment: &PlatformEnvironment,
+        inventory: &AppInventory,
+        app_id: &str,
+        probe: &P,
     ) -> Result<AppInspectionRecord, String> {
         let record = inventory
             .records
@@ -380,7 +407,7 @@ impl ApplicationScanner {
         ];
 
         for (root, kind) in roots {
-            match fs::symlink_metadata(&root) {
+            match probe.symlink_metadata(&root) {
                 Ok(meta) => {
                     if meta.file_type().is_symlink() || !meta.is_dir() {
                         continue;
@@ -399,7 +426,7 @@ impl ApplicationScanner {
                     continue;
                 }
             }
-            let entries = match fs::read_dir(&root) {
+            let entries = match probe.read_dir(&root) {
                 Ok(entries) => entries,
                 Err(err) => {
                     if err.kind() != std::io::ErrorKind::NotFound {
@@ -423,7 +450,7 @@ impl ApplicationScanner {
                 if Blacklist::is_blacklisted_with(&path, environment) {
                     continue;
                 }
-                match fs::symlink_metadata(&path) {
+                match probe.symlink_metadata(&path) {
                     Ok(m) => {
                         if m.file_type().is_symlink() {
                             continue;
@@ -909,6 +936,7 @@ mod tests {
             is_running: false,
             is_system_protected: false,
             quality: ObservationQuality::Fresh,
+            size_quality: ObservationQuality::Fresh,
             incomplete_reason: None,
             skipped_entries: 0,
         };
@@ -995,6 +1023,7 @@ mod tests {
         assert_eq!(inventory.records.len(), 1);
         let record = inventory.records.values().next().unwrap();
         assert_eq!(record.app.quality, ObservationQuality::Partial);
+        assert_eq!(record.app.size_quality, ObservationQuality::Fresh);
         assert!(record
             .app
             .incomplete_reason
@@ -1005,10 +1034,22 @@ mod tests {
         assert!(inventory.skipped_entry_count >= 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn app_inspect_with_unreadable_related_root_reports_incomplete_and_warning() {
-        use std::os::unix::fs::PermissionsExt;
+        struct FailingAppSupportProbe {
+            fail_path: PathBuf,
+        }
+        impl super::AppFsProbe for FailingAppSupportProbe {
+            fn read_dir(&self, path: &Path) -> std::io::Result<fs::ReadDir> {
+                if path == self.fail_path {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "permission denied",
+                    ));
+                }
+                fs::read_dir(path)
+            }
+        }
 
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
@@ -1026,18 +1067,19 @@ mod tests {
         let library = home.join("Library");
         let app_support = library.join("Application Support");
         fs::create_dir_all(&app_support).unwrap();
-        fs::set_permissions(&app_support, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let inspection = ApplicationScanner::inspect(&environment, &inventory, app_id).unwrap();
-        // Restore permissions before asserts so cleanup succeeds even on test failure
-        let _ = fs::set_permissions(&app_support, fs::Permissions::from_mode(0o755));
+        let probe = FailingAppSupportProbe {
+            fail_path: app_support,
+        };
+
+        let inspection =
+            ApplicationScanner::inspect_with(&environment, &inventory, app_id, &probe).unwrap();
 
         assert!(inspection.inspection.incomplete);
         assert!(inspection
             .inspection
             .warnings
             .iter()
-            .any(|w| w.contains("Could not read related data directory")
-                || w.contains("Could not access related data directory")));
+            .any(|w| w.contains("Could not read related data directory")));
     }
 }

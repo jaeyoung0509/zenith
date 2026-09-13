@@ -1225,6 +1225,7 @@ export type InstalledApp_Deserialize = {
 	is_running: boolean,
 	is_system_protected: boolean,
 	quality?: ObservationQuality,
+	size_quality?: ObservationQuality,
 	incomplete_reason?: string | null,
 	skipped_entries?: number,
 };
@@ -1243,6 +1244,7 @@ export type InstalledApp_Serialize = {
 	is_running: boolean,
 	is_system_protected: boolean,
 	quality: ObservationQuality,
+	size_quality: ObservationQuality,
 	incomplete_reason: string | null,
 	skipped_entries: number,
 };

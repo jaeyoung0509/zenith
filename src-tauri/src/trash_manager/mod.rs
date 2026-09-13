@@ -135,7 +135,8 @@ impl TrashPlanner {
             identity: inspection.app_identity.clone(),
             logical_size: app_size.logical_size,
             allocated_size: app_size.allocated_size,
-            size_is_lower_bound: app_size.quality != crate::models::ObservationQuality::Fresh,
+            size_is_lower_bound: app_size.size_quality
+                == crate::models::ObservationQuality::Partial,
             scope: TrashScope::AppBundle,
         });
 
@@ -154,7 +155,7 @@ impl TrashPlanner {
                 logical_size: record.item.logical_size,
                 allocated_size: record.item.allocated_size,
                 size_is_lower_bound: record.item.quality
-                    != crate::models::ObservationQuality::Fresh,
+                    == crate::models::ObservationQuality::Partial,
                 scope: TrashScope::AppRelated,
             });
         }
@@ -761,6 +762,7 @@ mod tests {
                     is_running: false,
                     is_system_protected: false,
                     quality: crate::models::ObservationQuality::Fresh,
+                    size_quality: crate::models::ObservationQuality::Fresh,
                     incomplete_reason: None,
                     skipped_entries: 0,
                 },

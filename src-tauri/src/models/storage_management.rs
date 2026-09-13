@@ -145,6 +145,8 @@ pub struct InstalledApp {
     #[serde(default)]
     pub quality: ObservationQuality,
     #[serde(default)]
+    pub size_quality: ObservationQuality,
+    #[serde(default)]
     pub incomplete_reason: Option<String>,
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]

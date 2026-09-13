@@ -446,9 +446,9 @@
                       {/if}
                     </div>
                     <div class="text-caption text-muted-foreground font-mono truncate mt-0.5">
-                      {#if app.quality === 'partial'}
+                      {#if app.size_quality === 'partial'}
                         ≥ {formatBytes(app.allocated_size)}
-                      {:else if app.quality === 'unavailable'}
+                      {:else if app.size_quality === 'unavailable'}
                         Size unavailable
                       {:else}
                         {formatBytes(app.allocated_size)}
@@ -481,9 +481,9 @@
               </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
                 <span>
-                  {#if inspection.app.quality === 'partial'}
+                  {#if inspection.app.size_quality === 'partial'}
                     ≥ {formatBytes(inspection.app.allocated_size)} app bundle (partial)
-                  {:else if inspection.app.quality === 'unavailable'}
+                  {:else if inspection.app.size_quality === 'unavailable'}
                     App bundle size unavailable
                   {:else}
                     {formatBytes(inspection.app.allocated_size)} app bundle

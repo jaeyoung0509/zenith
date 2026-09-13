@@ -47,35 +47,91 @@ impl LocalModelScanner {
         provider_name: &str,
         sink: &mut ModelDiscoverySink,
     ) -> Option<PathBuf> {
-        let root = SignatureLoader::expand_path(pattern, environment)?;
-        match fs::symlink_metadata(&root) {
-            Ok(meta) => {
-                if meta.file_type().is_symlink() || crate::safety::SymlinkGuard::is_symlink(&root) {
-                    sink.record_failure(format!(
-                        "{provider_name} root {} is a symlink and was excluded for safety",
-                        root.display()
-                    ));
-                    return None;
-                }
-                if !meta.is_dir() {
-                    sink.record_failure(format!(
-                        "{provider_name} root {} is not a directory",
-                        root.display()
-                    ));
-                    return None;
-                }
-                Some(root)
+        let root = match SignatureLoader::expand_path(pattern, environment) {
+            Some(root) => root,
+            None => {
+                sink.record_failure(format!(
+                    "Could not resolve {provider_name} discovery root for pattern '{pattern}'"
+                ));
+                return None;
             }
+        };
+        match crate::safety::SymlinkGuard::is_symlink_metadata(&root) {
+            Ok(true) => {
+                sink.record_failure(format!(
+                    "{provider_name} root {} is a symlink and was excluded for safety",
+                    root.display()
+                ));
+                None
+            }
+            Ok(false) => match fs::symlink_metadata(&root) {
+                Ok(meta) => {
+                    if !meta.is_dir() {
+                        sink.record_failure(format!(
+                            "{provider_name} root {} is not a directory",
+                            root.display()
+                        ));
+                        None
+                    } else {
+                        Some(root)
+                    }
+                }
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        None
+                    } else {
+                        sink.record_failure(format!(
+                            "Could not access {provider_name} root {}: {err}",
+                            root.display()
+                        ));
+                        None
+                    }
+                }
+            },
             Err(err) => {
                 if err.kind() == std::io::ErrorKind::NotFound {
                     None
                 } else {
                     sink.record_failure(format!(
-                        "Could not access {provider_name} root {}: {err}",
+                        "Could not inspect symlink metadata for {provider_name} root {}: {err}",
                         root.display()
                     ));
                     None
                 }
+            }
+        }
+    }
+
+    /// Inspects a model candidate entry fail-closed against symbolic links and junctions.
+    /// Returns the metadata if the path is a safe directory or file.
+    /// Deliberately returns `None` for symlinks (excluding them), and records a failure on access errors.
+    fn inspect_model_entry(
+        path: &Path,
+        provider_name: &str,
+        sink: &mut ModelDiscoverySink,
+    ) -> Option<fs::Metadata> {
+        match crate::safety::SymlinkGuard::is_symlink_metadata(path) {
+            Ok(true) => None,
+            Ok(false) => match fs::symlink_metadata(path) {
+                Ok(meta) => Some(meta),
+                Err(err) => {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        sink.record_failure(format!(
+                            "Could not read metadata for {provider_name} entry {}: {err}",
+                            path.display()
+                        ));
+                    }
+                    None
+                }
+            },
+            Err(err) => {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    sink.record_failure(format!(
+                        "Could not inspect symlink metadata for {provider_name} entry {}: {err}",
+                        path.display()
+                    ));
+                }
+                None
             }
         }
     }
@@ -160,17 +216,12 @@ impl LocalModelScanner {
                 }
             };
             let reg_path = reg.path();
-            match fs::symlink_metadata(&reg_path) {
-                Ok(m) if m.file_type().is_symlink() => continue,
-                Ok(m) if !m.is_dir() => continue,
-                Ok(_) => {}
-                Err(e) => {
-                    sink.record_failure(format!(
-                        "Could not read metadata for {}: {e}",
-                        reg_path.display()
-                    ));
-                    continue;
-                }
+            let reg_meta = match Self::inspect_model_entry(&reg_path, "Ollama registry", sink) {
+                Some(m) => m,
+                None => continue,
+            };
+            if !reg_meta.is_dir() {
+                continue;
             }
 
             let namespaces = match fs::read_dir(&reg_path) {
@@ -193,17 +244,12 @@ impl LocalModelScanner {
                     }
                 };
                 let ns_path = ns.path();
-                match fs::symlink_metadata(&ns_path) {
-                    Ok(m) if m.file_type().is_symlink() => continue,
-                    Ok(m) if !m.is_dir() => continue,
-                    Ok(_) => {}
-                    Err(e) => {
-                        sink.record_failure(format!(
-                            "Could not read metadata for {}: {e}",
-                            ns_path.display()
-                        ));
-                        continue;
-                    }
+                let ns_meta = match Self::inspect_model_entry(&ns_path, "Ollama namespace", sink) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                if !ns_meta.is_dir() {
+                    continue;
                 }
 
                 let model_dirs = match fs::read_dir(&ns_path) {
@@ -226,17 +272,12 @@ impl LocalModelScanner {
                         }
                     };
                     let md_path = md.path();
-                    match fs::symlink_metadata(&md_path) {
-                        Ok(m) if m.file_type().is_symlink() => continue,
-                        Ok(m) if !m.is_dir() => continue,
-                        Ok(_) => {}
-                        Err(e) => {
-                            sink.record_failure(format!(
-                                "Could not read metadata for {}: {e}",
-                                md_path.display()
-                            ));
-                            continue;
-                        }
+                    let md_meta = match Self::inspect_model_entry(&md_path, "Ollama model", sink) {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    if !md_meta.is_dir() {
+                        continue;
                     }
 
                     let model_name = md.file_name().to_string_lossy().to_string();
@@ -262,16 +303,8 @@ impl LocalModelScanner {
                             }
                         };
                         let path = tag.path();
-                        match fs::symlink_metadata(&path) {
-                            Ok(m) if m.file_type().is_symlink() => continue,
-                            Ok(_) => {}
-                            Err(e) => {
-                                sink.record_failure(format!(
-                                    "Could not read metadata for {}: {e}",
-                                    path.display()
-                                ));
-                                continue;
-                            }
+                        if Self::inspect_model_entry(&path, "Ollama tag", sink).is_none() {
+                            continue;
                         }
 
                         let tag_name = tag.file_name().to_string_lossy().to_string();
@@ -396,27 +429,12 @@ impl LocalModelScanner {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("models--") {
                 let path = entry.path();
-                match fs::symlink_metadata(&path) {
-                    Ok(m) => {
-                        if m.file_type().is_symlink()
-                            || crate::safety::SymlinkGuard::is_symlink(&path)
-                        {
-                            // Deliberately exclude symlinked model entries for safety
-                            continue;
-                        }
-                        if !m.is_dir() {
-                            continue;
-                        }
-                    }
-                    Err(err) => {
-                        if err.kind() != std::io::ErrorKind::NotFound {
-                            sink.record_failure(format!(
-                                "Could not read metadata for HuggingFace model entry {}: {err}",
-                                path.display()
-                            ));
-                        }
-                        continue;
-                    }
+                let meta = match Self::inspect_model_entry(&path, "HuggingFace model", sink) {
+                    Some(m) => m,
+                    None => continue,
+                };
+                if !meta.is_dir() {
+                    continue;
                 }
                 let clean_name = name.trim_start_matches("models--").replace("--", "/");
                 let measurement = SizeCalculator::measure_path_logged(&path, &[], environment);
@@ -498,19 +516,10 @@ impl LocalModelScanner {
                 }
             };
             let path = entry.path();
-            let meta = match fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(err) => {
-                    sink.record_failure(format!(
-                        "Could not read metadata for {}: {err}",
-                        path.display()
-                    ));
-                    continue;
-                }
+            let meta = match Self::inspect_model_entry(&path, "Apple MLX model", sink) {
+                Some(m) => m,
+                None => continue,
             };
-            if meta.file_type().is_symlink() || crate::safety::SymlinkGuard::is_symlink(&path) {
-                continue;
-            }
 
             if meta.is_dir() {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -582,21 +591,10 @@ impl LocalModelScanner {
                 }
             };
             let path = entry.path();
-            let meta = match fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(err) => {
-                    sink.record_failure(format!(
-                        "Could not read metadata for {}: {err}",
-                        path.display()
-                    ));
-                    continue;
-                }
+            let meta = match Self::inspect_model_entry(&path, "LM Studio entry", sink) {
+                Some(m) => m,
+                None => continue,
             };
-
-            // Anti-symlink protection: NEVER follow symlinks in local model scanning
-            if meta.file_type().is_symlink() || crate::safety::SymlinkGuard::is_symlink(&path) {
-                continue;
-            }
 
             if meta.is_dir() {
                 Self::collect_gguf_files(&path, root, source, prefix, sink);
@@ -764,6 +762,19 @@ mod tests {
         assert!(LocalModelScanner::scan_all_models(&environment)
             .items
             .is_empty());
+    }
+
+    #[test]
+    fn unresolvable_model_root_records_failure_and_marks_inventory_unavailable() {
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+        assert!(inventory.items.is_empty());
+        assert_eq!(inventory.quality, ObservationQuality::Unavailable);
+        assert!(inventory.skipped_entry_count >= 1);
+        assert!(inventory
+            .incomplete_reasons
+            .iter()
+            .any(|r| r.contains("Could not resolve")));
     }
 
     #[test]

@@ -695,6 +695,7 @@ fn test_local_model_and_app_inventory_serialization_enforces_safe_integers() {
             is_running: false,
             is_system_protected: false,
             quality: ObservationQuality::Fresh,
+            size_quality: ObservationQuality::Fresh,
             incomplete_reason: None,
             skipped_entries: 0,
         }],
