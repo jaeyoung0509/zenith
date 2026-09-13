@@ -874,8 +874,8 @@ impl SafeTreeDeleter {
         })?;
         let handle = WindowsDeleteHandle::open(path)?;
         let expected_is_reparse = expected.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-        if handle.device != expected_identity.device
-            || handle.inode != expected_identity.inode
+        if handle.device != expected_identity.entity().device()
+            || handle.inode != expected_identity.entity().inode()
             || handle.is_reparse_point != expected_is_reparse
             || (!expected_is_reparse && handle.is_dir != expected.is_dir())
         {
@@ -1033,8 +1033,8 @@ impl SafeTreeDeleter {
                 })?;
                 let mut directory = WindowsDeleteHandle::open(path)
                     .map_err(|error| format_io_error(path, &error))?;
-                if directory.device != expected_identity.device
-                    || directory.inode != expected_identity.inode
+                if directory.device != expected_identity.entity().device()
+                    || directory.inode != expected_identity.entity().inode()
                     || !directory.is_dir
                     || directory.is_reparse_point
                     || expected_metadata.is_dir() != directory.is_dir
@@ -1193,9 +1193,9 @@ impl SafeTreeDeleter {
                     "filesystem identity unavailable"
                 )
             })?;
-            if !current.is_dir
-                || current.device != directory.device
-                || current.inode != directory.inode
+            if !current.is_dir()
+                || current.entity().device() != directory.device
+                || current.entity().inode() != directory.inode
                 || directory.is_reparse_point
             {
                 return Err(format!(

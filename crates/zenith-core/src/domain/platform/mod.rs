@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub mod context;
+
+pub use context::{PlatformAccelerator, PlatformContext};
+
 /// Describes whether a platform-sensitive feature can be used safely.
 /// `ReadOnly` is intentionally distinct from `Available`: a platform can
 /// expose inspection while withholding the destructive or mutating action.

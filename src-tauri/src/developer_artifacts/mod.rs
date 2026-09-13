@@ -1,8 +1,9 @@
-use crate::large_files::FileIdentity;
+use crate::large_files::identity_from_path;
 use crate::models::{
     DeveloperArtifact, DeveloperArtifactKind, DeveloperArtifactScanEvent,
     DeveloperArtifactScanResult, DeveloperArtifactStatus, DeveloperArtifactUninspected,
     DeveloperArtifactUninspectedReason, DeveloperEcosystem, DeveloperWorkspace,
+    ReviewedFileIdentity,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::platform::path_algebra;
@@ -30,7 +31,7 @@ const INVENTORY_TTL_SECS: u64 = 15 * 60;
 pub struct DeveloperWorkspaceRecord {
     pub workspace: DeveloperWorkspace,
     pub path: PathBuf,
-    pub identity: FileIdentity,
+    pub identity: ReviewedFileIdentity,
     pub created_at: u64,
     pub whole_home: bool,
 }
@@ -39,13 +40,13 @@ pub struct DeveloperWorkspaceRecord {
 pub struct DeveloperArtifactRecord {
     pub artifact: DeveloperArtifact,
     pub path: PathBuf,
-    pub identity: FileIdentity,
+    pub identity: ReviewedFileIdentity,
     pub workspace_path: PathBuf,
-    pub workspace_identity: FileIdentity,
+    pub workspace_identity: ReviewedFileIdentity,
     pub project_root: PathBuf,
-    pub project_identity: FileIdentity,
+    pub project_identity: ReviewedFileIdentity,
     pub artifact_relative: PathBuf,
-    pub marker_identities: Vec<(PathBuf, FileIdentity)>,
+    pub marker_identities: Vec<(PathBuf, ReviewedFileIdentity)>,
 }
 
 #[derive(Debug, Clone)]
@@ -475,7 +476,7 @@ pub fn workspace_snapshot(
             .get(id)
             .cloned()
             .ok_or_else(|| "The selected workspace is unknown. Add it again.".to_string())?;
-        let current = FileIdentity::from_path(&record.path)
+        let current = identity_from_path(&record.path)
             .ok_or_else(|| "The selected workspace disappeared or became a symlink.".to_string())?;
         if !record.path.is_dir() || !same_workspace_directory_identity(&current, &record.identity) {
             return Err(
@@ -490,7 +491,10 @@ pub fn workspace_snapshot(
     Ok(result)
 }
 
-fn same_workspace_directory_identity(current: &FileIdentity, expected: &FileIdentity) -> bool {
+fn same_workspace_directory_identity(
+    current: &ReviewedFileIdentity,
+    expected: &ReviewedFileIdentity,
+) -> bool {
     current.same_entity(expected)
 }
 
@@ -551,7 +555,7 @@ fn store_workspace(
     whole_home: bool,
     workspaces_store: &Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
 ) -> Result<DeveloperWorkspaceRecord, String> {
-    let identity = FileIdentity::from_path(&canonical)
+    let identity = identity_from_path(&canonical)
         .ok_or_else(|| "The selected workspace is not a stable directory.".to_string())?;
 
     let mut workspaces = workspaces_store
@@ -1565,7 +1569,7 @@ fn measure_tree(path: &Path, _root_device: u64, cancel: &AtomicBool, depth: usiz
         stats.complete = false;
         // A nested link is not followed and only makes aggregate size/count
         // partial. The reviewed artifact root itself is still rejected by
-        // FileIdentity before it can become a cleanup record.
+        // ReviewedFileIdentity before it can become a cleanup record.
         stats.safety_blocked = depth == 0;
         merge_mtime(&mut stats.newest_mtime, metadata.modified().ok());
         stats.logical_bytes = metadata.len();
@@ -1639,12 +1643,12 @@ fn record_from_measurement(
     {
         return None;
     }
-    let identity = FileIdentity::from_path(&candidate.path)?;
-    let project_identity = FileIdentity::from_path(&candidate.project_root)?;
+    let identity = identity_from_path(&candidate.path)?;
+    let project_identity = identity_from_path(&candidate.project_root)?;
     let marker_identities = candidate
         .marker_paths
         .iter()
-        .filter_map(|path| FileIdentity::from_path(path).map(|identity| (path.clone(), identity)))
+        .filter_map(|path| identity_from_path(path).map(|identity| (path.clone(), identity)))
         .collect::<Vec<_>>();
     let status = if stats.cancelled {
         DeveloperArtifactStatus::ScanCancelled
@@ -1788,7 +1792,7 @@ mod tests {
     }
 
     fn workspace_record(root: &Path) -> DeveloperWorkspaceRecord {
-        let identity = FileIdentity::from_path(root).unwrap();
+        let identity = identity_from_path(root).unwrap();
         DeveloperWorkspaceRecord {
             workspace: DeveloperWorkspace {
                 id: Uuid::new_v4().to_string(),
@@ -2305,7 +2309,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("a.bin");
         fs::write(&file, [1u8, 2, 3, 4]).unwrap();
-        let device = FileIdentity::from_path(temp.path()).unwrap().device();
+        let device = identity_from_path(temp.path()).unwrap().device();
         let stats = measure_tree(temp.path(), device, &AtomicBool::new(false), 0);
         assert!(stats.complete);
         assert_eq!(stats.file_count, 1);
@@ -2459,12 +2463,12 @@ mod tests {
     #[test]
     fn workspace_identity_ignores_normal_directory_metadata_changes() {
         let temp = tempfile::tempdir().unwrap();
-        let original = FileIdentity::from_path(temp.path()).unwrap();
+        let original = identity_from_path(temp.path()).unwrap();
         let registered = original
             .with_size(original.size().saturating_add(1))
             .with_modified(original.modified().map(|value| value.saturating_sub(1)));
 
-        let current = FileIdentity::from_path(temp.path()).unwrap();
+        let current = identity_from_path(temp.path()).unwrap();
         assert!(same_workspace_directory_identity(&current, &registered));
     }
 
@@ -2475,12 +2479,12 @@ mod tests {
         let workspace = temp.path().join("workspace");
         let original = temp.path().join("original-workspace");
         fs::create_dir(&workspace).unwrap();
-        let registered = FileIdentity::from_path(&workspace).unwrap();
+        let registered = identity_from_path(&workspace).unwrap();
 
         fs::rename(&workspace, &original).unwrap();
         fs::create_dir(&workspace).unwrap();
 
-        let current = FileIdentity::from_path(&workspace).unwrap();
+        let current = identity_from_path(&workspace).unwrap();
         assert!(!same_workspace_directory_identity(&current, &registered));
     }
 
@@ -2522,7 +2526,7 @@ mod tests {
     #[test]
     fn filesystem_boundary_is_typed_as_safety_blocked() {
         let temp = tempfile::tempdir().unwrap();
-        let actual_device = FileIdentity::from_path(temp.path()).unwrap().device();
+        let actual_device = identity_from_path(temp.path()).unwrap().device();
         let stats = measure_tree(
             temp.path(),
             actual_device.wrapping_add(1),
@@ -2542,9 +2546,9 @@ mod tests {
         fs::write(project.join("Cargo.toml"), "[package]\nname='my_project'\n").unwrap();
 
         let workspace = workspace_record(temp.path());
-        assert!(!workspace.identity.is_zero());
+        assert!(!workspace.identity.is_unknown());
         assert_eq!(
-            FileIdentity::from_path(temp.path()),
+            identity_from_path(temp.path()),
             Some(workspace.identity.clone())
         );
 
@@ -2558,14 +2562,14 @@ mod tests {
             0,
         );
         let record = record_from_measurement(candidate, stats).unwrap();
-        assert!(!record.identity.is_zero());
+        assert!(!record.identity.is_unknown());
         assert_eq!(
-            FileIdentity::from_path(&record.path),
+            identity_from_path(&record.path),
             Some(record.identity.clone())
         );
         assert!(same_workspace_directory_identity(
             &record.identity,
-            &FileIdentity::from_path(&record.path).unwrap()
+            &identity_from_path(&record.path).unwrap()
         ));
     }
 }

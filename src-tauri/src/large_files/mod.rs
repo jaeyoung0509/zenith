@@ -1,5 +1,6 @@
 use crate::models::{
-    LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult,
+    FileIdentity, LargeFileItem, LargeFileKind, LargeFileScanEvent, LargeFileScanRequest,
+    LargeFileScanResult, ReviewedFileIdentity,
 };
 use crate::platform::description::PlatformEnvironment;
 use crate::platform::path_algebra;
@@ -22,7 +23,7 @@ const LARGE_FILE_ROOTS: [&str; 4] = ["downloads", "desktop", "documents", "movie
 pub struct LargeFileRecord {
     pub item: LargeFileItem,
     pub path: PathBuf,
-    pub identity: FileIdentity,
+    pub identity: ReviewedFileIdentity,
 }
 
 #[derive(Debug, Clone)]
@@ -35,91 +36,35 @@ pub struct LargeFileInventory {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileIdentity {
-    device: u64,
-    inode: u64,
-    size: u64,
-    modified: Option<u64>,
-}
+/// Captures the reviewed identity of a path, refusing symlinks.
+///
+/// A reviewed target is the file the user saw in an inventory, not whatever a
+/// link now points at, so a symlink has no identity to review and is skipped
+/// instead of being resolved. On Windows the identity comes from a handle
+/// opened without following reparse points; a path whose handle cannot be
+/// opened yields no identity rather than the weaker fallback used elsewhere.
+pub fn identity_from_path(path: &Path) -> Option<ReviewedFileIdentity> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    if crate::safety::SymlinkGuard::is_symlink(path) {
+        return None;
+    }
+    #[cfg(unix)]
+    let (device, inode) = (meta.dev(), meta.ino());
+    #[cfg(windows)]
+    let (device, inode) = crate::safety::toctou::windows_file_identity(path)?;
+    #[cfg(not(any(unix, windows)))]
+    let (device, inode) = (0, 0);
 
-impl FileIdentity {
-    pub fn is_zero(&self) -> bool {
-        self.device == 0 && self.inode == 0
+    let entity = FileIdentity::new(device, inode);
+    if entity.is_unknown() {
+        return None;
     }
 
-    pub fn same_entity(&self, other: &Self) -> bool {
-        !self.is_zero()
-            && !other.is_zero()
-            && self.device == other.device
-            && self.inode == other.inode
-    }
-
-    pub fn device(&self) -> u64 {
-        self.device
-    }
-
-    pub fn inode(&self) -> u64 {
-        self.inode
-    }
-
-    pub fn size(&self) -> u64 {
-        self.size
-    }
-
-    pub fn modified(&self) -> Option<u64> {
-        self.modified
-    }
-
-    #[cfg(test)]
-    pub fn for_test(device: u64, inode: u64, size: u64, modified: Option<u64>) -> Self {
-        Self {
-            device,
-            inode,
-            size,
-            modified,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn with_size(&self, size: u64) -> Self {
-        Self {
-            size,
-            ..self.clone()
-        }
-    }
-
-    #[cfg(test)]
-    pub fn with_modified(&self, modified: Option<u64>) -> Self {
-        Self {
-            modified,
-            ..self.clone()
-        }
-    }
-
-    pub fn from_path(path: &Path) -> Option<Self> {
-        let meta = fs::symlink_metadata(path).ok()?;
-        if crate::safety::SymlinkGuard::is_symlink(path) {
-            return None;
-        }
-        #[cfg(unix)]
-        let (device, inode) = (meta.dev(), meta.ino());
-        #[cfg(windows)]
-        let (device, inode) = crate::safety::toctou::windows_file_identity(path)?;
-        #[cfg(not(any(unix, windows)))]
-        let (device, inode) = (0, 0);
-
-        if device == 0 && inode == 0 {
-            return None;
-        }
-
-        Some(Self {
-            device,
-            inode,
-            size: meta.len(),
-            modified: modified_secs(&meta),
-        })
-    }
+    Some(ReviewedFileIdentity::new(
+        entity,
+        meta.len(),
+        modified_secs(&meta),
+    ))
 }
 
 pub fn is_allowed_large_file_path(environment: &PlatformEnvironment, path: &Path) -> bool {
@@ -314,7 +259,7 @@ impl LargeFileScanner {
                         kind: classify(extension.as_deref()),
                         extension,
                     };
-                    let Some(identity) = FileIdentity::from_path(&path) else {
+                    let Some(identity) = identity_from_path(&path) else {
                         skipped_entries = skipped_entries.saturating_add(1);
                         continue;
                     };
@@ -554,14 +499,14 @@ mod tests {
         let second = dir.path().join("계정 둘");
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
-        let first_id = super::FileIdentity::from_path(&first).unwrap();
-        let second_id = super::FileIdentity::from_path(&second).unwrap();
+        let first_id = super::identity_from_path(&first).unwrap();
+        let second_id = super::identity_from_path(&second).unwrap();
         assert_ne!(
             (first_id.device(), first_id.inode()),
             (second_id.device(), second_id.inode())
         );
         assert!(!first_id.same_entity(&second_id));
-        assert!(super::FileIdentity::from_path(&dir.path().join("없는 폴더")).is_none());
+        assert!(super::identity_from_path(&dir.path().join("없는 폴더")).is_none());
     }
 
     #[cfg(windows)]
@@ -587,7 +532,7 @@ mod tests {
         assert!(super::safe_scan_root_metadata(&link, &environment).is_none());
         std::fs::create_dir(target.join("문서")).unwrap();
         assert!(super::safe_scan_root_metadata(&link.join("문서"), &environment).is_none());
-        assert!(super::FileIdentity::from_path(&link).is_none());
+        assert!(super::identity_from_path(&link).is_none());
         assert!(crate::developer_artifacts::validate_workspace_root(&environment, &link).is_err());
     }
     use crate::models::LargeFileFilter;
@@ -762,7 +707,11 @@ mod tests {
                     extension: Some("bin".to_string()),
                 },
                 path: PathBuf::from(format!("/tmp/{id}.bin")),
-                identity: FileIdentity::for_test(1, allocated_size, allocated_size, None),
+                identity: ReviewedFileIdentity::new(
+                    FileIdentity::new(1, allocated_size),
+                    allocated_size,
+                    None,
+                ),
             }
         }
 
@@ -799,16 +748,16 @@ mod tests {
         let file = dir.path().join("test_file.bin");
         std::fs::write(&file, b"test content").unwrap();
 
-        let id = FileIdentity::from_path(&file)
-            .expect("FileIdentity::from_path must succeed for existing file");
-        assert!(!id.is_zero(), "Identity must not be zero");
+        let id =
+            identity_from_path(&file).expect("identity_from_path must succeed for existing file");
+        assert!(!id.is_unknown(), "Identity must not be zero");
         assert_eq!(id.size(), 12);
-        assert_eq!(FileIdentity::from_path(&file), Some(id.clone()));
+        assert_eq!(identity_from_path(&file), Some(id.clone()));
         assert!(id.same_entity(&id));
 
         // Zero identity must not be considered same entity or valid
-        let zero = FileIdentity::for_test(0, 0, 12, None);
-        assert!(zero.is_zero());
+        let zero = ReviewedFileIdentity::new(FileIdentity::new(0, 0), 12, None);
+        assert!(zero.is_unknown());
         assert!(!id.same_entity(&zero));
         assert!(!zero.same_entity(&zero));
     }

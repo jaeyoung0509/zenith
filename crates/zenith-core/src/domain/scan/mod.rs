@@ -1,4 +1,4 @@
-use crate::models::{Category, ObservationQuality, RiskTier};
+use crate::domain::{Category, ObservationQuality, RiskTier};
 use serde::{Deserialize, Serialize};
 
 fn unavailable_observation_quality() -> ObservationQuality {
@@ -469,8 +469,8 @@ impl ScanResult {
         &self,
         scan_id: &str,
         now: u64,
-    ) -> Result<(), crate::models::ZenithError> {
-        use crate::models::ZenithError;
+    ) -> Result<(), crate::domain::ZenithError> {
+        use crate::domain::ZenithError;
         if self.scan_id != scan_id {
             return Err(ZenithError::InvalidPlan(
                 "The scan is no longer current. Scan again before cleaning.".into(),
@@ -494,30 +494,6 @@ impl ScanResult {
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(tag = "type")]
-pub enum ScanEvent {
-    Started {
-        scan_id: String,
-    },
-    CategoryStarted {
-        category: Category,
-    },
-    ItemFound {
-        item: ScanItem,
-    },
-    CategoryFinished {
-        category: Category,
-        #[serde(with = "crate::ipc_numeric::u64")]
-        #[specta(type = u64)]
-        bytes: u64,
-        item_count: usize,
-    },
-    Finished {
-        result: ScanResult,
-    },
 }
 
 #[cfg(test)]

@@ -1,20 +1,19 @@
 [package]
-name = "zenith-core"
-version = "0.3.26"
+name = "zenith-desktop"
 description = "Zenith - cross-platform AI & Developer System Manager"
-authors = ["Zenith Team"]
-edition = "2021"
-# Lowest toolchain that builds the locked dependency set, verified by bisecting
-# `cargo check --locked`: sysinfo 0.39.6 requires rustc 1.95, and specta
-# 2.0.0-rc.25 (pinned by tauri-specta) uses `core::fmt::from_fn`, which
-# stabilized in 1.93.0; 1.92.0 and older fail with E0658 in that crate.
-# notify-rust 4.18.0 also requires 1.89.0, above the 1.77.2 floor that fixes
-# CVE-2024-24576 (batch-file argument escaping on Windows, relevant because
-# Zenith spawns .cmd/.bat shims there). The CI `msrv` job installs exactly this
-# toolchain and runs `just check-msrv`.
-rust-version = "1.95.0"
-license = "MIT"
-repository = "https://github.com/jaeyoung0509/zenith"
+# The desktop adapter is an application, not a library anyone installs, and it
+# depends on `zenith-core` by path. `cargo deny` refuses a version-less
+# dependency on a publishable crate for the right reason — a wildcard
+# requirement reaching crates.io would resolve to anything — so the crate
+# states that it is not published rather than restating a version that the
+# path already fixes.
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lib]
 name = "zenith_lib"
@@ -28,6 +27,7 @@ path = "src/main.rs"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
+zenith-core = { path = "../crates/zenith-core" }
 tauri = { version = "2.0", features = ["macos-private-api", "tray-icon", "image-png"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

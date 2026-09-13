@@ -765,3 +765,64 @@ fn test_local_model_and_app_inventory_serialization_enforces_safe_integers() {
         .to_string();
     assert!(result_error.contains("Number.MAX_SAFE_INTEGER"));
 }
+
+/// The domain's authorization types must stay off the interface.
+///
+/// `DeletePlan`, `DeleteTarget`, and the captured filesystem identities are
+/// mutation authority: a caller that holds one can replay a deletion without a
+/// fresh scan. They carry no `serde` or `specta` derives, and this asserts the
+/// consequence rather than the attribute — the bindings are generated from the
+/// same Specta builder the commands use, so a type that reached the registry
+/// would show up here as a declaration.
+///
+/// Declarations are matched by name, not by substring: `createDeletePlan` is a
+/// command name and carries no authority, while a `DeletePlan_Serialize` type
+/// alias is exactly the leak this guards against.
+#[test]
+fn generated_bindings_never_declare_authorization_types() {
+    const AUTHORIZATION_TYPES: [&str; 6] = [
+        "DeletePlan",
+        "DeleteTarget",
+        "FileIdentity",
+        "CleanupIdentity",
+        "ReviewedFileIdentity",
+        "ModifiedStamp",
+    ];
+
+    let bindings = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/bindings/tauri.ts"),
+    )
+    .expect("the generated TypeScript bindings are committed to the repository");
+
+    // An empty or truncated file would satisfy the negative check below, so the
+    // surface it is supposed to describe is asserted first.
+    for expected in ["export type PlanPreview", "export type ScanItem"] {
+        assert!(
+            bindings.contains(expected),
+            "the bindings no longer declare `{expected}`; the leak check would pass on a file that describes nothing"
+        );
+    }
+
+    let mut leaked = Vec::new();
+    for line in bindings.lines() {
+        let Some(declaration) = line.strip_prefix("export type ") else {
+            continue;
+        };
+        let name = declaration
+            .split([' ', '='])
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        // Specta emits `Name_Serialize` / `Name_Deserialize` companions for
+        // types whose two directions differ; the base name is the identifier.
+        let base = name.split('_').next().unwrap_or_default().to_string();
+        if AUTHORIZATION_TYPES.contains(&base.as_str()) {
+            leaked.push(name);
+        }
+    }
+
+    assert!(
+        leaked.is_empty(),
+        "authorization state crossed the IPC boundary as {leaked:?}; project it through `zenith_core::application::dto` instead"
+    );
+}

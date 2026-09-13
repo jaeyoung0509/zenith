@@ -104,6 +104,13 @@ jobs:
       - name: Prepare Tauri frontend directory
         run: mkdir -p dist
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          # `just check-architecture` reads `cargo metadata`, so the crate
+          # boundary rule needs a Node runtime in the Rust jobs too.
+          node-version: 22
+
       - name: Install just
         uses: taiki-e/install-action@just
 
@@ -116,6 +123,9 @@ jobs:
 
       - name: Rust Cargo Check
         run: just check-rust
+
+      - name: Crate boundary rule
+        run: just check-architecture
 
       - name: Release installer regression tests
         run: just test-release-installer
@@ -141,6 +151,13 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path dist | Out-Null
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          # `just check-architecture` reads `cargo metadata`, so the crate
+          # boundary rule needs a Node runtime in the Rust jobs too.
+          node-version: 22
+
       - name: Install just
         uses: taiki-e/install-action@just
 
@@ -153,6 +170,9 @@ jobs:
 
       - name: Rust Cargo Check
         run: just check-rust
+
+      - name: Crate boundary rule
+        run: just check-architecture
 
   msrv:
     name: Minimum Supported Rust Version (1.95.0)

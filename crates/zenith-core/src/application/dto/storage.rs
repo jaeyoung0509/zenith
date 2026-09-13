@@ -1,43 +1,17 @@
-use crate::models::ObservationQuality;
+//! What the storage workflows report across the interface boundary.
+//!
+//! Every structure here is an observation: an inventory, a scan result, a
+//! preview, or a progress step. The taxonomy those observations are described
+//! with — what kind of large file this is, what a filter means, how strong a
+//! relationship is — lives in [`crate::domain::storage`]. The authority that
+//! turns a selection into a mutation never appears here: a `TrashPlanPreview`
+//! carries a plan ID and byte totals, not the plan.
+
+use crate::domain::storage::{
+    AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,
+};
+use crate::domain::ObservationQuality;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum LargeFileKind {
-    Video,
-    Archive,
-    DiskImage,
-    Installer,
-    VmImage,
-    AiModel,
-    Database,
-    DeveloperArtifact,
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum LargeFileFilter {
-    #[default]
-    All,
-    Installers,
-}
-
-impl LargeFileFilter {
-    pub fn minimum_threshold(self) -> u64 {
-        match self {
-            Self::All => 100 * 1024 * 1024,
-            Self::Installers => 10 * 1024 * 1024,
-        }
-    }
-
-    pub fn matches_extension(self, extension: Option<&str>) -> bool {
-        match self {
-            Self::All => true,
-            Self::Installers => matches!(extension, Some("dmg" | "pkg" | "mpkg" | "xip" | "iso")),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct LargeFileItem {
@@ -113,15 +87,6 @@ pub enum LargeFileScanEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum AppInstallSource {
-    ApplicationBundle,
-    HomebrewCask,
-    InstallerPackage,
-    Unknown,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct InstalledApp {
     pub id: String,
@@ -161,30 +126,6 @@ pub struct InstalledAppInventory {
     #[specta(type = u64)]
     pub skipped_entry_count: u64,
     pub incomplete_reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum AppRelatedConfidence {
-    High,
-    Medium,
-    Shared,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum AppRelatedKind {
-    AppBundle,
-    ApplicationSupport,
-    Cache,
-    Log,
-    Preference,
-    SavedState,
-    Container,
-    GroupContainer,
-    ApplicationScripts,
-    HttpStorage,
-    WebKit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

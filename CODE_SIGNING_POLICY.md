@@ -179,8 +179,8 @@ all of these rules:
 - Signing requests originate only from the reviewed release workflow in this
   repository and run on GitHub-hosted runners.
 - The requested source revision is a protected `v*` tag whose version matches
-  `package.json`, `src-tauri/Cargo.toml`, `Cargo.lock`, and
-  `src-tauri/tauri.conf.json`.
+  `package.json`, the root `Cargo.toml` `[workspace.package]` table,
+  `Cargo.lock`, and `src-tauri/tauri.conf.json`.
 - SignPath origin verification binds the request to the repository, workflow,
   commit, and release tag. Signing credentials and private keys never enter the
   repository or ordinary build logs.

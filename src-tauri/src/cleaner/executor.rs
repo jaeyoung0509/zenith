@@ -764,7 +764,7 @@ mod tests {
     /// while the path still existed.
     fn volatile_plan(path: &std::path::Path, is_dir: bool) -> DeletePlan {
         let identity = ToctouGuard::capture(path).expect("capture identity while present");
-        assert_eq!(identity.is_dir, is_dir);
+        assert_eq!(identity.is_dir(), is_dir);
         DeletePlan {
             id: uuid::Uuid::new_v4(),
             scan_id: "scan-volatile".to_string(),

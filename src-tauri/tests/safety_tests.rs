@@ -1672,6 +1672,8 @@ mod windows_safety {
     use super::*;
     use std::os::windows::ffi::OsStrExt;
     use std::path::PathBuf;
+    use zenith_core::domain::identity::FileIdentity;
+    use zenith_lib::models::CleanupIdentity;
 
     #[test]
     fn directory_handle_captures_real_volume_file_identity() {
@@ -1679,7 +1681,7 @@ mod windows_safety {
         let target = dir.path().join("cache");
         fs::create_dir(&target).unwrap();
         let identity = ToctouGuard::capture(&target).expect("capture identity");
-        assert_ne!((identity.device, identity.inode), (0, 0));
+        assert_ne!(identity.entity(), FileIdentity::UNKNOWN);
         assert!(ToctouGuard::verify(&target, &identity).is_ok());
     }
 
@@ -1688,10 +1690,18 @@ mod windows_safety {
         let dir = tempdir().expect("tempdir");
         let target = dir.path().join("cache");
         fs::create_dir(&target).unwrap();
-        let mut identity = ToctouGuard::capture(&target).expect("capture");
-        identity.device = 0;
-        identity.inode = 0;
-        assert!(ToctouGuard::verify(&target, &identity).is_err());
+        let identity = ToctouGuard::capture(&target).expect("capture");
+
+        // The legacy Windows capture recorded (0, 0) when it could not open the
+        // directory's handle and skipped the identity check. Rebuilding that
+        // capture with an unknown entity must fail verification, not pass it.
+        let unverified = CleanupIdentity::new(
+            FileIdentity::UNKNOWN,
+            identity.is_dir(),
+            identity.size(),
+            identity.modified(),
+        );
+        assert!(ToctouGuard::verify(&target, &unverified).is_err());
     }
 
     #[test]

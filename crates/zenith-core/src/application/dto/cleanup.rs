@@ -1,41 +1,14 @@
-use crate::models::{CleanStrategy, RiskSummary, RiskTier};
+//! Projections of cleanup state onto the interface contract.
+//!
+//! These types are intentionally serializable. They describe a plan or a run;
+//! they cannot reconstruct one. In particular [`PlanPreview`] carries the plan
+//! ID, target item IDs, and byte totals — never a path, a strategy, or a
+//! captured filesystem identity.
+
+use crate::domain::cleanup::DeletePlan;
+use crate::domain::{RiskSummary, RiskTier};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileIdentity {
-    pub device: u64,
-    pub inode: u64,
-    pub is_dir: bool,
-    pub size: u64,
-    pub mtime_secs: u64,
-    pub mtime_nanos: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeleteTarget {
-    pub item_id: String,
-    pub signature_id: String,
-    pub name: String,
-    pub path: PathBuf,
-    pub strategy: CleanStrategy,
-    pub expected_bytes: u64,
-    pub risk: RiskTier,
-    pub identity: Option<FileIdentity>,
-    pub exclusions: Vec<String>,
-    pub min_age_days: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeletePlan {
-    pub id: Uuid,
-    pub scan_id: String,
-    pub targets: Vec<DeleteTarget>,
-    pub expected_reclaim_bytes: u64,
-    pub risk: RiskSummary,
-    pub created_at: u64,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct PlanTargetPreview {
@@ -61,6 +34,11 @@ pub struct PlanPreview {
 }
 
 impl DeletePlan {
+    /// Reduces authorization state to the disposable facts the interface may
+    /// show. The projection drops `path`, `strategy`, and `identity` by
+    /// construction rather than by a `skip_serializing` attribute, so a
+    /// future field on [`crate::domain::cleanup::DeleteTarget`] cannot leak
+    /// through this call by accident.
     pub fn preview(&self, ttl_secs: u64) -> PlanPreview {
         PlanPreview {
             id: self.id,

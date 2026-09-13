@@ -1,0 +1,21 @@
+[package]
+name = "zenith-core"
+description = "Zenith product semantics: scanning, cleanup safety, storage policy, and platform capability description, with no desktop-framework dependency."
+# Workspace-internal: the version is inherited from the application it ships
+# with, so publishing it independently would publish a version nobody chose.
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.13"

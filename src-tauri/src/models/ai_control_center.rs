@@ -1,5 +1,6 @@
 use crate::models::DashboardRoute;
 use serde::{Deserialize, Serialize};
+use zenith_core::domain::observation::ObservationQuality;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -19,16 +20,6 @@ pub enum ObservationScope {
     Project,
     Organization,
     LocalSessions,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ObservationQuality {
-    #[default]
-    Fresh,
-    Stale,
-    Partial,
-    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

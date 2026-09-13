@@ -156,6 +156,7 @@ jobs:
           just lint-rust
           just test-rust
           just check-rust
+          just check-architecture
 
       - name: Build macOS DMG bundle (ARM64)
         run: pnpm tauri build --target aarch64-apple-darwin --bundles dmg --config .github/tauri.package-ci.json
@@ -248,6 +249,7 @@ jobs:
           just lint-rust
           just test-rust
           just check-rust
+          just check-architecture
 
       - name: Create release artifact directory
         shell: pwsh

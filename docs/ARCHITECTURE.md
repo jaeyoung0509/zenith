@@ -71,8 +71,76 @@ picker through a static PowerShell script on Windows. The Windows adapter never
 interpolates user-controlled text into the script, requests UTF-8 output, and
 maps picker cancellation to `None` just like the macOS adapter.
 
+## Crate boundary
+
+Zenith is a Cargo workspace with two members:
+
+```text
+Cargo.toml          workspace manifest: version, edition, MSRV, release profile
+crates/zenith-core  product semantics, with no desktop framework in the graph
+src-tauri           zenith-desktop: the Tauri adapter and the `Zenith` binary
+```
+
+Every file in `zenith-core` answers one question the same way: *would this
+still make sense if Zenith had a CLI instead of a Tauri window?* Scanning,
+cleanup safety, storage policy, platform capability description, and the DTOs
+the interface is allowed to see all say yes. Webview IPC, tray and window
+lifecycle, capability grants, and desktop composition all say no, so they stay
+in `zenith-desktop`.
+
+Inside the domain crate the split is by responsibility, not by screen:
+
+- `domain/scan`: what was measured, and whether it may be cleaned.
+- `domain/cleanup`: what may be deleted. `DeletePlan` and `DeleteTarget` are
+  authorization state and carry no `serde` or `specta` derives; the only way a
+  plan reaches the interface is `application/dto/cleanup`, whose
+  `DeletePlan::preview` projection drops paths, strategies, and captured
+  identities by construction rather than by an attribute someone could remove.
+- `domain/storage`: the vocabulary and thresholds of the storage workflows.
+- `domain/platform`: the capability snapshot and the per-platform vocabulary.
+- `domain/risk`, `domain/identity`, `domain/paths`, `domain/observation`:
+  shared primitives — risk tiers, filesystem identity, path invariants, and
+  observation quality.
+- `application/dto`: serializable projections, grouped by the workflow that
+  produces them.
+
+`domain/identity` separates two concepts that look alike and must not be
+interchangeable. `FileIdentity` is the device and inode a path resolved to.
+`CleanupIdentity` is what generic cleanup captured at plan time — entity, file
+type, size, and a sub-second modification stamp — while
+`ReviewedFileIdentity` is what a reviewed storage workflow captured about a
+user-selected target. Because they are different types, a reviewed Trash target
+cannot satisfy a cleanup TOCTOU check.
+
+The boundary is enforced rather than documented.
+`scripts/check_core_boundaries.cjs` reads the resolved dependency graph from
+`cargo metadata` and fails when `zenith-core` declares `tauri`, `tauri-build`,
+`tauri-plugin-*`, `windows-sys`, `security-framework`, or `rfd` as any kind of
+dependency, or reaches a `tauri*`, `windows*`, `security-framework*`, or `rfd`
+crate over normal and build edges at any depth. `just check-architecture` runs
+that check together with `cargo check -p zenith-core`; CI runs it on macOS and
+Windows.
+
+Two parts of the target layout are deliberately not here yet. `ports/` is
+absent because no type in this crate names a capability it has to be given: the
+first port arrives with the `zenith-platform` crate, which is the next step in
+the migration. `ValidatedDeletePath` and the rest of the execution authority are
+absent because they belong to the safety/service migration that follows it.
+Neither is stubbed.
+
 ## Repository map
 
+- `crates/zenith-core/src/domain`: product semantics that must not depend on the
+  desktop framework — risk, scan vocabulary and cleanup eligibility, cleanup
+  authorization, storage policy, platform capabilities, filesystem identity,
+  path invariants, and observation quality.
+- `crates/zenith-core/src/application/dto`: the serializable projections the
+  interface sees — plan previews, clean results and events, scan events, and the
+  storage-management inventories.
+- `src-tauri/src/models`: the desktop model surface. It re-exports the domain
+  semantics above by name and adds the DTOs only the desktop adapter produces
+  (AI usage, metrics, Docker, keep-awake, ports, agent activity, developer
+  artifacts, diagnostics, settings), so command modules keep one import root.
 - `src-tauri/src/commands`: narrow generic IPC boundary. `mod.rs` only composes
   domain exports; `ai.rs`, `cleanup.rs`, and `system.rs` own handlers, while
   `state.rs` and `support.rs` own shared state and helpers.
@@ -446,8 +514,9 @@ The shared Linux frontend job exports Specta bindings, checks binding and lock
 file drift, runs Svelte/Vitest, builds `dist`, and uploads that verified frontend
 artifact. macOS and Windows x64 run Rust format, Clippy, tests, and check in
 parallel. Two additional jobs are independent of the packaging chain: `msrv`
-builds with the toolchain declared in `src-tauri/Cargo.toml` (Rust 1.95.0)
-through `just check-msrv`, and `supply-chain` runs `just supply-chain`
+builds with the toolchain declared in the root `Cargo.toml`
+`[workspace.package]` table (Rust 1.95.0) through `just check-msrv`, and
+`supply-chain` runs `just supply-chain`
 (`cargo deny`, `cargo audit`, and `pnpm audit`) against both lockfiles. Each
 packaging smoke job depends on the shared frontend artifact and its matching
 Rust job, proving that the platform bundle embeds the exact tested frontend

@@ -2,7 +2,11 @@
 
 /**
  * Zenith Version Management Script
- * Synchronizes versions across package.json, src-tauri/Cargo.toml, and src-tauri/tauri.conf.json.
+ *
+ * Synchronizes the application version across package.json,
+ * src-tauri/tauri.conf.json, and the Cargo workspace: the version lives once in
+ * the root manifest's `[workspace.package]` table, where both `zenith-core` and
+ * `zenith-desktop` inherit it.
  */
 
 const fs = require('fs');
@@ -11,8 +15,41 @@ const path = require('path');
 const rootDir = path.resolve(__dirname, '..');
 const pkgPath = path.join(rootDir, 'package.json');
 const tauriPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
-const cargoPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
+const cargoPath = path.join(rootDir, 'Cargo.toml');
 const cargoLockPath = path.join(rootDir, 'Cargo.lock');
+
+/**
+ * Workspace members that carry the application version.
+ *
+ * Cargo.lock is checked for every one of them: the lock lists the two crates
+ * alphabetically, so a single `name = "zenith-core"` lookup would match the
+ * domain crate and silently stop comparing the application.
+ */
+const VERSIONED_PACKAGES = ['zenith-core', 'zenith-desktop'];
+
+/** Half-open range of the `[workspace.package]` table inside the manifest. */
+function workspacePackageTableRange(manifest) {
+  const header = '[workspace.package]';
+  const start = manifest.indexOf(header);
+  if (start === -1) {
+    return null;
+  }
+  const bodyStart = start + header.length;
+  const nextTable = manifest.indexOf('\n[', bodyStart);
+  return { start, bodyStart, end: nextTable === -1 ? manifest.length : nextTable };
+}
+
+/** Reads `version` out of the root manifest's `[workspace.package]` table. */
+function readWorkspaceVersion(manifest) {
+  const range = workspacePackageTableRange(manifest);
+  if (!range) {
+    return null;
+  }
+  const version = manifest
+    .slice(range.bodyStart, range.end)
+    .match(/^version\s*=\s*"([^"]+)"/m);
+  return version ? version[1] : null;
+}
 
 function getVersions() {
   const pkgMatch = fs.readFileSync(pkgPath, 'utf8').match(/"version":\s*"([^"]+)"/);
@@ -21,25 +58,33 @@ function getVersions() {
   const tauriMatch = fs.readFileSync(tauriPath, 'utf8').match(/"version":\s*"([^"]+)"/);
   const tauri = tauriMatch ? tauriMatch[1] : null;
 
-  const cargoMatch = fs.readFileSync(cargoPath, 'utf8').match(/^version\s*=\s*"([^"]+)"/m);
-  const cargo = cargoMatch ? cargoMatch[1] : null;
+  const cargo = readWorkspaceVersion(fs.readFileSync(cargoPath, 'utf8'));
 
-  const cargoLockMatch = fs
-    .readFileSync(cargoLockPath, 'utf8')
-    .match(/name = "zenith-core"\r?\nversion = "([^"]+)"/);
-  const cargoLock = cargoLockMatch ? cargoLockMatch[1] : null;
+  const cargoLockText = fs.readFileSync(cargoLockPath, 'utf8');
+  const cargoLock = VERSIONED_PACKAGES.map((name) => {
+    const match = cargoLockText.match(
+      new RegExp(`name = "${name}"\\r?\\nversion = "([^"]+)"`),
+    );
+    return { name, version: match ? match[1] : null };
+  });
 
   return { pkg, tauri, cargo, cargoLock };
 }
 
 function checkVersions(expectedVersion) {
   const { pkg, tauri, cargo, cargoLock } = getVersions();
-  console.log(`📦 package.json:      ${pkg}`);
-  console.log(`🦀 Cargo.toml:        ${cargo}`);
-  console.log(`🔒 Cargo.lock:        ${cargoLock}`);
-  console.log(`⚙️  tauri.conf.json:   ${tauri}`);
+  console.log(`📦 package.json:                   ${pkg}`);
+  console.log(`🦀 Cargo.toml [workspace.package]: ${cargo}`);
+  for (const entry of cargoLock) {
+    console.log(`🔒 Cargo.lock ${entry.name}:${' '.repeat(Math.max(1, 20 - entry.name.length))}${entry.version}`);
+  }
+  console.log(`⚙️  tauri.conf.json:                ${tauri}`);
 
-  if (!pkg || !tauri || !cargo || !cargoLock || pkg !== cargo || pkg !== tauri || pkg !== cargoLock) {
+  const lockVersionsMatch =
+    cargoLock.length === VERSIONED_PACKAGES.length &&
+    cargoLock.every((entry) => entry.version === pkg);
+
+  if (!pkg || !tauri || !cargo || !lockVersionsMatch || pkg !== cargo || pkg !== tauri) {
     console.error('❌ Version mismatch detected between manifest files!');
     process.exit(1);
   }
@@ -71,17 +116,32 @@ function writeVersion(nextVersion) {
   tauri = tauri.replace(/"version":\s*"[^"]+"/, `"version": "${cleanVersion}"`);
   fs.writeFileSync(tauriPath, tauri);
 
-  // 3. src-tauri/Cargo.toml
-  let cargo = fs.readFileSync(cargoPath, 'utf8');
-  cargo = cargo.replace(/^version\s*=\s*"[^"]+"/m, `version = "${cleanVersion}"`);
-  fs.writeFileSync(cargoPath, cargo);
-
-  // 4. Cargo.lock workspace package entry
-  let cargoLock = fs.readFileSync(cargoLockPath, 'utf8');
-  cargoLock = cargoLock.replace(
-    /(name = "zenith-core"\r?\nversion = ")[^"]+"/,
-    `$1${cleanVersion}"`,
+  // 3. Cargo.toml — the workspace version both members inherit
+  const cargo = fs.readFileSync(cargoPath, 'utf8');
+  const range = workspacePackageTableRange(cargo);
+  if (!range) {
+    console.error('❌ Cargo.toml no longer declares a [workspace.package] table');
+    process.exit(1);
+  }
+  const table = cargo.slice(range.bodyStart, range.end);
+  const rewritten = table.replace(/^version\s*=\s*"[^"]+"/m, `version = "${cleanVersion}"`);
+  if (rewritten === table) {
+    console.error('❌ Cargo.toml [workspace.package] has no version to update');
+    process.exit(1);
+  }
+  fs.writeFileSync(
+    cargoPath,
+    cargo.slice(0, range.bodyStart) + rewritten + cargo.slice(range.end),
   );
+
+  // 4. Cargo.lock — every workspace member that inherits the version
+  let cargoLock = fs.readFileSync(cargoLockPath, 'utf8');
+  for (const name of VERSIONED_PACKAGES) {
+    cargoLock = cargoLock.replace(
+      new RegExp(`(name = "${name}"\\r?\\nversion = ")[^"]+"`),
+      `$1${cleanVersion}"`,
+    );
+  }
   fs.writeFileSync(cargoLockPath, cargoLock);
 
   console.log(`🚀 Successfully updated version to ${cleanVersion} across all manifests.`);
