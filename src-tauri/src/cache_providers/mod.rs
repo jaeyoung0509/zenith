@@ -1,6 +1,7 @@
 use crate::models::{
-    derive_cleanup_disposition, CacheArtifactKind, CacheManagementMode, CacheMetadata,
-    CacheSizeSemantics, Category, CleanupEligibility, ObservationQuality, RiskTier, ScanItem,
+    derive_cleanup_disposition, AbsolutePath, CacheArtifactKind, CacheManagementMode,
+    CacheMetadata, CacheSizeSemantics, CanonicalPath, Category, CleanupEligibility,
+    ObservationQuality, RiskTier, ScanItem,
 };
 use crate::platform::path_algebra::{self, PathFlavor};
 use crate::platform::PlatformEnvironment;
@@ -306,7 +307,7 @@ fn discover_path(
     parse_discovered_path(&output.stdout).and_then(|path| validate_cache_path(path, environment))
 }
 
-fn parse_discovered_path(output: &[u8]) -> Result<PathBuf, String> {
+fn parse_discovered_path(output: &[u8]) -> Result<AbsolutePath, String> {
     if output.len() > MAX_DISCOVERY_OUTPUT {
         return Err("Cache discovery output exceeded the safety limit".to_string());
     }
@@ -320,20 +321,16 @@ fn parse_discovered_path(output: &[u8]) -> Result<PathBuf, String> {
     if lines.len() != 1 || lines[0].chars().any(char::is_control) {
         return Err("Cache discovery returned an ambiguous path".to_string());
     }
-    let path = PathBuf::from(lines[0]);
-    if !path.is_absolute() {
-        return Err("Cache discovery returned a relative path".to_string());
-    }
-    Ok(path)
+    AbsolutePath::new(lines[0]).map_err(|_| "Cache discovery returned a relative path".to_string())
 }
 
 fn validate_cache_path(
-    path: PathBuf,
+    path: AbsolutePath,
     environment: &PlatformEnvironment,
 ) -> Result<PathBuf, String> {
     let metadata = std::fs::symlink_metadata(&path)
         .map_err(|_| "The discovered cache directory is unavailable".to_string())?;
-    if !metadata.is_dir() || SymlinkGuard::is_symlink(&path) {
+    if !metadata.is_dir() || SymlinkGuard::is_symlink(path.as_path()) {
         return Err("The discovered cache must be a real directory".to_string());
     }
     // The stated profile is the authority: the runner's own home must not
@@ -343,18 +340,22 @@ fn validate_cache_path(
         .ok_or_else(|| "Could not resolve the current user profile".to_string())?;
     let canonical_home = std::fs::canonicalize(home)
         .map_err(|_| "Could not validate the current user profile".to_string())?;
-    let canonical = std::fs::canonicalize(&path)
+    // Every check below runs on the resolved location: an approved cache
+    // reached through a link is the link's target, and that is what the
+    // profile, blacklist, and symlink rules must be applied to.
+    let canonical = CanonicalPath::resolve(&path)
         .map_err(|_| "Could not canonicalize the discovered cache".to_string())?;
 
     let flavor = environment.flavor();
-    let in_profile = path_is_within(&canonical, &canonical_home, flavor);
-    let mut approved = in_profile && cache_location_approved(&canonical, &canonical_home, flavor);
+    let in_profile = path_is_within(canonical.as_path(), &canonical_home, flavor);
+    let mut approved =
+        in_profile && cache_location_approved(canonical.as_path(), &canonical_home, flavor);
     // Relocated caches (PNPM_HOME, UV_CACHE_DIR, a configured npm cache) stay
     // supported under the same blacklist and symlink validation as in-profile
     // locations instead of being refused for being outside the profile.
     for root in relocated_cache_roots(environment) {
-        approved |=
-            path_is_same(&canonical, &root, flavor) || path_is_within(&canonical, &root, flavor);
+        approved |= path_is_same(canonical.as_path(), &root, flavor)
+            || path_is_within(canonical.as_path(), &root, flavor);
     }
 
     if !approved {
@@ -362,15 +363,20 @@ fn validate_cache_path(
             "The provider cache override is outside approved user cache locations".to_string(),
         );
     }
-    Blacklist::validate_with(&canonical, environment).map_err(|error| error.to_string())?;
+    Blacklist::validate_with(canonical.as_path(), environment)
+        .map_err(|error| error.to_string())?;
     if in_profile {
-        SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home, environment)
-            .map_err(|error| error.to_string())?;
+        SymlinkGuard::validate_no_symlink_ancestors(
+            canonical.as_path(),
+            &canonical_home,
+            environment,
+        )
+        .map_err(|error| error.to_string())?;
     } else {
-        SymlinkGuard::validate_anchored_path(&canonical, environment)
+        SymlinkGuard::validate_anchored_path(canonical.as_path(), environment)
             .map_err(|error| error.to_string())?;
     }
-    Ok(canonical)
+    Ok(canonical.into_path_buf())
 }
 
 fn relocated_cache_roots(environment: &PlatformEnvironment) -> Vec<PathBuf> {
@@ -529,7 +535,7 @@ fn bounded_message(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::ProviderKind;
-    use super::{cache_location_approved, node_manager_roots, parse_discovered_path};
+    use super::{cache_location_approved, node_manager_roots, parse_discovered_path, AbsolutePath};
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::paths::SimulatedPaths;
     use crate::platform::PlatformEnvironment;
@@ -655,6 +661,12 @@ mod tests {
         );
     }
 
+    /// Fixture paths are rooted by construction; the type only makes the
+    /// assumption explicit at the boundary the test is exercising.
+    fn rooted(path: PathBuf) -> AbsolutePath {
+        AbsolutePath::new(path).expect("fixture path is absolute")
+    }
+
     #[test]
     fn validate_cache_path_approves_the_stated_home_and_refuses_elsewhere() {
         let stated_home = tempfile::tempdir().unwrap();
@@ -667,13 +679,13 @@ mod tests {
                     .with_flavor(PathFlavor::current())
                     .with_home(stated_home.path()),
             ));
-        assert!(super::validate_cache_path(cache.clone(), &environment).is_ok());
+        assert!(super::validate_cache_path(rooted(cache), &environment).is_ok());
 
         // An in-profile directory that is not an approved cache root is refused
         // even though it exists, so the approval step still does work.
         let unapproved = stated_home.path().join("random-override");
         std::fs::create_dir_all(&unapproved).unwrap();
-        assert!(super::validate_cache_path(unapproved, &environment).is_err());
+        assert!(super::validate_cache_path(rooted(unapproved), &environment).is_err());
     }
 
     #[test]

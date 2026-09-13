@@ -1,6 +1,7 @@
-use crate::models::{FileIdentity, ZenithError};
+use crate::models::{CleanupIdentity, ZenithError};
 use std::fs;
 use std::path::Path;
+use zenith_core::domain::identity::{FileIdentity, ModifiedStamp};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -9,19 +10,22 @@ pub struct ToctouGuard;
 
 impl ToctouGuard {
     /// Captures the filesystem identity (device ID, inode, file type, size, and modification timestamp).
-    pub fn capture(path: &Path) -> Option<FileIdentity> {
+    ///
+    /// The platform-specific capture is unchanged; the result is wrapped in
+    /// [`CleanupIdentity`] so the executor can only compare it against another
+    /// capture from this same path, and never against a reviewed storage
+    /// target's identity.
+    pub fn capture(path: &Path) -> Option<CleanupIdentity> {
         let meta = fs::symlink_metadata(path).ok()?;
 
         #[cfg(unix)]
         {
-            Some(FileIdentity {
-                device: meta.dev(),
-                inode: meta.ino(),
-                is_dir: meta.is_dir(),
-                size: meta.len(),
-                mtime_secs: meta.mtime().max(0) as u64,
-                mtime_nanos: meta.mtime_nsec().max(0) as u32,
-            })
+            Some(CleanupIdentity::new(
+                FileIdentity::new(meta.dev(), meta.ino()),
+                meta.is_dir(),
+                meta.len(),
+                ModifiedStamp::new(meta.mtime().max(0) as u64, meta.mtime_nsec().max(0) as u32),
+            ))
         }
 
         #[cfg(windows)]
@@ -35,14 +39,12 @@ impl ToctouGuard {
 
             let (device, inode) = windows_file_identity(path)?;
 
-            Some(FileIdentity {
-                device,
-                inode,
-                is_dir: meta.is_dir(),
-                size: meta.len(),
-                mtime_secs,
-                mtime_nanos,
-            })
+            Some(CleanupIdentity::new(
+                FileIdentity::new(device, inode),
+                meta.is_dir(),
+                meta.len(),
+                ModifiedStamp::new(mtime_secs, mtime_nanos),
+            ))
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -54,19 +56,17 @@ impl ToctouGuard {
                 .map(|d| (d.as_secs(), d.subsec_nanos()))
                 .unwrap_or((0, 0));
 
-            Some(FileIdentity {
-                device: 0,
-                inode: 0,
-                is_dir: meta.is_dir(),
-                size: meta.len(),
-                mtime_secs,
-                mtime_nanos,
-            })
+            Some(CleanupIdentity::new(
+                FileIdentity::new(0, 0),
+                meta.is_dir(),
+                meta.len(),
+                ModifiedStamp::new(mtime_secs, mtime_nanos),
+            ))
         }
     }
 
     /// Verifies that the filesystem identity matches what was recorded during scanning.
-    pub fn verify(path: &Path, expected: &FileIdentity) -> Result<(), ZenithError> {
+    pub fn verify(path: &Path, expected: &CleanupIdentity) -> Result<(), ZenithError> {
         let current = match Self::capture(path) {
             Some(id) => id,
             None => match fs::symlink_metadata(path) {
@@ -98,36 +98,34 @@ impl ToctouGuard {
         // that fail-open is now a verification failure.
         #[cfg(any(unix, windows))]
         {
-            if expected.device == 0 && expected.inode == 0 {
+            if expected.entity().is_unknown() {
                 return Err(ZenithError::ChangedSinceScan(format!(
                     "Filesystem identity unavailable for {}; refusing to mutate",
                     path.display()
                 )));
             }
-            if current.device == 0 && current.inode == 0 {
+            if current.entity().is_unknown() {
                 return Err(ZenithError::ChangedSinceScan(format!(
                     "Could not verify filesystem identity for {}; refusing to mutate",
                     path.display()
                 )));
             }
-            if current.device != expected.device || current.inode != expected.inode {
+            if current.entity() != expected.entity() {
                 return Err(ZenithError::ChangedSinceScan(format!(
-                    "Identity mismatch for {}: expected (dev={}, ino={}), found (dev={}, ino={})",
+                    "Identity mismatch for {}: expected ({}), found ({})",
                     path.display(),
-                    expected.device,
-                    expected.inode,
-                    current.device,
-                    current.inode
+                    expected.entity(),
+                    current.entity()
                 )));
             }
         }
 
         // File type (directory vs file) must strictly match
-        if current.is_dir != expected.is_dir {
+        if current.is_dir() != expected.is_dir() {
             return Err(ZenithError::ChangedSinceScan(format!(
                 "File type changed from is_dir={} to is_dir={} for {}",
-                expected.is_dir,
-                current.is_dir,
+                expected.is_dir(),
+                current.is_dir(),
                 path.display()
             )));
         }
@@ -138,19 +136,18 @@ impl ToctouGuard {
         // stale-temp signatures (`min_age_days`): the executor re-measures the
         // full tree newest-mtime immediately before deletion instead of
         // relying on the single directory mtime captured at plan time.
-        if current.mtime_secs != expected.mtime_secs || current.mtime_nanos != expected.mtime_nanos
-        {
+        if current.modified() != expected.modified() {
             return Err(ZenithError::ChangedSinceScan(format!(
                 "{} was modified after scanning (mtime mismatch)",
                 path.display()
             )));
         }
-        if !current.is_dir && current.size != expected.size {
+        if !current.is_dir() && current.size() != expected.size() {
             return Err(ZenithError::ChangedSinceScan(format!(
                 "File {} size changed from {} to {} bytes after scanning",
                 path.display(),
-                expected.size,
-                current.size
+                expected.size(),
+                current.size()
             )));
         }
 

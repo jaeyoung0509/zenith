@@ -1,7 +1,7 @@
 use crate::applications::AppInspectionRecord;
 use crate::developer_artifacts::DeveloperArtifactInventory;
 use crate::large_files::{
-    allowed_large_file_root, is_allowed_large_file_path, FileIdentity, LargeFileInventory,
+    allowed_large_file_root, identity_from_path, is_allowed_large_file_path, LargeFileInventory,
 };
 use crate::models::{
     DeveloperArtifactKind, DeveloperArtifactStatus, TrashItemResult, TrashPlanPreview, TrashResult,
@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
+use zenith_core::domain::identity::ReviewedFileIdentity;
 
 const PLAN_TTL_SECS: u64 = 300;
 
@@ -20,7 +21,7 @@ const PLAN_TTL_SECS: u64 = 300;
 pub struct TrashTarget {
     pub item_id: String,
     pub path: PathBuf,
-    pub identity: FileIdentity,
+    pub identity: ReviewedFileIdentity,
     pub logical_size: u64,
     pub allocated_size: u64,
     pub size_is_lower_bound: bool,
@@ -36,11 +37,11 @@ pub enum TrashScope {
     AppRelated,
     DeveloperArtifact {
         workspace_root: PathBuf,
-        workspace_identity: FileIdentity,
+        workspace_identity: ReviewedFileIdentity,
         project_root: PathBuf,
-        project_identity: FileIdentity,
+        project_identity: ReviewedFileIdentity,
         artifact_relative: PathBuf,
-        marker_identities: Vec<(PathBuf, FileIdentity)>,
+        marker_identities: Vec<(PathBuf, ReviewedFileIdentity)>,
         kind: DeveloperArtifactKind,
     },
 }
@@ -381,9 +382,9 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
         }
     }
 
-    let current = FileIdentity::from_path(&target.path)
+    let current = identity_from_path(&target.path)
         .ok_or_else(|| "Skipped because the item disappeared or became a symlink.".to_string())?;
-    if target.identity.is_zero() || current.is_zero() {
+    if target.identity.is_unknown() || current.is_unknown() {
         return Err("Skipped because the item has an unverifiable zero identity.".to_string());
     }
     if current != target.identity {
@@ -432,11 +433,11 @@ fn validate_developer_artifact_target(
     environment: &PlatformEnvironment,
     target: &TrashTarget,
     workspace_root: &Path,
-    workspace_identity: &FileIdentity,
+    workspace_identity: &ReviewedFileIdentity,
     project_root: &Path,
-    project_identity: &FileIdentity,
+    project_identity: &ReviewedFileIdentity,
     artifact_relative: &Path,
-    marker_identities: &[(PathBuf, FileIdentity)],
+    marker_identities: &[(PathBuf, ReviewedFileIdentity)],
     kind: DeveloperArtifactKind,
 ) -> Result<(), String> {
     if target.path == *workspace_root || target.path == *project_root {
@@ -480,7 +481,7 @@ fn validate_developer_artifact_target(
     }
     for (marker, identity) in marker_identities {
         if !marker.starts_with(workspace_root)
-            || FileIdentity::from_path(marker) != Some(identity.clone())
+            || identity_from_path(marker) != Some(identity.clone())
         {
             return Err("Skipped because project evidence changed after review.".to_string());
         }
@@ -493,8 +494,8 @@ fn validate_developer_artifact_target(
     Ok(())
 }
 
-fn same_directory_identity(path: &Path, expected: &FileIdentity) -> bool {
-    let Some(current) = FileIdentity::from_path(path) else {
+fn same_directory_identity(path: &Path, expected: &ReviewedFileIdentity) -> bool {
+    let Some(current) = identity_from_path(path) else {
         return false;
     };
     current.same_entity(expected) && path.is_dir()
@@ -639,6 +640,7 @@ mod tests {
     use crate::platform::paths::SimulatedPaths;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use zenith_core::domain::identity::FileIdentity;
 
     /// A POSIX environment stating exactly the profile the test means.
     fn posix_environment(home: &Path) -> PlatformEnvironment {
@@ -770,7 +772,7 @@ mod tests {
                 warnings: Vec::new(),
             },
             app_path: PathBuf::from("C:\\Program Files\\Example.app"),
-            app_identity: FileIdentity::for_test(1, 1, 0, None),
+            app_identity: ReviewedFileIdentity::new(FileIdentity::new(1, 1), 0, None),
             related: HashMap::new(),
             created_at: unix_timestamp(),
         };
@@ -810,7 +812,7 @@ mod tests {
                 warnings: vec!["bundle size unavailable".to_string()],
             },
             app_path: PathBuf::from("/Applications/Example.app"),
-            app_identity: FileIdentity::for_test(1, 1, 0, None),
+            app_identity: ReviewedFileIdentity::new(FileIdentity::new(1, 1), 0, None),
             related: HashMap::new(),
             created_at: unix_timestamp(),
         };
@@ -852,7 +854,7 @@ mod tests {
         let record = crate::large_files::LargeFileRecord {
             item,
             path: path.clone(),
-            identity: FileIdentity::from_path(&path).unwrap(),
+            identity: identity_from_path(&path).unwrap(),
         };
         let inventory = LargeFileInventory {
             scan_id: "scan-1".to_string(),
@@ -877,11 +879,11 @@ mod tests {
         let target = project.join("target");
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(project.join("Cargo.toml"), "[package]\nname='demo'\n").unwrap();
-        let workspace_identity = FileIdentity::from_path(&workspace).unwrap();
-        let project_identity = FileIdentity::from_path(&project).unwrap();
-        let target_identity = FileIdentity::from_path(&target).unwrap();
+        let workspace_identity = identity_from_path(&workspace).unwrap();
+        let project_identity = identity_from_path(&project).unwrap();
+        let target_identity = identity_from_path(&target).unwrap();
         let marker = project.join("Cargo.toml");
-        let marker_identity = FileIdentity::from_path(&marker).unwrap();
+        let marker_identity = identity_from_path(&marker).unwrap();
         let artifact = crate::models::DeveloperArtifact {
             id: "artifact".to_string(),
             workspace_id: "workspace-id".to_string(),
@@ -974,7 +976,7 @@ mod tests {
         std::fs::create_dir_all(&target).unwrap();
         let marker = project.join("Cargo.toml");
         std::fs::write(&marker, "[package]\nname='demo'\n").unwrap();
-        let marker_identity = FileIdentity::from_path(&marker).unwrap();
+        let marker_identity = identity_from_path(&marker).unwrap();
         let record = crate::developer_artifacts::DeveloperArtifactRecord {
             artifact: crate::models::DeveloperArtifact {
                 id: "artifact".to_string(),
@@ -994,11 +996,11 @@ mod tests {
                 selected_by_default: false,
             },
             path: target.clone(),
-            identity: FileIdentity::from_path(&target).unwrap(),
+            identity: identity_from_path(&target).unwrap(),
             workspace_path: workspace.clone(),
-            workspace_identity: FileIdentity::from_path(&workspace).unwrap(),
+            workspace_identity: identity_from_path(&workspace).unwrap(),
             project_root: project.clone(),
-            project_identity: FileIdentity::from_path(&project).unwrap(),
+            project_identity: identity_from_path(&project).unwrap(),
             artifact_relative: PathBuf::from("target"),
             marker_identities: vec![(marker.clone(), marker_identity)],
         };
@@ -1062,13 +1064,13 @@ mod tests {
                 selected_by_default: false,
             },
             path: target.clone(),
-            identity: FileIdentity::from_path(&target).unwrap(),
+            identity: identity_from_path(&target).unwrap(),
             workspace_path: project.clone(),
-            workspace_identity: FileIdentity::from_path(&project).unwrap(),
+            workspace_identity: identity_from_path(&project).unwrap(),
             project_root: project.clone(),
-            project_identity: FileIdentity::from_path(&project).unwrap(),
+            project_identity: identity_from_path(&project).unwrap(),
             artifact_relative: PathBuf::from("target"),
-            marker_identities: vec![(marker.clone(), FileIdentity::from_path(&marker).unwrap())],
+            marker_identities: vec![(marker.clone(), identity_from_path(&marker).unwrap())],
         };
         let inventory = DeveloperArtifactInventory {
             scan_id: "developer-scan".to_string(),
@@ -1110,7 +1112,7 @@ mod tests {
         let target = TrashTarget {
             item_id: "item".to_string(),
             path: file.clone(),
-            identity: FileIdentity::from_path(&file).unwrap(),
+            identity: identity_from_path(&file).unwrap(),
             logical_size: 5,
             allocated_size: 5,
             size_is_lower_bound: false,
@@ -1160,7 +1162,7 @@ mod tests {
     #[test]
     fn app_related_items_are_skipped_when_the_app_bundle_cannot_move() {
         let missing = PathBuf::from("/Applications/Missing Example.app");
-        let identity = FileIdentity::for_test(1, 1, 0, None);
+        let identity = ReviewedFileIdentity::new(FileIdentity::new(1, 1), 0, None);
         let plan = TrashPlan {
             id: Uuid::new_v4(),
             created_at: unix_timestamp(),
@@ -1208,14 +1210,14 @@ mod tests {
         let marker = project.join("Cargo.toml");
         std::fs::write(&marker, "[package]\nname='demo'\n").unwrap();
 
-        let workspace_identity = FileIdentity::from_path(&workspace).unwrap();
-        let project_identity = FileIdentity::from_path(&project).unwrap();
-        let marker_identity = FileIdentity::from_path(&marker).unwrap();
+        let workspace_identity = identity_from_path(&workspace).unwrap();
+        let project_identity = identity_from_path(&project).unwrap();
+        let marker_identity = identity_from_path(&marker).unwrap();
 
         let target_item = TrashTarget {
             item_id: "artifact".to_string(),
             path: target,
-            identity: FileIdentity::for_test(0, 0, 7, None),
+            identity: ReviewedFileIdentity::new(FileIdentity::new(0, 0), 7, None),
             logical_size: 7,
             allocated_size: 7,
             size_is_lower_bound: false,
@@ -1312,7 +1314,7 @@ mod tests {
                 TrashTarget {
                     item_id: "target1".to_string(),
                     path: file1.clone(),
-                    identity: FileIdentity::from_path(&file1).unwrap(),
+                    identity: identity_from_path(&file1).unwrap(),
                     logical_size: 4,
                     allocated_size: 4,
                     size_is_lower_bound: false,
@@ -1323,7 +1325,7 @@ mod tests {
                 TrashTarget {
                     item_id: "target2".to_string(),
                     path: file2.clone(),
-                    identity: FileIdentity::from_path(&file2).unwrap(),
+                    identity: identity_from_path(&file2).unwrap(),
                     logical_size: 4,
                     allocated_size: 4,
                     size_is_lower_bound: true,

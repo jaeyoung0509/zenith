@@ -124,8 +124,11 @@ test: test-rust test-front test-release-installer
     @echo "🎉 All Rust & Frontend tests passed!"
 
 # Run Rust safety invariants & unit tests (the same command CI runs)
+#
+# The workspace is tested as a whole so `zenith-core`'s own suite runs on every
+# platform the desktop crate does, not only where someone remembers to ask.
 test-rust:
-    cargo test --manifest-path src-tauri/Cargo.toml
+    cargo test --workspace
 
 # Run frontend Vitest unit tests
 test-front:
@@ -154,12 +157,12 @@ test-package installer scope="perUser":
 
 # Run the doctor self-check against a binary built from this source tree.
 doctor: ensure-dist
-    cargo run --manifest-path src-tauri/Cargo.toml --bin Zenith -- --doctor
+    cargo run -p zenith-desktop --bin Zenith -- --doctor
 
 # Rust format and lint gate (the same command the CI Rust jobs run).
 lint-rust:
-    cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-    cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Lint and format gate (Rust plus the frontend typecheck).
 lint: lint-rust
@@ -167,18 +170,25 @@ lint: lint-rust
 
 # Rust compile check (the same command the CI Rust jobs run).
 check-rust:
-    cargo check --manifest-path src-tauri/Cargo.toml
+    cargo check --workspace
+
+# Architecture rule: the domain crate must build without the desktop crate and
+# must not reach a desktop framework or a native platform binding, at any depth.
+# Enforced from the resolved dependency graph rather than by convention.
+check-architecture:
+    cargo check -p zenith-core
+    node scripts/check_core_boundaries.cjs
 
 # Check code types & compile check
-check: ensure-dist lint-rust
+check: ensure-dist lint-rust check-architecture
     just check-rust
     pnpm check
     pnpm build
 
-# Build with the exact rust-version declared in src-tauri/Cargo.toml
+# Build with the exact rust-version declared in the workspace manifest
 check-msrv: ensure-dist
     node scripts/check_rust_version.cjs
-    cargo check --manifest-path src-tauri/Cargo.toml --locked
+    cargo check --workspace --locked
 
 # Fail on locked-dependency vulnerabilities, license drift, and duplicate bans
 supply-chain:
@@ -186,7 +196,8 @@ supply-chain:
     cargo audit
     pnpm audit --audit-level=high
 
-# Check version consistency across package.json, Cargo.toml, and tauri.conf.json
+# Check version consistency across package.json, the workspace manifests, and
+# tauri.conf.json
 check-version:
     @node scripts/bump_version.cjs check
 

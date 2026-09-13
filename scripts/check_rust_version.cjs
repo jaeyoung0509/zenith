@@ -2,7 +2,11 @@
 
 /**
  * Verifies that the active Rust toolchain matches the `rust-version` declared
- * in src-tauri/Cargo.toml.
+ * in the root Cargo.toml workspace manifest.
+ *
+ * The floor is a workspace property: `zenith-core` and `zenith-desktop` both
+ * inherit it, so the check reads the one place it is stated rather than one of
+ * the two packages that inherit it.
  *
  * The `msrv` CI job installs exactly that toolchain before running this script,
  * so a toolchain/declaration drift fails the job instead of silently verifying
@@ -14,7 +18,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const rootDir = path.resolve(__dirname, '..');
-const manifestPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
+const manifestPath = path.join(rootDir, 'Cargo.toml');
 
 function fail(message) {
   console.error(`Error: ${message}`);
@@ -35,8 +39,8 @@ if (!active) {
   fail(`could not parse the active rustc version from: ${rustcOutput}`);
 }
 
-console.log(`src-tauri/Cargo.toml rust-version: ${declared}`);
-console.log(`active rustc:                    ${active} (${rustcOutput})`);
+console.log(`Cargo.toml rust-version:   ${declared}`);
+console.log(`active rustc:              ${active} (${rustcOutput})`);
 
 if (active !== declared) {
   fail(

@@ -17,6 +17,28 @@ safety conventions below when changing Zenith.
   `pnpm test -- --run`, and `pnpm build`. Use `just build-fast` to verify that
   the standalone debug binary embeds the current frontend.
 
+## Crate boundary
+
+- Zenith is a Cargo workspace. `crates/zenith-core` owns product semantics; the
+  `src-tauri` package (`zenith-desktop`, library `zenith_lib`, binary `Zenith`)
+  owns the Tauri adapter. The version, edition, and MSRV are stated once in the
+  root `Cargo.toml` `[workspace.package]` table and both members inherit them;
+  `just check-version` and `just bump-patch` maintain that one copy.
+- `zenith-core` must not depend on `tauri`, `tauri-build`, `tauri-plugin-*`,
+  `windows-sys`, `security-framework`, or `rfd`, directly or transitively.
+  `scripts/check_core_boundaries.cjs` enforces this from `cargo metadata`; run
+  `just check-architecture` after adding or moving a dependency.
+- Ask of every Rust file: would this still make sense if Zenith had a CLI
+  instead of a Tauri window? If yes it belongs in `zenith-core`. If it owns
+  WebView IPC, tray or window lifecycle, capability grants, or desktop
+  composition, it stays in `src-tauri`.
+- Domain authorization state is not a frontend contract. `DeletePlan` and
+  `DeleteTarget` carry no `serde` or `specta` derives; an interface-facing
+  shape is a separate projection under `zenith_core::application::dto`.
+- Do not restate a domain type in the desktop crate. `src-tauri/src/models`
+  re-exports the core types by name so command modules keep one import root,
+  and adds only the DTOs the desktop adapter produces itself.
+
 ## Tauri architecture
 
 - Keep Tauri commands thin. Put scanning, cleanup, metrics, power management,
@@ -29,9 +51,10 @@ safety conventions below when changing Zenith.
   `tauri::async_runtime::spawn_blocking`. Use Tauri channels for operations that
   report progress over time.
 - Every serialized `u64` or `Option<u64>` that crosses IPC must use the shared
-  `ipc_numeric` serde adapter plus a matching explicit Specta type annotation.
-  Add a real model serialization regression test; never justify an unguarded
-  integer with an assumed workstation-size bound.
+  `ipc_numeric` serde adapter (`zenith_core::ipc_numeric`, re-exported as
+  `crate::ipc_numeric` in the desktop crate) plus a matching explicit Specta
+  type annotation. Add a real model serialization regression test; never
+  justify an unguarded integer with an assumed workstation-size bound.
 - Lifecycle-owned registries such as cancellation handles must have a TTL and
   hard entry cap, recover poisoned locks where their state is disposable, and
   remove entries on success, cancellation, and error paths.
@@ -130,6 +153,9 @@ safety conventions below when changing Zenith.
   frontend job. macOS and Windows Rust jobs run in parallel; packaging jobs may
   consume the verified frontend artifact only after their platform Rust job
   succeeds. Do not duplicate the frontend test suite in each platform job.
+- Each platform Rust job runs `just check-architecture` alongside the format,
+  lint, test, and check recipes. The crate boundary is a build invariant, not a
+  review convention; do not move it behind a scheduled or advisory job.
 - Packaging jobs use `.github/tauri.package-ci.json` to disable Tauri's frontend
   rebuild. Pass the file path to `--config`; do not inline JSON in workflow
   commands because PowerShell command forwarding strips nested quotes. The

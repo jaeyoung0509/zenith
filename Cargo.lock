@@ -5905,7 +5905,18 @@ dependencies = [
 
 [[package]]
 name = "zenith-core"
-version = "0.3.26"
+version = "0.3.27"
+dependencies = [
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "zenith-desktop"
+version = "0.3.27"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -5934,6 +5945,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "windows-sys 0.61.2",
+ "zenith-core",
 ]
 
 [[package]]

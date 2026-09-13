@@ -1,4 +1,4 @@
-use crate::large_files::FileIdentity;
+use crate::large_files::identity_from_path;
 #[cfg(not(target_os = "windows"))]
 use crate::models::AppInstallSource;
 use crate::models::{
@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(not(target_os = "windows"))]
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
+use zenith_core::domain::identity::ReviewedFileIdentity;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -26,7 +27,7 @@ const MAX_INCOMPLETE_REASONS: usize = 32;
 pub struct AppRecord {
     pub app: InstalledApp,
     pub path: PathBuf,
-    pub identity: FileIdentity,
+    pub identity: ReviewedFileIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,14 +65,14 @@ pub struct AppInventory {
 pub struct RelatedRecord {
     pub item: AppRelatedItem,
     pub path: PathBuf,
-    pub identity: FileIdentity,
+    pub identity: ReviewedFileIdentity,
 }
 
 #[derive(Debug, Clone)]
 pub struct AppInspectionRecord {
     pub inspection: AppUninstallInspection,
     pub app_path: PathBuf,
-    pub app_identity: FileIdentity,
+    pub app_identity: ReviewedFileIdentity,
     pub related: HashMap<String, RelatedRecord>,
     pub created_at: u64,
 }
@@ -217,7 +218,7 @@ impl ApplicationScanner {
                         continue;
                     }
 
-                    let Some(identity) = FileIdentity::from_path(&path) else {
+                    let Some(identity) = identity_from_path(&path) else {
                         skipped_entry_count = skipped_entry_count.saturating_add(1);
                         if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
                             incomplete_reasons.push(format!(
@@ -373,7 +374,7 @@ impl ApplicationScanner {
                 record.app.name
             ));
         }
-        if FileIdentity::from_path(&record.path).as_ref() != Some(&record.identity) {
+        if identity_from_path(&record.path).as_ref() != Some(&record.identity) {
             return Err(
                 "The application changed after inventory. Refresh applications.".to_string(),
             );
@@ -502,7 +503,7 @@ impl ApplicationScanner {
                 else {
                     continue;
                 };
-                let Some(identity) = FileIdentity::from_path(&path) else {
+                let Some(identity) = identity_from_path(&path) else {
                     incomplete = true;
                     continue;
                 };

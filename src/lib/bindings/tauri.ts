@@ -380,8 +380,10 @@ export type AiUsageSnapshot_Serialize = {
 	fetched_at: number,
 };
 
+/**  How an installed application was discovered. */
 export type AppInstallSource = "application_bundle" | "homebrew_cask" | "installer_package" | "unknown";
 
+/**  How strongly a path is tied to the application being uninstalled. */
 export type AppRelatedConfidence = "high" | "medium" | "shared";
 
 export type AppRelatedItem = AppRelatedItem_Serialize | AppRelatedItem_Deserialize;
@@ -1493,7 +1495,18 @@ export type ObservationPeriod_Serialize = {
 	label: string,
 };
 
-export type ObservationQuality = "fresh" | "stale" | "partial" | "unavailable";
+export type ObservationQuality = 
+/**  The measurement completed and describes every entry it covers. */
+"fresh" | 
+/**
+ *  The measurement completed, but the underlying source lags the live
+ *  state it describes.
+ */
+"stale" | 
+/**  Part of the tree could not be measured. The total is a lower bound. */
+"partial" | 
+/**  Nothing could be measured. The absence of a number is the reading. */
+"unavailable";
 
 export type ObservationScope = "subscription" | "api_key" | "project" | "organization" | "local_sessions";
 

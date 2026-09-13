@@ -14,7 +14,11 @@ pub mod diagnostics;
 pub mod docker;
 pub mod execution_budget;
 pub mod hash;
-pub mod ipc_numeric;
+// The wire rule for a `u64` that crosses IPC is a property of the contract,
+// not of the desktop adapter, so it is defined in `zenith_core` and re-exported
+// here: `#[serde(with = "crate::ipc_numeric::u64")]` keeps working in both
+// crates against the single definition.
+pub use zenith_core::ipc_numeric;
 pub mod large_files;
 pub mod metrics;
 pub mod models;

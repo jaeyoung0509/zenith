@@ -1,4 +1,4 @@
-use crate::models::ZenithError;
+use crate::models::{CanonicalPath, PathViolation, ZenithError};
 use crate::platform::path_algebra;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -364,12 +364,17 @@ impl SymlinkGuard {
     }
 
     /// Canonicalizes the path and verifies that its canonical location does not violate Blacklist.
+    ///
+    /// The blacklist is applied to the resolved location. Every spelling of a
+    /// file resolves to one path, so a target cannot be named around the rule,
+    /// and a link is judged by where it points rather than by what it is
+    /// called.
     pub fn validate_canonical_blacklist(
         path: &Path,
         environment: &crate::platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
-        if let Ok(canonical) = fs::canonicalize(path) {
-            crate::safety::Blacklist::validate_with(&canonical, environment)?;
+        if let Ok(canonical) = CanonicalPath::resolve(path) {
+            crate::safety::Blacklist::validate_with(canonical.as_path(), environment)?;
         }
         Ok(())
     }
@@ -380,17 +385,19 @@ impl SymlinkGuard {
         path: &Path,
         environment: &crate::platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
-        let canonical = fs::canonicalize(path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                return ZenithError::Missing(path.display().to_string());
+        let canonical = CanonicalPath::resolve(path).map_err(|violation| {
+            // A path that no longer resolves is already absent; every other
+            // resolution failure is a mutation blocker.
+            match &violation {
+                PathViolation::Unresolvable { kind, .. }
+                    if *kind == std::io::ErrorKind::NotFound =>
+                {
+                    ZenithError::Missing(path.display().to_string())
+                }
+                _ => ZenithError::ChangedSinceScan(violation.to_string()),
             }
-            ZenithError::ChangedSinceScan(format!(
-                "Could not verify canonical location for {}: {}",
-                path.display(),
-                error
-            ))
         })?;
-        crate::safety::Blacklist::validate_with(&canonical, environment)?;
+        crate::safety::Blacklist::validate_with(canonical.as_path(), environment)?;
         Ok(())
     }
 

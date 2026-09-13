@@ -11,8 +11,8 @@ separate verbatim-path and console regressions fixed in #118.
 
 ## What CI actually verifies
 
-The `rust-windows` job in `.github/workflows/ci.yml` runs
-`cargo test --manifest-path src-tauri/Cargo.toml` on `windows-latest`, so the
+The `rust-windows` job in `.github/workflows/ci.yml` runs `just test-rust`
+(`cargo test --workspace`) on `windows-latest`, so the
 Windows-gated (`#[cfg(windows)]`) tests run against real Windows APIs and a real
 NTFS temporary directory. Those tests assert:
 
