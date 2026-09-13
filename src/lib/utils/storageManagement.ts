@@ -60,12 +60,12 @@ export function isSelectedAppTrashLowerBound(
   inspection: AppUninstallInspection,
   selectedRelatedIds: string[]
 ): boolean {
-  if (inspection.app.size_quality === 'partial') {
+  if (inspection.app.size_quality !== 'fresh') {
     return true;
   }
   const selected = new Set(selectedRelatedIds);
   return inspection.related_items.some(
-    (item) => selected.has(item.id) && item.quality === 'partial'
+    (item) => selected.has(item.id) && item.quality !== 'fresh'
   );
 }
 

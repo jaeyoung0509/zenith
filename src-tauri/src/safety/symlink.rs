@@ -91,12 +91,19 @@ impl SymlinkInspector for NativeSymlinkInspector {
     }
 }
 
+fn fail_closed_link_result(result: std::io::Result<bool>) -> bool {
+    match result {
+        Ok(is_symlink) => is_symlink,
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 impl SymlinkGuard {
     /// Checks whether the path is a symbolic link or reparse point (junction, mount point) without following it.
     /// Cloud placeholders (OneDrive), deduplication, and WOF compression are treated as regular entries.
     /// For inspection pipelines that must fail closed on access/permission errors, use `is_symlink_metadata`.
     pub fn is_symlink(path: &Path) -> bool {
-        Self::is_symlink_metadata(path).unwrap_or(false)
+        fail_closed_link_result(Self::is_symlink_metadata(path))
     }
 
     /// Reads metadata to check whether the path is a symbolic link or name-surrogate reparse point.
@@ -594,6 +601,21 @@ mod tests {
             SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment),
             Err(ZenithError::Missing(_))
         ));
+    }
+
+    #[test]
+    fn boolean_link_check_only_treats_not_found_as_an_ordinary_absence() {
+        assert!(!fail_closed_link_result(Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing",
+        ))));
+        assert!(fail_closed_link_result(Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "refused",
+        ))));
+        assert!(fail_closed_link_result(Err(std::io::Error::other(
+            "reparse classification failed",
+        ))));
     }
 
     #[cfg(unix)]

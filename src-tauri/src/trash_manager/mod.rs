@@ -135,8 +135,7 @@ impl TrashPlanner {
             identity: inspection.app_identity.clone(),
             logical_size: app_size.logical_size,
             allocated_size: app_size.allocated_size,
-            size_is_lower_bound: app_size.size_quality
-                == crate::models::ObservationQuality::Partial,
+            size_is_lower_bound: app_size.size_quality != crate::models::ObservationQuality::Fresh,
             scope: TrashScope::AppBundle,
         });
 
@@ -155,7 +154,7 @@ impl TrashPlanner {
                 logical_size: record.item.logical_size,
                 allocated_size: record.item.allocated_size,
                 size_is_lower_bound: record.item.quality
-                    == crate::models::ObservationQuality::Partial,
+                    != crate::models::ObservationQuality::Fresh,
                 scope: TrashScope::AppRelated,
             });
         }
@@ -779,6 +778,45 @@ mod tests {
         let error = TrashPlanner::from_app_inspection(&environment, &inspection, &[])
             .expect_err("Windows has no app uninstall path");
         assert!(error.contains("not supported on Windows"));
+    }
+
+    #[test]
+    fn unavailable_app_size_marks_the_trash_plan_as_a_lower_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let environment = posix_environment(temp.path());
+        let inspection = AppInspectionRecord {
+            inspection: crate::models::AppUninstallInspection {
+                inspection_id: "inspection".to_string(),
+                app: crate::models::InstalledApp {
+                    id: "app".to_string(),
+                    name: "Example".to_string(),
+                    bundle_id: Some("com.example.Editor".to_string()),
+                    version: None,
+                    display_path: "/Applications/Example.app".to_string(),
+                    executable_name: None,
+                    logical_size: 0,
+                    allocated_size: 0,
+                    modified_at: None,
+                    install_source: crate::models::AppInstallSource::ApplicationBundle,
+                    is_running: false,
+                    is_system_protected: false,
+                    quality: crate::models::ObservationQuality::Partial,
+                    size_quality: crate::models::ObservationQuality::Unavailable,
+                    incomplete_reason: Some("bundle size unavailable".to_string()),
+                    skipped_entries: 1,
+                },
+                related_items: Vec::new(),
+                incomplete: true,
+                warnings: vec!["bundle size unavailable".to_string()],
+            },
+            app_path: PathBuf::from("/Applications/Example.app"),
+            app_identity: FileIdentity::for_test(1, 1, 0, None),
+            related: HashMap::new(),
+            created_at: unix_timestamp(),
+        };
+
+        let plan = TrashPlanner::from_app_inspection(&environment, &inspection, &[]).unwrap();
+        assert!(plan.preview().size_is_lower_bound);
     }
 
     #[test]

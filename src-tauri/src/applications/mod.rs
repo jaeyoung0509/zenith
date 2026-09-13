@@ -76,7 +76,7 @@ pub struct AppInspectionRecord {
     pub created_at: u64,
 }
 
-/// Filesystem probe seam for inspecting application-related data directories.
+/// Filesystem probe seam for application discovery and size inspection.
 /// Allows deterministic testing of permission and I/O failures without altering host permissions.
 pub trait AppFsProbe: Send + Sync {
     fn symlink_metadata(&self, path: &Path) -> std::io::Result<fs::Metadata> {
@@ -96,12 +96,17 @@ pub struct ApplicationScanner;
 
 impl ApplicationScanner {
     pub fn scan(environment: &PlatformEnvironment) -> AppInventory {
+        Self::scan_with(environment, &NativeAppFsProbe)
+    }
+
+    pub fn scan_with<P: AppFsProbe>(environment: &PlatformEnvironment, probe: &P) -> AppInventory {
         // Windows has no reviewed application-bundle inventory: bundles,
         // their related data, and the uninstall review that consumes them are
         // macOS concepts. The refusal is stated by the environment's flavor so
         // it is provable on any runner, and a native Windows process states
         // Windows.
         if environment.flavor().is_windows() {
+            let _ = probe;
             return empty_inventory();
         }
 
@@ -115,6 +120,7 @@ impl ApplicationScanner {
             let mut records = HashMap::new();
             let mut skipped_entry_count = 0u64;
             let mut incomplete_reasons = Vec::new();
+            let mut observed_roots = 0u64;
 
             // The reviewed system root and the stated profile's own folder are
             // the only places an application bundle is inventoried from.
@@ -124,6 +130,18 @@ impl ApplicationScanner {
             }
             if let Some(home) = environment.user_home() {
                 roots.push(home.join("Applications"));
+            }
+            if roots.is_empty() {
+                return AppInventory {
+                    inventory_id: Uuid::new_v4().to_string(),
+                    records,
+                    created_at: unix_timestamp(),
+                    quality: ObservationQuality::Unavailable,
+                    skipped_entry_count: 1,
+                    incomplete_reasons: vec![
+                        "Could not resolve any application discovery roots".to_string()
+                    ],
+                };
             }
 
             let mut system = System::new_all();
@@ -135,7 +153,7 @@ impl ApplicationScanner {
                 .collect::<Vec<_>>();
 
             for root in roots {
-                let meta = match fs::symlink_metadata(&root) {
+                let meta = match probe.symlink_metadata(&root) {
                     Ok(m) => m,
                     Err(e) => {
                         if e.kind() != std::io::ErrorKind::NotFound {
@@ -146,22 +164,29 @@ impl ApplicationScanner {
                                     root.display()
                                 ));
                             }
+                        } else {
+                            observed_roots = observed_roots.saturating_add(1);
                         }
                         continue;
                     }
                 };
                 if meta.file_type().is_symlink() {
-                    skipped_entry_count = skipped_entry_count.saturating_add(1);
-                    if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
-                        incomplete_reasons
-                            .push(format!("Application root is a symlink: {}", root.display()));
-                    }
+                    // Symlink exclusion is an intentional scope boundary, not
+                    // a failed observation.
+                    observed_roots = observed_roots.saturating_add(1);
                     continue;
                 }
                 if !meta.is_dir() {
+                    skipped_entry_count = skipped_entry_count.saturating_add(1);
+                    if incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                        incomplete_reasons.push(format!(
+                            "Application root is not a directory: {}",
+                            root.display()
+                        ));
+                    }
                     continue;
                 }
-                let entries = match fs::read_dir(&root) {
+                let entries = match probe.read_dir(&root) {
                     Ok(e) => e,
                     Err(e) => {
                         skipped_entry_count = skipped_entry_count.saturating_add(1);
@@ -174,6 +199,7 @@ impl ApplicationScanner {
                         continue;
                     }
                 };
+                observed_roots = observed_roots.saturating_add(1);
                 for entry in entries {
                     let entry = match entry {
                         Ok(e) => e,
@@ -214,7 +240,7 @@ impl ApplicationScanner {
                         })
                         .unwrap_or_else(|| "Unknown App".to_string());
 
-                    let measurement = measure_path_without_symlinks(&path);
+                    let measurement = measure_path_without_symlinks_with(&path, probe);
                     let size_quality = measurement.quality();
                     let mut app_incomplete_reason = measurement.incomplete_reason.clone();
                     let mut app_skipped_entries = measurement.skipped_entries;
@@ -276,7 +302,8 @@ impl ApplicationScanner {
                         executable_name: metadata.executable,
                         logical_size: measurement.logical_size,
                         allocated_size: measurement.allocated_size,
-                        modified_at: fs::metadata(&path)
+                        modified_at: probe
+                            .symlink_metadata(&path)
                             .ok()
                             .and_then(|value| value.modified().ok())
                             .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
@@ -302,7 +329,7 @@ impl ApplicationScanner {
 
             let inventory_quality = if skipped_entry_count == 0 {
                 ObservationQuality::Fresh
-            } else if !records.is_empty() {
+            } else if observed_roots > 0 {
                 ObservationQuality::Partial
             } else {
                 ObservationQuality::Unavailable
@@ -479,7 +506,7 @@ impl ApplicationScanner {
                     incomplete = true;
                     continue;
                 };
-                let measurement = measure_path_without_symlinks(&path);
+                let measurement = measure_path_without_symlinks_with(&path, probe);
                 let quality = measurement.quality();
                 if quality != ObservationQuality::Fresh {
                     incomplete = true;
@@ -575,8 +602,13 @@ fn is_zenith_identity(name: &str, bundle_id: Option<&str>) -> bool {
 
 const MAX_APP_WALK_DEPTH: usize = 32;
 
+#[cfg(test)]
 fn measure_path_without_symlinks(path: &Path) -> AppPathMeasurement {
-    let root_metadata = match fs::symlink_metadata(path) {
+    measure_path_without_symlinks_with(path, &NativeAppFsProbe)
+}
+
+fn measure_path_without_symlinks_with<P: AppFsProbe>(path: &Path, probe: &P) -> AppPathMeasurement {
+    let root_metadata = match probe.symlink_metadata(path) {
         Ok(m) => m,
         Err(e) => {
             return AppPathMeasurement {
@@ -614,7 +646,7 @@ fn measure_path_without_symlinks(path: &Path) -> AppPathMeasurement {
     let mut stack = vec![(path.to_path_buf(), 0usize)];
 
     while let Some((current, depth)) = stack.pop() {
-        let metadata = match fs::symlink_metadata(&current) {
+        let metadata = match probe.symlink_metadata(&current) {
             Ok(m) => m,
             Err(e) => {
                 skipped_entries = skipped_entries.saturating_add(1);
@@ -667,7 +699,7 @@ fn measure_path_without_symlinks(path: &Path) -> AppPathMeasurement {
                 continue;
             }
 
-            match fs::read_dir(&current) {
+            match probe.read_dir(&current) {
                 Ok(entries) => {
                     for entry in entries {
                         match entry {
@@ -751,10 +783,15 @@ fn read_bundle_metadata(path: &Path) -> BundleMetadataObservation {
             }
         }
         Err(err) => {
-            let reason = if plist_path.exists() {
-                format!("Failed to parse Info.plist in {}: {err}", path.display())
-            } else {
-                format!("Missing Info.plist in {}", path.display())
+            let reason = match fs::symlink_metadata(&plist_path) {
+                Ok(_) => format!("Failed to parse Info.plist in {}: {err}", path.display()),
+                Err(metadata_error) if metadata_error.kind() == std::io::ErrorKind::NotFound => {
+                    format!("Missing Info.plist in {}", path.display())
+                }
+                Err(metadata_error) => format!(
+                    "Could not inspect Info.plist in {}: {metadata_error}",
+                    path.display()
+                ),
             };
             BundleMetadataObservation {
                 metadata: BundleMetadata::default(),
@@ -828,6 +865,50 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use std::sync::Arc;
 
+    #[derive(Default)]
+    struct FailingAppFsProbe {
+        metadata_failure: Option<PathBuf>,
+        read_dir_failure: Option<PathBuf>,
+    }
+
+    impl super::AppFsProbe for FailingAppFsProbe {
+        fn symlink_metadata(&self, path: &Path) -> std::io::Result<fs::Metadata> {
+            if self.metadata_failure.as_deref() == Some(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated metadata refusal",
+                ));
+            }
+            fs::symlink_metadata(path)
+        }
+
+        fn read_dir(&self, path: &Path) -> std::io::Result<fs::ReadDir> {
+            if self.read_dir_failure.as_deref() == Some(path) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated directory refusal",
+                ));
+            }
+            fs::read_dir(path)
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn write_test_bundle(bundle: &Path, name: &str) {
+        let contents = bundle.join("Contents");
+        fs::create_dir_all(&contents).unwrap();
+        fs::write(
+            contents.join("Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleName</key><string>{name}</string><key>CFBundleIdentifier</key><string>com.example.{name}</string></dict></plist>"#
+            ),
+        )
+        .unwrap();
+        fs::write(contents.join("payload.bin"), b"visible payload").unwrap();
+    }
+
     /// A POSIX environment stating the reviewed system root and the profile.
     #[cfg(not(target_os = "windows"))]
     fn environment_with_roots(system_root: &Path, home: &Path) -> PlatformEnvironment {
@@ -883,6 +964,18 @@ mod tests {
 
         assert!(inventory.records.is_empty());
         assert!(!inventory.inventory_id.is_empty());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn unresolved_posix_application_roots_report_unavailable_inventory() {
+        let inventory =
+            ApplicationScanner::scan(&PlatformEnvironment::simulated(PathFlavor::Posix));
+
+        assert!(inventory.records.is_empty());
+        assert_eq!(inventory.quality, ObservationQuality::Unavailable);
+        assert_eq!(inventory.skipped_entry_count, 1);
+        assert!(inventory.incomplete_reasons[0].contains("resolve"));
     }
 
     #[test]
@@ -987,7 +1080,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn app_scan_with_symlinked_root_reports_incomplete_reason_and_skipped_entry() {
+    fn app_scan_with_symlinked_root_treats_it_as_an_intentional_exclusion() {
         let temp = tempfile::tempdir().unwrap();
         let real_apps = temp.path().join("real_apps");
         fs::create_dir_all(&real_apps).unwrap();
@@ -998,12 +1091,62 @@ mod tests {
         let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(temp.path());
         let inventory = ApplicationScanner::scan(&environment);
 
-        assert!(inventory.skipped_entry_count >= 1);
-        assert_eq!(inventory.quality, ObservationQuality::Unavailable);
+        assert_eq!(inventory.skipped_entry_count, 0);
+        assert_eq!(inventory.quality, ObservationQuality::Fresh);
+        assert!(inventory.incomplete_reasons.is_empty());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn app_scan_retains_readable_records_when_another_root_cannot_be_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let system_root = temp.path().join("system-applications");
+        let profile = temp.path().join("profile");
+        let profile_apps = profile.join("Applications");
+        fs::create_dir_all(&system_root).unwrap();
+        write_test_bundle(&profile_apps.join("Readable.app"), "Readable");
+
+        let environment = environment_with_roots(&system_root, &profile);
+        let probe = FailingAppFsProbe {
+            read_dir_failure: Some(system_root.clone()),
+            ..Default::default()
+        };
+        let inventory = ApplicationScanner::scan_with(&environment, &probe);
+
+        assert_eq!(inventory.records.len(), 1);
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+        assert_eq!(inventory.skipped_entry_count, 1);
         assert!(inventory
             .incomplete_reasons
             .iter()
-            .any(|r| r.contains("symlink")));
+            .any(|reason| reason.contains(&system_root.display().to_string())));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn app_scan_retains_bundle_with_lower_bound_size_when_child_metadata_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let system_root = temp.path().join("system-applications");
+        let profile = temp.path().join("profile");
+        let bundle = profile.join("Applications/Partial.app");
+        fs::create_dir_all(&system_root).unwrap();
+        write_test_bundle(&bundle, "Partial");
+        let refused_child = bundle.join("Contents/refused.bin");
+        fs::write(&refused_child, vec![7; 4_096]).unwrap();
+
+        let environment = environment_with_roots(&system_root, &profile);
+        let probe = FailingAppFsProbe {
+            metadata_failure: Some(refused_child),
+            ..Default::default()
+        };
+        let inventory = ApplicationScanner::scan_with(&environment, &probe);
+
+        assert_eq!(inventory.records.len(), 1);
+        let app = &inventory.records.values().next().unwrap().app;
+        assert_eq!(app.size_quality, ObservationQuality::Partial);
+        assert!(app.allocated_size > 0);
+        assert_eq!(app.skipped_entries, 1);
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
     }
 
     #[cfg(unix)]
@@ -1037,21 +1180,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn app_inspect_with_unreadable_related_root_reports_incomplete_and_warning() {
-        struct FailingAppSupportProbe {
-            fail_path: PathBuf,
-        }
-        impl super::AppFsProbe for FailingAppSupportProbe {
-            fn read_dir(&self, path: &Path) -> std::io::Result<fs::ReadDir> {
-                if path == self.fail_path {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "permission denied",
-                    ));
-                }
-                fs::read_dir(path)
-            }
-        }
-
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
         let apps = home.join("Applications");
@@ -1069,8 +1197,9 @@ mod tests {
         let app_support = library.join("Application Support");
         fs::create_dir_all(&app_support).unwrap();
 
-        let probe = FailingAppSupportProbe {
-            fail_path: app_support,
+        let probe = FailingAppFsProbe {
+            read_dir_failure: Some(app_support),
+            ..Default::default()
         };
 
         let inspection =

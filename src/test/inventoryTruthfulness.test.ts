@@ -248,6 +248,30 @@ describe('Inventory Truthfulness (#196)', () => {
       expect(isSelectedAppTrashLowerBound(partialAppInspection, ['related-1'])).toBe(true);
     });
 
+    it('returns true when an app or selected related size is unavailable', () => {
+      expect(
+        isSelectedAppTrashLowerBound(
+          {
+            ...baseInspection,
+            app: { ...baseApp, size_quality: 'unavailable' },
+          },
+          []
+        )
+      ).toBe(true);
+
+      expect(
+        isSelectedAppTrashLowerBound(
+          {
+            ...baseInspection,
+            related_items: [
+              { ...baseInspection.related_items[0], quality: 'unavailable' },
+            ],
+          },
+          ['related-1']
+        )
+      ).toBe(true);
+    });
+
     it('returns false when app has quality partial (e.g. plist error) but size_quality fresh and selected items fresh', () => {
       const metadataPartialAppInspection: AppUninstallInspection = {
         ...baseInspection,

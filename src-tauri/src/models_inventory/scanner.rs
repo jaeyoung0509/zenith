@@ -13,6 +13,7 @@ pub struct ModelDiscoverySink {
     pub items: Vec<LocalModelItem>,
     pub skipped_entries: u64,
     pub incomplete_reasons: Vec<String>,
+    observed_scopes: u64,
 }
 
 impl ModelDiscoverySink {
@@ -27,6 +28,10 @@ impl ModelDiscoverySink {
                 self.incomplete_reasons.push(reason);
             }
         }
+    }
+
+    fn record_observed_scope(&mut self) {
+        self.observed_scopes = self.observed_scopes.saturating_add(1);
     }
 }
 
@@ -58,10 +63,10 @@ impl LocalModelScanner {
         };
         match crate::safety::SymlinkGuard::is_symlink_metadata(&root) {
             Ok(true) => {
-                sink.record_failure(format!(
-                    "{provider_name} root {} is a symlink and was excluded for safety",
-                    root.display()
-                ));
+                // Symlink exclusion is an intentional scan boundary, not an
+                // observation failure. Treat the configured scope as inspected
+                // without following it.
+                sink.record_observed_scope();
                 None
             }
             Ok(false) => match fs::symlink_metadata(&root) {
@@ -78,6 +83,7 @@ impl LocalModelScanner {
                 }
                 Err(err) => {
                     if err.kind() == std::io::ErrorKind::NotFound {
+                        sink.record_observed_scope();
                         None
                     } else {
                         sink.record_failure(format!(
@@ -90,6 +96,7 @@ impl LocalModelScanner {
             },
             Err(err) => {
                 if err.kind() == std::io::ErrorKind::NotFound {
+                    sink.record_observed_scope();
                     None
                 } else {
                     sink.record_failure(format!(
@@ -150,7 +157,7 @@ impl LocalModelScanner {
 
         let quality = if sink.skipped_entries == 0 {
             ObservationQuality::Fresh
-        } else if !sink.items.is_empty() {
+        } else if sink.observed_scopes > 0 {
             ObservationQuality::Partial
         } else {
             ObservationQuality::Unavailable
@@ -206,6 +213,7 @@ impl LocalModelScanner {
                 return;
             }
         };
+        sink.record_observed_scope();
 
         for reg in registries {
             let reg = match reg {
@@ -303,9 +311,10 @@ impl LocalModelScanner {
                             }
                         };
                         let path = tag.path();
-                        if Self::inspect_model_entry(&path, "Ollama tag", sink).is_none() {
-                            continue;
-                        }
+                        let tag_meta = match Self::inspect_model_entry(&path, "Ollama tag", sink) {
+                            Some(meta) => meta,
+                            None => continue,
+                        };
 
                         let tag_name = tag.file_name().to_string_lossy().to_string();
                         let full_name = format!("{}:{}", model_name, tag_name);
@@ -323,9 +332,9 @@ impl LocalModelScanner {
                                 }
                             };
 
-                        let last_modified = fs::metadata(&path)
+                        let last_modified = tag_meta
+                            .modified()
                             .ok()
-                            .and_then(|m| m.modified().ok())
                             .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs());
 
@@ -370,24 +379,36 @@ impl LocalModelScanner {
             }
         };
 
+        let unavailable = |detail: &str| {
+            OllamaSizeObservation::Unavailable(format!(
+                "Could not measure Ollama manifest {}: {detail}",
+                manifest_path.display()
+            ))
+        };
+        let Some(layers) = val.get("layers").and_then(|layers| layers.as_array()) else {
+            return unavailable("missing or invalid layers array");
+        };
         let mut total_size = 0u64;
-
-        if let Some(layers) = val.get("layers").and_then(|l| l.as_array()) {
-            for layer in layers {
-                if let Some(size) = layer.get("size").and_then(|s| s.as_u64()) {
-                    total_size += size;
-                }
-            }
+        for layer in layers {
+            let Some(size) = layer.get("size").and_then(|size| size.as_u64()) else {
+                return unavailable("a layer is missing a valid size");
+            };
+            let Some(next) = total_size.checked_add(size) else {
+                return unavailable("layer sizes overflow u64");
+            };
+            total_size = next;
         }
 
-        // Add config layer size
-        if let Some(cfg) = val
+        let Some(config_size) = val
             .get("config")
             .and_then(|c| c.get("size"))
             .and_then(|s| s.as_u64())
-        {
-            total_size += cfg;
-        }
+        else {
+            return unavailable("missing or invalid config size");
+        };
+        let Some(total_size) = total_size.checked_add(config_size) else {
+            return unavailable("layer and config sizes overflow u64");
+        };
 
         OllamaSizeObservation::Exact(total_size)
     }
@@ -414,6 +435,7 @@ impl LocalModelScanner {
                 return;
             }
         };
+        sink.record_observed_scope();
 
         for entry in entries {
             let entry = match entry {
@@ -451,9 +473,9 @@ impl LocalModelScanner {
                         measurement.incomplete_reason.clone(),
                     );
                 }
-                let last_modified = fs::metadata(&path)
+                let last_modified = meta
+                    .modified()
                     .ok()
-                    .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs());
 
@@ -483,7 +505,9 @@ impl LocalModelScanner {
                 None => return,
             };
 
-        Self::collect_gguf_files(&lm_root, &lm_root, ModelSource::LmStudio, "lmstudio", sink);
+        if Self::collect_gguf_files(&lm_root, &lm_root, ModelSource::LmStudio, "lmstudio", sink) {
+            sink.record_observed_scope();
+        }
     }
 
     /// Scans MLX model weights directory.
@@ -503,6 +527,7 @@ impl LocalModelScanner {
                 return;
             }
         };
+        sink.record_observed_scope();
 
         for entry in entries {
             let entry = match entry {
@@ -567,7 +592,7 @@ impl LocalModelScanner {
         source: ModelSource,
         prefix: &str,
         sink: &mut ModelDiscoverySink,
-    ) {
+    ) -> bool {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(err) => {
@@ -575,7 +600,7 @@ impl LocalModelScanner {
                     "Could not read LM Studio directory {}: {err}",
                     dir.display()
                 ));
-                return;
+                return false;
             }
         };
 
@@ -597,7 +622,7 @@ impl LocalModelScanner {
             };
 
             if meta.is_dir() {
-                Self::collect_gguf_files(&path, root, source, prefix, sink);
+                let _ = Self::collect_gguf_files(&path, root, source, prefix, sink);
             } else if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
                 let file_name = path
                     .file_name()
@@ -630,6 +655,7 @@ impl LocalModelScanner {
                 });
             }
         }
+        true
     }
 }
 
@@ -804,6 +830,44 @@ mod tests {
         assert!(!inventory.incomplete_reasons.is_empty());
     }
 
+    #[test]
+    fn structurally_invalid_ollama_manifest_is_not_reported_as_exact_zero_bytes() {
+        let home = tempfile::tempdir().unwrap();
+        let ollama = home
+            .path()
+            .join(".ollama/models/manifests/registry.ollama.ai/library/invalid");
+        std::fs::create_dir_all(&ollama).unwrap();
+        std::fs::write(ollama.join("badtag"), br#"{"layers":[{}],"config":{}}"#).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+
+        assert_eq!(inventory.items.len(), 1);
+        assert_eq!(inventory.items[0].quality, ObservationQuality::Unavailable);
+        assert!(inventory.items[0]
+            .incomplete_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("valid size")));
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+    }
+
+    #[test]
+    fn a_failed_scope_and_known_empty_scopes_produce_partial_empty_inventory() {
+        let home = tempfile::tempdir().unwrap();
+        let manifests = home.path().join(".ollama/models/manifests");
+        std::fs::create_dir_all(manifests.parent().unwrap()).unwrap();
+        std::fs::write(&manifests, b"not a directory").unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let inventory = LocalModelScanner::scan_all_models(&environment);
+
+        assert!(inventory.items.is_empty());
+        assert_eq!(inventory.quality, ObservationQuality::Partial);
+        assert!(inventory.skipped_entry_count >= 1);
+    }
+
     #[cfg(unix)]
     #[test]
     fn huggingface_scan_excludes_symlinked_model_entry() {
@@ -828,7 +892,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlinked_model_root_is_excluded_and_records_failure() {
+    fn symlinked_model_root_is_an_intentional_exclusion_not_an_io_failure() {
         let home = tempfile::tempdir().unwrap();
         let real_manifests = home.path().join("real_manifests");
         std::fs::create_dir_all(&real_manifests).unwrap();
@@ -846,10 +910,8 @@ mod tests {
             &mut sink,
         );
         assert!(resolved.is_none());
-        assert_eq!(sink.skipped_entries, 1);
-        assert!(sink
-            .incomplete_reasons
-            .iter()
-            .any(|r| r.contains("is a symlink and was excluded")));
+        assert_eq!(sink.skipped_entries, 0);
+        assert!(sink.incomplete_reasons.is_empty());
+        assert_eq!(sink.observed_scopes, 1);
     }
 }
