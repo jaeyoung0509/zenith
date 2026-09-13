@@ -147,6 +147,9 @@ pub enum FolderAccess {
     /// Access was refused, including a denied or cancelled folder-access
     /// prompt.
     Denied,
+    /// The folder exists but could not be opened for a non-permission I/O
+    /// reason. Retrying permission cannot repair this state.
+    Unreadable,
 }
 
 /// Probes the user's Downloads folder before the scan takes the storage gate.
@@ -169,7 +172,10 @@ pub fn probe_downloads_access(environment: &PlatformEnvironment) -> FolderAccess
             Ok(_) => FolderAccess::Granted,
             // A missing folder raises no prompt, so it is not a refusal.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => FolderAccess::NotGated,
-            Err(_) => FolderAccess::Denied,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                FolderAccess::Denied
+            }
+            Err(_) => FolderAccess::Unreadable,
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -729,8 +735,17 @@ fn discover_workspace<F>(
             *skipped_entries = skipped_entries.saturating_add(1);
             continue;
         }
-        if downloads_access == FolderAccess::Denied
-            && is_downloads_directory(environment, &directory)
+        let downloads_refusal = match downloads_access {
+            FolderAccess::Denied => {
+                Some((DeveloperArtifactUninspectedReason::PermissionDenied, true))
+            }
+            FolderAccess::Unreadable => {
+                Some((DeveloperArtifactUninspectedReason::Unreadable, false))
+            }
+            FolderAccess::NotGated | FolderAccess::Granted => None,
+        };
+        if let Some((reason, retryable)) =
+            downloads_refusal.filter(|_| is_downloads_directory(environment, &directory))
         {
             // The gate already parked on this folder: reading it here would
             // wait on the same prompt a second time, inside the storage gate.
@@ -739,8 +754,8 @@ fn discover_workspace<F>(
                 uninspected_seen,
                 on_event,
                 &directory,
-                DeveloperArtifactUninspectedReason::PermissionDenied,
-                true,
+                reason,
+                retryable,
             );
             *skipped_entries = skipped_entries.saturating_add(1);
             continue;
@@ -2062,6 +2077,24 @@ mod tests {
         assert_eq!(finished.uninspected, inventory.uninspected);
     }
 
+    #[test]
+    fn unreadable_downloads_is_not_misreported_as_a_permission_denial() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("Downloads")).unwrap();
+        let environment = environment_with_downloads(temp.path());
+        let workspace = whole_home_workspace(temp.path());
+
+        let (inventory, _) =
+            scan_recording_events(&environment, &workspace, FolderAccess::Unreadable);
+
+        assert_eq!(inventory.uninspected.len(), 1);
+        assert_eq!(
+            inventory.uninspected[0].reason,
+            DeveloperArtifactUninspectedReason::Unreadable
+        );
+        assert!(!inventory.uninspected[0].retryable);
+    }
+
     /// First-run denial and the Allow-then-rescan retry path, driven on the
     /// same home so the retry cannot pass by scanning a fresh fixture.
     #[cfg(target_os = "macos")]
@@ -2184,6 +2217,19 @@ mod tests {
         fs::set_permissions(&downloads, fs::Permissions::from_mode(0o000)).unwrap();
         assert_eq!(probe_downloads_access(&environment), FolderAccess::Denied);
         drop(restore);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_probe_keeps_non_permission_failures_distinct() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("Downloads"), b"not a directory").unwrap();
+        let environment = environment_with_downloads(temp.path());
+
+        assert_eq!(
+            probe_downloads_access(&environment),
+            FolderAccess::Unreadable
+        );
     }
 
     #[test]

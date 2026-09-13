@@ -204,7 +204,7 @@ impl ScanEngine {
             let cat_incomplete_item_count = accumulator
                 .items
                 .iter()
-                .filter(|item| !item.allows_cleanup())
+                .filter(|item| item.quality != ObservationQuality::Fresh)
                 .count() as u64;
 
             let cat_item_count = accumulator.items.len();
@@ -400,9 +400,9 @@ mod tests {
 
         assert_eq!(result.skipped_entry_count, 6);
         assert_eq!(
-            result.incomplete_item_count, 1,
-            "only the inaccessible aged candidate cannot be cleaned; the partial \
-             cache is still cleanable, so it is not an incomplete item"
+            result.incomplete_item_count, 2,
+            "both partial and unavailable observations are incomplete, regardless \
+             of whether the partial item remains reviewable for cleanup"
         );
     }
 

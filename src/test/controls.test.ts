@@ -124,7 +124,7 @@ describe('metric and action consistency contracts', () => {
 
     expect(rendered.body).toContain('w-[7rem]');
     expect(rendered.body).toContain('whitespace-nowrap');
-    expect(rendered.body).toContain('Rebuild: 1');
+    expect(rendered.body).toContain('Rebuild: 198.8 MB');
   });
 
   it('reports how much of a category the measurement skipped', () => {
@@ -217,7 +217,7 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('Safe: 1');
+    expect(rendered.body).toContain('Safe: 84.9 MB');
     expect(rendered.body).not.toContain('Selected:');
   });
 

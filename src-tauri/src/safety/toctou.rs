@@ -67,18 +67,29 @@ impl ToctouGuard {
 
     /// Verifies that the filesystem identity matches what was recorded during scanning.
     pub fn verify(path: &Path, expected: &FileIdentity) -> Result<(), ZenithError> {
-        if !path.exists() && !crate::safety::SymlinkGuard::is_symlink(path) {
-            return Err(ZenithError::Missing(path.display().to_string()));
-        }
-
         let current = match Self::capture(path) {
             Some(id) => id,
-            None => {
-                return Err(ZenithError::ChangedSinceScan(format!(
-                    "Could not read metadata for {}",
-                    path.display()
-                )))
-            }
+            None => match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(ZenithError::Missing(path.display().to_string()));
+                }
+                Err(error) => {
+                    return Err(ZenithError::ChangedSinceScan(format!(
+                        "Could not read metadata for {}: {}",
+                        path.display(),
+                        error
+                    )));
+                }
+                Ok(_) => {
+                    // The path still exists, but `capture` could not derive a
+                    // complete identity (for example, Windows could not open
+                    // the handle). That is never equivalent to absence.
+                    return Err(ZenithError::ChangedSinceScan(format!(
+                        "Could not verify filesystem identity for {}",
+                        path.display()
+                    )));
+                }
+            },
         };
 
         // A missing or zero identity is never accepted as verified when

@@ -45,9 +45,9 @@ pub struct ProcessMemory {
     pub can_terminate: bool,
     #[serde(default)]
     pub termination_lease_id: Option<String>,
-    /// Names of the processes that directly started the group's members,
-    /// de-duplicated and sorted. Empty when the snapshot cannot resolve a
-    /// parent for every instance, so a mixed group claims no single origin.
+    /// Names of direct parents outside this process group, de-duplicated and
+    /// sorted. Parents normalized into the same group are omitted so the UI
+    /// reports the group's external source rather than an internal worker.
     #[serde(default)]
     pub parent_process_names: Vec<String>,
     #[serde(default)]

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { CategoryResult } from '../models/types';
   import { formatBytes } from '../utils/format';
-  import { cleanableBytes, isCleanable, presentedItems, riskCounts } from '../utils/cleanup';
+  import { cleanableBytes, isCleanable, presentedItems } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import Card from './Card.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -31,11 +31,9 @@
 
   let Icon = $derived(icons[categoryResult.category] || Boxes);
 
-  // The card and its detail view read the same presented set and the same
-  // per-risk counts, so a card can never advertise a location the detail view
-  // omits (or vice versa).
+  // The card and its detail view read the same presented set, so a card can
+  // never advertise a location the detail view omits (or vice versa).
   let presented = $derived(presentedItems(categoryResult.items));
-  let tabs = $derived(riskCounts(categoryResult.items));
 
   let cleanableItems = $derived(categoryResult.items.filter(isCleanable));
 
@@ -114,19 +112,19 @@
           <span class="shrink-0 whitespace-nowrap text-xs text-muted-foreground font-mono">
             {presented.length} items
           </span>
-          {#if tabs.safe > 0}
+          {#if categoryResult.safe_bytes > 0}
             <span class="shrink-0 whitespace-nowrap text-meta text-success font-mono">
-              Safe: {tabs.safe}
+              Safe: {formatBytes(categoryResult.safe_bytes)}
             </span>
           {/if}
-          {#if tabs.rebuild > 0}
+          {#if categoryResult.rebuild_bytes > 0}
             <span class="shrink-0 whitespace-nowrap text-meta text-warning font-mono">
-              • Rebuild: {tabs.rebuild}
+              • Rebuild: {formatBytes(categoryResult.rebuild_bytes)}
             </span>
           {/if}
-          {#if tabs.manual > 0}
+          {#if categoryResult.manual_bytes > 0}
             <span class="shrink-0 whitespace-nowrap text-meta text-destructive font-mono">
-              • Manual: {tabs.manual}
+              • Manual: {formatBytes(categoryResult.manual_bytes)}
             </span>
           {/if}
           {#if (categoryResult.skipped_entry_count ?? 0) > 0}

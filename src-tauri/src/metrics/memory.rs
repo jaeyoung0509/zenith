@@ -7,7 +7,7 @@ use crate::models::{
     MemoryTerminationResult, ProcessMemory, ProcessOwnership,
 };
 use crate::process_owner::ProcessOwner;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1140,13 +1140,14 @@ fn ancestry_reaches(start: u32, target: u32, parents: &HashMap<u32, u32>, max_ho
 }
 
 /// Derives a displayed group's origin from the same captured snapshot as its
-/// memory figures: the distinct, sorted names of the members' direct parents,
-/// and whether every member traces back to this Zenith process.
+/// memory figures: the distinct, sorted names of direct parents outside the
+/// group, and whether every member traces back to this Zenith process.
 ///
-/// `parent_process_names` lists exactly the parents the snapshot resolved, and
-/// stays empty when it resolved none. `ownership` is `ZenithChild` only when
-/// every member has Zenith as a strict ancestor, so one untraceable member
-/// leaves the group `Observed` and the view never claims a partial match.
+/// Parents that are themselves members are implementation detail (for example,
+/// `rust-analyzer-proc-macro-srv` is normalized into the `rust-analyzer` group)
+/// and are omitted so the UI reports the group's external source. `ownership`
+/// is `ZenithChild` only when every member has Zenith as a strict ancestor, so
+/// one untraceable member leaves the group `Observed`.
 fn group_provenance(
     members: &[u32],
     captured: &HashMap<u32, CapturedProcess>,
@@ -1154,10 +1155,14 @@ fn group_provenance(
     zenith_pid: u32,
 ) -> (Vec<String>, ProcessOwnership) {
     let mut parent_process_names: Vec<String> = Vec::new();
+    let member_set: HashSet<u32> = members.iter().copied().collect();
     for member in members {
         let Some((_, Some(parent))) = captured.get(member) else {
             continue;
         };
+        if member_set.contains(parent) {
+            continue;
+        }
         if let Some((name, _)) = captured.get(parent) {
             parent_process_names.push(name.clone());
         }
@@ -2083,6 +2088,23 @@ mod tests {
             "parents are de-duplicated and sorted"
         );
         assert_eq!(ownership, ProcessOwnership::Observed);
+    }
+
+    #[test]
+    fn group_omits_internal_parent_and_reports_external_source() {
+        let captured = captured_table(&[
+            (105, "Warp", None),
+            (101, "rust-analyzer", Some(105)),
+            (102, "rust-analyzer", Some(101)),
+            (103, "rust-analyzer", Some(101)),
+        ]);
+        let links = link_table(&captured);
+
+        assert_eq!(
+            group_provenance(&[101, 102, 103], &captured, &links, 999),
+            (vec!["Warp".to_string()], ProcessOwnership::Observed),
+            "proc-macro children should not make rust-analyzer look like its own source"
+        );
     }
 
     #[test]

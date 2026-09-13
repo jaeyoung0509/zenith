@@ -305,12 +305,11 @@ impl SafeTreeDeleter {
         let mut report = TreeDeleteReport::default();
         let root_metadata = match fs::symlink_metadata(root) {
             Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return report,
             Err(error) => {
-                // Fail closed: metadata failure aborts instead of being
-                // treated as "nothing to delete".
-                if !root.exists() {
-                    return report;
-                }
+                // Only an explicit NotFound is an already-satisfied
+                // postcondition. `Path::exists` cannot be used here because it
+                // collapses permission and other metadata errors into false.
                 report.errors.push(format!("{}: {}", root.display(), error));
                 return report;
             }
@@ -400,10 +399,10 @@ impl SafeTreeDeleter {
         let mut report = TreeDeleteReport::default();
         match fs::symlink_metadata(root) {
             Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return report,
             Err(error) => {
-                if !root.exists() && !SymlinkGuard::is_symlink(root) {
-                    return report;
-                }
+                // Fail closed for every metadata failure except an explicit
+                // NotFound; `exists()` would hide access refusals here.
                 report.errors.push(format!("{}: {}", root.display(), error));
                 return report;
             }

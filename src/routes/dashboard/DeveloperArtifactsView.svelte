@@ -313,6 +313,9 @@
       const result = await tauriStartDeveloperArtifactScan(workspaceIds, handleScanEvent);
       scanResult = result;
       items = result.items;
+      // The command result is authoritative. Channel delivery is best-effort,
+      // so do not rely on the `uninspected` progress event having arrived.
+      uninspected = result.uninspected ?? [];
       discoveredCount = result.discovered_count;
       measuredCount = result.measured_count;
       skippedEntries = result.skipped_entries;
