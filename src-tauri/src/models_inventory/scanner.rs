@@ -133,15 +133,11 @@ impl LocalModelScanner {
     }
 
     pub fn scan_ollama_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
-        let manifests_root = match Self::resolve_root(
-            "~/.ollama/models/manifests",
-            environment,
-            "Ollama",
-            sink,
-        ) {
-            Some(root) => root,
-            None => return,
-        };
+        let manifests_root =
+            match Self::resolve_root("~/.ollama/models/manifests", environment, "Ollama", sink) {
+                Some(root) => root,
+                None => return,
+            };
 
         // Ollama manifests structure: ~/.ollama/models/manifests/registry.ollama.ai/library/<model>/<tag>
         let registries = match fs::read_dir(&manifests_root) {
@@ -259,7 +255,9 @@ impl LocalModelScanner {
                         let tag = match tag {
                             Ok(t) => t,
                             Err(e) => {
-                                sink.record_failure(format!("Could not read Ollama tag entry: {e}"));
+                                sink.record_failure(format!(
+                                    "Could not read Ollama tag entry: {e}"
+                                ));
                                 continue;
                             }
                         };
@@ -461,15 +459,11 @@ impl LocalModelScanner {
 
     /// Scans LM Studio downloaded models directory.
     pub fn scan_lmstudio_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
-        let lm_root = match Self::resolve_root(
-            "~/.cache/lm-studio/models",
-            environment,
-            "LM Studio",
-            sink,
-        ) {
-            Some(root) => root,
-            None => return,
-        };
+        let lm_root =
+            match Self::resolve_root("~/.cache/lm-studio/models", environment, "LM Studio", sink) {
+                Some(root) => root,
+                None => return,
+            };
 
         Self::collect_gguf_files(&lm_root, &lm_root, ModelSource::LmStudio, "lmstudio", sink);
     }

@@ -487,7 +487,9 @@ impl ApplicationScanner {
         if let Some(reason) = &record.app.incomplete_reason {
             incomplete = true;
             if warnings.len() < MAX_INCOMPLETE_REASONS {
-                warnings.push(format!("Application bundle observation was partial: {reason}"));
+                warnings.push(format!(
+                    "Application bundle observation was partial: {reason}"
+                ));
             }
         }
         if bundle_id.is_none() {

@@ -153,7 +153,8 @@ impl TrashPlanner {
                 identity: record.identity.clone(),
                 logical_size: record.item.logical_size,
                 allocated_size: record.item.allocated_size,
-                size_is_lower_bound: record.item.quality != crate::models::ObservationQuality::Fresh,
+                size_is_lower_bound: record.item.quality
+                    != crate::models::ObservationQuality::Fresh,
                 scope: TrashScope::AppRelated,
             });
         }

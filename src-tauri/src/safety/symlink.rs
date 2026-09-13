@@ -216,21 +216,25 @@ impl SymlinkGuard {
                             )?;
                         }
                         let canonical_target =
-                            inspector.canonicalize(target).map_err(|err| match err.kind() {
-                                std::io::ErrorKind::PermissionDenied => {
-                                    ZenithError::PermissionDenied(target.display().to_string())
-                                }
-                                std::io::ErrorKind::NotFound => outside_base(),
-                                _ => ZenithError::Io(err.to_string()),
-                            })?;
+                            inspector
+                                .canonicalize(target)
+                                .map_err(|err| match err.kind() {
+                                    std::io::ErrorKind::PermissionDenied => {
+                                        ZenithError::PermissionDenied(target.display().to_string())
+                                    }
+                                    std::io::ErrorKind::NotFound => outside_base(),
+                                    _ => ZenithError::Io(err.to_string()),
+                                })?;
                         let canonical_base =
-                            inspector.canonicalize(base).map_err(|err| match err.kind() {
-                                std::io::ErrorKind::PermissionDenied => {
-                                    ZenithError::PermissionDenied(base.display().to_string())
-                                }
-                                std::io::ErrorKind::NotFound => outside_base(),
-                                _ => ZenithError::Io(err.to_string()),
-                            })?;
+                            inspector
+                                .canonicalize(base)
+                                .map_err(|err| match err.kind() {
+                                    std::io::ErrorKind::PermissionDenied => {
+                                        ZenithError::PermissionDenied(base.display().to_string())
+                                    }
+                                    std::io::ErrorKind::NotFound => outside_base(),
+                                    _ => ZenithError::Io(err.to_string()),
+                                })?;
                         let norm_canonical_base =
                             path_algebra::normalize(&canonical_base.to_string_lossy(), flavor);
                         let norm_canonical_target =
@@ -762,7 +766,8 @@ mod tests {
     }
 
     #[test]
-    fn symlink_guard_fails_closed_when_component_metadata_inspection_fails_with_permission_denied() {
+    fn symlink_guard_fails_closed_when_component_metadata_inspection_fails_with_permission_denied()
+    {
         let environment = crate::platform::PlatformEnvironment::simulated(
             crate::platform::path_algebra::PathFlavor::Windows,
         );

@@ -735,7 +735,9 @@ fn test_local_model_and_app_inventory_serialization_enforces_safe_integers() {
         expires_at: 5000,
         size_is_lower_bound: false,
     };
-    let preview_error = serde_json::to_string(&unsafe_preview).unwrap_err().to_string();
+    let preview_error = serde_json::to_string(&unsafe_preview)
+        .unwrap_err()
+        .to_string();
     assert!(preview_error.contains("Number.MAX_SAFE_INTEGER"));
 
     let safe_result = TrashResult {
@@ -757,6 +759,8 @@ fn test_local_model_and_app_inventory_serialization_enforces_safe_integers() {
         items: vec![],
         size_is_lower_bound: false,
     };
-    let result_error = serde_json::to_string(&unsafe_result).unwrap_err().to_string();
+    let result_error = serde_json::to_string(&unsafe_result)
+        .unwrap_err()
+        .to_string();
     assert!(result_error.contains("Number.MAX_SAFE_INTEGER"));
 }
