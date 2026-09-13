@@ -1,7 +1,7 @@
 use crate::models::{
-    derive_cleanup_disposition, Category, CleanupEligibility, DockerContainerItem,
-    DockerImageItem, DockerOverview, DockerStatus, DockerVolumeItem, FileSize,
-    ObservationQuality, RiskTier, ScanItem, ZenithError,
+    derive_cleanup_disposition, Category, CleanupEligibility, DockerContainerItem, DockerImageItem,
+    DockerOverview, DockerStatus, DockerVolumeItem, FileSize, ObservationQuality, RiskTier,
+    ScanItem, ZenithError,
 };
 use crate::platform::description::{PlatformEnvironment, ToolResolution};
 use crate::tooling;

@@ -1516,13 +1516,8 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             management_mode: tc.management,
             ..Default::default()
         };
-        let disposition = derive_cleanup_disposition(
-            tc.risk,
-            tc.quality,
-            &metadata,
-            &size,
-            tc.reason,
-        );
+        let disposition =
+            derive_cleanup_disposition(tc.risk, tc.quality, &metadata, &size, tc.reason);
         assert_eq!(
             disposition.eligibility, tc.expected_eligibility,
             "failed eligibility for {:?}/{:?}/{:?}",
@@ -1572,7 +1567,10 @@ fn test_nested_protected_app_bundle_fails_closed() {
     use zenith_lib::models::ZenithSettings;
 
     let size = FileSize::new(5000, Some(5000));
-    let reason = Some("Protected system or application bundle detected: /tmp/cache/Payload/Malicious.app".to_string());
+    let reason = Some(
+        "Protected system or application bundle detected: /tmp/cache/Payload/Malicious.app"
+            .to_string(),
+    );
     let metadata = CacheMetadata::default();
     let disposition = derive_cleanup_disposition(
         RiskTier::Safe,
@@ -1584,13 +1582,11 @@ fn test_nested_protected_app_bundle_fails_closed() {
 
     assert_eq!(disposition.eligibility, CleanupEligibility::Blocked);
     assert_eq!(disposition.cleanable_bytes, None);
-    assert!(
-        disposition
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Protected")
-    );
+    assert!(disposition
+        .reason
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Protected"));
 
     let mut item = ScanItem {
         id: "test.nested_app".into(),
@@ -1648,7 +1644,10 @@ fn test_nested_protected_app_bundle_fails_closed() {
 
     let settings = ZenithSettings::default();
     let candidates = select_quick_clean_safe_candidates(&scan, &settings);
-    assert!(candidates.is_empty(), "Blocked nested app item must never be quick-cleaned");
+    assert!(
+        candidates.is_empty(),
+        "Blocked nested app item must never be quick-cleaned"
+    );
 
     // Planning even if forced selected must fail closed
     item.is_selected = true;

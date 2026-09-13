@@ -224,9 +224,9 @@ pub fn derive_cleanup_disposition(
         if quality == ObservationQuality::Partial {
             return CleanupDisposition::reviewable(
                 observed,
-                incomplete_reason
-                    .map(Into::into)
-                    .or_else(|| Some("Incomplete scan; review before pruning with provider".into())),
+                incomplete_reason.map(Into::into).or_else(|| {
+                    Some("Incomplete scan; review before pruning with provider".into())
+                }),
             );
         }
         return CleanupDisposition::reviewable(observed, None);
@@ -308,6 +308,7 @@ impl ScanItem {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn mock(
         id: impl Into<String>,
         signature_id: impl Into<String>,
@@ -617,12 +618,16 @@ mod tests {
         let legacy_item: ScanItem = serde_json::from_value(json).unwrap();
         assert_eq!(legacy_item.quality, ObservationQuality::Unavailable);
         assert_eq!(legacy_item.skipped_entry_count, 0);
-        assert_eq!(legacy_item.disposition.eligibility, CleanupEligibility::Blocked);
+        assert_eq!(
+            legacy_item.disposition.eligibility,
+            CleanupEligibility::Blocked
+        );
         assert!(!legacy_item.allows_cleanup());
 
         // Test unsafe number in cleanable_bytes fails closed
         item.disposition.cleanable_bytes = Some(crate::ipc_numeric::MAX_SAFE_INTEGER + 1);
-        let error = serde_json::to_value(&item).expect_err("unsafe cleanable_bytes must fail closed");
+        let error =
+            serde_json::to_value(&item).expect_err("unsafe cleanable_bytes must fail closed");
         assert!(error.to_string().contains("MAX_SAFE_INTEGER"));
     }
 
@@ -673,49 +678,97 @@ mod tests {
         };
 
         // 1. Safe + Fresh + Zenith => AutoCleanable
-        let d1 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Fresh, &zenith_meta, &size, None);
+        let d1 = derive_cleanup_disposition(
+            RiskTier::Safe,
+            ObservationQuality::Fresh,
+            &zenith_meta,
+            &size,
+            None,
+        );
         assert_eq!(d1.eligibility, CleanupEligibility::AutoCleanable);
         assert_eq!(d1.cleanable_bytes, Some(1000));
         assert!(d1.is_cleanable());
 
         // 2. Safe + Partial + Zenith => Reviewable (never auto-cleanable)
-        let d2 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Partial, &zenith_meta, &size, None);
+        let d2 = derive_cleanup_disposition(
+            RiskTier::Safe,
+            ObservationQuality::Partial,
+            &zenith_meta,
+            &size,
+            None,
+        );
         assert_eq!(d2.eligibility, CleanupEligibility::Reviewable);
         assert_eq!(d2.cleanable_bytes, Some(1000));
         assert!(d2.is_cleanable());
 
         // 3. Safe + Unavailable + Zenith => Blocked
-        let d3 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Unavailable, &zenith_meta, &size, None);
+        let d3 = derive_cleanup_disposition(
+            RiskTier::Safe,
+            ObservationQuality::Unavailable,
+            &zenith_meta,
+            &size,
+            None,
+        );
         assert_eq!(d3.eligibility, CleanupEligibility::Blocked);
         assert_eq!(d3.cleanable_bytes, None);
         assert!(!d3.is_cleanable());
 
         // 4. Rebuild + Fresh + Zenith => Reviewable
-        let d4 = derive_cleanup_disposition(RiskTier::Rebuild, ObservationQuality::Fresh, &zenith_meta, &size, None);
+        let d4 = derive_cleanup_disposition(
+            RiskTier::Rebuild,
+            ObservationQuality::Fresh,
+            &zenith_meta,
+            &size,
+            None,
+        );
         assert_eq!(d4.eligibility, CleanupEligibility::Reviewable);
         assert_eq!(d4.cleanable_bytes, Some(1000));
         assert!(d4.is_cleanable());
 
         // 5. Rebuild + Partial + Zenith => Reviewable (never quick clean)
-        let d5 = derive_cleanup_disposition(RiskTier::Rebuild, ObservationQuality::Partial, &zenith_meta, &size, None);
+        let d5 = derive_cleanup_disposition(
+            RiskTier::Rebuild,
+            ObservationQuality::Partial,
+            &zenith_meta,
+            &size,
+            None,
+        );
         assert_eq!(d5.eligibility, CleanupEligibility::Reviewable);
         assert_eq!(d5.cleanable_bytes, Some(1000));
         assert!(d5.is_cleanable());
 
         // 6. Manual + Fresh + Zenith => Blocked from generic cleanup
-        let d6 = derive_cleanup_disposition(RiskTier::Manual, ObservationQuality::Fresh, &zenith_meta, &size, None);
+        let d6 = derive_cleanup_disposition(
+            RiskTier::Manual,
+            ObservationQuality::Fresh,
+            &zenith_meta,
+            &size,
+            None,
+        );
         assert_eq!(d6.eligibility, CleanupEligibility::Blocked);
         assert_eq!(d6.cleanable_bytes, None);
         assert!(!d6.is_cleanable());
 
         // 7. Safe + Fresh + ToolManaged => Reviewable (provider decides, never AutoCleanable)
-        let d7 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Fresh, &tool_meta, &size, None);
+        let d7 = derive_cleanup_disposition(
+            RiskTier::Safe,
+            ObservationQuality::Fresh,
+            &tool_meta,
+            &size,
+            None,
+        );
         assert_eq!(d7.eligibility, CleanupEligibility::Reviewable);
         assert_eq!(d7.cleanable_bytes, Some(1000));
         assert!(d7.is_cleanable());
 
         // 8. Safe + Fresh + Advisory => Advisory
-        let d8 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Fresh, &advisory_meta, &size, None);
+        let d8 = derive_cleanup_disposition(
+            RiskTier::Safe,
+            ObservationQuality::Fresh,
+            &advisory_meta,
+            &size,
+            None,
+        );
         assert_eq!(d8.eligibility, CleanupEligibility::Advisory);
         assert_eq!(d8.cleanable_bytes, None);
         assert!(!d8.is_cleanable());

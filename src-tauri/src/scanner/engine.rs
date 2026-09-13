@@ -561,7 +561,10 @@ mod tests {
         );
         assert!(!blocked.allows_cleanup());
         assert_eq!(blocked.cleanable_bytes(), 0);
-        assert_eq!(blocked.disposition.eligibility, crate::models::CleanupEligibility::Blocked);
+        assert_eq!(
+            blocked.disposition.eligibility,
+            crate::models::CleanupEligibility::Blocked
+        );
 
         assert_eq!(
             system.total_bytes,

@@ -595,13 +595,7 @@ describe('summarizeCategory invariants and explicit population', () => {
     const items = [autoCleanable, reviewable, blocked, advisory, nonexistent];
 
     // Case 1: Select only auto_cleanable
-    const summary1 = summarizeCategory(
-      items,
-      { 'auto-1': true },
-      'all',
-      '',
-      'size'
-    );
+    const summary1 = summarizeCategory(items, { 'auto-1': true });
 
     expect(summary1.detected_count).toBe(5);
     expect(summary1.visible_count).toBe(4); // excludes nonexistent
@@ -616,13 +610,12 @@ describe('summarizeCategory invariants and explicit population', () => {
     expect(summary1.cleanable_bytes).toBeLessThanOrEqual(summary1.observed_bytes);
 
     // Case 2: Attempting to select blocked or advisory items fails closed (never adds to selected_bytes)
-    const summary2 = summarizeCategory(
-      items,
-      { 'auto-1': true, 'blocked-1': true, 'advisory-1': true, 'review-1': true },
-      'all',
-      '',
-      'size'
-    );
+    const summary2 = summarizeCategory(items, {
+      'auto-1': true,
+      'blocked-1': true,
+      'advisory-1': true,
+      'review-1': true,
+    });
 
     expect(summary2.selected_count).toBe(2); // only auto-1 and review-1 are counted as selected
     expect(summary2.selected_bytes).toBe(3000); // 1000 + 2000
