@@ -289,9 +289,14 @@ impl NativePlatformPaths {
         path_str.encode_utf16().chain([0]).collect()
     }
 
-    /// Returns directories searched for tools. Discovery convenience only:
-    /// this list is not an execution trust boundary.
-    pub fn tool_search_locations() -> Vec<PathBuf> {
+    /// Returns directories searched for tools under `home`, the profile the
+    /// caller is describing. Discovery convenience only: this list is not an
+    /// execution trust boundary.
+    pub fn tool_search_locations(home: Option<&Path>) -> Vec<PathBuf> {
+        // Only the macOS branch consults the profile: the Windows branch reads
+        // the machine's own Program Files and package-manager roots, and the
+        // remaining hosts have fixed tool paths. One signature covers all three.
+        let _ = home;
         #[cfg(target_os = "windows")]
         {
             let mut roots = Vec::new();
@@ -361,7 +366,7 @@ impl NativePlatformPaths {
                 PathBuf::from("/Applications/Docker.app/Contents/Resources/bin"),
                 PathBuf::from("/Applications/Ollama.app/Contents/Resources"),
             ];
-            if let Some(home) = NativePlatformPaths::new().home() {
+            if let Some(home) = home {
                 roots.extend([
                     home.join(".local/bin"),
                     home.join(".cargo/bin"),
@@ -386,7 +391,10 @@ impl NativePlatformPaths {
     /// is willing to execute. User-writable containers (`%LOCALAPPDATA%`,
     /// `%APPDATA%`, `%ProgramData%` themselves) are excluded; only their
     /// documented tool/package-manager children are trusted.
-    pub fn trusted_tool_roots() -> Vec<PathBuf> {
+    pub fn trusted_tool_roots(home: Option<&Path>) -> Vec<PathBuf> {
+        // Only the macOS branch consults the profile; see
+        // [`Self::tool_search_locations`].
+        let _ = home;
         #[cfg(target_os = "windows")]
         {
             let mut roots = Vec::new();
@@ -456,7 +464,7 @@ impl NativePlatformPaths {
         }
         #[cfg(target_os = "macos")]
         {
-            Self::tool_search_locations()
+            Self::tool_search_locations(home)
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
@@ -643,7 +651,7 @@ impl PlatformPathsProvider for NativePlatformPaths {
         {
             std::env::var_os("ProgramFiles")
                 .map(PathBuf::from)
-                .or_else(|| Some(PathBuf::from("C:\\Program Files")))
+                .or_else(|| Some(windows_program_files()))
         }
 
         #[cfg(target_os = "macos")]
@@ -662,7 +670,7 @@ impl PlatformPathsProvider for NativePlatformPaths {
         {
             std::env::var_os("ProgramData")
                 .map(PathBuf::from)
-                .or_else(|| Some(PathBuf::from("C:\\ProgramData")))
+                .or_else(|| Some(windows_program_data()))
         }
 
         #[cfg(target_os = "macos")]
@@ -675,6 +683,23 @@ impl PlatformPathsProvider for NativePlatformPaths {
             Some(PathBuf::from("/var/lib"))
         }
     }
+}
+
+/// The administrator-writable install root a Windows machine resolves when the
+/// environment does not state one.
+///
+/// The fallback is a fact of the *platform*, so it lives in the flavor's branch
+/// instead of inside the `#[cfg(target_os = "windows")]` block that used to hold
+/// the literal: a stated Windows environment is protected exactly like a real
+/// one, and the value is asserted on every runner.
+pub fn windows_program_files() -> PathBuf {
+    PathBuf::from(r"C:\Program Files")
+}
+
+/// The shared application-data root a Windows machine resolves when the
+/// environment does not state one.
+pub fn windows_program_data() -> PathBuf {
+    PathBuf::from(r"C:\ProgramData")
 }
 
 fn resolve_user_home(
@@ -796,11 +821,23 @@ impl PlatformPathsProvider for SimulatedPaths {
     }
 
     fn program_files(&self) -> Option<PathBuf> {
-        self.program_files.clone()
+        // POSIX protection comes from the blacklist's own system rules, while a
+        // Windows machine's administrator-writable roots are environment facts,
+        // so the platform default is what keeps a stated Windows machine
+        // protected rather than a default that silently widens a POSIX one.
+        self.program_files.clone().or_else(|| {
+            self.flavor
+                .is_windows()
+                .then(crate::platform::paths::windows_program_files)
+        })
     }
 
     fn program_data(&self) -> Option<PathBuf> {
-        self.program_data.clone()
+        self.program_data.clone().or_else(|| {
+            self.flavor
+                .is_windows()
+                .then(crate::platform::paths::windows_program_data)
+        })
     }
 
     fn flavor(&self) -> PathFlavor {
@@ -853,6 +890,35 @@ mod tests {
         assert!(paths.content_dir("../../other-user").is_none());
     }
 
+    /// A stated Windows machine keeps the platform's administrator-writable
+    /// roots even when the caller states none, and a POSIX one never inherits
+    /// them. Both directions are asserted on every runner.
+    #[test]
+    fn stated_platforms_resolve_their_own_install_roots() {
+        let windows = SimulatedPaths::new().with_flavor(PathFlavor::Windows);
+        assert_eq!(windows.program_files(), Some(windows_program_files()));
+        assert_eq!(windows.program_data(), Some(windows_program_data()));
+
+        // A stated root wins over the platform default: Known Folder Move and a
+        // non-`C:` system drive both relocate these.
+        let relocated = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Windows)
+            .with_program_files(r"D:\Program Files")
+            .with_program_data(r"D:\ProgramData");
+        assert_eq!(
+            relocated.program_files(),
+            Some(PathBuf::from(r"D:\Program Files"))
+        );
+        assert_eq!(
+            relocated.program_data(),
+            Some(PathBuf::from(r"D:\ProgramData"))
+        );
+
+        let posix = SimulatedPaths::new().with_flavor(PathFlavor::Posix);
+        assert_eq!(posix.program_files(), None);
+        assert_eq!(posix.program_data(), None);
+    }
+
     #[test]
     fn simulated_environment_expands_allowlisted_placeholders() {
         let dir = tempdir().unwrap();
@@ -902,7 +968,12 @@ mod tests {
 
     #[test]
     fn an_unstated_root_is_absent_rather_than_invented() {
-        let environment = SimulatedPaths::new().with_home(r"D:\Users\me");
+        // A POSIX machine documents no install roots, so nothing is invented
+        // for one. Windows does document them, which
+        // `stated_platforms_resolve_their_own_install_roots` asserts.
+        let environment = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Posix)
+            .with_home("/home/me");
 
         assert_eq!(environment.program_files(), None);
         assert_eq!(environment.program_data(), None);
@@ -912,7 +983,7 @@ mod tests {
             None
         );
         // An unstated home is also absent, so expansion fails closed.
-        let empty = SimulatedPaths::new();
+        let empty = SimulatedPaths::new().with_flavor(PathFlavor::Posix);
         assert_eq!(empty.user_home(), None);
         assert_eq!(empty.expand_placeholder("~/Downloads"), None);
     }

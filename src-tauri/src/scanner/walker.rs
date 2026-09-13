@@ -85,6 +85,7 @@ impl DirectoryScanner {
 
             let size = measurement.size;
             let file_count = measurement.file_count;
+            let skipped_entry_count = measurement.skipped_entries;
             let (quality, incomplete_reason) = if !exists || measurement.complete {
                 (ObservationQuality::Fresh, None)
             } else if size.reclaimable() == 0 {
@@ -160,6 +161,7 @@ impl DirectoryScanner {
                 exists,
                 quality,
                 incomplete_reason,
+                skipped_entry_count,
             });
         }
 
@@ -183,6 +185,7 @@ impl DirectoryScanner {
                     FileSize::default(),
                     0,
                     None,
+                    1,
                     format!(
                         "Configured path {} is a symlink; cleanup is blocked",
                         root.display()
@@ -200,6 +203,7 @@ impl DirectoryScanner {
                     FileSize::default(),
                     0,
                     None,
+                    1,
                     format!("Could not inspect {}: {}", root.display(), err),
                 )];
             }
@@ -216,6 +220,7 @@ impl DirectoryScanner {
                     FileSize::default(),
                     0,
                     None,
+                    1,
                     format!("Could not inspect {}: {}", root.display(), err),
                 )];
             }
@@ -259,6 +264,7 @@ impl DirectoryScanner {
                         FileSize::default(),
                         0,
                         None,
+                        1,
                         format!(
                             "Candidate {} is a symlink; cleanup is blocked",
                             path.display()
@@ -276,6 +282,7 @@ impl DirectoryScanner {
                         FileSize::default(),
                         0,
                         None,
+                        1,
                         format!("Could not inspect {}: {}", path.display(), err),
                     ));
                     continue;
@@ -307,6 +314,7 @@ impl DirectoryScanner {
                     size,
                     stats.file_count,
                     last_modified,
+                    stats.skipped_entries,
                     stats.incomplete_reason.unwrap_or_else(|| {
                         format!("Could not completely inspect {}", path.display())
                     }),
@@ -350,6 +358,7 @@ impl DirectoryScanner {
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
+                skipped_entry_count: stats.skipped_entries,
             });
         }
 
@@ -362,6 +371,7 @@ impl DirectoryScanner {
                 FileSize::default(),
                 0,
                 None,
+                1,
                 reason,
             ));
         }
@@ -378,6 +388,7 @@ impl DirectoryScanner {
         size: FileSize,
         file_count: usize,
         last_modified: Option<u64>,
+        skipped_entry_count: u64,
         reason: String,
     ) -> ScanItem {
         let mut cache_metadata = signature.cache_metadata();
@@ -405,6 +416,7 @@ impl DirectoryScanner {
             exists: true,
             quality: ObservationQuality::Unavailable,
             incomplete_reason: Some(reason),
+            skipped_entry_count,
         }
     }
 
@@ -424,10 +436,12 @@ impl DirectoryScanner {
             newest_mtime: None,
             complete: true,
             incomplete_reason: None,
+            skipped_entries: 0,
         };
 
         if current_depth > max_depth {
             stats.complete = false;
+            stats.skipped_entries += 1;
             stats.incomplete_reason = Some(format!(
                 "Directory depth limit of {} exceeded at {}",
                 max_depth,
@@ -440,6 +454,7 @@ impl DirectoryScanner {
             Ok(m) => m,
             Err(err) => {
                 stats.complete = false;
+                stats.skipped_entries += 1;
                 stats.incomplete_reason = Some(format!(
                     "Failed to read metadata for {}: {}",
                     path.display(),
@@ -460,6 +475,7 @@ impl DirectoryScanner {
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
         {
             stats.complete = false;
+            stats.skipped_entries += 1;
             stats.incomplete_reason = Some(format!(
                 "Protected application bundle encountered in {}",
                 path.display()
@@ -501,6 +517,7 @@ impl DirectoryScanner {
             Ok(e) => e,
             Err(err) => {
                 stats.complete = false;
+                stats.skipped_entries += 1;
                 stats.incomplete_reason = Some(format!(
                     "Failed to read directory {}: {}",
                     path.display(),
@@ -515,6 +532,7 @@ impl DirectoryScanner {
                 Ok(e) => e,
                 Err(err) => {
                     stats.complete = false;
+                    stats.skipped_entries += 1;
                     if stats.incomplete_reason.is_none() {
                         stats.incomplete_reason = Some(format!(
                             "Failed to read entry in {}: {}",
@@ -528,6 +546,7 @@ impl DirectoryScanner {
             let child_path = ent.path();
 
             if crate::safety::Blacklist::is_blacklisted_with(&child_path, environment) {
+                stats.skipped_entries += 1;
                 continue;
             }
 
@@ -540,6 +559,7 @@ impl DirectoryScanner {
                     .unwrap_or(false)
                     || child_str.contains(ex)
             }) {
+                stats.skipped_entries += 1;
                 continue;
             }
 
@@ -559,6 +579,7 @@ impl DirectoryScanner {
             stats.logical += sub_stats.logical;
             stats.allocated += sub_stats.allocated;
             stats.file_count += sub_stats.file_count;
+            stats.skipped_entries += sub_stats.skipped_entries;
             if let Some(sub_mtime) = sub_stats.newest_mtime {
                 stats.newest_mtime = Some(match stats.newest_mtime {
                     Some(existing) => existing.max(sub_mtime),
@@ -579,6 +600,9 @@ pub struct TreeStats {
     pub newest_mtime: Option<SystemTime>,
     pub complete: bool,
     pub incomplete_reason: Option<String>,
+    /// Entries the walk did not account for: excluded, blacklisted, protected,
+    /// unreadable, or beyond the depth limit.
+    pub skipped_entries: u64,
 }
 
 #[cfg(test)]
@@ -652,6 +676,50 @@ mod tests {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("symlink")));
         }
+    }
+
+    /// The aged walker classifies its boundaries with the stated flavor, so the
+    /// tree statistics report what a Windows machine would refuse.
+    #[test]
+    fn windows_flavor_tree_stats_report_the_stated_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("candidate.cache");
+        std::fs::create_dir_all(candidate.join(".git")).unwrap();
+        std::fs::write(candidate.join(".git/objects"), vec![1u8; 1_024]).unwrap();
+        // A reserved device name is a Windows boundary, but Windows itself
+        // cannot create every one of them, so the fixture states it only where
+        // the host can hold it and the expectation follows.
+        let _ = std::fs::create_dir_all(candidate.join("nul"));
+        // Windows reports success for a reserved name without creating it, so
+        // the fixture is what the filesystem actually holds.
+        let reserved_created = std::fs::symlink_metadata(candidate.join("nul")).is_ok();
+        if reserved_created {
+            std::fs::write(candidate.join("nul/payload"), vec![2u8; 2_048]).unwrap();
+        }
+        std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
+
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let stats = DirectoryScanner::measure_tree_stats(&windows, &candidate, &[], 0, 32);
+
+        assert_eq!(stats.file_count, 1);
+        assert_eq!(stats.logical, 4_096);
+        assert!(
+            stats.complete,
+            "a protected name is a deliberate boundary, not a read failure"
+        );
+        assert_eq!(
+            stats.skipped_entries,
+            1 + u64::from(reserved_created),
+            "`.git` and, where the host holds one, the reserved device name are not measured"
+        );
+
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let stats = DirectoryScanner::measure_tree_stats(&posix, &candidate, &[], 0, 32);
+        assert_eq!(stats.skipped_entries, 1, "only `.git` is a POSIX boundary");
+        assert_eq!(
+            stats.logical,
+            4_096 + if reserved_created { 2_048 } else { 0 }
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "name": "windows-unc-profile-no-volume-identity",
   "flavor": "windows",
-  "system_drive": null,
+  "system_drive": "C:",
   "profile_shape": "unc",
   "known_folder_redirected": false,
   "temp_inside_profile": true,

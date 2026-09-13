@@ -1,5 +1,6 @@
 import type { DiskMetrics, DiskVolume, MemoryMetrics, MemoryTerminationMode } from '../models/types';
 import {
+  refusalForPreview,
   tauriGetDiskVolumes,
   tauriGetMemoryMetrics,
   tauriTerminateMemoryGroup,
@@ -76,6 +77,11 @@ export class MemoryStore {
 
   async terminateMemoryGroup(leaseId: string, mode: MemoryTerminationMode, displayName: string) {
     if (this.terminating) return null;
+    const refusal = refusalForPreview('Stopping a process');
+    if (refusal) {
+      this.error = refusal;
+      return null;
+    }
     if (!leaseId) {
       this.error = `Could not terminate ${displayName}: termination snapshot expired; refresh and try again.`;
       return null;

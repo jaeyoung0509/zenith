@@ -20,6 +20,7 @@
     largeFileKindLabel,
   } from '../../lib/utils/storageManagement';
   import {
+    refusalForPreview,
     tauriCancelLargeFileScan,
     tauriExecuteTrashPlan,
     tauriPrepareLargeFileTrash,
@@ -261,6 +262,11 @@
 
   async function executeTrash() {
     if (!plan) return;
+    const refusal = refusalForPreview('Deleting files');
+    if (refusal) {
+      error = refusal;
+      return;
+    }
     isExecuting = true;
     error = null;
     try {

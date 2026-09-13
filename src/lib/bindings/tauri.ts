@@ -48,6 +48,10 @@ export const commands = {
 	manual_bytes: number,
 	quality: ObservationQuality,
 	incomplete_reasons: string[],
+	/**  Sum of the categories' skipped-entry counts. */
+	skipped_entry_count: number,
+	/**  Retained items whose observation is not `Fresh`. */
+	incomplete_item_count: number,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
@@ -65,7 +69,12 @@ export const commands = {
 	getDockerStatus: () => typedError<DockerStatus_Serialize, string>(__TAURI_INVOKE("get_docker_status")),
 	pruneDockerTarget: (signatureId: string) => typedError<number, string>(__TAURI_INVOKE("prune_docker_target", { signatureId })),
 	getLocalModels: () => typedError<LocalModelItem_Serialize[], string>(__TAURI_INVOKE("get_local_models")),
-	deleteLocalModel: (modelId: string) => typedError<number, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
+	/**
+	 *  Deletes one local model and reports the bytes it reclaimed.
+	 *  `None` means the model was deleted but the reclaimed amount could not be
+	 *  measured completely; the interface must not present that as a number.
+	 */
+	deleteLocalModel: (modelId: string) => typedError<IpcOptionalU64_Serialize, string>(__TAURI_INVOKE("delete_local_model", { modelId })),
 	getAwakeState: () => typedError<AwakeState_Serialize, string>(__TAURI_INVOKE("get_awake_state")),
 	setAwakeRules: (rules: AwakeRule_Deserialize[]) => typedError<null, string>(__TAURI_INVOKE("set_awake_rules", { rules })),
 	setManualAwake: (durationSecs: number | null, behavior: AwakeBehavior) => typedError<null, string>(__TAURI_INVOKE("set_manual_awake", { durationSecs, behavior })),
@@ -590,6 +599,10 @@ export type CategoryResult_Deserialize = {
 	rebuild_bytes: number,
 	manual_bytes: number,
 	quality?: ObservationQuality,
+	/**  Sum of the retained items' skipped-entry counts. */
+	skipped_entry_count?: number,
+	/**  Retained items whose observation is not `Fresh`. */
+	incomplete_item_count?: number,
 };
 
 export type CategoryResult_Serialize = {
@@ -601,6 +614,10 @@ export type CategoryResult_Serialize = {
 	rebuild_bytes: number,
 	manual_bytes: number,
 	quality: ObservationQuality,
+	/**  Sum of the retained items' skipped-entry counts. */
+	skipped_entry_count: number,
+	/**  Retained items whose observation is not `Fresh`. */
+	incomplete_item_count: number,
 };
 
 export type CleanEvent = CleanEvent_Serialize | CleanEvent_Deserialize;
@@ -643,6 +660,14 @@ export type CleanResult_Deserialize = {
 	finished_at: number,
 	total_reclaimed_bytes: number,
 	total_failed_bytes: number,
+	/**
+	 *  Targets that reclaimed some bytes but were not fully cleaned. They keep
+	 *  `success = true`, so the count is the only place a partial run is
+	 *  visible in the summary.
+	 */
+	partial_count: number,
+	/**  Targets that reclaimed nothing. */
+	failed_count: number,
 	items: CleanItemResult_Deserialize[],
 	actual_disk_free_delta: number | null,
 };
@@ -653,6 +678,14 @@ export type CleanResult_Serialize = {
 	finished_at: number,
 	total_reclaimed_bytes: number,
 	total_failed_bytes: number,
+	/**
+	 *  Targets that reclaimed some bytes but were not fully cleaned. They keep
+	 *  `success = true`, so the count is the only place a partial run is
+	 *  visible in the summary.
+	 */
+	partial_count: number,
+	/**  Targets that reclaimed nothing. */
+	failed_count: number,
 	items: CleanItemResult_Serialize[],
 	actual_disk_free_delta: number | null,
 };
@@ -1117,6 +1150,30 @@ export type InstalledApp_Serialize = {
 	is_running: boolean,
 	is_system_protected: boolean,
 };
+
+/**
+ *  A nullable integer that crosses IPC without changing its JSON or Specta
+ *  shape. Command return values cannot attach a serde field adapter directly,
+ *  so this transparent wrapper keeps `number | null` while enforcing the same
+ *  JavaScript-safe range as model fields.
+ */
+export type IpcOptionalU64 = IpcOptionalU64_Serialize | IpcOptionalU64_Deserialize;
+
+/**
+ *  A nullable integer that crosses IPC without changing its JSON or Specta
+ *  shape. Command return values cannot attach a serde field adapter directly,
+ *  so this transparent wrapper keeps `number | null` while enforcing the same
+ *  JavaScript-safe range as model fields.
+ */
+export type IpcOptionalU64_Deserialize = number | null;
+
+/**
+ *  A nullable integer that crosses IPC without changing its JSON or Specta
+ *  shape. Command return values cannot attach a serde field adapter directly,
+ *  so this transparent wrapper keeps `number | null` while enforcing the same
+ *  JavaScript-safe range as model fields.
+ */
+export type IpcOptionalU64_Serialize = number | null;
 
 export type LargeFileFilter = "all" | "installers";
 
@@ -1820,6 +1877,12 @@ export type ScanItem_Deserialize = {
 	exists: boolean,
 	quality?: ObservationQuality,
 	incomplete_reason?: string | null,
+	/**
+	 *  Entries the measurement did not account for (excluded, blacklisted,
+	 *  protected, unreadable, or beyond the depth limit). Reported so a
+	 *  partial total is never presented as a complete one.
+	 */
+	skipped_entry_count?: number,
 };
 
 export type ScanItem_Serialize = {
@@ -1838,6 +1901,12 @@ export type ScanItem_Serialize = {
 	exists: boolean,
 	quality: ObservationQuality,
 	incomplete_reason: string | null,
+	/**
+	 *  Entries the measurement did not account for (excluded, blacklisted,
+	 *  protected, unreadable, or beyond the depth limit). Reported so a
+	 *  partial total is never presented as a complete one.
+	 */
+	skipped_entry_count: number,
 };
 
 export type ScanResult = ScanResult_Serialize | ScanResult_Deserialize;
@@ -1855,6 +1924,10 @@ export type ScanResult_Deserialize = {
 	manual_bytes: number,
 	quality?: ObservationQuality,
 	incomplete_reasons?: string[],
+	/**  Sum of the categories' skipped-entry counts. */
+	skipped_entry_count?: number,
+	/**  Retained items whose observation is not `Fresh`. */
+	incomplete_item_count?: number,
 };
 
 export type ScanResult_Serialize = {
@@ -1870,6 +1943,10 @@ export type ScanResult_Serialize = {
 	manual_bytes: number,
 	quality: ObservationQuality,
 	incomplete_reasons: string[],
+	/**  Sum of the categories' skipped-entry counts. */
+	skipped_entry_count: number,
+	/**  Retained items whose observation is not `Fresh`. */
+	incomplete_item_count: number,
 };
 
 export type SelectedApplication = {

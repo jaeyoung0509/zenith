@@ -5,16 +5,16 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
+pub fn resolve_project(
+    cwd: &Path,
+    environment: &crate::platform::PlatformEnvironment,
+) -> Option<(PathBuf, ProjectIdentity)> {
     let canonical_cwd = cwd.canonicalize().ok()?;
     if !canonical_cwd.is_dir() {
         return None;
     }
 
-    let git_root = find_git_root(
-        &canonical_cwd,
-        crate::privacy::paths::user_home().as_deref(),
-    );
+    let git_root = find_git_root(&canonical_cwd, environment.user_home().as_deref());
 
     let root = git_root.unwrap_or_else(|| canonical_cwd.clone());
     let marker = root.join(".git");
@@ -23,9 +23,9 @@ pub fn resolve_project(cwd: &Path) -> Option<(PathBuf, ProjectIdentity)> {
 
     let display_name = root.file_name()?.to_string_lossy().to_string();
     let location_hint =
-        location_hint(&root, PathFlavor::current()).unwrap_or_else(|| display_name.clone());
+        location_hint(&root, environment.flavor()).unwrap_or_else(|| display_name.clone());
 
-    let display_path = crate::privacy::paths::display_path(&root);
+    let display_path = crate::privacy::paths::display_path(&root, environment);
 
     let id = opaque_id("project", &root);
     let worktree_id = if is_worktree {
@@ -183,22 +183,23 @@ pub fn candidate_project_roots(
     agent_cwds: &[PathBuf],
     dev_listeners: &[crate::models::DevelopmentListener],
     registered_workspaces: &[PathBuf],
+    environment: &crate::platform::PlatformEnvironment,
 ) -> Vec<PathBuf> {
     let mut candidates = HashSet::new();
     for cwd in agent_cwds {
-        if let Some((root, _)) = resolve_project(cwd) {
+        if let Some((root, _)) = resolve_project(cwd, environment) {
             candidates.insert(root);
         }
     }
     for listener in dev_listeners {
         if let Some(dir) = listener.working_directory.as_deref() {
-            if let Some((root, _)) = resolve_project(Path::new(dir)) {
+            if let Some((root, _)) = resolve_project(Path::new(dir), environment) {
                 candidates.insert(root);
             }
         }
     }
     for ws in registered_workspaces {
-        if let Some((root, _)) = resolve_project(ws) {
+        if let Some((root, _)) = resolve_project(ws, environment) {
             candidates.insert(root);
         }
     }
@@ -220,6 +221,11 @@ pub fn opaque_id(namespace: &str, value: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// The host machine these project fixtures live on.
+    fn test_environment() -> crate::platform::PlatformEnvironment {
+        crate::platform::PlatformEnvironment::native()
+    }
+
     #[test]
     fn resolves_deepest_repository_and_hides_absolute_path() {
         let temp = tempfile::tempdir().unwrap();
@@ -229,7 +235,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/feature/test\n").unwrap();
 
-        let (resolved, identity) = resolve_project(&nested).unwrap();
+        let (resolved, identity) = resolve_project(&nested, &test_environment()).unwrap();
         assert_eq!(resolved, root.canonicalize().unwrap());
         assert_eq!(identity.display_name, "repo-name");
         assert_eq!(identity.branch.as_deref(), Some("feature/test"));
@@ -303,8 +309,8 @@ mod tests {
         let second = temp.path().join("two/project");
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
-        let (_, a) = resolve_project(&first).unwrap();
-        let (_, b) = resolve_project(&second).unwrap();
+        let (_, a) = resolve_project(&first, &test_environment()).unwrap();
+        let (_, b) = resolve_project(&second, &test_environment()).unwrap();
         assert_ne!(a.id, b.id);
         assert_ne!(a.location_hint, b.location_hint);
     }
@@ -328,7 +334,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("outside-project");
         std::fs::create_dir_all(&project).unwrap();
-        let (_, identity) = resolve_project(&project).unwrap();
+        let (_, identity) = resolve_project(&project, &test_environment()).unwrap();
         assert!(
             !identity.display_path.starts_with('/') && !identity.display_path.contains(":\\"),
             "display path leaked an absolute location: {}",

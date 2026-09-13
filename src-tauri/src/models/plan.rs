@@ -170,6 +170,16 @@ pub struct CleanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub total_failed_bytes: u64,
+    /// Targets that reclaimed some bytes but were not fully cleaned. They keep
+    /// `success = true`, so the count is the only place a partial run is
+    /// visible in the summary.
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub partial_count: u64,
+    /// Targets that reclaimed nothing.
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub failed_count: u64,
     pub items: Vec<CleanItemResult>,
     pub actual_disk_free_delta: Option<i64>,
 }

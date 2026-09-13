@@ -100,6 +100,43 @@ describe('cleanOutcome', () => {
     expect(cleanOutcome({ items: [item('success', true), item('success', true)] })).toBe('success');
     expect(cleanOutcome({ items: [] })).toBe('failed');
   });
+
+  it('prefers the backend counts over inspecting the item list', () => {
+    // The backend counts a target that reclaimed bytes without finishing, even
+    // when the item row is filtered out of the UI list (a `partial` target with
+    // no message is exactly the case the old heuristic missed).
+    expect(
+      cleanOutcome({
+        items: [item('success', true), item('partial', true)],
+        partial_count: 1,
+        failed_count: 0,
+      })
+    ).toBe('partial');
+
+    expect(
+      cleanOutcome({
+        items: [item('success', true), item('failed', false), item('partial', true)],
+        partial_count: 1,
+        failed_count: 1,
+      })
+    ).toBe('partial');
+
+    expect(
+      cleanOutcome({
+        items: [item('failed', false), item('failed', false)],
+        partial_count: 0,
+        failed_count: 2,
+      })
+    ).toBe('failed');
+
+    expect(
+      cleanOutcome({
+        items: [item('success', true)],
+        partial_count: 0,
+        failed_count: 0,
+      })
+    ).toBe('success');
+  });
 });
 
 describe('quick clean eligibility and predicate consistency', () => {

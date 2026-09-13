@@ -128,6 +128,22 @@
               • Manual: {formatBytes(categoryResult.manual_bytes)}
             </span>
           {/if}
+          {#if (categoryResult.skipped_entry_count ?? 0) > 0}
+            <span
+              class="shrink-0 whitespace-nowrap text-meta text-muted-foreground font-mono"
+              title="Excluded, protected, or unreadable entries the measurement did not count"
+            >
+              • {categoryResult.skipped_entry_count} entries skipped
+            </span>
+          {/if}
+          {#if (categoryResult.incomplete_item_count ?? 0) > 0}
+            <span
+              class="shrink-0 whitespace-nowrap text-meta text-muted-foreground font-mono"
+              title="Items whose locations could not be fully inspected: partly measured or inaccessible"
+            >
+              • {categoryResult.incomplete_item_count} items not fully measured
+            </span>
+          {/if}
         </div>
       </div>
     </div>

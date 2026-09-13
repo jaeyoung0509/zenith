@@ -14,6 +14,7 @@
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import { formatBytes, formatCountdown, formatTimeAgo, ttlRemaining } from '../../lib/utils/format';
   import {
+    refusalForPreview,
     tauriCancelDeveloperArtifactScan,
     tauriExecuteTrashPlan,
     tauriPickDeveloperWorkspace,
@@ -344,6 +345,11 @@
 
   async function executeCleanup() {
     if (!plan) return;
+    const refusal = refusalForPreview('Deleting artifacts');
+    if (refusal) {
+      error = refusal;
+      return;
+    }
     if (hasMeasurementIncompleteSelected && !partialCleanupConfirmed) {
       error = `Confirm the partial-measurement warning before moving these artifacts to ${platformContextStore.trashLabel}.`;
       return;

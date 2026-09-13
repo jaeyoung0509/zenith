@@ -652,8 +652,12 @@ fn search_candidates(environment: &crate::platform::PlatformEnvironment) -> Vec<
 
     // One shared root set for discovery. `tool_search_locations` reads
     // ProgramW6432/ProgramFiles(x86), package-manager environment variables,
-    // Chocolatey/Scoop shims, WinGet Links, and nvm-windows on Windows.
-    candidates.extend(crate::platform::NativePlatformPaths::tool_search_locations());
+    // Chocolatey/Scoop shims, WinGet Links, and nvm-windows on Windows. The
+    // profile comes from the description, so a stated machine searches its own
+    // roots instead of the runner's.
+    candidates.extend(crate::platform::NativePlatformPaths::tool_search_locations(
+        environment.user_home().as_deref(),
+    ));
 
     #[cfg(target_os = "macos")]
     if let Some(home) = environment.user_home() {

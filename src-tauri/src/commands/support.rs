@@ -16,12 +16,29 @@ where
 {
     tauri::async_runtime::spawn_blocking(work)
         .await
-        .map_err(|error| format!("{context}: {error}"))?
+        .map_err(|error| join_failure(context, error))?
 }
 
-pub(super) fn user_home() -> Result<PathBuf, String> {
-    crate::platform::NativePlatformPaths::new()
-        .home()
+/// The error for a worker task that never returned its result.
+///
+/// The join error's `Display` carries the panic message the worker died with,
+/// and `map_err(|_| "… panicked")` used to throw exactly that away: the log and
+/// the user were left with the symptom and no cause. The raw message goes to the
+/// diagnostics sink (which redacts credentials and masks paths); the value that
+/// crosses IPC is sanitized the same way, so a panic payload cannot leak into
+/// the interface what the log would have hidden.
+pub(crate) fn join_failure(context: &str, error: impl std::fmt::Display) -> String {
+    let message = format!("{context}: {error}");
+    crate::diagnostics::log_error("worker", &message);
+    crate::diagnostics::sanitize_log(&message)
+}
+
+/// The profile of the environment the command is acting on.
+pub(super) fn user_home(
+    environment: &crate::platform::PlatformEnvironment,
+) -> Result<PathBuf, String> {
+    environment
+        .user_home()
         .ok_or_else(|| "User home directory is not available".to_string())
 }
 
@@ -98,5 +115,24 @@ mod tests {
         let data = Mutex::new(123);
         let guard = lock_or_state_error(&data, "Settings").unwrap();
         assert_eq!(*guard, 123);
+    }
+
+    /// The error surfaced for a dead worker must carry what it died with: the
+    /// previous `map_err(|_| "… panicked")` named only the symptom.
+    #[test]
+    fn join_failure_keeps_the_panic_payload() {
+        let worker = tauri::async_runtime::spawn_blocking(|| panic!("cache index was truncated"));
+        let error = tauri::async_runtime::block_on(worker).expect_err("the worker panicked");
+
+        let message = join_failure("Large-file scan worker panicked", error);
+
+        assert!(
+            message.starts_with("Large-file scan worker panicked: "),
+            "the caller's context must stay attached: {message}"
+        );
+        assert!(
+            message.contains("cache index was truncated"),
+            "the panic payload must survive: {message}"
+        );
     }
 }

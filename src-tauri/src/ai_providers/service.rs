@@ -177,11 +177,23 @@ impl ProviderCollectionService {
                         match res {
                             Ok(Ok(usage)) => usage,
                             Ok(Err(err)) => map_error_to_usage(&adapter.descriptor(), err),
-                            Err(_panic) => failed_provider(
-                                id,
-                                provider_name,
-                                "Collector panicked unexpectedly.",
-                            ),
+                            // The payload is the cause, but the row crosses
+                            // IPC: sanitize what the user sees, and keep the
+                            // raw text in the diagnostics log below.
+                            Err(panic) => {
+                                let payload = panic_payload_text(panic.as_ref());
+                                crate::diagnostics::log_error(
+                                    "provider",
+                                    &format!("Collector panicked unexpectedly: {payload}"),
+                                );
+                                failed_provider(
+                                    id,
+                                    provider_name,
+                                    &crate::diagnostics::sanitize_log(&format!(
+                                        "Collector panicked unexpectedly: {payload}"
+                                    )),
+                                )
+                            }
                         }
                     }
                     None => failed_provider(id, provider_name, "Unknown provider"),
@@ -196,7 +208,15 @@ impl ProviderCollectionService {
         }
 
         for handle in handles {
-            let _ = handle.join();
+            if let Err(panic) = handle.join() {
+                crate::diagnostics::log_error(
+                    "provider",
+                    &format!(
+                        "Usage collector worker panicked: {}",
+                        panic_payload_text(panic.as_ref())
+                    ),
+                );
+            }
         }
 
         let mut guard = results.lock().unwrap_or_else(|p| p.into_inner());
@@ -217,6 +237,21 @@ impl ProviderCollectionService {
             providers,
             fetched_at: now_secs(),
         }
+    }
+}
+
+/// The text of a panic payload, for the provider failure message and the log.
+///
+/// `catch_unwind` and `JoinHandle::join` hand back the payload as `dyn Any`;
+/// that message is the only record of what the collector was doing when it
+/// died, and it used to be discarded.
+fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else if let Some(text) = payload.downcast_ref::<&'static str>() {
+        (*text).to_string()
+    } else {
+        "no message".to_string()
     }
 }
 

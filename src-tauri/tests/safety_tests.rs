@@ -344,10 +344,14 @@ fn test_symlink_safety_and_no_escape() {
         assert!(SymlinkGuard::is_symlink(&symlink_path));
 
         // Size calculation on the directory with symlink must only measure the link, not traverse outside
-        let (size, count) =
-            SizeCalculator::measure_path(dir.path(), &[], &PlatformEnvironment::native());
-        assert_eq!(count, 1);
-        assert!(size.logical > 0);
+        let measurement =
+            SizeCalculator::measure_path_full(dir.path(), &[], &PlatformEnvironment::native());
+        assert_eq!(measurement.file_count, 1);
+        assert!(measurement.size.logical > 0);
+        assert!(
+            measurement.complete,
+            "a symlink is measured as a link, not as a boundary"
+        );
     }
 }
 
@@ -371,6 +375,7 @@ fn test_safety_planner_rejects_unknown_signatures() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
 
     let plan_res = SafetyPlanner::create_plan(&[fake_item], &registry);
@@ -404,6 +409,7 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
 
     let result = SafetyPlanner::create_plan(&[forged_item], &registry);
@@ -467,6 +473,7 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
@@ -614,6 +621,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             rebuild_bytes: 0,
             manual_bytes: 0,
             quality: ObservationQuality::Fresh,
+            skipped_entry_count: 0,
+            incomplete_item_count: 0,
         }],
         total_bytes: 0,
         safe_bytes: 0,
@@ -621,6 +630,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         manual_bytes: 0,
         quality: ObservationQuality::Fresh,
         incomplete_reasons: vec![],
+        skipped_entry_count: 0,
+        incomplete_item_count: 0,
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -688,6 +699,7 @@ fn manual_strategy_never_enters_generic_cleaner() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
 
     assert!(matches!(
@@ -721,6 +733,7 @@ fn npm_cache_selection_plans_provider_cleanup_without_deleting_fixture() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     assert_eq!(plan.targets.len(), 1);
@@ -774,6 +787,7 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
@@ -828,8 +842,11 @@ fn test_ancestor_symlink_escape_rejection() {
 
         let target_path = symlink_dir.join("cache");
         // Verify ancestor symlink detection
-        let validation_res =
-            SymlinkGuard::validate_no_symlink_ancestors(&target_path, &trusted_root);
+        let validation_res = SymlinkGuard::validate_no_symlink_ancestors(
+            &target_path,
+            &trusted_root,
+            &PlatformEnvironment::native(),
+        );
         assert!(
             validation_res.is_err(),
             "Ancestor symlink must be rejected!"
@@ -867,8 +884,11 @@ fn test_symlink_ancestor_above_signature_root_rejection() {
         let signature_target = symlink_dot_cargo.join("registry").join("cache");
 
         // Validate that checking against base_dir detects the .cargo symlink
-        let validation_res =
-            SymlinkGuard::validate_components_between(&signature_target, base_dir.path());
+        let validation_res = SymlinkGuard::validate_components_between(
+            &signature_target,
+            base_dir.path(),
+            &PlatformEnvironment::native(),
+        );
         assert!(
             validation_res.is_err(),
             "Symlink above signature root must be rejected!"
@@ -893,8 +913,11 @@ fn test_signature_root_itself_symlink_rejection() {
         let symlink_cache = base_dir.path().join("cache");
         std::os::unix::fs::symlink(outside_dir.path(), &symlink_cache).expect("create symlink");
 
-        let validation_res =
-            SymlinkGuard::validate_components_between(&symlink_cache, base_dir.path());
+        let validation_res = SymlinkGuard::validate_components_between(
+            &symlink_cache,
+            base_dir.path(),
+            &PlatformEnvironment::native(),
+        );
         assert!(
             validation_res.is_err(),
             "Signature root as symlink must be rejected!"
@@ -924,6 +947,7 @@ fn test_docker_prune_target_can_create_plan() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
 
     let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
@@ -980,6 +1004,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         exists: true,
         quality: ObservationQuality::Fresh,
         incomplete_reason: None,
+        skipped_entry_count: 0,
     };
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
@@ -1027,17 +1052,17 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
         .any(|ex| ex == "default_project_id.txt" || ex.ends_with("default_project_id.txt")));
 
     // Measure size with signature exclusions
-    let (measured_size, measured_count) = SizeCalculator::measure_path(
+    let measured = SizeCalculator::measure_path_full(
         &cache_dir,
         &gemini_sig.exclusions,
         &PlatformEnvironment::native(),
     );
     assert_eq!(
-        measured_count, 1,
+        measured.file_count, 1,
         "Only transient_cache should be counted as reclaimable"
     );
     assert_eq!(
-        measured_size.logical,
+        measured.size.logical,
         b"transient session data".len() as u64
     );
 
@@ -1103,6 +1128,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                         exists: true,
                         quality: ObservationQuality::Fresh,
                         incomplete_reason: None,
+                        skipped_entry_count: 0,
                     },
                     ScanItem {
                         id: "dev.safe.zero".to_string(),
@@ -1120,6 +1146,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                         exists: true,
                         quality: ObservationQuality::Fresh,
                         incomplete_reason: None,
+                        skipped_entry_count: 0,
                     },
                     ScanItem {
                         id: "dev.rebuild".to_string(),
@@ -1137,8 +1164,11 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                         exists: true,
                         quality: ObservationQuality::Fresh,
                         incomplete_reason: None,
+                        skipped_entry_count: 0,
                     },
                 ],
+                incomplete_item_count: 0,
+                skipped_entry_count: 0,
             },
             CategoryResult {
                 category: Category::System,
@@ -1164,7 +1194,10 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     exists: true,
                     quality: ObservationQuality::Fresh,
                     incomplete_reason: None,
+                    skipped_entry_count: 0,
                 }],
+                incomplete_item_count: 0,
+                skipped_entry_count: 0,
             },
             CategoryResult {
                 category: Category::Model,
@@ -1190,11 +1223,16 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     exists: true,
                     quality: ObservationQuality::Fresh,
                     incomplete_reason: None,
+                    skipped_entry_count: 0,
                 }],
+                incomplete_item_count: 0,
+                skipped_entry_count: 0,
             },
         ],
         quality: ObservationQuality::Fresh,
         incomplete_reasons: vec![],
+        incomplete_item_count: 0,
+        skipped_entry_count: 0,
     };
 
     // Default settings has clean_developer_tools=true
@@ -1323,6 +1361,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         exists: true,
         quality: ObservationQuality::Partial,
         incomplete_reason: Some("Permission denied in subtree".to_string()),
+        skipped_entry_count: 0,
     };
 
     let unavailable_item = ScanItem {
@@ -1344,6 +1383,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         exists: true,
         quality: ObservationQuality::Unavailable,
         incomplete_reason: Some("Failed to access directory".to_string()),
+        skipped_entry_count: 0,
     };
 
     // 1. Cleanup permission invariants
@@ -1377,9 +1417,13 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
             manual_bytes: 0,
             quality: ObservationQuality::Partial,
             items: vec![partial_item.clone(), unavailable_item.clone()],
+            skipped_entry_count: 0,
+            incomplete_item_count: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Permission denied in subtree".to_string()],
+        skipped_entry_count: 0,
+        incomplete_item_count: 0,
     };
 
     let settings = ZenithSettings::default();

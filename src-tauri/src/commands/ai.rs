@@ -64,14 +64,17 @@ pub async fn get_project_context(
         &state.activity_singleflight,
         &state.activity_generation,
         &state.runtime_metrics,
+        &state.environment,
         threshold_secs,
         force.unwrap_or(false),
     )
     .await?;
     let dev_store = state.dev_port_store.clone();
     let storage_state = state.storage_state.clone();
+    let environment = state.environment.clone();
     let enriched = tauri::async_runtime::spawn_blocking(move || {
-        let enriched_registry = enrich_activity_for_project_view(raw, &dev_store, &storage_state);
+        let enriched_registry =
+            enrich_activity_for_project_view(raw, &dev_store, &storage_state, &environment);
         let snapshot = enriched_registry.snapshot.clone();
         {
             let store = crate::agent_activity::global_store();
@@ -108,9 +111,14 @@ pub async fn request_stop_agent_session(
 
     let cache = state.agent_activity_cache.clone();
     let runtime = state.ai_control_runtime.clone();
+    let environment = state.environment.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let system = crate::agent_activity::termination::RealTerminationSystem;
-        let result = crate::agent_activity::termination::execute_graceful_stop(&lease, &system);
+        let result = crate::agent_activity::termination::execute_graceful_stop(
+            &lease,
+            &system,
+            &environment,
+        );
         if result.is_ok() {
             if let Ok(mut cache_guard) = cache.lock() {
                 *cache_guard = None;
@@ -125,10 +133,13 @@ pub async fn request_stop_agent_session(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_agent_integrations() -> Result<Vec<AgentIntegrationInfo>, String> {
+pub async fn get_agent_integrations(
+    state: State<'_, AppState>,
+) -> Result<Vec<AgentIntegrationInfo>, String> {
+    let environment = state.environment.clone();
     run_blocking(
-        || {
-            let home = user_home()?;
+        move || {
+            let home = user_home(&environment)?;
             const TOOLS: &[&str] = &[
                 "antigravity",
                 "claude",
@@ -154,10 +165,14 @@ pub async fn get_agent_integrations() -> Result<Vec<AgentIntegrationInfo>, Strin
 
 #[tauri::command]
 #[specta::specta]
-pub async fn setup_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
+pub async fn setup_agent_integration(
+    tool_id: String,
+    state: State<'_, AppState>,
+) -> Result<AgentIntegrationResult, String> {
+    let environment = state.environment.clone();
     run_blocking(
         move || {
-            let home = user_home()?;
+            let home = user_home(&environment)?;
             crate::agent_activity::hooks::install_integration(&tool_id, &home)
         },
         "Agent integration setup worker panicked",
@@ -167,10 +182,14 @@ pub async fn setup_agent_integration(tool_id: String) -> Result<AgentIntegration
 
 #[tauri::command]
 #[specta::specta]
-pub async fn remove_agent_integration(tool_id: String) -> Result<AgentIntegrationResult, String> {
+pub async fn remove_agent_integration(
+    tool_id: String,
+    state: State<'_, AppState>,
+) -> Result<AgentIntegrationResult, String> {
+    let environment = state.environment.clone();
     run_blocking(
         move || {
-            let home = user_home()?;
+            let home = user_home(&environment)?;
             crate::agent_activity::hooks::uninstall_integration(&tool_id, &home)
         },
         "Agent integration removal worker panicked",
@@ -193,11 +212,12 @@ pub async fn get_agent_quick_summary(
         &state.activity_singleflight,
         &state.activity_generation,
         &state.runtime_metrics,
+        &state.environment,
         threshold_secs,
         false,
     )
     .await
-    .map_err(|_| "Agent activity cache is unavailable.".to_string())?;
+    .map_err(|error| format!("Agent activity cache is unavailable: {error}"))?;
     let mut active_count = 0;
     let mut attention_count = 0;
     let mut rows = Vec::new();
@@ -319,6 +339,7 @@ pub async fn get_ai_control_center(
         &state.activity_singleflight,
         &state.activity_generation,
         &state.runtime_metrics,
+        &state.environment,
         inactivity_threshold_secs,
         false,
     )
@@ -351,6 +372,7 @@ pub async fn get_ai_control_center(
     let memory_sampler = state.memory_sampler.clone();
     let awake = state.awake_manager.clone();
     let dev_store = state.dev_port_store.clone();
+    let environment = state.environment.clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Running blocking work survives request cancellation, so its permit
         // must live in the worker rather than in the awaiting request.
@@ -385,7 +407,8 @@ pub async fn get_ai_control_center(
         let awake_state = awake.get_state();
         let listeners = crate::dev_ports::list_listeners_with_context(
             &dev_store,
-            &crate::dev_ports::RealDevPortSystem::default(),
+            &crate::dev_ports::RealDevPortSystem::new(environment.flavor()),
+            environment.user_home().as_deref(),
         )
         .unwrap_or_default();
         let resources = crate::ai_control_center::resources::attribute(
@@ -594,6 +617,7 @@ pub async fn run_ai_safety_scan(
         &state.activity_singleflight,
         &state.activity_generation,
         &state.runtime_metrics,
+        &state.environment,
         inactivity_threshold_secs,
         false,
     )

@@ -23,13 +23,15 @@
     result.items.filter((i) => !i.success || i.status === 'failed')
   );
   let partialItems = $derived(
-    result.items.filter(
-      (i) => i.success && (i.status === 'partial' || !!i.error_message)
-    )
+    result.items.filter((i) => i.success && i.status === 'partial')
   );
   let fullSuccessItems = $derived(
     result.items.filter((i) => i.success && i.status === 'success' && !i.error_message)
   );
+  // The backend counts every target it could not fully clean, so the summary
+  // reports its verdict instead of re-deriving one from the item list.
+  let partialCount = $derived(result.partial_count ?? partialItems.length);
+  let failedCount = $derived(result.failed_count ?? failedItems.length);
 
   onMount(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -154,6 +156,11 @@
           </span>
         {/if}
       </div>
+      {#if partialCount > 0 || failedCount > 0}
+        <div class="mt-1 text-meta font-mono text-muted-foreground">
+          {partialCount} target(s) partially cleaned, {failedCount} failed
+        </div>
+      {/if}
     </div>
 
     <!-- Failed Items -->
@@ -161,7 +168,7 @@
       <div class="space-y-1.5">
         <div class="flex items-center gap-1.5 text-xs font-medium text-destructive">
           <AlertCircle size={14} />
-          <span>{failedItems.length} item(s) failed</span>
+          <span>{failedCount} item(s) failed</span>
         </div>
         <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
           {#each failedItems as item}
@@ -181,7 +188,7 @@
       <div class="space-y-1.5">
         <div class="flex items-center gap-1.5 text-xs font-medium text-warning">
           <AlertTriangle size={14} />
-          <span>{partialItems.length} item(s) partially cleaned</span>
+          <span>{partialCount} item(s) partially cleaned</span>
         </div>
         <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
           {#each partialItems as item}

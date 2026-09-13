@@ -37,10 +37,6 @@ pub mod trash_manager;
 
 use commands::AppState;
 use platform::path_algebra::PathFlavor;
-use platform::{NativePlatformCapabilities, PlatformCapabilitiesProvider};
-use power::KeepAwakeManager;
-use signatures::SignatureRegistry;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::image::Image;
@@ -318,87 +314,13 @@ fn show_quick_panel_tracked(
 pub fn run() {
     crate::platform::environment::set_webview_version(tauri::webview_version().ok());
     let environment = Arc::new(crate::platform::PlatformEnvironment::native());
-    // The catalog is loaded against the same description every other component
-    // receives, instead of building a second, unrelated native environment.
-    let registry =
-        Arc::new(SignatureRegistry::load_embedded_with(&environment).unwrap_or_default());
-    let awake_manager = Arc::new(KeepAwakeManager::new());
-    awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
-    let settings = Arc::new(Mutex::new(models::ZenithSettings::default()));
-    let last_scan = Arc::new(Mutex::new(None));
-    let credentials: Arc<dyn crate::ai_providers::CredentialStore> =
-        Arc::new(crate::ai_providers::OsCredentialStore::default());
-    let ai_collection_service = Arc::new(crate::ai_providers::ProviderCollectionService::default());
-    let ai_usage_cache = Arc::new(Mutex::new(None));
-    let runtime_metrics = Arc::new(crate::runtime_metrics::RuntimeMetrics::new());
-    let usage_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(
-        runtime_metrics.clone(),
-    ));
-    let usage_generation = Arc::new(std::sync::atomic::AtomicU64::new(1));
-    let delete_plans = Arc::new(Mutex::new(HashMap::new()));
-    let storage_operation_gate = operation_gate::StorageOperationGate::default();
-    let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
-    let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
-    let memory_termination_store =
-        Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
-    let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
-    let agent_activity_cache = Arc::new(Mutex::new(None));
-    let activity_singleflight = Arc::new(crate::collection::SingleFlight::with_metrics(
-        runtime_metrics.clone(),
-    ));
-    let activity_generation = Arc::new(std::sync::atomic::AtomicU64::new(1));
-    let execution_budgets = Arc::new(crate::execution_budget::ExecutionBudgets::new());
-    let ai_control_state = Arc::new(Mutex::new(
-        crate::ai_control_center::state::AiControlCenterState::default(),
-    ));
-    let ai_control_refresh_lock = Arc::new(Mutex::new(()));
-    let ai_control_runtime = Arc::new(crate::ai_control_center::runtime::AiControlRuntime::new(
-        memory_sampler.clone(),
-        dev_port_store.clone(),
-        agent_activity_cache.clone(),
-        activity_singleflight.clone(),
-        activity_generation.clone(),
-        runtime_metrics.clone(),
-        ai_control_state.clone(),
-        awake_manager.clone(),
-        settings.clone(),
-    ));
-    let platform_capabilities: Arc<dyn PlatformCapabilitiesProvider> =
-        Arc::new(NativePlatformCapabilities::new(environment.clone()));
     // The container host is observed once, at the composition root. The
     // adapter never reads the process environment itself.
     let container_host =
         crate::docker::adapter::ContainerHost::from_value(std::env::var("DOCKER_HOST").ok());
-
-    let app_state = AppState {
-        environment: environment.clone(),
-        container_host,
-        registry,
-        awake_manager: awake_manager.clone(),
-        settings: settings.clone(),
-        last_scan,
-        credentials,
-        ai_collection_service,
-        ai_usage_cache,
-        usage_singleflight,
-        usage_generation,
-        delete_plans,
-        storage_operation_gate,
-        storage_state,
-        memory_sampler: memory_sampler.clone(),
-        memory_termination_store: memory_termination_store.clone(),
-        dev_port_store: dev_port_store.clone(),
-        agent_activity_cache: agent_activity_cache.clone(),
-        activity_singleflight,
-        activity_generation,
-        ai_control_state: ai_control_state.clone(),
-        ai_control_refresh_lock,
-        ai_control_runtime: ai_control_runtime.clone(),
-        platform_capabilities,
-        runtime_metrics,
-        execution_budgets,
-        docker_status_cache: Arc::new(Mutex::new(None)),
-    };
+    let app_state = AppState::new(environment, container_host);
+    let awake_manager = app_state.awake_manager.clone();
+    let ai_control_runtime = app_state.ai_control_runtime.clone();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -428,7 +350,22 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            if let Ok(config_dir) = app.path().app_config_dir() {
+            let config_dir = match app.path().app_config_dir() {
+                Ok(config_dir) => Some(config_dir),
+                Err(error) => {
+                    // Without the config directory every stored setting falls
+                    // back to its default, so the reason is the only record
+                    // that the user's own preferences were not applied.
+                    crate::diagnostics::log_error(
+                        "startup",
+                        &format!(
+                            "Settings directory is unavailable; stored settings were not loaded: {error}"
+                        ),
+                    );
+                    None
+                }
+            };
+            if let Some(config_dir) = config_dir {
                 let loaded = settings_store::load(&config_dir);
                 app.state::<AppState>()
                     .awake_manager
@@ -817,5 +754,30 @@ mod tests {
             rendered,
         )
         .expect("write capability golden data");
+    }
+
+    /// Exports the platform vocabulary the browser preview renders.
+    ///
+    /// The preview can be pointed at Windows, Linux, or macOS, and each
+    /// selection has to show that platform's own nouns. The values come from
+    /// the same `PlatformContext::for_platform` the command serves, so the
+    /// preview cannot drift from the backend's copy. Each platform is described
+    /// by a stated environment, which is the only way to render all three from
+    /// one runner.
+    #[test]
+    #[ignore = "code generation"]
+    fn export_platform_context_golden() {
+        use crate::models::{PlatformContext, PlatformKind};
+
+        let golden = serde_json::json!({
+            "macos": PlatformContext::for_preview(PlatformKind::Macos),
+            "windows": PlatformContext::for_preview(PlatformKind::Windows),
+            "linux": PlatformContext::for_preview(PlatformKind::Linux),
+        });
+        let rendered = serde_json::to_string_pretty(&golden)
+            .expect("serialize platform context golden")
+            + "\n";
+        std::fs::write("../src/lib/bindings/platform-context.golden.json", rendered)
+            .expect("write platform context golden");
     }
 }

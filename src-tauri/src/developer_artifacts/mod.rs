@@ -569,12 +569,12 @@ pub fn validate_workspace_root(
                 flavor,
             ) =>
         {
-            SymlinkGuard::validate_no_symlink_ancestors(path, home).map_err(|_| {
+            SymlinkGuard::validate_no_symlink_ancestors(path, home, environment).map_err(|_| {
                 "The selected workspace contains a symbolic-link component.".to_string()
             })?;
         }
         _ => {
-            SymlinkGuard::validate_anchored_path(&norm_canonical).map_err(|_| {
+            SymlinkGuard::validate_anchored_path(&norm_canonical, environment).map_err(|_| {
                 "The selected workspace contains a symbolic-link component.".to_string()
             })?;
         }

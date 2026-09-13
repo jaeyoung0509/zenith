@@ -192,14 +192,20 @@ impl CacheProviderRegistry {
             exists: true,
             quality,
             incomplete_reason: measurement.incomplete_reason,
+            skipped_entry_count: measurement.skipped_entries,
         }))
     }
 
+    /// Runs the provider's own prune command.
+    ///
+    /// The returned amount is `None` when either measurement was incomplete:
+    /// the provider still pruned, and the caller reports the target as partial
+    /// instead of showing a difference between two partial numbers as exact.
     pub fn prune(
         signature_id: &str,
         planned_path: &Path,
         environment: &PlatformEnvironment,
-    ) -> Result<u64, String> {
+    ) -> Result<Option<u64>, String> {
         let provider = ProviderKind::for_signature(signature_id)
             .ok_or_else(|| "Unknown external cache provider".to_string())?;
         if matching_process_is_active(provider) {
@@ -214,9 +220,7 @@ impl CacheProviderRegistry {
                 "The provider cache location changed since the scan. Scan again.".to_string(),
             );
         }
-        let before = SizeCalculator::measure_path(&fresh_path, &[], environment)
-            .0
-            .reclaimable();
+        let before = SizeCalculator::measure_path_logged(&fresh_path, &[], environment);
         let output = run_provider(provider, provider.prune_args(), environment)?;
         if !output.status.success() {
             return Err(format!(
@@ -229,10 +233,8 @@ impl CacheProviderRegistry {
         if !paths_match(&rediscovered, &fresh_path) {
             return Err("The provider cache location changed during cleanup.".to_string());
         }
-        let after = SizeCalculator::measure_path(&rediscovered, &[], environment)
-            .0
-            .reclaimable();
-        Ok(before.saturating_sub(after))
+        let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment);
+        Ok(crate::scanner::size::reclaimed_between(&before, &after))
     }
 }
 
@@ -352,10 +354,11 @@ fn validate_cache_path(
     }
     Blacklist::validate_with(&canonical, environment).map_err(|error| error.to_string())?;
     if in_profile {
-        SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home)
+        SymlinkGuard::validate_no_symlink_ancestors(&canonical, &canonical_home, environment)
             .map_err(|error| error.to_string())?;
     } else {
-        SymlinkGuard::validate_anchored_path(&canonical).map_err(|error| error.to_string())?;
+        SymlinkGuard::validate_anchored_path(&canonical, environment)
+            .map_err(|error| error.to_string())?;
     }
     Ok(canonical)
 }
@@ -433,7 +436,9 @@ fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/opt/homebrew"),
     ];
-    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots());
+    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots(
+        environment.user_home().as_deref(),
+    ));
     if let Some(home) = environment.user_home() {
         roots.extend([
             home.join(".local/bin"),
@@ -728,7 +733,9 @@ mod tests {
     fn trusted_tool_roots_exclude_bare_user_writable_containers() {
         use crate::platform::NativePlatformPaths;
 
-        let roots = NativePlatformPaths::trusted_tool_roots();
+        let roots = NativePlatformPaths::trusted_tool_roots(
+            PlatformEnvironment::native().user_home().as_deref(),
+        );
 
         // A bare user-writable container is never a trusted executable root:
         // trust comes from a named install directory below it, so no root may be

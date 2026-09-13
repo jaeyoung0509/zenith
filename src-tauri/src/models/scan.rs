@@ -102,6 +102,12 @@ pub struct ScanItem {
     pub quality: ObservationQuality,
     #[serde(default)]
     pub incomplete_reason: Option<String>,
+    /// Entries the measurement did not account for (excluded, blacklisted,
+    /// protected, unreadable, or beyond the depth limit). Reported so a
+    /// partial total is never presented as a complete one.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_entry_count: u64,
 }
 
 impl ScanItem {
@@ -132,6 +138,14 @@ pub struct CategoryResult {
     pub manual_bytes: u64,
     #[serde(default = "unavailable_observation_quality")]
     pub quality: ObservationQuality,
+    /// Sum of the retained items' skipped-entry counts.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_entry_count: u64,
+    /// Retained items whose observation is not `Fresh`.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub incomplete_item_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -162,6 +176,14 @@ pub struct ScanResult {
     pub quality: ObservationQuality,
     #[serde(default)]
     pub incomplete_reasons: Vec<String>,
+    /// Sum of the categories' skipped-entry counts.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_entry_count: u64,
+    /// Retained items whose observation is not `Fresh`.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub incomplete_item_count: u64,
 }
 
 impl ScanResult {
@@ -250,6 +272,8 @@ mod tests {
             manual_bytes: 0,
             quality: ObservationQuality::Fresh,
             incomplete_reasons: vec![],
+            skipped_entry_count: 0,
+            incomplete_item_count: 0,
         };
         assert!(scan.is_fresh_at(1000));
         assert!(scan.is_fresh_at(1299));
@@ -278,6 +302,8 @@ mod tests {
             manual_bytes: 0,
             quality: ObservationQuality::Partial,
             incomplete_reasons: vec!["Some directories were unreadable".into()],
+            skipped_entry_count: 4,
+            incomplete_item_count: 1,
         };
         // A partial scan must NEVER report Fresh, even within the TTL window
         assert!(!scan.is_fresh_at(1000));
@@ -317,18 +343,51 @@ mod tests {
             exists: true,
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
+            skipped_entry_count: MAX_SAFE - 3,
         };
         let mut json = serde_json::to_value(&item).unwrap();
         assert_eq!(json["size"]["logical"], MAX_SAFE);
         assert_eq!(json["size"]["allocated"], MAX_SAFE - 1);
         assert_eq!(json["last_modified"], MAX_SAFE - 2);
+        assert_eq!(json["skipped_entry_count"], MAX_SAFE - 3);
         assert_eq!(json["quality"], "fresh");
         assert_eq!(json["cache_metadata"]["management_mode"], "tool_managed");
         assert_eq!(json["cache_metadata"]["artifact_kind"], "package_store");
 
         json.as_object_mut().unwrap().remove("quality");
+        json.as_object_mut().unwrap().remove("skipped_entry_count");
         let legacy_item: ScanItem = serde_json::from_value(json).unwrap();
         assert_eq!(legacy_item.quality, ObservationQuality::Unavailable);
+        assert_eq!(legacy_item.skipped_entry_count, 0);
         assert!(!legacy_item.allows_cleanup());
+    }
+
+    /// A count above `Number.MAX_SAFE_INTEGER` must be refused at the IPC
+    /// boundary rather than silently rounded in the browser.
+    #[test]
+    fn an_unsafe_skipped_entry_count_is_refused_by_the_ipc_adapter() {
+        let mut item = ScanItem {
+            id: "dev.uv.cache".into(),
+            signature_id: "dev.uv.cache".into(),
+            name: "uv cache".into(),
+            category: Category::Developer,
+            risk: RiskTier::Rebuild,
+            path: "/Users/test/Library/Caches/uv".into(),
+            size: FileSize::new(1, Some(1)),
+            file_count: 1,
+            description: "owner managed".into(),
+            cache_metadata: CacheMetadata::default(),
+            is_selected: false,
+            last_modified: None,
+            exists: true,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entry_count: crate::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        };
+
+        let error = serde_json::to_value(&item).expect_err("unsafe counter must fail closed");
+        assert!(error.to_string().contains("MAX_SAFE_INTEGER"));
+        item.skipped_entry_count = crate::ipc_numeric::MAX_SAFE_INTEGER;
+        assert!(serde_json::to_value(&item).is_ok());
     }
 }

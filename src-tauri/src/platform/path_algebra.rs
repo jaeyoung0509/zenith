@@ -344,6 +344,19 @@ fn drive_root_keys_match(left: &str, right: &str) -> bool {
     left.trim_end_matches('\\') == right.trim_end_matches('\\')
 }
 
+/// True when the path names a `..` component, whatever separator spelling the
+/// flavor accepts.
+///
+/// A lexical rule, so it is decided by the flavor rather than by the host's
+/// `Path::components`: a Windows-shaped path is checked with Windows separators
+/// on every runner.
+pub fn has_parent_traversal(path: &str, flavor: PathFlavor) -> bool {
+    let canonical = canonical_separators(&strip_verbatim(path, flavor), flavor);
+    canonical
+        .split(flavor.separator())
+        .any(|component| component == "..")
+}
+
 /// Component-boundary containment: `parent` contains `child` when `child`
 /// equals `parent` or lives below it. `C:\Program Files (x86)` does not contain
 /// `C:\Program Files`.
@@ -408,6 +421,21 @@ pub fn is_absolute(path: &str, flavor: PathFlavor) -> bool {
     }
     if is_unc(&stripped, flavor) {
         return true;
+    }
+    // `strip_verbatim` removes trailing separators for comparison keys, so a
+    // drive root arrives here as `C:`. Preserve the distinction between the
+    // absolute `C:\` (including `\\?\C:\`) and drive-relative `C:` spellings
+    // by consulting the original rooted form.
+    if stripped.len() == 2
+        && stripped.ends_with(':')
+        && stripped.as_bytes()[0].is_ascii_alphabetic()
+    {
+        let canonical = canonical_separators(path, flavor);
+        let without_verbatim = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+        return without_verbatim
+            .as_bytes()
+            .get(2)
+            .is_some_and(|byte| *byte == b'\\');
     }
     let chars: Vec<char> = stripped.chars().collect();
     chars.len() >= 3
@@ -698,6 +726,34 @@ mod tests {
     }
 
     #[test]
+    fn parent_traversal_is_recognized_on_both_flavors() {
+        assert!(has_parent_traversal("../cache", PathFlavor::Posix));
+        assert!(has_parent_traversal(
+            "/Users/me/../other",
+            PathFlavor::Posix
+        ));
+        assert!(!has_parent_traversal("/Users/me/...", PathFlavor::Posix));
+        assert!(!has_parent_traversal("/Users/me/cache", PathFlavor::Posix));
+
+        assert!(has_parent_traversal(
+            r"C:\Users\me\..\other",
+            PathFlavor::Windows
+        ));
+        assert!(has_parent_traversal(
+            r"C:/Users/me/../other",
+            PathFlavor::Windows
+        ));
+        assert!(!has_parent_traversal(
+            r"C:\Users\me\...",
+            PathFlavor::Windows
+        ));
+        assert!(!has_parent_traversal(
+            r"\\?\C:\Users\me\cache",
+            PathFlavor::Windows
+        ));
+    }
+
+    #[test]
     fn containment_respects_component_boundaries() {
         assert!(contains(r"C:\Program Files", r"C:\Program Files\Zenith", W));
         assert!(!contains(
@@ -878,6 +934,10 @@ mod tests {
         }
         assert!(!is_absolute(r"\\server", W));
         assert!(is_absolute(r"\\server\share", W));
+        assert!(is_absolute(r"C:\", W));
+        assert!(is_absolute(r"\\?\C:\", W));
+        assert!(!is_absolute("C:", W));
+        assert!(!is_absolute(r"1:\", W));
         assert!(!is_root(r"\\server\share\folder", W));
         assert!(!is_root(r"C:\Users", W));
         assert!(!is_root("/Users", P));

@@ -61,6 +61,33 @@ impl SignatureRegistry {
         Ok(registry)
     }
 
+    /// Loads the catalog for startup, recording a load failure instead of
+    /// presenting an empty catalog as a healthy one.
+    ///
+    /// A failed catalog used to reach `unwrap_or_default()` at the composition
+    /// root, where the failure was invisible in the log and the fallback was
+    /// unreachable from a test. The fallback is an empty registry rather than
+    /// [`Self::default`]: the catalog that just failed to load cannot be
+    /// replaced by one validated against a different environment, and nothing
+    /// should be scanned or cleaned from a catalog that was never verified.
+    ///
+    /// The failure is returned as well as logged. An empty catalog produces an
+    /// empty scan, and an empty scan is byte-for-byte what a clean machine
+    /// reports; the caller is the only place that can tell the two apart.
+    pub(crate) fn load_or_default<E: std::fmt::Display>(
+        environment: &PlatformEnvironment,
+        load: impl FnOnce(&PlatformEnvironment) -> Result<SignatureRegistry, E>,
+    ) -> (SignatureRegistry, Option<String>) {
+        match load(environment) {
+            Ok(registry) => (registry, None),
+            Err(error) => {
+                let message = format!("Signature catalog could not be loaded: {error}");
+                crate::diagnostics::log_error("startup", &message);
+                (Self::new(), Some(message))
+            }
+        }
+    }
+
     /// Loads the embedded catalog without the platform-declaration gate. The
     /// manifest lint and the environment doctor must see an offending
     /// signature in order to report it, so they load through this entry point.
@@ -550,6 +577,30 @@ mod tests {
     }
 
     #[test]
+    fn signature_catalog_failure_falls_back_to_an_empty_registry() {
+        let environment = stated_environment();
+
+        let (registry, failure) = SignatureRegistry::load_or_default(&environment, |_| {
+            Err(crate::models::ZenithError::SignatureMismatch(
+                "stated catalog defect".to_string(),
+            ))
+        });
+
+        // Fail closed: a catalog that could not be loaded must not leave the
+        // process scanning and cleaning from signatures nobody verified.
+        assert!(registry.all().is_empty());
+        let failure = failure.expect("the failure is reported, not only logged");
+        assert!(failure.contains("stated catalog defect"), "{failure}");
+
+        // A successful load is passed through untouched, so the fallback is
+        // not a second implementation of the loader.
+        let (loaded, failure) =
+            SignatureRegistry::load_or_default(&environment, SignatureRegistry::load_embedded_with);
+        assert!(!loaded.all().is_empty());
+        assert_eq!(failure, None);
+    }
+
+    #[test]
     fn a_drive_relative_signature_path_is_refused() {
         // `C:cache` names a location relative to the current directory on `C:`
         // and must never be treated as an absolute cleanup target.
@@ -759,6 +810,12 @@ mod tests {
             registry.get("dev.npm.cache").unwrap().strategy,
             crate::models::CleanStrategy::ExternalCommand
         );
+        // Yarn has no version-aware adapter yet, so it stays a manual target:
+        // a `rebuild` risk with a `manual` strategy would be a plan the planner
+        // refuses and the interface can still select.
+        let yarn = registry.get("dev.yarn.cache").unwrap();
+        assert_eq!(yarn.risk, RiskTier::Manual);
+        assert_eq!(yarn.strategy, crate::models::CleanStrategy::Manual);
     }
 
     #[test]

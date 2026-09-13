@@ -1,7 +1,7 @@
 use crate::models::{LocalModelItem, ModelSource, ZenithError};
 use crate::models_inventory::LocalModelScanner;
 use crate::platform::PlatformEnvironment;
-use crate::safety::SafeTreeDeleter;
+use crate::safety::{SafeTreeDeleter, TreeDeleteReport};
 use crate::signatures::SignatureLoader;
 use crate::tooling;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ impl LocalModelManager {
     pub fn delete_by_id(
         environment: &PlatformEnvironment,
         model_id: &str,
-    ) -> Result<u64, ZenithError> {
+    ) -> Result<Option<u64>, ZenithError> {
         let models = LocalModelScanner::scan_all_models(environment);
         let model = Self::resolve_by_id(&models, model_id)?;
         match model.source {
@@ -37,19 +37,19 @@ impl LocalModelManager {
             .ok_or_else(|| ZenithError::PathNotAllowed(format!("unknown model id: {model_id}")))
     }
 
+    /// Deletes one model through the owning CLI.
+    ///
+    /// The returned amount is `None` when either measurement of the blob store
+    /// was incomplete: the model was deleted, and the caller reports that the
+    /// reclaimed bytes are unknown instead of subtracting two partial numbers.
     fn delete_ollama(
         environment: &PlatformEnvironment,
         model: &LocalModelItem,
-    ) -> Result<u64, ZenithError> {
+    ) -> Result<Option<u64>, ZenithError> {
         let blobs_dir = SignatureLoader::expand_path("~/.ollama/models/blobs", environment);
-        let before_bytes = blobs_dir
+        let before = blobs_dir
             .as_ref()
-            .map(|p| {
-                crate::scanner::SizeCalculator::measure_path(p, &[], environment)
-                    .0
-                    .reclaimable()
-            })
-            .unwrap_or(0);
+            .map(|p| crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment));
 
         let mut cmd = tooling::command("ollama");
         cmd.args(Self::ollama_delete_args(model));
@@ -71,17 +71,14 @@ impl LocalModelManager {
             ));
         }
 
-        let after_bytes = blobs_dir
+        let after = blobs_dir
             .as_ref()
-            .map(|p| {
-                crate::scanner::SizeCalculator::measure_path(p, &[], environment)
-                    .0
-                    .reclaimable()
-            })
-            .unwrap_or(0);
+            .map(|p| crate::scanner::SizeCalculator::measure_path_logged(p, &[], environment));
 
-        let actual_reclaimed = before_bytes.saturating_sub(after_bytes);
-        Ok(actual_reclaimed)
+        Ok(match (before, after) {
+            (Some(before), Some(after)) => crate::scanner::size::reclaimed_between(&before, &after),
+            _ => None,
+        })
     }
 
     fn ollama_delete_args(model: &LocalModelItem) -> [&str; 2] {
@@ -92,7 +89,7 @@ impl LocalModelManager {
         environment: &PlatformEnvironment,
         model: &LocalModelItem,
         allowed_root: &str,
-    ) -> Result<u64, ZenithError> {
+    ) -> Result<Option<u64>, ZenithError> {
         let root = SignatureLoader::expand_path(allowed_root, environment)
             .ok_or_else(|| ZenithError::PathNotAllowed(allowed_root.into()))?;
         let path = PathBuf::from(&model.path);
@@ -101,13 +98,28 @@ impl LocalModelManager {
         }
 
         // Ancestor symlink protection
-        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root)?;
+        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root, environment)?;
 
         let report = SafeTreeDeleter::delete_path(&path, &[], environment);
-        if report.is_success() || report.reclaimed_bytes > 0 {
-            Ok(report.reclaimed_bytes)
+        Self::filesystem_delete_result(report)
+    }
+
+    fn filesystem_delete_result(report: TreeDeleteReport) -> Result<Option<u64>, ZenithError> {
+        if report.is_success() {
+            // The tree deleter's own accounting is exact: it reports what it
+            // removed, not a difference between two measurements.
+            Ok(Some(report.reclaimed_bytes))
         } else {
-            Err(ZenithError::Io(report.errors.join("; ")))
+            let detail = report.errors.join("; ");
+            let message = if report.reclaimed_bytes > 0 {
+                format!(
+                    "Model deletion was partial after reclaiming {} bytes: {detail}",
+                    report.reclaimed_bytes
+                )
+            } else {
+                detail
+            };
+            Err(ZenithError::Io(message))
         }
     }
 
@@ -122,6 +134,7 @@ mod tests {
     use crate::models::{LocalModelItem, ModelSource, ZenithError};
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
+    use crate::safety::TreeDeleteReport;
     use std::path::Path;
 
     fn model(id: &str, name: &str, path: &str) -> LocalModelItem {
@@ -170,6 +183,23 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_filesystem_delete_is_not_reported_as_success() {
+        let result = LocalModelManager::filesystem_delete_result(TreeDeleteReport {
+            reclaimed_bytes: 42,
+            deleted_files: 1,
+            skipped_files: 1,
+            errors: vec!["locked shard".to_string()],
+            os_error_codes: vec![],
+        });
+
+        let error = result.expect_err("a partial delete must remain a failure");
+        let message = error.to_string();
+        assert!(message.contains("partial"), "{message}");
+        assert!(message.contains("42 bytes"), "{message}");
+        assert!(message.contains("locked shard"), "{message}");
+    }
+
+    #[test]
     fn the_adapter_root_comes_from_the_stated_environment() {
         let stated_home = tempfile::tempdir().unwrap();
         let model_dir = stated_home.path().join(".cache/mlx/zenith-probe");
@@ -186,7 +216,10 @@ mod tests {
         let reclaimed =
             LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
                 .expect("a model under the stated root is deletable");
-        assert!(reclaimed > 0, "the deleted file's bytes are reported");
+        assert!(
+            reclaimed.is_some_and(|bytes| bytes > 0),
+            "the deleted file's bytes are reported"
+        );
         assert!(
             !model_dir.exists(),
             "the model under the stated root is removed"

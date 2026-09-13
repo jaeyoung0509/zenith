@@ -125,11 +125,11 @@ impl SafetyPlanner {
                     // 2b. Ancestor symlink escape protection: ensure no directory between anchor/root and path is a symlink
                     for root in &resolved_roots {
                         if path.starts_with(root) {
-                            SymlinkGuard::validate_no_symlink_ancestors(&path, root)?;
+                            SymlinkGuard::validate_no_symlink_ancestors(&path, root, environment)?;
                         }
                     }
                 } else {
-                    SymlinkGuard::validate_anchored_path(&path)?;
+                    SymlinkGuard::validate_anchored_path(&path, environment)?;
                 }
 
                 // 3. Hard Blacklist check (lexical & canonical)
@@ -209,6 +209,7 @@ mod tests {
             exists: true,
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
+            skipped_entry_count: 0,
         };
 
         let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());

@@ -1,4 +1,5 @@
 use crate::applications::{AppInspectionRecord, AppInventory, ApplicationScanner};
+use crate::commands::support::join_failure;
 use crate::commands::AppState;
 use crate::developer_artifacts::{
     result_from_inventory, DeveloperArtifactInventory, DeveloperArtifactScanner,
@@ -228,7 +229,7 @@ pub async fn start_large_file_scan(
         })
     })
     .await
-    .map_err(|_| "Large-file scan worker panicked".to_string())??;
+    .map_err(|error| join_failure("Large-file scan worker panicked", error))??;
     Ok(result)
 }
 
@@ -243,7 +244,7 @@ pub async fn pick_developer_workspace(
         crate::developer_artifacts::pick_workspace(&environment, &storage_state.workspaces)
     })
     .await
-    .map_err(|_| "Developer workspace picker worker panicked".to_string())?
+    .map_err(|error| join_failure("Developer workspace picker worker panicked", error))?
 }
 
 #[tauri::command]
@@ -257,7 +258,7 @@ pub async fn register_developer_home_workspace(
         crate::developer_artifacts::register_home_workspace(&environment, &storage_state.workspaces)
     })
     .await
-    .map_err(|_| "Developer home workspace worker panicked".to_string())?
+    .map_err(|error| join_failure("Developer home workspace worker panicked", error))?
 }
 
 #[tauri::command]
@@ -319,7 +320,7 @@ pub async fn start_developer_artifact_scan(
         })
     })
     .await
-    .map_err(|_| "Developer artifact scan worker panicked".to_string())??;
+    .map_err(|error| join_failure("Developer artifact scan worker panicked", error))??;
     Ok(result)
 }
 
@@ -421,7 +422,7 @@ pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> R
         crate::platform::NativeSystemActions::new().reveal_path(&path)
     })
     .await
-    .map_err(|_| "File manager worker panicked".to_string())?
+    .map_err(|error| join_failure("File manager worker panicked", error))?
 }
 
 #[tauri::command]
@@ -474,7 +475,7 @@ pub async fn get_installed_apps(state: State<'_, AppState>) -> Result<Vec<Instal
         operation_gate.run_read(|| ApplicationScanner::scan(&environment))
     })
     .await
-    .map_err(|_| "Application inventory worker panicked".to_string())?;
+    .map_err(|error| join_failure("Application inventory worker panicked", error))?;
     let mut apps = inventory
         .records
         .values()
@@ -529,7 +530,7 @@ pub async fn inspect_app_uninstall(
         })
     })
     .await
-    .map_err(|_| "App inspection worker panicked".to_string())??;
+    .map_err(|error| join_failure("App inspection worker panicked", error))??;
     let result = inspection.inspection.clone();
     *storage_state
         .app_inspection
@@ -596,7 +597,7 @@ pub async fn execute_trash_plan(
         })
     })
     .await
-    .map_err(|_| "Trash execution worker panicked".to_string())?
+    .map_err(|error| join_failure("Trash execution worker panicked", error))?
 }
 
 fn unix_timestamp() -> u64 {

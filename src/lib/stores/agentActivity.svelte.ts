@@ -4,6 +4,7 @@ import type {
   AgentIntegrationResult,
 } from '../models/types';
 import {
+  refusalForPreview,
   tauriGetProjectContext,
   tauriRequestStopAgentSession,
   tauriGetAgentIntegrations,
@@ -138,6 +139,11 @@ export class AgentActivityStore {
   }
 
   async uninstallIntegration(toolId: string): Promise<AgentIntegrationResult> {
+    const refusal = refusalForPreview('Removing an agent integration');
+    if (refusal) {
+      this.error = refusal;
+      throw new Error(refusal);
+    }
     const res = await tauriRemoveAgentIntegration(toolId);
     await this.fetchIntegrations();
     await this.refresh(true);
@@ -145,6 +151,11 @@ export class AgentActivityStore {
   }
 
   async stopSession(sessionId: string, leaseId: string): Promise<void> {
+    const refusal = refusalForPreview('Stopping a session');
+    if (refusal) {
+      this.error = refusal;
+      throw new Error(refusal);
+    }
     await tauriRequestStopAgentSession(sessionId, leaseId);
     await this.refresh(true);
   }

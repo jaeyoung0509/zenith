@@ -3,10 +3,16 @@ import { ScanStore } from '../lib/stores/scan.svelte';
 import type { ScanResult } from '../lib/models/types';
 import { tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriScan } from '../lib/utils/tauri';
 
-vi.mock('../lib/utils/tauri', () => ({
-  tauriCreatePlan: vi.fn(), tauriExecuteClean: vi.fn(),
-  tauriGetLastScan: vi.fn(), tauriScan: vi.fn(),
-}));
+vi.mock('../lib/utils/tauri', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/utils/tauri')>();
+  return {
+    ...actual,
+    tauriCreatePlan: vi.fn(),
+    tauriExecuteClean: vi.fn(),
+    tauriGetLastScan: vi.fn(),
+    tauriScan: vi.fn(),
+  };
+});
 
 function fixture(id = 'scan', finished = 1000): ScanResult {
   return {
@@ -33,6 +39,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1000_000);
   vi.resetAllMocks();
+  // The cleanup paths below exercise the native flow. Preview mode refuses a
+  // destructive dispatch before it reaches the command layer, which is covered
+  // in previewRefusal.test.ts.
+  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -161,7 +171,7 @@ describe('cleanup freshness and recovery', () => {
 
   it('owns one visible timer, auto-rescans stale results, and disposes idempotently', async () => {
     const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
-    const windowEvents = new EventTarget();
+    const windowEvents = Object.assign(new EventTarget(), { __TAURI_INTERNALS__: {} });
     vi.stubGlobal('document', page);
     vi.stubGlobal('window', windowEvents);
     vi.mocked(tauriScan).mockImplementation(async () => fixture('new', Math.floor(Date.now() / 1000)));

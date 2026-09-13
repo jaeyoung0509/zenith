@@ -3,6 +3,24 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Largest integer JavaScript can represent without precision loss.
 pub const MAX_SAFE_INTEGER: u64 = (1u64 << 53) - 1;
 
+/// A nullable integer that crosses IPC without changing its JSON or Specta
+/// shape. Command return values cannot attach a serde field adapter directly,
+/// so this transparent wrapper keeps `number | null` while enforcing the same
+/// JavaScript-safe range as model fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(transparent)]
+pub struct IpcOptionalU64(
+    #[serde(with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
+    pub Option<u64>,
+);
+
+impl From<Option<u64>> for IpcOptionalU64 {
+    fn from(value: Option<u64>) -> Self {
+        Self(value)
+    }
+}
+
 fn ensure_safe(value: u64) -> Result<u64, String> {
     if value <= MAX_SAFE_INTEGER {
         Ok(value)
@@ -112,5 +130,18 @@ mod tests {
             value: Some(unsafe_value)
         })
         .is_err());
+    }
+
+    #[test]
+    fn transparent_command_value_keeps_the_wire_shape_and_safety_check() {
+        assert_eq!(
+            serde_json::to_string(&IpcOptionalU64(Some(MAX_SAFE_INTEGER))).unwrap(),
+            MAX_SAFE_INTEGER.to_string()
+        );
+        assert_eq!(
+            serde_json::to_string(&IpcOptionalU64(None)).unwrap(),
+            "null"
+        );
+        assert!(serde_json::to_string(&IpcOptionalU64(Some(MAX_SAFE_INTEGER + 1))).is_err());
     }
 }

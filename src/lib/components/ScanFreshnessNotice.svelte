@@ -1,6 +1,20 @@
 <script lang="ts">
   import { scanStore } from '../stores/scan.svelte';
   import Button from './Button.svelte';
+
+  /** How much of the last scan could not be measured, as an operator summary. */
+  let measurementGaps = $derived.by(() => {
+    const scan = scanStore.lastScan;
+    if (!scan) return null;
+    const parts: string[] = [];
+    const skipped = scan.skipped_entry_count ?? 0;
+    const incomplete = scan.incomplete_item_count ?? 0;
+    if (skipped > 0) parts.push(`${skipped} entries skipped`);
+    // An `Unavailable` item was not measured at all, so the summary says what
+    // is true of both it and a partially measured one.
+    if (incomplete > 0) parts.push(`${incomplete} items not fully measured`);
+    return parts.length > 0 ? parts.join(' · ') : null;
+  });
 </script>
 
 {#if scanStore.freshness !== 'fresh'}
@@ -20,6 +34,11 @@
         Results are out of date. Scan again, then review the new selection before cleaning.
       {:else}
         Scan storage to find current cleanup candidates.
+      {/if}
+      {#if measurementGaps && scanStore.freshness !== 'refreshing'}
+        <span class="mt-1 block font-mono text-caption text-muted-foreground">
+          {measurementGaps}
+        </span>
       {/if}
     </span>
     <Button size="sm" variant="outline" disabled={scanStore.isScanning || scanStore.isCleaning} onclick={() => scanStore.runScan()}>

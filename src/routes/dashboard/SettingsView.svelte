@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
+  import { frontendErrorStore } from '../../lib/stores/frontendErrors.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
@@ -848,6 +849,33 @@
           <ShieldCheck size={14} />
           <span>{selfCheckRunning ? 'Running Self-Check…' : 'Run Environment Self-Check'}</span>
         </Button>
+      </div>
+
+      <div class="space-y-2 border-t border-border/60 pt-3">
+        <div class="text-xs font-medium text-foreground">Uncaught Frontend Errors</div>
+        {#if frontendErrorStore.entries.length === 0}
+          <p class="text-meta text-muted-foreground">No uncaught frontend errors.</p>
+        {:else}
+          <ul class="space-y-1.5">
+            {#each frontendErrorStore.entries as entry (entry.id)}
+              <li
+                class="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-meta"
+                role="alert"
+              >
+                <div class="flex items-center gap-2 text-destructive">
+                  <AlertTriangle size={14} class="shrink-0" />
+                  <span class="font-medium">
+                    {entry.kind === 'rejection' ? 'Unhandled rejection' : 'Uncaught error'}
+                  </span>
+                  <span class="font-mono text-caption text-muted-foreground">{entry.at}</span>
+                </div>
+                <p class="mt-1 break-words font-mono text-caption text-foreground/90">
+                  {entry.message}
+                </p>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
 
       {#if selfCheckError}

@@ -39,7 +39,9 @@ import type {
 } from '../models/types';
 import type { nativeApi } from './native';
 import { createDevelopmentPortsMock } from './mocks/developmentPorts';
+import { previewPlatform } from './mocks/previewPlatform';
 import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
+import { goldenPlatformContextByPlatform } from '../models/platformContext';
 
 type ZenithApi = typeof nativeApi;
 
@@ -278,25 +280,11 @@ let lastMockScan: ScanResult | null = null;
 
 export const mockApi = {
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
-    return goldenCapabilitiesByPlatform.macos;
+    return goldenCapabilitiesByPlatform[previewPlatform()];
   },
 
   async getPlatformContext(): Promise<PlatformContext> {
-    return {
-      platform: 'macos',
-      log_directory: '~/Library/Logs/Zenith',
-      reveal_label: 'Reveal in Finder',
-      trash_label: 'Trash',
-      app_data_label: 'Application Support',
-      quick_panel_surface_label: 'menu bar',
-      container_runtime_hint: 'Colima',
-      native_caption_bar: false,
-      overlay_title_bar: true,
-      primary_accelerator: 'meta',
-      app_identity_label: 'bundle identifier',
-      terminal_label: 'Terminal',
-      releases_url: 'https://github.com/jaeyoung0509/zenith/releases',
-    };
+    return goldenPlatformContextByPlatform[previewPlatform()];
   },
 
   async getProjectContext(_force = false): Promise<AgentActivitySnapshot> {
@@ -831,6 +819,8 @@ export const mockApi = {
           safe_bytes: intensiveBytes,
           rebuild_bytes: 0,
           manual_bytes: 0,
+          skipped_entry_count: 0,
+          incomplete_item_count: 0,
         };
 
         if (intensiveCleanup) {
@@ -887,6 +877,8 @@ export const mockApi = {
               safe_bytes: 3.2 * 1024 * 1024 * 1024,
               rebuild_bytes: 0,
               manual_bytes: 0,
+              skipped_entry_count: 0,
+              incomplete_item_count: 0,
             },
             {
               category: 'developer',
@@ -925,6 +917,8 @@ export const mockApi = {
               safe_bytes: 3.1 * 1024 * 1024 * 1024,
               rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
               manual_bytes: 0,
+              skipped_entry_count: 0,
+              incomplete_item_count: 0,
             },
             ...(intensiveCleanup ? [intensiveCategory] : []),
           ],
@@ -932,6 +926,8 @@ export const mockApi = {
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
+          skipped_entry_count: 0,
+          incomplete_item_count: 0,
         };
 
         lastMockScan = result;
@@ -1026,6 +1022,8 @@ export const mockApi = {
                 finished_at: Math.floor(Date.now() / 1000),
                 total_reclaimed_bytes: plan.expected_reclaim_bytes,
                 total_failed_bytes: 0,
+                partial_count: 0,
+                failed_count: 0,
                 items,
                 actual_disk_free_delta: plan.expected_reclaim_bytes,
               };
@@ -1075,6 +1073,8 @@ export const mockApi = {
             finished_at: Math.floor(Date.now() / 1000),
             total_reclaimed_bytes: 500 * 1024 * 1024,
             total_failed_bytes: 0,
+            partial_count: 0,
+            failed_count: 0,
             items: [
               {
                 item_id: 'mock-safe-item',
@@ -1254,7 +1254,7 @@ export const mockApi = {
     ];
   },
 
-  async deleteLocalModel(_modelId: string): Promise<number> {
+  async deleteLocalModel(_modelId: string): Promise<number | null> {
     return 4.2 * 1024 * 1024 * 1024;
   },
 

@@ -1,7 +1,9 @@
 //! Cleanup scan, private plan, and execution command handlers.
 
 use super::state::AppState;
-use super::support::{lock_or_state_error, lock_recover, run_blocking, unix_timestamp};
+use super::support::{
+    join_failure, lock_or_state_error, lock_recover, run_blocking, unix_timestamp,
+};
 use crate::cleaner::CleanExecutor;
 use crate::models::{
     Category, CleanEvent, CleanResult, CleanStrategy, PlanPreview, RiskTier, ScanEvent, ScanResult,
@@ -18,6 +20,12 @@ pub async fn start_scan(
     categories: Option<Vec<Category>>,
     state: State<'_, AppState>,
 ) -> Result<ScanResult, String> {
+    // A catalog that failed to load is empty, and an empty catalog reports an
+    // empty scan with `Fresh` quality: refusing here is what keeps a startup
+    // failure from looking like a clean machine.
+    if let Some(refusal) = state.catalog_failure() {
+        return Err(refusal);
+    }
     state
         .platform_capabilities
         .capabilities()
@@ -69,7 +77,7 @@ pub async fn start_scan(
         })
     })
     .await
-    .map_err(|_| "Scan worker thread panicked".to_string())?;
+    .map_err(|error| join_failure("Scan worker thread panicked", error))?;
 
     Ok(result)
 }
@@ -201,7 +209,7 @@ pub async fn execute_clean(
         })
     })
     .await
-    .map_err(|_| "Clean worker thread panicked".to_string())??;
+    .map_err(|error| join_failure("Clean worker thread panicked", error))??;
 
     Ok(result)
 }
@@ -271,6 +279,8 @@ pub async fn quick_clean_safe(
             finished_at: now,
             total_reclaimed_bytes: 0,
             total_failed_bytes: 0,
+            partial_count: 0,
+            failed_count: 0,
             items: vec![],
             actual_disk_free_delta: Some(0),
         });
@@ -315,7 +325,7 @@ pub async fn quick_clean_safe(
         })
     })
     .await
-    .map_err(|_| "Quick clean worker thread panicked".to_string())??;
+    .map_err(|error| join_failure("Quick clean worker thread panicked", error))??;
 
     Ok(result)
 }

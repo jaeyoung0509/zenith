@@ -92,13 +92,23 @@ pub fn command_markers(adapter_id: &str) -> &'static [&'static str] {
         .map_or(&[], |adapter| adapter.command_markers)
 }
 
-pub fn adapter_for_executable(path: &Path) -> Option<&'static AgentToolAdapter> {
-    let home = crate::platform::NativePlatformPaths::new().home();
-    adapter_for_executable_in_roots(path, home.as_deref(), &windows_install_roots())
+pub fn adapter_for_executable(
+    path: &Path,
+    environment: &crate::platform::PlatformEnvironment,
+) -> Option<&'static AgentToolAdapter> {
+    adapter_for_executable_in_roots(
+        path,
+        environment.user_home().as_deref(),
+        &windows_install_roots(),
+    )
 }
 
-pub fn adapter_for_process(executable: &Path, cmd: &[String]) -> Option<&'static AgentToolAdapter> {
-    if let Some(adapter) = adapter_for_executable(executable) {
+pub fn adapter_for_process(
+    executable: &Path,
+    cmd: &[String],
+    environment: &crate::platform::PlatformEnvironment,
+) -> Option<&'static AgentToolAdapter> {
+    if let Some(adapter) = adapter_for_executable(executable, environment) {
         return Some(adapter);
     }
     let exe_name = executable
@@ -265,6 +275,11 @@ fn is_install_descendant(relative: &str) -> bool {
         })
 }
 
+/// Scoop and Program Files roots on Windows.
+///
+/// These are facts of the machine that runs the process (they come from its own
+/// environment variables), so they stay host-derived; the profile that is
+/// searched comes from the description.
 fn windows_install_roots() -> Vec<std::path::PathBuf> {
     #[cfg(windows)]
     {
@@ -467,26 +482,38 @@ mod tests {
         }
     }
 
+    /// The machine these adapter rules are asserted against: the host, because
+    /// the fixtures below are the host's own install locations.
+    fn test_environment() -> crate::platform::PlatformEnvironment {
+        crate::platform::PlatformEnvironment::native()
+    }
+
     #[cfg(unix)]
     #[test]
     fn exact_executable_match_rejects_substrings_and_cursor_app() {
         assert_eq!(
-            adapter_for_executable(Path::new("/opt/homebrew/bin/codex"))
+            adapter_for_executable(Path::new("/opt/homebrew/bin/codex"), &test_environment())
                 .unwrap()
                 .id,
             "codex"
         );
-        assert!(adapter_for_executable(Path::new("/tmp/codex-helper")).is_none());
-        assert!(adapter_for_executable(Path::new("/tmp/codex")).is_none());
-        assert!(adapter_for_executable(Path::new("codex")).is_none());
-        assert!(adapter_for_executable(Path::new(
-            "/Applications/Cursor.app/Contents/MacOS/Cursor"
-        ))
+        assert!(
+            adapter_for_executable(Path::new("/tmp/codex-helper"), &test_environment()).is_none()
+        );
+        assert!(adapter_for_executable(Path::new("/tmp/codex"), &test_environment()).is_none());
+        assert!(adapter_for_executable(Path::new("codex"), &test_environment()).is_none());
+        assert!(adapter_for_executable(
+            Path::new("/Applications/Cursor.app/Contents/MacOS/Cursor"),
+            &test_environment(),
+        )
         .is_none());
         assert_eq!(
-            adapter_for_executable(Path::new("/usr/local/bin/cursor-agent"))
-                .unwrap()
-                .id,
+            adapter_for_executable(
+                Path::new("/usr/local/bin/cursor-agent"),
+                &test_environment()
+            )
+            .unwrap()
+            .id,
             "cursor"
         );
     }
@@ -499,21 +526,36 @@ mod tests {
             "C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"
                 .to_string(),
         ];
-        assert_eq!(adapter_for_process(node, &claude_cmd).unwrap().id, "claude");
+        assert_eq!(
+            adapter_for_process(node, &claude_cmd, &test_environment())
+                .unwrap()
+                .id,
+            "claude"
+        );
 
         let gemini_cmd = vec![
             "node".to_string(),
             "C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\\@google\\gemini-cli\\dist\\index.js"
                 .to_string(),
         ];
-        assert_eq!(adapter_for_process(node, &gemini_cmd).unwrap().id, "gemini");
+        assert_eq!(
+            adapter_for_process(node, &gemini_cmd, &test_environment())
+                .unwrap()
+                .id,
+            "gemini"
+        );
 
         // A Node server without an agent CLI in its command line stays unknown.
         let plain_server = vec!["node".to_string(), "D:\\dev\\server.js".to_string()];
-        assert!(adapter_for_process(node, &plain_server).is_none());
+        assert!(adapter_for_process(node, &plain_server, &test_environment()).is_none());
 
         // Non-Node hosts never fall back to argument inspection.
-        assert!(adapter_for_process(Path::new("C:\\tools\\python.exe"), &claude_cmd).is_none());
+        assert!(adapter_for_process(
+            Path::new("C:\\tools\\python.exe"),
+            &claude_cmd,
+            &test_environment()
+        )
+        .is_none());
     }
 
     #[test]
@@ -522,7 +564,7 @@ mod tests {
         for project in ["claude", "gemini", "codex", "opencode"] {
             let cmd = vec!["node".to_string(), format!("C:\\dev\\{project}\\server.js")];
             assert!(
-                adapter_for_process(node, &cmd).is_none(),
+                adapter_for_process(node, &cmd, &test_environment()).is_none(),
                 "project folder {project} must not match an agent adapter"
             );
         }
@@ -535,7 +577,8 @@ mod tests {
             &[
                 "node".to_string(),
                 "/opt/homebrew/lib/node_modules/claude-code-helper/server.js".to_string(),
-            ]
+            ],
+            &test_environment()
         )
         .is_none());
         assert!(adapter_for_process(
@@ -543,7 +586,8 @@ mod tests {
             &[
                 "node".to_string(),
                 "/opt/homebrew/lib/node_modules/gemini-cli-helper/server.js".to_string(),
-            ]
+            ],
+            &test_environment()
         )
         .is_none());
     }

@@ -111,6 +111,48 @@ describe('metric and action consistency contracts', () => {
     expect(rendered.body).toContain('Rebuild: 198.8 MB');
   });
 
+  it('reports how much of a category the measurement skipped', () => {
+    const rendered = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer',
+          items: [],
+          total_bytes: 1024,
+          safe_bytes: 1024,
+          rebuild_bytes: 0,
+          manual_bytes: 0,
+          quality: 'partial',
+          skipped_entry_count: 12,
+          incomplete_item_count: 2,
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('12 entries skipped');
+    expect(rendered.body).toContain('2 items not fully measured');
+
+    const complete = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer',
+          items: [],
+          total_bytes: 1024,
+          safe_bytes: 1024,
+          rebuild_bytes: 0,
+          manual_bytes: 0,
+          quality: 'fresh',
+          skipped_entry_count: 0,
+          incomplete_item_count: 0,
+        },
+      },
+    });
+
+    expect(complete.body).not.toContain('entries skipped');
+    expect(complete.body).not.toContain('items not fully measured');
+  });
+
   it('does not duplicate the default safe subtotal as a Selected metric', () => {
     scanStore.selectedMap = { safe: true, rebuild: false };
     const rendered = render(CategoryCard, {

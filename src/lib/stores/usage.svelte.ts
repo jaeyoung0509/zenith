@@ -1,5 +1,6 @@
 import type { AiProviderUsage, AiUsageSnapshot, ProviderDescriptor, ProviderId } from '../models/types';
 import {
+  refusalForPreview,
   tauriConnectOpenRouter,
   tauriDisconnectAiProvider,
   tauriGetAiProviderDescriptors,
@@ -220,6 +221,11 @@ export class UsageStore {
   }
 
   async disconnectOpenRouter() {
+    const refusal = refusalForPreview('Disconnecting a provider');
+    if (refusal) {
+      this.error = refusal;
+      return;
+    }
     this.connectingProvider = 'openrouter';
     this.error = null;
     try {

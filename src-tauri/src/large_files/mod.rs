@@ -195,7 +195,7 @@ impl LargeFileScanner {
                 root: display_root.clone(),
             });
 
-            let Some(_root_meta) = safe_scan_root_metadata(&root) else {
+            let Some(_root_meta) = safe_scan_root_metadata(&root, environment) else {
                 skipped_entries += 1;
                 continue;
             };
@@ -415,11 +415,12 @@ fn resolve_roots(
     environment: &PlatformEnvironment,
     tokens: &[String],
 ) -> Result<Vec<PathBuf>, String> {
-    resolve_roots_with(tokens, |token| environment.content_dir(token))
+    resolve_roots_with(tokens, environment, |token| environment.content_dir(token))
 }
 
 fn resolve_roots_with(
     tokens: &[String],
+    environment: &PlatformEnvironment,
     resolve: impl Fn(&str) -> Option<PathBuf>,
 ) -> Result<Vec<PathBuf>, String> {
     let requested = if tokens.is_empty() {
@@ -437,7 +438,7 @@ fn resolve_roots_with(
         let Some(root) = resolve(&token) else {
             continue;
         };
-        if seen.insert(root.clone()) && safe_scan_root_metadata(&root).is_some() {
+        if seen.insert(root.clone()) && safe_scan_root_metadata(&root, environment).is_some() {
             roots.push(root);
         }
     }
@@ -449,12 +450,15 @@ fn resolve_roots_with(
     Ok(roots)
 }
 
-fn safe_scan_root_metadata(path: &Path) -> Option<fs::Metadata> {
+fn safe_scan_root_metadata(
+    path: &Path,
+    environment: &crate::platform::PlatformEnvironment,
+) -> Option<fs::Metadata> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.is_dir() || crate::safety::SymlinkGuard::is_symlink(path) {
         return None;
     }
-    crate::safety::SymlinkGuard::validate_anchored_path(path).ok()?;
+    crate::safety::SymlinkGuard::validate_anchored_path(path, environment).ok()?;
     Some(metadata)
 }
 
@@ -508,8 +512,12 @@ mod tests {
         base: &Path,
         folders: &[(KnownFolder, &str)],
     ) -> PlatformEnvironment {
-        let mut environment =
-            PlatformEnvironment::simulated(PathFlavor::current()).with_home(base.join("profile"));
+        // The fixture lives in the temporary directory, and the anchored
+        // symlink validation starts from a stated root: without this the
+        // temporary tree would be validated from the drive root.
+        let mut environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(base.join("profile"))
+            .with_temp_dir(base);
         for (folder, relative) in folders {
             environment = environment.with_known_folder(*folder, base.join(relative));
         }
@@ -524,12 +532,19 @@ mod tests {
         std::fs::create_dir_all(&documents).unwrap();
         std::fs::create_dir_all(&other).unwrap();
         let resolve = |token: &str| (token == "documents").then(|| documents.clone());
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(dir.path());
         assert_eq!(
-            super::resolve_roots_with(&["documents".into()], resolve).unwrap(),
+            super::resolve_roots_with(&["documents".into()], &environment, resolve).unwrap(),
             vec![documents.clone()]
         );
-        assert!(super::resolve_roots_with(&[other.display().to_string()], resolve).is_err());
-        assert!(super::resolve_roots_with(&["../사용자 둘".into()], resolve).is_err());
+        assert!(
+            super::resolve_roots_with(&[other.display().to_string()], &environment, resolve)
+                .is_err()
+        );
+        assert!(
+            super::resolve_roots_with(&["../사용자 둘".into()], &environment, resolve).is_err()
+        );
     }
 
     #[test]
@@ -567,11 +582,12 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(super::safe_scan_root_metadata(&link).is_none());
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::Windows).with_home(dir.path().to_path_buf());
+        assert!(super::safe_scan_root_metadata(&link, &environment).is_none());
         std::fs::create_dir(target.join("문서")).unwrap();
-        assert!(super::safe_scan_root_metadata(&link.join("문서")).is_none());
+        assert!(super::safe_scan_root_metadata(&link.join("문서"), &environment).is_none());
         assert!(super::FileIdentity::from_path(&link).is_none());
-        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(dir.path());
         assert!(crate::developer_artifacts::validate_workspace_root(&environment, &link).is_err());
     }
     use crate::models::LargeFileFilter;
@@ -701,8 +717,9 @@ mod tests {
         fs::create_dir(&real).unwrap();
         std::os::unix::fs::symlink(&real, &linked).unwrap();
 
-        assert!(safe_scan_root_metadata(&real).is_some());
-        assert!(safe_scan_root_metadata(&linked).is_none());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        assert!(safe_scan_root_metadata(&real, &environment).is_some());
+        assert!(safe_scan_root_metadata(&linked, &environment).is_none());
     }
 
     #[test]
