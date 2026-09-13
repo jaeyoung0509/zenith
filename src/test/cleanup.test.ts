@@ -3,10 +3,15 @@ import type { ScanItem, ZenithSettings } from '../lib/models/types';
 import {
   cleanableBytes,
   filterAndSortCleanupItems,
+  isAutoCleanable,
+  isBlocked,
+  isAdvisory,
   isCleanable,
+  observedBytes,
   presentedItems,
   reclaimableBytes,
   riskCounts,
+  summarizeCategory,
 } from '../lib/utils/cleanup';
 import { cleanOutcome } from '../lib/utils/cleanResult';
 import { scanStore } from '../lib/stores/scan.svelte';
@@ -445,3 +450,203 @@ describe('scanStore selectionSummary', () => {
     expect(scanStore.selectionSummary.selectedCount).toBe(2);
   });
 });
+
+describe('cleanup disposition authority & byte semantics', () => {
+  it('respects backend disposition with absolute precedence over legacy risk tier', () => {
+    // Protected bundle in safe cache item
+    const blockedSafeItem = item({
+      id: 'blocked-safe',
+      risk: 'safe',
+      size: { logical: 2048, allocated: 2048 },
+      disposition: {
+        eligibility: 'blocked',
+        cleanable_bytes: null,
+        reason: 'Protected application bundle encountered in ~/Library/Caches/...',
+      },
+    });
+
+    expect(isCleanable(blockedSafeItem)).toBe(false);
+    expect(isAutoCleanable(blockedSafeItem)).toBe(false);
+    expect(isBlocked(blockedSafeItem)).toBe(true);
+    expect(isAdvisory(blockedSafeItem)).toBe(false);
+    expect(cleanableBytes(blockedSafeItem)).toBe(0);
+    expect(observedBytes(blockedSafeItem)).toBe(2048);
+  });
+
+  it('correctly classifies auto_cleanable, reviewable, and advisory backend dispositions', () => {
+    const autoItem = item({
+      id: 'auto-item',
+      risk: 'safe',
+      size: { logical: 1000, allocated: 1000 },
+      disposition: {
+        eligibility: 'auto_cleanable',
+        cleanable_bytes: 1000,
+        reason: null,
+      },
+    });
+    expect(isCleanable(autoItem)).toBe(true);
+    expect(isAutoCleanable(autoItem)).toBe(true);
+    expect(isBlocked(autoItem)).toBe(false);
+    expect(cleanableBytes(autoItem)).toBe(1000);
+
+    const reviewableItem = item({
+      id: 'review-item',
+      risk: 'rebuild',
+      size: { logical: 1500, allocated: 1500 },
+      disposition: {
+        eligibility: 'reviewable',
+        cleanable_bytes: 1500,
+        reason: null,
+      },
+    });
+    expect(isCleanable(reviewableItem)).toBe(true);
+    expect(isAutoCleanable(reviewableItem)).toBe(false);
+    expect(isBlocked(reviewableItem)).toBe(false);
+    expect(cleanableBytes(reviewableItem)).toBe(1500);
+
+    const advisoryItem = item({
+      id: 'advisory-item',
+      risk: 'safe',
+      size: { logical: 800, allocated: 800 },
+      disposition: {
+        eligibility: 'advisory',
+        cleanable_bytes: null,
+        reason: 'Tool managed cache requires external CLI',
+      },
+    });
+    expect(isCleanable(advisoryItem)).toBe(false);
+    expect(isAutoCleanable(advisoryItem)).toBe(false);
+    expect(isBlocked(advisoryItem)).toBe(false);
+    expect(isAdvisory(advisoryItem)).toBe(true);
+    expect(cleanableBytes(advisoryItem)).toBe(0);
+    expect(observedBytes(advisoryItem)).toBe(800);
+  });
+
+  it('falls back safely when disposition is absent', () => {
+    const unavailableItem = item({
+      id: 'unavail',
+      quality: 'unavailable',
+      incomplete_reason: 'Scan incomplete',
+      size: { logical: 500, allocated: 500 },
+    });
+    expect(isCleanable(unavailableItem)).toBe(false);
+    expect(isBlocked(unavailableItem)).toBe(true);
+    expect(cleanableBytes(unavailableItem)).toBe(0);
+
+    const toolItem = item({
+      id: 'tool',
+      cache_metadata: {
+        provider: 'Docker',
+        management_mode: 'advisory',
+        artifact_kind: 'temporary',
+        consequence: '',
+        size_semantics: 'physical_reclaimable',
+        last_used_confidence: 'unknown',
+      },
+      size: { logical: 500, allocated: 500 },
+    });
+    expect(isCleanable(toolItem)).toBe(false);
+    expect(isAdvisory(toolItem)).toBe(true);
+    expect(cleanableBytes(toolItem)).toBe(0);
+  });
+});
+
+describe('summarizeCategory invariants and explicit population', () => {
+  it('enforces selected_bytes <= cleanable_bytes <= observed_bytes invariant', () => {
+    const autoCleanable = item({
+      id: 'auto-1',
+      name: 'Auto Cleanable Cache',
+      risk: 'safe',
+      size: { logical: 1000, allocated: 1000 },
+      disposition: { eligibility: 'auto_cleanable', cleanable_bytes: 1000, reason: null },
+    });
+
+    const reviewable = item({
+      id: 'review-1',
+      name: 'Rebuild Registry Cache',
+      risk: 'rebuild',
+      size: { logical: 2000, allocated: 2000 },
+      disposition: { eligibility: 'reviewable', cleanable_bytes: 2000, reason: null },
+    });
+
+    const blocked = item({
+      id: 'blocked-1',
+      name: 'Blocked Bundle Cache',
+      risk: 'safe',
+      size: { logical: 3000, allocated: 3000 },
+      disposition: { eligibility: 'blocked', cleanable_bytes: null, reason: 'Protected bundle' },
+    });
+
+    const advisory = item({
+      id: 'advisory-1',
+      name: 'Advisory External Cache',
+      risk: 'safe',
+      size: { logical: 4000, allocated: 4000 },
+      disposition: { eligibility: 'advisory', cleanable_bytes: null, reason: 'External command' },
+    });
+
+    const nonexistent = item({
+      id: 'missing-1',
+      name: 'Missing Item',
+      exists: false,
+      size: { logical: 5000, allocated: 5000 },
+    });
+
+    const items = [autoCleanable, reviewable, blocked, advisory, nonexistent];
+
+    // Case 1: Select only auto_cleanable
+    const summary1 = summarizeCategory(
+      items,
+      { 'auto-1': true },
+      'all',
+      '',
+      'size'
+    );
+
+    expect(summary1.detected_count).toBe(5);
+    expect(summary1.visible_count).toBe(4); // excludes nonexistent
+    expect(summary1.cleanable_count).toBe(2); // auto-1 + review-1
+    expect(summary1.blocked_count).toBe(2); // blocked-1 + missing-1
+    expect(summary1.selected_count).toBe(1);
+
+    expect(summary1.observed_bytes).toBe(1000 + 2000 + 3000 + 4000); // 10000
+    expect(summary1.cleanable_bytes).toBe(1000 + 2000); // 3000
+    expect(summary1.selected_bytes).toBe(1000);
+    expect(summary1.selected_bytes).toBeLessThanOrEqual(summary1.cleanable_bytes);
+    expect(summary1.cleanable_bytes).toBeLessThanOrEqual(summary1.observed_bytes);
+
+    // Case 2: Attempting to select blocked or advisory items fails closed (never adds to selected_bytes)
+    const summary2 = summarizeCategory(
+      items,
+      { 'auto-1': true, 'blocked-1': true, 'advisory-1': true, 'review-1': true },
+      'all',
+      '',
+      'size'
+    );
+
+    expect(summary2.selected_count).toBe(2); // only auto-1 and review-1 are counted as selected
+    expect(summary2.selected_bytes).toBe(3000); // 1000 + 2000
+    expect(summary2.selected_bytes).toBeLessThanOrEqual(summary2.cleanable_bytes);
+    expect(summary2.cleanable_bytes).toBeLessThanOrEqual(summary2.observed_bytes);
+
+    // Case 3: Summary state when nothing is selected
+    const summaryNone = summarizeCategory(items, {});
+    expect(summaryNone.detected_count).toBe(5);
+    expect(summaryNone.visible_count).toBe(4);
+    expect(summaryNone.cleanable_count).toBe(2);
+    expect(summaryNone.blocked_count).toBe(2); // blocked-1 + missing-1
+    expect(summaryNone.advisory_count).toBe(1);
+    expect(summaryNone.selected_count).toBe(0);
+    expect(summaryNone.selected_bytes).toBe(0);
+    expect(summaryNone.can_select_all).toBe(true);
+    expect(summaryNone.is_all_cleanable_selected).toBe(false);
+
+    // Case 4: Summary state when all cleanable items are selected
+    const summaryAll = summarizeCategory(items, { 'auto-1': true, 'review-1': true });
+    expect(summaryAll.selected_count).toBe(2);
+    expect(summaryAll.selected_bytes).toBe(3000);
+    expect(summaryAll.can_select_all).toBe(false);
+    expect(summaryAll.is_all_cleanable_selected).toBe(true);
+  });
+});
+

@@ -1,4 +1,7 @@
-use crate::models::{CacheSizeSemantics, FileSize, ObservationQuality, ScanItem, Signature};
+use crate::models::{
+    derive_cleanup_disposition, CacheSizeSemantics, CleanupEligibility, FileSize,
+    ObservationQuality, ScanItem, Signature,
+};
 use crate::platform::PlatformEnvironment;
 use crate::scanner::{PathMeasurement, SizeCalculator};
 use crate::signatures::SignatureLoader;
@@ -102,7 +105,7 @@ impl DirectoryScanner {
             let skipped_entry_count = measurement.skipped_entries;
             let (quality, incomplete_reason) = if !exists || measurement.complete {
                 (ObservationQuality::Fresh, None)
-            } else if size.reclaimable() == 0 {
+            } else if size.observed_bytes() == 0 {
                 (
                     ObservationQuality::Unavailable,
                     measurement
@@ -154,10 +157,17 @@ impl DirectoryScanner {
                 signature.name.clone()
             };
 
-            // Only auto-select if RiskTier is Safe, size > 0, and quality is Fresh
-            let is_selected = signature.risk.is_auto_selectable()
-                && size.reclaimable() > 0
-                && quality == ObservationQuality::Fresh;
+            let disposition = derive_cleanup_disposition(
+                signature.risk,
+                quality,
+                &cache_metadata,
+                &size,
+                incomplete_reason.as_deref(),
+            );
+
+            // Only auto-select if disposition is AutoCleanable and cleanable_bytes > 0
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable
+                && disposition.cleanable_bytes.unwrap_or(0) > 0;
 
             items.push(ScanItem {
                 id: item_id,
@@ -170,6 +180,7 @@ impl DirectoryScanner {
                 file_count,
                 description: signature.description.clone(),
                 cache_metadata,
+                disposition,
                 is_selected,
                 last_modified,
                 exists,
@@ -340,7 +351,7 @@ impl DirectoryScanner {
             }
 
             let size = FileSize::new(stats.logical, Some(stats.allocated));
-            if size.reclaimable() == 0 {
+            if size.observed_bytes() == 0 {
                 continue;
             }
 
@@ -348,6 +359,17 @@ impl DirectoryScanner {
                 "{} (unchanged for at least {} days)",
                 signature.description, min_age_days
             );
+
+            let cache_metadata = signature.cache_metadata();
+            let disposition = derive_cleanup_disposition(
+                signature.risk,
+                ObservationQuality::Fresh,
+                &cache_metadata,
+                &size,
+                None,
+            );
+            let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable
+                && disposition.cleanable_bytes.unwrap_or(0) > 0;
 
             items.push(ScanItem {
                 id: format!("{}.{}.{}", signature.id, path_index, name),
@@ -359,8 +381,9 @@ impl DirectoryScanner {
                 size,
                 file_count: stats.file_count,
                 description,
-                cache_metadata: signature.cache_metadata(),
-                is_selected: signature.risk.is_auto_selectable() && size.reclaimable() > 0,
+                cache_metadata,
+                disposition,
+                is_selected,
                 last_modified: modified
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .ok()
@@ -405,6 +428,13 @@ impl DirectoryScanner {
         // An uninspectable candidate's size is informational: it can never be
         // cleaned, so it must not render as a reclaimable lower bound.
         cache_metadata.size_semantics = CacheSizeSemantics::Informational;
+        let disposition = derive_cleanup_disposition(
+            signature.risk,
+            ObservationQuality::Unavailable,
+            &cache_metadata,
+            &size,
+            Some(&reason),
+        );
         ScanItem {
             id,
             signature_id: signature.id.clone(),
@@ -419,6 +449,7 @@ impl DirectoryScanner {
                 signature.description
             ),
             cache_metadata,
+            disposition,
             is_selected: false,
             last_modified,
             exists: true,

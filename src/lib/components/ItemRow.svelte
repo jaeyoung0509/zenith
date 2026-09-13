@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
-  import { isCleanable } from '../utils/cleanup';
+  import { isAdvisory, isBlocked, isCleanable } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import { platformContextStore } from '../stores/platformContext.svelte';
   import { canReveal, revealUnavailableReason, runReveal } from '../utils/reveal';
@@ -25,10 +25,12 @@
     size_semantics: 'physical_reclaimable' as const,
     last_used_confidence: 'unknown' as const,
   });
-  let isUnavailable = $derived(item.quality !== 'fresh' && item.quality !== 'partial');
-  let isManual = $derived(item.risk === 'manual' || cacheMetadata.management_mode === 'advisory');
   let cleanable = $derived(isCleanable(item));
-  let isSelected = $derived(!!scanStore.selectedMap[item.id] && !isManual && !isUnavailable);
+  let isBlockedItem = $derived(isBlocked(item));
+  let isAdvisoryItem = $derived(isAdvisory(item) || item.risk === 'manual');
+  let isSelected = $derived(!!scanStore.selectedMap[item.id] && cleanable);
+  let blockedReason = $derived(item.disposition?.reason ?? item.incomplete_reason ?? 'Cleanup blocked');
+
   // An item that cannot be cleaned must not present a reclaimable amount: its
   // size is informational, exactly like an `informational` size semantics.
   let sizePrefix = $derived.by(() => {
@@ -41,7 +43,7 @@
   let revealError = $state<string | null>(null);
 
   function handleToggle() {
-    if (isManual || isUnavailable) return;
+    if (!cleanable) return;
     scanStore.toggleItem(item.id);
   }
 
@@ -58,7 +60,7 @@
     : ''}"
 >
   <div class="flex items-start space-x-3 flex-1 min-w-0 pr-3">
-    {#if isManual}
+    {#if isAdvisoryItem}
       <button
         type="button"
         onclick={handleReveal}
@@ -72,10 +74,10 @@
     {:else}
       <Checkbox
         checked={isSelected}
-        disabled={!scanStore.canClean || isUnavailable}
+        disabled={!scanStore.canClean || !cleanable}
         onchange={handleToggle}
-        ariaLabel={isUnavailable ? `${item.name} is inaccessible and cannot be cleaned` : `Select ${item.name}`}
-        title={isUnavailable ? (item.incomplete_reason ?? 'Inaccessible: cleanup blocked') : undefined}
+        ariaLabel={!cleanable ? `${item.name}: ${blockedReason}` : `Select ${item.name}`}
+        title={!cleanable ? blockedReason : undefined}
         class="mt-0.5 shrink-0"
       />
     {/if}
@@ -86,18 +88,30 @@
           {item.name}
         </span>
         <RiskBadge risk={item.risk} />
-        {#if item.quality === 'partial'}
+        {#if item.disposition?.eligibility === 'blocked'}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={blockedReason}>
+            Blocked
+          </span>
+        {:else if item.disposition?.eligibility === 'advisory'}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={blockedReason}>
+            Advisory
+          </span>
+        {:else if item.quality === 'partial'}
           <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.incomplete_reason ?? 'Partial scan'}>
             Partial
           </span>
-        {:else if isUnavailable}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={item.incomplete_reason ?? 'Inaccessible item'}>
+        {:else if isBlockedItem}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={blockedReason}>
             Inaccessible
           </span>
         {/if}
       </div>
 
-      {#if item.incomplete_reason}
+      {#if item.disposition?.reason}
+        <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.disposition.reason}>
+          {item.disposition.reason}
+        </p>
+      {:else if item.incomplete_reason}
         <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.incomplete_reason}>
           {item.incomplete_reason}
         </p>

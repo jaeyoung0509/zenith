@@ -75,8 +75,184 @@ impl FileSize {
         Self { logical, allocated }
     }
 
-    pub fn reclaimable(&self) -> u64 {
+    pub fn observed_bytes(&self) -> u64 {
         self.allocated.unwrap_or(self.logical)
+    }
+
+    pub fn reclaimable(&self) -> u64 {
+        self.observed_bytes()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupEligibility {
+    AutoCleanable,
+    Reviewable,
+    #[default]
+    Blocked,
+    Advisory,
+}
+
+impl CleanupEligibility {
+    pub fn is_cleanable(&self) -> bool {
+        matches!(self, Self::AutoCleanable | Self::Reviewable)
+    }
+
+    pub fn is_auto_cleanable(&self) -> bool {
+        matches!(self, Self::AutoCleanable)
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        matches!(self, Self::Blocked)
+    }
+
+    pub fn is_advisory(&self) -> bool {
+        matches!(self, Self::Advisory)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+pub struct CleanupDisposition {
+    pub eligibility: CleanupEligibility,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default, with = "crate::ipc_numeric::option_u64")]
+    #[specta(type = Option<u64>)]
+    pub cleanable_bytes: Option<u64>,
+}
+
+impl CleanupDisposition {
+    pub fn new(
+        eligibility: CleanupEligibility,
+        reason: Option<String>,
+        cleanable_bytes: Option<u64>,
+    ) -> Self {
+        Self {
+            eligibility,
+            reason,
+            cleanable_bytes,
+        }
+    }
+
+    pub fn auto_cleanable(bytes: u64) -> Self {
+        Self {
+            eligibility: CleanupEligibility::AutoCleanable,
+            reason: None,
+            cleanable_bytes: Some(bytes),
+        }
+    }
+
+    pub fn reviewable(bytes: u64, reason: Option<String>) -> Self {
+        Self {
+            eligibility: CleanupEligibility::Reviewable,
+            reason,
+            cleanable_bytes: Some(bytes),
+        }
+    }
+
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        Self {
+            eligibility: CleanupEligibility::Blocked,
+            reason: Some(reason.into()),
+            cleanable_bytes: None,
+        }
+    }
+
+    pub fn advisory(reason: impl Into<String>) -> Self {
+        Self {
+            eligibility: CleanupEligibility::Advisory,
+            reason: Some(reason.into()),
+            cleanable_bytes: None,
+        }
+    }
+
+    pub fn is_cleanable(&self) -> bool {
+        self.eligibility.is_cleanable() && self.cleanable_bytes.unwrap_or(0) > 0
+    }
+}
+
+pub fn is_safety_blocked_reason(reason: &str) -> bool {
+    let lower = reason.to_lowercase();
+    (lower.contains("protected") && (lower.contains("bundle") || lower.contains(".app")))
+        || lower.contains("symlink")
+        || lower.contains("blacklist")
+}
+
+pub fn derive_cleanup_disposition(
+    risk: RiskTier,
+    quality: ObservationQuality,
+    cache_metadata: &CacheMetadata,
+    size: &FileSize,
+    incomplete_reason: Option<&str>,
+) -> CleanupDisposition {
+    // 1. Safety violations (protected .app bundle, symlink escape, blacklist) fail closed
+    if incomplete_reason.is_some_and(is_safety_blocked_reason) {
+        return CleanupDisposition::blocked(
+            incomplete_reason.unwrap_or("Protected path encountered; cleanup blocked"),
+        );
+    }
+
+    // 2. Unavailable observations are always blocked from cleanup
+    if quality == ObservationQuality::Unavailable {
+        return CleanupDisposition::blocked(
+            incomplete_reason.unwrap_or("Inaccessible path; inspection failed"),
+        );
+    }
+
+    // 3. Advisory caches cannot enter generic cleanup
+    if cache_metadata.management_mode == CacheManagementMode::Advisory {
+        return CleanupDisposition::advisory(
+            incomplete_reason.unwrap_or("Advisory cache: managed manually or outside Zenith"),
+        );
+    }
+
+    // 4. Manual risk tiers cannot be cleaned generically
+    if risk == RiskTier::Manual {
+        return CleanupDisposition::blocked(
+            incomplete_reason.unwrap_or("Manual cleanup only; generic cleanup is unsupported"),
+        );
+    }
+
+    let observed = size.observed_bytes();
+
+    // 5. Tool-managed caches: provider policy decides, never AutoCleanable
+    if cache_metadata.management_mode == CacheManagementMode::ToolManaged {
+        if observed == 0 {
+            return CleanupDisposition::blocked("No cleanable data found");
+        }
+        if quality == ObservationQuality::Partial {
+            return CleanupDisposition::reviewable(
+                observed,
+                incomplete_reason
+                    .map(Into::into)
+                    .or_else(|| Some("Incomplete scan; review before pruning with provider".into())),
+            );
+        }
+        return CleanupDisposition::reviewable(observed, None);
+    }
+
+    // 6. Partial observation quality: reviewable, never auto-selected or quick-cleanable
+    if quality == ObservationQuality::Partial {
+        if observed == 0 {
+            return CleanupDisposition::blocked("No cleanable data found");
+        }
+        return CleanupDisposition::reviewable(
+            observed,
+            incomplete_reason
+                .map(Into::into)
+                .or_else(|| Some("Incomplete scan; review before cleaning".into())),
+        );
+    }
+
+    // 7. Fresh observation with Zenith management
+    if observed == 0 {
+        return CleanupDisposition::blocked("No cleanable data found");
+    }
+    match risk {
+        RiskTier::Safe => CleanupDisposition::auto_cleanable(observed),
+        RiskTier::Rebuild => CleanupDisposition::reviewable(observed, None),
+        RiskTier::Manual => CleanupDisposition::blocked("Manual cleanup only"),
     }
 }
 
@@ -93,6 +269,8 @@ pub struct ScanItem {
     pub description: String,
     #[serde(default)]
     pub cache_metadata: CacheMetadata,
+    #[serde(default)]
+    pub disposition: CleanupDisposition,
     pub is_selected: bool,
     #[serde(with = "crate::ipc_numeric::option_u64")]
     #[specta(type = Option<u64>)]
@@ -111,11 +289,66 @@ pub struct ScanItem {
 }
 
 impl ScanItem {
-    pub fn allows_cleanup(&self) -> bool {
-        matches!(
+    pub fn observed_bytes(&self) -> u64 {
+        self.size.observed_bytes()
+    }
+
+    pub fn derive_disposition(&self) -> CleanupDisposition {
+        derive_cleanup_disposition(
+            self.risk,
             self.quality,
-            ObservationQuality::Fresh | ObservationQuality::Partial
+            &self.cache_metadata,
+            &self.size,
+            self.incomplete_reason.as_deref(),
         )
+    }
+
+    pub fn with_derived_disposition(mut self) -> Self {
+        self.disposition = self.derive_disposition();
+        self
+    }
+
+    pub fn mock(
+        id: impl Into<String>,
+        signature_id: impl Into<String>,
+        name: impl Into<String>,
+        category: Category,
+        risk: RiskTier,
+        path: impl Into<String>,
+        size: FileSize,
+        file_count: usize,
+    ) -> Self {
+        let disposition = derive_cleanup_disposition(
+            risk,
+            ObservationQuality::Fresh,
+            &Default::default(),
+            &size,
+            None,
+        );
+        let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
+        Self {
+            id: id.into(),
+            signature_id: signature_id.into(),
+            name: name.into(),
+            category,
+            risk,
+            path: path.into(),
+            size,
+            file_count,
+            description: String::new(),
+            cache_metadata: Default::default(),
+            is_selected,
+            last_modified: None,
+            exists: true,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entry_count: 0,
+            disposition,
+        }
+    }
+
+    pub fn allows_cleanup(&self) -> bool {
+        self.disposition.is_cleanable()
     }
 
     /// Bytes this item would reclaim when cleaned, and zero when it cannot be
@@ -126,16 +359,12 @@ impl ScanItem {
     /// observation cannot support a cleanup never contributes a byte that only
     /// looks reclaimable.
     pub fn cleanable_bytes(&self) -> u64 {
-        if self.allows_cleanup() {
-            self.size.reclaimable()
-        } else {
-            0
-        }
+        self.disposition.cleanable_bytes.unwrap_or(0)
     }
 
     /// Whether this item is a cleanup candidate a user could select.
     pub fn is_cleanable_candidate(&self) -> bool {
-        self.allows_cleanup() && self.risk != RiskTier::Manual && self.cleanable_bytes() > 0
+        self.allows_cleanup()
     }
 }
 
@@ -147,6 +376,9 @@ pub struct CategoryResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub total_bytes: u64,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub cleanable_bytes: u64,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub safe_bytes: u64,
@@ -183,6 +415,9 @@ pub struct ScanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub total_bytes: u64,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub cleanable_bytes: u64,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub safe_bytes: u64,
@@ -284,6 +519,7 @@ mod tests {
             finished_at: 1000,
             categories: vec![],
             total_bytes: 0,
+            cleanable_bytes: 0,
             safe_bytes: 0,
             rebuild_bytes: 0,
             manual_bytes: 0,
@@ -314,6 +550,7 @@ mod tests {
             finished_at: 1000,
             categories: vec![],
             total_bytes: 100,
+            cleanable_bytes: 100,
             safe_bytes: 100,
             rebuild_bytes: 0,
             manual_bytes: 0,
@@ -337,7 +574,7 @@ mod tests {
     #[test]
     fn cache_metadata_and_large_numbers_survive_ipc_serialization() {
         const MAX_SAFE: u64 = 9_007_199_254_740_991;
-        let item = ScanItem {
+        let mut item = ScanItem {
             id: "dev.uv.cache".into(),
             signature_id: "dev.uv.cache".into(),
             name: "uv cache".into(),
@@ -355,6 +592,7 @@ mod tests {
                 size_semantics: CacheSizeSemantics::ConservativeLowerBound,
                 last_used_confidence: CacheUsageConfidence::Unknown,
             },
+            disposition: CleanupDisposition::reviewable(MAX_SAFE - 1, None),
             is_selected: false,
             last_modified: Some(MAX_SAFE - 2),
             exists: true,
@@ -370,13 +608,22 @@ mod tests {
         assert_eq!(json["quality"], "fresh");
         assert_eq!(json["cache_metadata"]["management_mode"], "tool_managed");
         assert_eq!(json["cache_metadata"]["artifact_kind"], "package_store");
+        assert_eq!(json["disposition"]["eligibility"], "reviewable");
+        assert_eq!(json["disposition"]["cleanable_bytes"], MAX_SAFE - 1);
 
         json.as_object_mut().unwrap().remove("quality");
         json.as_object_mut().unwrap().remove("skipped_entry_count");
+        json.as_object_mut().unwrap().remove("disposition");
         let legacy_item: ScanItem = serde_json::from_value(json).unwrap();
         assert_eq!(legacy_item.quality, ObservationQuality::Unavailable);
         assert_eq!(legacy_item.skipped_entry_count, 0);
+        assert_eq!(legacy_item.disposition.eligibility, CleanupEligibility::Blocked);
         assert!(!legacy_item.allows_cleanup());
+
+        // Test unsafe number in cleanable_bytes fails closed
+        item.disposition.cleanable_bytes = Some(crate::ipc_numeric::MAX_SAFE_INTEGER + 1);
+        let error = serde_json::to_value(&item).expect_err("unsafe cleanable_bytes must fail closed");
+        assert!(error.to_string().contains("MAX_SAFE_INTEGER"));
     }
 
     /// A count above `Number.MAX_SAFE_INTEGER` must be refused at the IPC
@@ -394,6 +641,7 @@ mod tests {
             file_count: 1,
             description: "owner managed".into(),
             cache_metadata: CacheMetadata::default(),
+            disposition: CleanupDisposition::default(),
             is_selected: false,
             last_modified: None,
             exists: true,
@@ -406,5 +654,82 @@ mod tests {
         assert!(error.to_string().contains("MAX_SAFE_INTEGER"));
         item.skipped_entry_count = crate::ipc_numeric::MAX_SAFE_INTEGER;
         assert!(serde_json::to_value(&item).is_ok());
+    }
+
+    #[test]
+    fn test_derive_cleanup_disposition_matrix() {
+        let size = FileSize::new(1000, Some(1000));
+        let zenith_meta = CacheMetadata {
+            management_mode: CacheManagementMode::Zenith,
+            ..Default::default()
+        };
+        let tool_meta = CacheMetadata {
+            management_mode: CacheManagementMode::ToolManaged,
+            ..Default::default()
+        };
+        let advisory_meta = CacheMetadata {
+            management_mode: CacheManagementMode::Advisory,
+            ..Default::default()
+        };
+
+        // 1. Safe + Fresh + Zenith => AutoCleanable
+        let d1 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Fresh, &zenith_meta, &size, None);
+        assert_eq!(d1.eligibility, CleanupEligibility::AutoCleanable);
+        assert_eq!(d1.cleanable_bytes, Some(1000));
+        assert!(d1.is_cleanable());
+
+        // 2. Safe + Partial + Zenith => Reviewable (never auto-cleanable)
+        let d2 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Partial, &zenith_meta, &size, None);
+        assert_eq!(d2.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d2.cleanable_bytes, Some(1000));
+        assert!(d2.is_cleanable());
+
+        // 3. Safe + Unavailable + Zenith => Blocked
+        let d3 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Unavailable, &zenith_meta, &size, None);
+        assert_eq!(d3.eligibility, CleanupEligibility::Blocked);
+        assert_eq!(d3.cleanable_bytes, None);
+        assert!(!d3.is_cleanable());
+
+        // 4. Rebuild + Fresh + Zenith => Reviewable
+        let d4 = derive_cleanup_disposition(RiskTier::Rebuild, ObservationQuality::Fresh, &zenith_meta, &size, None);
+        assert_eq!(d4.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d4.cleanable_bytes, Some(1000));
+        assert!(d4.is_cleanable());
+
+        // 5. Rebuild + Partial + Zenith => Reviewable (never quick clean)
+        let d5 = derive_cleanup_disposition(RiskTier::Rebuild, ObservationQuality::Partial, &zenith_meta, &size, None);
+        assert_eq!(d5.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d5.cleanable_bytes, Some(1000));
+        assert!(d5.is_cleanable());
+
+        // 6. Manual + Fresh + Zenith => Blocked from generic cleanup
+        let d6 = derive_cleanup_disposition(RiskTier::Manual, ObservationQuality::Fresh, &zenith_meta, &size, None);
+        assert_eq!(d6.eligibility, CleanupEligibility::Blocked);
+        assert_eq!(d6.cleanable_bytes, None);
+        assert!(!d6.is_cleanable());
+
+        // 7. Safe + Fresh + ToolManaged => Reviewable (provider decides, never AutoCleanable)
+        let d7 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Fresh, &tool_meta, &size, None);
+        assert_eq!(d7.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d7.cleanable_bytes, Some(1000));
+        assert!(d7.is_cleanable());
+
+        // 8. Safe + Fresh + Advisory => Advisory
+        let d8 = derive_cleanup_disposition(RiskTier::Safe, ObservationQuality::Fresh, &advisory_meta, &size, None);
+        assert_eq!(d8.eligibility, CleanupEligibility::Advisory);
+        assert_eq!(d8.cleanable_bytes, None);
+        assert!(!d8.is_cleanable());
+
+        // 9. Nested protected .app => Blocked (even if Safe + Fresh/Partial)
+        let d9 = derive_cleanup_disposition(
+            RiskTier::Safe,
+            ObservationQuality::Partial,
+            &zenith_meta,
+            &size,
+            Some("Protected application bundle encountered in /Library/Caches/something.app"),
+        );
+        assert_eq!(d9.eligibility, CleanupEligibility::Blocked);
+        assert_eq!(d9.cleanable_bytes, None);
+        assert!(!d9.is_cleanable());
     }
 }

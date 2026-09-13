@@ -6,7 +6,7 @@ use super::support::{
 };
 use crate::cleaner::CleanExecutor;
 use crate::models::{
-    Category, CleanEvent, CleanResult, CleanStrategy, PlanPreview, RiskTier, ScanEvent, ScanResult,
+    Category, CleanEvent, CleanResult, CleanStrategy, PlanPreview, ScanEvent, ScanResult,
 };
 use crate::safety::SafetyPlanner;
 use crate::scanner::ScanEngine;
@@ -215,8 +215,8 @@ pub async fn execute_clean(
 }
 
 /// Derives backend-owned Safe-only candidates for Quick Clean.
-/// Enforces: risk == Safe, bytes > 0, category enabled in settings.
-/// Never includes Rebuild or Manual items.
+/// Enforces: disposition.eligibility == AutoCleanable, cleanable_bytes > 0, category enabled in settings.
+/// Never includes Rebuild, Manual, Blocked, or Advisory items.
 pub fn select_quick_clean_safe_candidates(
     scan: &ScanResult,
     settings: &crate::models::ZenithSettings,
@@ -227,10 +227,8 @@ pub fn select_quick_clean_safe_candidates(
             continue;
         }
         for item in &category.items {
-            let bytes = item.size.allocated.unwrap_or(item.size.logical);
-            if item.risk == RiskTier::Safe
-                && bytes > 0
-                && item.quality == crate::models::ObservationQuality::Fresh
+            if item.disposition.eligibility == crate::models::CleanupEligibility::AutoCleanable
+                && item.cleanable_bytes() > 0
             {
                 eligible_ids.push(item.id.clone());
             }

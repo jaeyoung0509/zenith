@@ -42,6 +42,8 @@ export type {
   CleanItemResult,
   CleanResult,
   CleanStatus,
+  CleanupDisposition,
+  CleanupEligibility,
   ControlCenterQuickSummary,
   DashboardTab_Deserialize,
   DashboardTab_Serialize,

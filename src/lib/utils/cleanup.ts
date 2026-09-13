@@ -7,20 +7,142 @@ export function reclaimableBytes(item: ScanItem): number {
   return item.size.allocated ?? item.size.logical;
 }
 
+/** Observed bytes on disk for this item; zero if the item does not exist. */
+export function observedBytes(item: ScanItem): number {
+  if (!item.exists) return 0;
+  return reclaimableBytes(item);
+}
+
 /**
- * Mirrors the backend's `ScanItem::is_cleanable_candidate`: an item is
- * cleanable only when its observation supports a deletion, its declared risk is
- * not `manual`, and it measured something to reclaim.
+ * Backend-owned authority on whether an item allows cleanup.
+ *
+ * When `item.disposition` is present, it is the sole authority.
+ * An item is cleanable only when eligibility is `auto_cleanable` or `reviewable`
+ * and it has non-zero cleanable bytes.
  */
 export function isCleanable(item: ScanItem): boolean {
-  return (item.quality === 'fresh' || item.quality === 'partial')
-    && item.risk !== 'manual'
-    && reclaimableBytes(item) > 0;
+  if (item.disposition) {
+    const el = item.disposition.eligibility;
+    const bytes = item.disposition.cleanable_bytes ?? 0;
+    return (el === 'auto_cleanable' || el === 'reviewable') && bytes > 0;
+  }
+  if (!item.exists) return false;
+  if (item.cache_metadata?.management_mode === 'advisory') return false;
+  if (item.risk === 'manual') return false;
+  return (
+    (item.quality === 'fresh' || item.quality === 'partial') &&
+    reclaimableBytes(item) > 0
+  );
+}
+
+/** Whether the item is automatically cleanable by Safe/Quick Clean actions. */
+export function isAutoCleanable(item: ScanItem): boolean {
+  if (item.disposition) {
+    const bytes = item.disposition.cleanable_bytes ?? 0;
+    return item.disposition.eligibility === 'auto_cleanable' && bytes > 0;
+  }
+  return item.risk === 'safe' && item.quality === 'fresh' && isCleanable(item);
+}
+
+/** Whether the item is explicitly blocked from generic cleanup (e.g. nested .app, inaccessible). */
+export function isBlocked(item: ScanItem): boolean {
+  if (item.disposition) {
+    return item.disposition.eligibility === 'blocked';
+  }
+  return !item.exists || item.risk === 'manual' || item.quality === 'unavailable';
+}
+
+/** Whether the item is advisory-only (external/manual management required). */
+export function isAdvisory(item: ScanItem): boolean {
+  if (item.disposition) {
+    return item.disposition.eligibility === 'advisory';
+  }
+  return item.cache_metadata?.management_mode === 'advisory';
 }
 
 /** Bytes this item would actually reclaim; zero when it cannot be cleaned. */
 export function cleanableBytes(item: ScanItem): number {
+  if (item.disposition) {
+    return item.disposition.cleanable_bytes ?? 0;
+  }
   return isCleanable(item) ? reclaimableBytes(item) : 0;
+}
+
+export interface CategorySummary {
+  detected_count: number;
+  visible_count: number;
+  cleanable_count: number;
+  selected_count: number;
+  blocked_count: number;
+  advisory_count: number;
+  observed_bytes: number;
+  cleanable_bytes: number;
+  selected_bytes: number;
+  is_all_cleanable_selected: boolean;
+  can_select_all: boolean;
+}
+
+/**
+ * Derives comprehensive, authoritative counts and byte totals for a category.
+ *
+ * Guaranteed invariant:
+ * `selected_bytes <= cleanable_bytes <= observed_bytes`
+ */
+export function summarizeCategory(
+  items: ScanItem[],
+  selectedMap: Record<string, boolean> = {}
+): CategorySummary {
+  const detected_count = items.length;
+  let visible_count = 0;
+  let cleanable_count = 0;
+  let selected_count = 0;
+  let blocked_count = 0;
+  let advisory_count = 0;
+  let observed_bytes = 0;
+  let cleanable_bytes_sum = 0;
+  let selected_bytes = 0;
+
+  for (const item of items) {
+    const obs = observedBytes(item);
+    observed_bytes += obs;
+
+    if (isPresentedItem(item)) {
+      visible_count++;
+    }
+
+    if (isBlocked(item)) {
+      blocked_count++;
+    } else if (isAdvisory(item)) {
+      advisory_count++;
+    }
+
+    if (isCleanable(item)) {
+      cleanable_count++;
+      const cln = cleanableBytes(item);
+      cleanable_bytes_sum += cln;
+      if (selectedMap[item.id]) {
+        selected_count++;
+        selected_bytes += cln;
+      }
+    }
+  }
+
+  const is_all_cleanable_selected = cleanable_count > 0 && selected_count === cleanable_count;
+  const can_select_all = cleanable_count > 0 && selected_count < cleanable_count;
+
+  return {
+    detected_count,
+    visible_count,
+    cleanable_count,
+    selected_count,
+    blocked_count,
+    advisory_count,
+    observed_bytes,
+    cleanable_bytes: cleanable_bytes_sum,
+    selected_bytes,
+    is_all_cleanable_selected,
+    can_select_all,
+  };
 }
 
 /**

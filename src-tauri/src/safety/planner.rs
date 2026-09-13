@@ -145,7 +145,7 @@ impl SafetyPlanner {
                 }
             }
 
-            let bytes = item.size.reclaimable();
+            let bytes = item.cleanable_bytes();
             expected_reclaim_bytes += bytes;
             risk_summary.add(item.risk, bytes);
 
@@ -193,6 +193,7 @@ mod tests {
 
     #[test]
     fn rejects_manual_adapter_observations_before_signature_resolution() {
+        let size = FileSize::new(1024, Some(512));
         let item = ScanItem {
             id: "container.orbstack.storage".to_string(),
             signature_id: "adapter.orbstack.storage".to_string(),
@@ -200,7 +201,7 @@ mod tests {
             category: Category::Container,
             risk: RiskTier::Manual,
             path: "/untrusted/data.img.raw".to_string(),
-            size: FileSize::new(1024, Some(512)),
+            size,
             file_count: 1,
             description: String::new(),
             cache_metadata: Default::default(),
@@ -210,6 +211,13 @@ mod tests {
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
             skipped_entry_count: 0,
+            disposition: crate::models::derive_cleanup_disposition(
+                RiskTier::Manual,
+                ObservationQuality::Fresh,
+                &Default::default(),
+                &size,
+                None,
+            ),
         };
 
         let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());

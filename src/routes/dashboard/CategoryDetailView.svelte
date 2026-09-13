@@ -8,6 +8,7 @@
     isCleanable,
     presentedItems,
     riskCounts,
+    summarizeCategory,
     type CleanupSortMode,
   } from '../../lib/utils/cleanup';
   import Button from '../../lib/components/Button.svelte';
@@ -58,17 +59,11 @@
     return cleanableFilteredItems.every((i) => scanStore.selectedMap[i.id]);
   });
 
-  // "Detected locations" is a property of the category, not of the current
-  // search or risk filter, and the tab counts read the same presented set.
-  let presentedCount = $derived(presentedItems(categoryResult.items).length);
+  let summary = $derived(summarizeCategory(categoryResult.items, scanStore.selectedMap));
+  let presentedCount = $derived(summary.visible_count);
   let tabs = $derived(riskCounts(categoryResult.items));
 
-  let categorySelectedBytes = $derived.by(() =>
-    categoryResult.items.reduce(
-      (total, item) => total + (scanStore.selectedMap[item.id] ? cleanableBytes(item) : 0),
-      0
-    )
-  );
+  let categorySelectedBytes = $derived(summary.selected_bytes);
 
   function toggleAllFiltered() {
     if (cleanableFilteredItems.length === 0) return;

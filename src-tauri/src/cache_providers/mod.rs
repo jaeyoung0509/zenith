@@ -1,6 +1,6 @@
 use crate::models::{
-    CacheArtifactKind, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category,
-    ObservationQuality, RiskTier, ScanItem,
+    derive_cleanup_disposition, CacheArtifactKind, CacheManagementMode, CacheMetadata,
+    CacheSizeSemantics, Category, CleanupEligibility, ObservationQuality, RiskTier, ScanItem,
 };
 use crate::platform::path_algebra::{self, PathFlavor};
 use crate::platform::PlatformEnvironment;
@@ -169,6 +169,22 @@ impl CacheProviderRegistry {
             .and_then(|metadata| metadata.modified().ok())
             .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
+        let cache_metadata = CacheMetadata {
+            provider: provider.executable().to_string(),
+            management_mode: CacheManagementMode::ToolManaged,
+            artifact_kind: CacheArtifactKind::PackageStore,
+            consequence: provider.consequence().to_string(),
+            size_semantics,
+            last_used_confidence: Default::default(),
+        };
+        let disposition = derive_cleanup_disposition(
+            RiskTier::Rebuild,
+            quality,
+            &cache_metadata,
+            &measurement.size,
+            measurement.incomplete_reason.as_deref(),
+        );
+        let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
         Ok(Some(ScanItem {
             id: signature_id.to_string(),
             signature_id: signature_id.to_string(),
@@ -179,20 +195,14 @@ impl CacheProviderRegistry {
             size: measurement.size,
             file_count: measurement.file_count,
             description: "Inspected and pruned by the owning package manager.".to_string(),
-            cache_metadata: CacheMetadata {
-                provider: provider.executable().to_string(),
-                management_mode: CacheManagementMode::ToolManaged,
-                artifact_kind: CacheArtifactKind::PackageStore,
-                consequence: provider.consequence().to_string(),
-                size_semantics,
-                last_used_confidence: Default::default(),
-            },
-            is_selected: false,
+            cache_metadata,
+            is_selected,
             last_modified,
             exists: true,
             quality,
             incomplete_reason: measurement.incomplete_reason,
             skipped_entry_count: measurement.skipped_entries,
+            disposition,
         }))
     }
 
