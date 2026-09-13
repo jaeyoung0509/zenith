@@ -33,11 +33,10 @@ fn aggregate_quality(
     }
 }
 
-/// The retained items and reclaimable bytes of one category.
+/// The retained items and byte populations of one category.
 ///
-/// Every byte total is derived from `ScanItem::cleanable_bytes` in `push`, so
-/// the category total always equals the sum of its risk buckets and an item
-/// whose observation cannot support a cleanup contributes to neither.
+/// `total_bytes` is the observed footprint, including blocked/advisory rows;
+/// `cleanable_bytes` and the Safe/Rebuild buckets include only eligible bytes.
 #[derive(Default)]
 struct CategoryAccumulator {
     items: Vec<ScanItem>,
@@ -63,9 +62,9 @@ impl CategoryAccumulator {
             return None;
         }
 
+        self.total_bytes += observed;
         self.cleanable_bytes += bytes;
         if item.disposition.eligibility.is_cleanable() {
-            self.total_bytes += bytes;
             match item.risk {
                 RiskTier::Safe => self.safe_bytes += bytes,
                 RiskTier::Rebuild => self.rebuild_bytes += bytes,
@@ -73,7 +72,6 @@ impl CategoryAccumulator {
             }
         } else if item.risk == RiskTier::Manual {
             self.manual_bytes += observed;
-            self.total_bytes += observed;
         }
 
         if !item.allows_cleanup() {
@@ -499,11 +497,10 @@ mod tests {
         );
     }
 
-    /// Every byte total in a category comes from the same item set, so an
-    /// uninspectable item is retained for the user without inflating any total
-    /// and without becoming a second, destructive error surface.
+    /// Observed and cleanable totals remain distinct, so an uninspectable item
+    /// stays visible without becoming actionable or a second error surface.
     #[test]
-    fn category_totals_exclude_uncleanable_items_and_emit_no_error_event() {
+    fn category_totals_separate_observed_and_cleanable_bytes_and_emit_no_error_event() {
         let fixture = tempfile::tempdir().unwrap();
         let plain_root = fixture.path().join("plain-cache");
         let aged_root = fixture.path().join("aged-cache");
@@ -568,10 +565,9 @@ mod tests {
 
         assert_eq!(
             system.total_bytes,
-            system.safe_bytes + system.rebuild_bytes + system.manual_bytes,
-            "the category total is the sum of its risk buckets"
+            cleanable.size.observed_bytes() + blocked.size.observed_bytes(),
+            "detected bytes include retained blocked observations"
         );
-        assert_eq!(system.total_bytes, cleanable.size.observed_bytes());
         assert_eq!(system.cleanable_bytes, cleanable.size.observed_bytes());
         assert_eq!(system.safe_bytes, cleanable.size.observed_bytes());
         assert_eq!(system.rebuild_bytes, 0);

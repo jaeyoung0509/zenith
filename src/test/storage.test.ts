@@ -45,6 +45,11 @@ describe('StorageView CTA and responsive toolbar layout', () => {
           last_modified: Date.now(),
           exists: true,
           quality: 'fresh',
+          disposition: {
+            eligibility: 'auto_cleanable',
+            reason: null,
+            cleanable_bytes: 1024 * 1024 * 100,
+          },
         },
       ],
       total_bytes: 1024 * 1024 * 100,
@@ -107,6 +112,11 @@ describe('StorageView CTA and responsive toolbar layout', () => {
           last_modified: Date.now(),
           exists: true,
           quality: 'fresh',
+          disposition: {
+            eligibility: 'reviewable',
+            reason: null,
+            cleanable_bytes: 1024 * 1024 * 500,
+          },
         },
       ],
       total_bytes: 1024 * 1024 * 500,
@@ -161,6 +171,11 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       last_modified: null,
       exists: true,
       quality: 'fresh' as const,
+      disposition: {
+        eligibility: 'auto_cleanable' as const,
+        reason: null,
+        cleanable_bytes: 1024,
+      },
     };
     const manualItem = {
       ...safeItem,
@@ -170,6 +185,11 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       path: '/tmp/manual-resource',
       risk: 'manual' as const,
       size: { logical: 0, allocated: 0 },
+      disposition: {
+        eligibility: 'blocked' as const,
+        reason: 'Manual cleanup only',
+        cleanable_bytes: null,
+      },
     };
     const category: CategoryResult = {
       category: 'developer',
@@ -345,6 +365,11 @@ describe('detected versus reclaimable storage copy', () => {
           last_modified: null,
           exists: true,
           quality: 'fresh',
+          disposition: {
+            eligibility: 'blocked',
+            reason: 'Manual cleanup only',
+            cleanable_bytes: null,
+          },
         },
       ],
       total_bytes: bytes,

@@ -85,6 +85,13 @@ impl SafetyPlanner {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
+            if !item.has_current_disposition() {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' cleanup eligibility changed since the scan; scan again",
+                    item.name
+                )));
+            }
+
             if !item.allows_cleanup() {
                 return Err(ZenithError::InvalidPlan(format!(
                     "Item '{}' was not completely inspected or is inaccessible and cannot be cleaned",
@@ -225,6 +232,29 @@ mod tests {
             result,
             Err(ZenithError::UnsupportedManualOperation(name))
                 if name == "OrbStack VM Storage"
+        ));
+    }
+
+    #[test]
+    fn rejects_a_disposition_that_no_longer_matches_the_scan_facts() {
+        let mut item = ScanItem::mock(
+            "test.stale",
+            "test.signature",
+            "Stale item",
+            Category::Developer,
+            RiskTier::Safe,
+            "/tmp/stale-item",
+            FileSize::new(1024, Some(1024)),
+            1,
+        );
+        item.quality = ObservationQuality::Unavailable;
+        item.incomplete_reason = Some("Access was revoked".into());
+
+        let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());
+        assert!(matches!(
+            result,
+            Err(ZenithError::InvalidPlan(message))
+                if message.contains("eligibility changed since the scan")
         ));
     }
 }

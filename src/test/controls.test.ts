@@ -111,6 +111,11 @@ describe('metric and action consistency contracts', () => {
               last_modified: 0,
               exists: true,
               quality: 'fresh',
+              disposition: {
+                eligibility: 'reviewable',
+                reason: null,
+                cleanable_bytes: 198.8 * 1024 * 1024,
+              },
             },
           ],
           total_bytes: 198.8 * 1024 * 1024,
@@ -191,6 +196,11 @@ describe('metric and action consistency contracts', () => {
               last_modified: 0,
               exists: true,
               quality: 'fresh',
+              disposition: {
+                eligibility: 'auto_cleanable',
+                reason: null,
+                cleanable_bytes: 84.9 * 1024 * 1024,
+              },
             },
             {
               id: 'rebuild',
@@ -206,6 +216,11 @@ describe('metric and action consistency contracts', () => {
               last_modified: 0,
               exists: true,
               quality: 'fresh',
+              disposition: {
+                eligibility: 'reviewable',
+                reason: null,
+                cleanable_bytes: 207.5 * 1024 * 1024,
+              },
             },
           ],
           total_bytes: 292.4 * 1024 * 1024,
@@ -243,6 +258,11 @@ describe('metric and action consistency contracts', () => {
               last_modified: 0,
               exists: true,
               quality: 'fresh',
+              disposition: {
+                eligibility: 'auto_cleanable',
+                reason: null,
+                cleanable_bytes: 80 * 1024 * 1024,
+              },
             },
             {
               id: 'rebuild',
@@ -258,6 +278,11 @@ describe('metric and action consistency contracts', () => {
               last_modified: 0,
               exists: true,
               quality: 'fresh',
+              disposition: {
+                eligibility: 'reviewable',
+                reason: null,
+                cleanable_bytes: 200 * 1024 * 1024,
+              },
             },
           ],
           total_bytes: 280 * 1024 * 1024,

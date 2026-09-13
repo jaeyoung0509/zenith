@@ -42,6 +42,7 @@ import { createDevelopmentPortsMock } from './mocks/developmentPorts';
 import { previewPlatform } from './mocks/previewPlatform';
 import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
 import { goldenPlatformContextByPlatform } from '../models/platformContext';
+import { cleanableBytes, isCleanable } from '../utils/cleanup';
 
 type ZenithApi = typeof nativeApi;
 
@@ -820,6 +821,7 @@ export const mockApi = {
           }
         }
         const intensiveBytes = 1.4 * 1024 * 1024 * 1024;
+        const blockedBytes = 198.6 * 1024 * 1024;
         const intensiveItem: ScanItem = {
           id: 'system.intensive.user_app_caches.mock-app',
           signature_id: 'system.intensive.user_app_caches',
@@ -848,7 +850,7 @@ export const mockApi = {
           category: 'system',
           risk: 'safe',
           path: '~/Library/Caches/com.example.bundled-cache',
-          size: { logical: 198.6 * 1024 * 1024, allocated: 198.6 * 1024 * 1024 },
+          size: { logical: blockedBytes, allocated: blockedBytes },
           file_count: 0,
           description: 'Third-party cache inactive for at least 7 days',
           cache_metadata: {
@@ -877,9 +879,9 @@ export const mockApi = {
           category: 'system',
           display_name: 'System',
           items: [intensiveItem, blockedItem],
-          // The uninspectable item contributes no cleanable byte: totals and
-          // risk buckets come from the same predicate the UI selects with.
-          total_bytes: intensiveBytes,
+          // Detected bytes retain the blocked observation while cleanable and
+          // Safe buckets contain only actionable bytes.
+          total_bytes: intensiveBytes + blockedBytes,
           cleanable_bytes: intensiveBytes,
           safe_bytes: intensiveBytes,
           rebuild_bytes: 0,
@@ -896,7 +898,7 @@ export const mockApi = {
           onEvent({
             type: 'CategoryFinished',
             category: 'system',
-            bytes: intensiveBytes,
+            bytes: intensiveCategory.total_bytes,
             item_count: 2,
           });
         }
@@ -1017,7 +1019,9 @@ export const mockApi = {
             },
             ...(intensiveCleanup ? [intensiveCategory] : []),
           ],
-          total_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
+          total_bytes:
+            8.3 * 1024 * 1024 * 1024 +
+            (intensiveCleanup ? intensiveBytes + blockedBytes : 0),
           cleanable_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
@@ -1047,31 +1051,32 @@ export const mockApi = {
   },
 
   async createPlan(_scanId: string, items: ScanItem[]): Promise<PlanPreview> {
+    if (items.length === 0 || items.some((item) => !isCleanable(item))) {
+      throw new Error('Selected item is not eligible for cleanup');
+    }
+    const bytesFor = (item: ScanItem) => cleanableBytes(item);
     return {
       id: 'mock-plan-1',
       targets: items.map((i) => ({
         item_id: i.id,
         name: i.name,
-        expected_bytes: i.size.allocated ?? i.size.logical,
+        expected_bytes: bytesFor(i),
         risk: i.risk,
       })),
-      expected_reclaim_bytes: items.reduce(
-        (acc, i) => acc + (i.size.allocated ?? i.size.logical),
-        0
-      ),
+      expected_reclaim_bytes: items.reduce((acc, i) => acc + bytesFor(i), 0),
       risk: {
         safe_count: items.filter((i) => i.risk === 'safe').length,
         rebuild_count: items.filter((i) => i.risk === 'rebuild').length,
         manual_count: items.filter((i) => i.risk === 'manual').length,
         safe_bytes: items
           .filter((i) => i.risk === 'safe')
-          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+          .reduce((acc, i) => acc + bytesFor(i), 0),
         rebuild_bytes: items
           .filter((i) => i.risk === 'rebuild')
-          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+          .reduce((acc, i) => acc + bytesFor(i), 0),
         manual_bytes: items
           .filter((i) => i.risk === 'manual')
-          .reduce((acc, i) => acc + (i.size.allocated ?? i.size.logical), 0),
+          .reduce((acc, i) => acc + bytesFor(i), 0),
       },
       expires_at: Math.floor(Date.now() / 1000) + 300,
     };

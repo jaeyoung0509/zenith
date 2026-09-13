@@ -25,6 +25,7 @@ function fixture(id = 'scan', finished = 1000): ScanResult {
         risk: 'safe', path: '/fixture', size: { logical: 10, allocated: 10 },
         file_count: 1, description: 'Test only', is_selected: false, last_modified: null, exists: true,
         quality: 'fresh', incomplete_reason: null,
+        disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 10 },
       }] }],
   };
 }
@@ -343,6 +344,7 @@ describe('cleanup freshness and recovery', () => {
             exists: true,
             quality: 'fresh',
             incomplete_reason: null,
+            disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 30 },
           },
           {
             id: 'partial-safe-item',
@@ -359,6 +361,11 @@ describe('cleanup freshness and recovery', () => {
             exists: true,
             quality: 'partial',
             incomplete_reason: 'Some files inaccessible',
+            disposition: {
+              eligibility: 'reviewable',
+              reason: 'Some files inaccessible',
+              cleanable_bytes: 20,
+            },
           },
           {
             id: 'unavailable-item',
@@ -375,6 +382,11 @@ describe('cleanup freshness and recovery', () => {
             exists: true,
             quality: 'unavailable',
             incomplete_reason: 'Permission denied',
+            disposition: {
+              eligibility: 'blocked',
+              reason: 'Permission denied',
+              cleanable_bytes: null,
+            },
           },
         ],
       }],

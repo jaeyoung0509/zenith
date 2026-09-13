@@ -27,7 +27,7 @@
   });
   let cleanable = $derived(isCleanable(item));
   let isBlockedItem = $derived(isBlocked(item));
-  let isAdvisoryItem = $derived(isAdvisory(item) || item.risk === 'manual');
+  let isAdvisoryItem = $derived(isAdvisory(item));
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && cleanable);
   let blockedReason = $derived(item.disposition?.reason ?? item.incomplete_reason ?? 'Cleanup blocked');
 

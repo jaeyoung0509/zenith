@@ -1035,7 +1035,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     use zenith_lib::commands::select_quick_clean_safe_candidates;
     use zenith_lib::models::ZenithSettings;
 
-    let scan = ScanResult {
+    let mut scan = ScanResult {
         scan_id: "test-scan-123".to_string(),
         valid_for_seconds: 60,
         started_at: 1000,
@@ -1153,6 +1153,14 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     };
     let candidates2 = select_quick_clean_safe_candidates(&scan, &disabled_dev_settings);
     assert_eq!(candidates2, vec!["sys.safe.nonzero"]);
+
+    // A detached permission flag must not survive a change in the captured
+    // facts, even if an internally inconsistent scan reaches Quick Clean.
+    let stale = &mut scan.categories[0].items[0];
+    stale.quality = ObservationQuality::Unavailable;
+    stale.incomplete_reason = Some("Access was revoked".into());
+    let candidates3 = select_quick_clean_safe_candidates(&scan, &default_settings);
+    assert_eq!(candidates3, vec!["sys.safe.nonzero"]);
 }
 
 #[test]

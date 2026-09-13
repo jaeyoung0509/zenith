@@ -21,51 +21,33 @@ export function observedBytes(item: ScanItem): number {
  * and it has non-zero cleanable bytes.
  */
 export function isCleanable(item: ScanItem): boolean {
-  if (item.disposition) {
-    const el = item.disposition.eligibility;
-    const bytes = item.disposition.cleanable_bytes ?? 0;
-    return (el === 'auto_cleanable' || el === 'reviewable') && bytes > 0;
-  }
-  if (!item.exists) return false;
-  if (item.cache_metadata?.management_mode === 'advisory') return false;
-  if (item.risk === 'manual') return false;
+  const eligibility = item.disposition?.eligibility;
   return (
-    (item.quality === 'fresh' || item.quality === 'partial') &&
-    reclaimableBytes(item) > 0
+    (eligibility === 'auto_cleanable' || eligibility === 'reviewable') &&
+    cleanableBytes(item) > 0
   );
 }
 
 /** Whether the item is automatically cleanable by Safe/Quick Clean actions. */
 export function isAutoCleanable(item: ScanItem): boolean {
-  if (item.disposition) {
-    const bytes = item.disposition.cleanable_bytes ?? 0;
-    return item.disposition.eligibility === 'auto_cleanable' && bytes > 0;
-  }
-  return item.risk === 'safe' && item.quality === 'fresh' && isCleanable(item);
+  return item.disposition?.eligibility === 'auto_cleanable' && cleanableBytes(item) > 0;
 }
 
 /** Whether the item is explicitly blocked from generic cleanup (e.g. nested .app, inaccessible). */
 export function isBlocked(item: ScanItem): boolean {
-  if (item.disposition) {
-    return item.disposition.eligibility === 'blocked';
-  }
-  return !item.exists || item.risk === 'manual' || item.quality === 'unavailable';
+  return !item.disposition || item.disposition.eligibility === 'blocked';
 }
 
 /** Whether the item is advisory-only (external/manual management required). */
 export function isAdvisory(item: ScanItem): boolean {
-  if (item.disposition) {
-    return item.disposition.eligibility === 'advisory';
-  }
-  return item.cache_metadata?.management_mode === 'advisory';
+  return item.disposition?.eligibility === 'advisory';
 }
 
 /** Bytes this item would actually reclaim; zero when it cannot be cleaned. */
 export function cleanableBytes(item: ScanItem): number {
-  if (item.disposition) {
-    return item.disposition.cleanable_bytes ?? 0;
-  }
-  return isCleanable(item) ? reclaimableBytes(item) : 0;
+  const eligibility = item.disposition?.eligibility;
+  if (eligibility !== 'auto_cleanable' && eligibility !== 'reviewable') return 0;
+  return Math.min(item.disposition?.cleanable_bytes ?? 0, observedBytes(item));
 }
 
 export interface CategorySummary {

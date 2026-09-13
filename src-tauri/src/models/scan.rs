@@ -360,7 +360,20 @@ impl ScanItem {
     /// observation cannot support a cleanup never contributes a byte that only
     /// looks reclaimable.
     pub fn cleanable_bytes(&self) -> u64 {
-        self.disposition.cleanable_bytes.unwrap_or(0)
+        if !self.disposition.is_cleanable() {
+            return 0;
+        }
+        self.disposition
+            .cleanable_bytes
+            .unwrap_or(0)
+            .min(self.observed_bytes())
+    }
+
+    /// Whether the serialized disposition still matches the facts captured by
+    /// this scan item. Mutation paths use this to reject stale or internally
+    /// inconsistent scan data instead of trusting a detached permission flag.
+    pub fn has_current_disposition(&self) -> bool {
+        self.disposition == self.derive_disposition()
     }
 
     /// Whether this item is a cleanup candidate a user could select.
@@ -784,5 +797,29 @@ mod tests {
         assert_eq!(d9.eligibility, CleanupEligibility::Blocked);
         assert_eq!(d9.cleanable_bytes, None);
         assert!(!d9.is_cleanable());
+    }
+
+    #[test]
+    fn cleanable_bytes_fail_closed_for_inconsistent_dispositions() {
+        let mut item = ScanItem::mock(
+            "test.item",
+            "test.signature",
+            "Test item",
+            Category::Developer,
+            RiskTier::Safe,
+            "/tmp/test-item",
+            FileSize::new(100, Some(100)),
+            1,
+        );
+
+        item.disposition = CleanupDisposition::new(
+            CleanupEligibility::Blocked,
+            Some("blocked".into()),
+            Some(100),
+        );
+        assert_eq!(item.cleanable_bytes(), 0);
+
+        item.disposition = CleanupDisposition::reviewable(500, None);
+        assert_eq!(item.cleanable_bytes(), 100);
     }
 }

@@ -17,7 +17,7 @@ import { cleanOutcome } from '../lib/utils/cleanResult';
 import { scanStore } from '../lib/stores/scan.svelte';
 
 function item(overrides: Partial<ScanItem>): ScanItem {
-  return {
+  const fixture = {
     id: 'cache',
     signature_id: 'dev.cache',
     name: 'Cache',
@@ -41,7 +41,27 @@ function item(overrides: Partial<ScanItem>): ScanItem {
     quality: 'fresh',
     incomplete_reason: null,
     ...overrides,
-  };
+  } as ScanItem;
+  if (!('disposition' in overrides)) {
+    const observed = fixture.exists ? fixture.size.allocated ?? fixture.size.logical : 0;
+    const eligibility =
+      !fixture.exists || fixture.quality === 'unavailable' || fixture.risk === 'manual'
+        ? 'blocked'
+        : fixture.cache_metadata?.management_mode === 'advisory'
+          ? 'advisory'
+          : fixture.quality === 'partial' || fixture.risk === 'rebuild'
+            ? 'reviewable'
+            : 'auto_cleanable';
+    fixture.disposition = {
+      eligibility,
+      reason: eligibility === 'blocked' ? 'Fixture is not eligible for cleanup' : null,
+      cleanable_bytes:
+        (eligibility === 'auto_cleanable' || eligibility === 'reviewable') && observed > 0
+          ? observed
+          : null,
+    };
+  }
+  return fixture;
 }
 
 /** Settings that enable every cleanup category, used by the store tests. */
@@ -522,9 +542,20 @@ describe('cleanup disposition authority & byte semantics', () => {
     expect(observedBytes(advisoryItem)).toBe(800);
   });
 
-  it('falls back safely when disposition is absent', () => {
+  it('fails closed when disposition is absent', () => {
+    const freshSafeItem = item({
+      id: 'legacy-fresh-safe',
+      disposition: undefined,
+      size: { logical: 500, allocated: 500 },
+    });
+    expect(isCleanable(freshSafeItem)).toBe(false);
+    expect(isAutoCleanable(freshSafeItem)).toBe(false);
+    expect(isBlocked(freshSafeItem)).toBe(true);
+    expect(cleanableBytes(freshSafeItem)).toBe(0);
+
     const unavailableItem = item({
       id: 'unavail',
+      disposition: undefined,
       quality: 'unavailable',
       incomplete_reason: 'Scan incomplete',
       size: { logical: 500, allocated: 500 },
@@ -535,6 +566,7 @@ describe('cleanup disposition authority & byte semantics', () => {
 
     const toolItem = item({
       id: 'tool',
+      disposition: undefined,
       cache_metadata: {
         provider: 'Docker',
         management_mode: 'advisory',
@@ -546,8 +578,24 @@ describe('cleanup disposition authority & byte semantics', () => {
       size: { logical: 500, allocated: 500 },
     });
     expect(isCleanable(toolItem)).toBe(false);
-    expect(isAdvisory(toolItem)).toBe(true);
+    expect(isAdvisory(toolItem)).toBe(false);
+    expect(isBlocked(toolItem)).toBe(true);
     expect(cleanableBytes(toolItem)).toBe(0);
+  });
+
+  it('never lets malformed disposition bytes exceed observed bytes or revive a blocked item', () => {
+    const oversized = item({
+      size: { logical: 100, allocated: 100 },
+      disposition: { eligibility: 'reviewable', cleanable_bytes: 500, reason: null },
+    });
+    const blockedWithBytes = item({
+      size: { logical: 100, allocated: 100 },
+      disposition: { eligibility: 'blocked', cleanable_bytes: 100, reason: 'Blocked' },
+    });
+
+    expect(cleanableBytes(oversized)).toBe(100);
+    expect(cleanableBytes(blockedWithBytes)).toBe(0);
+    expect(isCleanable(blockedWithBytes)).toBe(false);
   });
 });
 
@@ -642,4 +690,3 @@ describe('summarizeCategory invariants and explicit population', () => {
     expect(summaryAll.is_all_cleanable_selected).toBe(true);
   });
 });
-

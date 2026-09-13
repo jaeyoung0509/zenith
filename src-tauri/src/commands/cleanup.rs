@@ -227,7 +227,8 @@ pub fn select_quick_clean_safe_candidates(
             continue;
         }
         for item in &category.items {
-            if item.disposition.eligibility == crate::models::CleanupEligibility::AutoCleanable
+            if item.has_current_disposition()
+                && item.disposition.eligibility == crate::models::CleanupEligibility::AutoCleanable
                 && item.cleanable_bytes() > 0
             {
                 eligible_ids.push(item.id.clone());

@@ -33,6 +33,11 @@ beforeEach(() => {
             last_modified: Date.now(),
             exists: true,
             quality: 'fresh',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              reason: null,
+              cleanable_bytes: 14 * 1024 * 1024,
+            },
           },
         ],
         total_bytes: 14 * 1024 * 1024,
