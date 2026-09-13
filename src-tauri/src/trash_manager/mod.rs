@@ -865,6 +865,7 @@ mod tests {
             skipped_entries: 0,
             cancelled: false,
             truncated: false,
+            uninspected: Vec::new(),
         };
         let plan = TrashPlanner::from_developer_artifacts(
             &inventory,
@@ -956,6 +957,7 @@ mod tests {
             skipped_entries: 0,
             cancelled: false,
             truncated: false,
+            uninspected: Vec::new(),
         };
         let plan =
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
@@ -1023,6 +1025,7 @@ mod tests {
             skipped_entries: 0,
             cancelled: false,
             truncated: false,
+            uninspected: Vec::new(),
         };
         let plan =
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();

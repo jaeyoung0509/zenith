@@ -95,6 +95,12 @@ maps picker cancellation to `None` just like the macOS adapter.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
   for resources that must not be treated as arbitrary files.
 - `src-tauri/src/metrics` and `src-tauri/src/power`: platform system integration.
+  The Memory view reports what one process-table snapshot observed. A process
+  group is labelled as started by Zenith only when that same snapshot traces
+  every member's ancestry to this process; everything else is reported as
+  observed, with the parent names the snapshot resolved. Termination eligibility
+  is a separate, allowlist-gated question and never implies Zenith launched the
+  process.
 - `src-tauri/src/dev_ports`: bounded TCP-listener discovery, conservative
   development/testing-tool classification, opaque lease storage, TOCTOU validation,
   and exact-process graceful/force signaling.
@@ -173,10 +179,23 @@ before deletion.
 
 The initial intensive scope covers stale third-party children of
 `~/Library/Caches` and stale application-log groups under `~/Library/Logs`.
-Apple/system cache namespaces and diagnostic/crash reports are excluded.
-Temporary cleanup remains a separate known-prefix allowlist and never becomes
-an unrestricted `/tmp` scan. Reviewed developer-tool prefixes still use the
-same whole-tree inactivity threshold as every other temporary candidate.
+Apple/system cache namespaces and diagnostic/crash reports are excluded, and a
+prefix exclusion matches case-insensitively because a cache namespace's on-disk
+casing is not stable. A namespace whose owner publishes its own invalidation
+command is excluded rather than treated as a generic cache, so `dotslash` and
+Playwright's `ms-playwright` downloads remain owned by their CLIs. Temporary
+cleanup remains a separate known-prefix allowlist and never becomes an
+unrestricted `/tmp` scan. Reviewed developer-tool prefixes still use the same
+whole-tree inactivity threshold as every other temporary candidate.
+
+One predicate decides what a scan offers and what every surface counts. Items
+whose observation cannot support a cleanup contribute zero bytes to the risk
+buckets, the category totals, the scan totals, and the selection summary, so a
+category total always equals the sum of its buckets and an inaccessible item is
+never selectable. A completed partial scan is explained once, through the
+item's own observation quality and the scan's durable `incomplete_reasons` and
+counters — never through a second, destructive error surface alongside a scan
+that otherwise succeeded.
 
 See [SAFETY.md](SAFETY.md) for the full deletion contract.
 
@@ -251,7 +270,18 @@ computer` registers the canonical current-user home as a backend-owned scope, wh
 the native folder picker registers narrower user-owned workspaces. Both return
 only opaque workspace IDs to the frontend. Whole-home discovery prunes system,
 credential, media, package-manager state, and installed app-bundle trees before
-recursion. Discovery recognizes generated trees only when direct project-root evidence proves their purpose: Cargo/Maven targets, Gradle
+recursion. `Downloads` stays in scope: users keep projects there. Because macOS
+gates that folder behind a user consent prompt that parks the reading thread,
+the scan probes the folder **before** it takes the storage-operation gate, so a
+waiting dialog cannot stall the mutating storage commands queued behind that
+gate. The resolved answer is passed into the walk, which then neither prompts a
+second time nor blocks on the same folder again.
+
+A folder the walk cannot read is recorded by path with its reason and whether a
+retry can include it, reported while the scan runs and again in the final
+result. A refused `Downloads` therefore surfaces as an uninspected entry with a
+rescan affordance instead of an anonymous skip counter, and the scan completes
+as partial rather than appearing to have covered everything. Discovery recognizes generated trees only when direct project-root evidence proves their purpose: Cargo/Maven targets, Gradle
 outputs, Node modules, Python environments, Composer/Ruby dependencies, Go,
 .NET, CMake, Swift, Flutter, Elixir, and Terraform artifacts. Generic names
 such as `build`, `vendor`, `bin`, or `target` are skipped without that evidence.

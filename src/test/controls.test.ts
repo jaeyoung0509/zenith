@@ -96,7 +96,23 @@ describe('metric and action consistency contracts', () => {
         categoryResult: {
           category: 'developer',
           display_name: 'Developer',
-          items: [],
+          items: [
+            {
+              id: 'developer.rebuild',
+              signature_id: 'developer.rebuild',
+              name: 'Rebuild cache',
+              category: 'developer',
+              risk: 'rebuild',
+              path: '/tmp/rebuild-cache',
+              size: { logical: 198.8 * 1024 * 1024, allocated: 198.8 * 1024 * 1024 },
+              file_count: 1,
+              description: 'Rebuildable cache',
+              is_selected: false,
+              last_modified: 0,
+              exists: true,
+              quality: 'fresh',
+            },
+          ],
           total_bytes: 198.8 * 1024 * 1024,
           safe_bytes: 0,
           rebuild_bytes: 198.8 * 1024 * 1024,
@@ -202,7 +218,7 @@ describe('metric and action consistency contracts', () => {
     });
 
     expect(rendered.body).toContain('Safe: 84.9 MB');
-    expect(rendered.body).not.toContain('Selected: 84.9 MB');
+    expect(rendered.body).not.toContain('Selected:');
   });
 
   it('keeps Selected visible when the selection differs from the safe subtotal', () => {

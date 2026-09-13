@@ -3,7 +3,7 @@ use crate::commands::support::join_failure;
 use crate::commands::AppState;
 use crate::developer_artifacts::{
     result_from_inventory, DeveloperArtifactInventory, DeveloperArtifactScanner,
-    DeveloperWorkspaceRecord,
+    DeveloperWorkspaceRecord, FolderAccess,
 };
 use crate::large_files::{LargeFileInventory, LargeFileScanner};
 use crate::models::{
@@ -282,16 +282,33 @@ pub async fn start_developer_artifact_scan(
     let storage_state = state.storage_state.clone();
     let worker_storage_state = storage_state.clone();
     let environment = state.environment.clone();
+    // Resolve the workspace set and answer the Downloads consent prompt before
+    // taking the storage read gate. macOS parks the probing thread until the
+    // user answers, and every mutating storage command queues behind that gate,
+    // so probing inside it would stall unrelated operations on a dialog.
+    let workspaces =
+        crate::developer_artifacts::workspace_snapshot(&workspace_ids, &storage_state.workspaces)?;
+    let downloads_access = if workspaces.iter().any(|workspace| workspace.whole_home) {
+        let probe_environment = state.environment.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::developer_artifacts::probe_downloads_access(&probe_environment)
+        })
+        .await
+        .map_err(|error| join_failure("Developer artifact downloads probe panicked", error))?
+    } else {
+        // A scan that never looks at Downloads must not raise the prompt.
+        FolderAccess::NotGated
+    };
     let _permit = state.execution_budgets.acquire_storage_read().await?;
     let result = tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_read(|| {
             let mut emitted_result: Option<DeveloperArtifactScanResult> = None;
             let mut active_scan_id: Option<String> = None;
             let cancel_for_event = cancel.clone();
-            let inventory_result = DeveloperArtifactScanner::scan(
+            let inventory_result = DeveloperArtifactScanner::scan_workspaces(
                 &environment,
-                &workspace_ids,
-                &worker_storage_state.workspaces,
+                &workspaces,
+                downloads_access,
                 cancel_for_worker,
                 |event| {
                     if let DeveloperArtifactScanEvent::Started { scan_id, .. } = &event {

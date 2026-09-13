@@ -88,11 +88,11 @@ export const commands = {
 	getPlatformContext: () => __TAURI_INVOKE<PlatformContext>("get_platform_context"),
 	/**
 	 *  Platform vocabulary and locations the interface renders.
-	 * 
+	 *
 	 *  Copy such as "Move to Trash", "menu bar", or a log directory literal is only
 	 *  true on one platform; the frontend asks for it instead of hardcoding it.
 	 *  Runs the `--doctor` self-check against the running environment.
-	 * 
+	 *
 	 *  The command line and the interface execute the same assertions: a user who
 	 *  cannot open a terminal can still see which invariant failed.
 	 */
@@ -107,7 +107,7 @@ export const commands = {
 	prepareLargeFileTrash: (scanId: string, selectedItemIds: string[]) => typedError<TrashPlanPreview_Serialize, string>(__TAURI_INVOKE("prepare_large_file_trash", { scanId, selectedItemIds })),
 	/**
 	 *  Reveals a scanned large file in the platform file manager.
-	 * 
+	 *
 	 *  The interface submits only the item id: the path is resolved from the
 	 *  backend-owned inventory, so the frontend never has to reassemble a path from
 	 *  display fields (which on Windows produced mixed separators) and a stale id
@@ -730,9 +730,19 @@ export type DeveloperArtifactKind = "cargo_target" | "node_modules" | "python_ve
 
 export type DeveloperArtifactScanEvent = DeveloperArtifactScanEvent_Serialize | DeveloperArtifactScanEvent_Deserialize;
 
-export type DeveloperArtifactScanEvent_Deserialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Deserialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; project_name?: never; result?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Deserialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
+export type DeveloperArtifactScanEvent_Deserialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Deserialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } |
+/**
+ *  A directory the walk could not inspect, reported while the scan runs so
+ *  a refused folder is visible without waiting for the final result.
+ */
+({ type: "uninspected"; path: string; name: string; reason: DeveloperArtifactUninspectedReason; retryable: boolean }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Deserialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
 
-export type DeveloperArtifactScanEvent_Serialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Serialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; project_name?: never; result?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Serialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
+export type DeveloperArtifactScanEvent_Serialize = ({ type: "started"; scan_id: string; workspace_count: number }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_id?: never } | ({ type: "workspace_started"; workspace: DeveloperWorkspace }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace_count?: never; workspace_id?: never } | ({ type: "project_discovered"; workspace_id: string; project_name: string; ecosystem: DeveloperEcosystem }) & { artifact?: never; artifact_id?: never; discovered_count?: never; kind?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } | ({ type: "artifact_measurement_started"; artifact_id: string; project_name: string; kind: DeveloperArtifactKind }) & { artifact?: never; discovered_count?: never; ecosystem?: never; measured_count?: never; name?: never; path?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "artifact_found"; artifact: DeveloperArtifact_Serialize }) & { artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "progress"; workspace_id: string; discovered_count: number; measured_count: number; skipped_entries: number }) & { artifact?: never; artifact_id?: never; ecosystem?: never; kind?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; workspace?: never; workspace_count?: never } | ({ type: "workspace_finished"; workspace_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never } |
+/**
+ *  A directory the walk could not inspect, reported while the scan runs so
+ *  a refused folder is visible without waiting for the final result.
+ */
+({ type: "uninspected"; path: string; name: string; reason: DeveloperArtifactUninspectedReason; retryable: boolean }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; project_name?: never; result?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "finished"; result: DeveloperArtifactScanResult_Serialize }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; retryable?: never; scan_id?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never } | ({ type: "cancelled"; scan_id: string }) & { artifact?: never; artifact_id?: never; discovered_count?: never; ecosystem?: never; kind?: never; measured_count?: never; name?: never; path?: never; project_name?: never; reason?: never; result?: never; retryable?: never; skipped_entries?: never; workspace?: never; workspace_count?: never; workspace_id?: never };
 
 export type DeveloperArtifactScanResult = DeveloperArtifactScanResult_Serialize | DeveloperArtifactScanResult_Deserialize;
 
@@ -744,6 +754,11 @@ export type DeveloperArtifactScanResult_Deserialize = {
 	skipped_entries: number,
 	cancelled: boolean,
 	truncated: boolean,
+	/**
+	 *  Directories the walk could not inspect, with the reason and whether a
+	 *  retry can include them.
+	 */
+	uninspected?: DeveloperArtifactUninspected[],
 };
 
 export type DeveloperArtifactScanResult_Serialize = {
@@ -754,24 +769,58 @@ export type DeveloperArtifactScanResult_Serialize = {
 	skipped_entries: number,
 	cancelled: boolean,
 	truncated: boolean,
+	/**
+	 *  Directories the walk could not inspect, with the reason and whether a
+	 *  retry can include them.
+	 */
+	uninspected: DeveloperArtifactUninspected[],
 };
 
-export type DeveloperArtifactStatus = 
+export type DeveloperArtifactStatus =
 /**  Every measured entry and project marker was verified. */
-"complete" | 
+"complete" |
 /**
  *  The generated-folder scope and project evidence are verified, but one
  *  or more descendants could not be measured. Manual cleanup is allowed
  *  after an explicit warning and execution-time revalidation.
  */
-"measurement_incomplete" | 
+"measurement_incomplete" |
 /**
  *  A safety boundary (for example a symlink, filesystem boundary, or
  *  project marker identity) could not be verified. Cleanup is forbidden.
  */
-"safety_blocked" | 
+"safety_blocked" |
 /**  The scan was cancelled before this artifact could be fully validated. */
 "scan_cancelled";
+
+/**
+ *  A directory the whole-home scan could not inspect.
+ *
+ *  Recorded so a partial scan names what it missed and offers a retry, instead
+ *  of folding a refused folder into an anonymous skip counter.
+ */
+export type DeveloperArtifactUninspected = {
+	path: string,
+	name: string,
+	reason: DeveloperArtifactUninspectedReason,
+	/**  Whether granting access and scanning again can include this directory. */
+	retryable: boolean,
+};
+
+/**
+ *  Why a directory the scan wanted to inspect was left uninspected.
+ *
+ *  The scan cannot separate "the user answered Don't Allow" from "the read was
+ *  refused or cancelled": both reach the app as the same access refusal.
+ */
+export type DeveloperArtifactUninspectedReason =
+/**
+ *  The operating system refused access to the folder, including a denied
+ *  or cancelled folder-access prompt.
+ */
+"permission_denied" |
+/**  The folder could not be read for any other I/O reason. */
+"unreadable";
 
 export type DeveloperArtifact_Deserialize = {
 	id: string,
@@ -851,7 +900,7 @@ export type DevelopmentListener_Serialize = {
 
 /**
  *  What the diagnostics panel shows about this machine.
- * 
+ *
  *  The machine facts are first-class fields rather than prose in
  *  `enabled_features`: a report from a machine the maintainers do not own is
  *  only useful if the arch, the OS build, the webview runtime, the elevation
@@ -1459,7 +1508,7 @@ export type PlatformCapabilities_Serialize = {
 
 /**
  *  Platform vocabulary and locations the interface must not hardcode.
- * 
+ *
  *  Copy such as "Move to Trash", "Menu Bar Quick Panel", or
  *  `~/Library/Logs/Zenith` is only true on one platform. Deriving it from the
  *  running backend keeps the Windows and Linux builds from describing
@@ -1529,6 +1578,13 @@ export type ProcessMemory_Deserialize = {
 	process_count: number,
 	can_terminate: boolean,
 	termination_lease_id?: string | null,
+	/**
+	 *  Names of direct parents outside this process group, de-duplicated and
+	 *  sorted. Parents normalized into the same group are omitted so the UI
+	 *  reports the group's external source rather than an internal worker.
+	 */
+	parent_process_names?: string[],
+	ownership?: ProcessOwnership,
 };
 
 export type ProcessMemory_Serialize = {
@@ -1539,7 +1595,24 @@ export type ProcessMemory_Serialize = {
 	process_count: number,
 	can_terminate: boolean,
 	termination_lease_id: string | null,
+	/**
+	 *  Names of direct parents outside this process group, de-duplicated and
+	 *  sorted. Parents normalized into the same group are omitted so the UI
+	 *  reports the group's external source rather than an internal worker.
+	 */
+	parent_process_names: string[],
+	ownership: ProcessOwnership,
 };
+
+/**
+ *  How Zenith relates to a process group it is displaying.
+ *
+ *  The grouping is an observation of the system process table. `ZenithChild`
+ *  is only ever reported when the same fresh snapshot shows this Zenith process
+ *  in every member's parent chain, so the view never implies Zenith started a
+ *  process it merely observed.
+ */
+export type ProcessOwnership = "observed" | "zenith_child";
 
 export type ProjectContext = ProjectContext_Serialize | ProjectContext_Deserialize;
 
@@ -1855,9 +1928,9 @@ export type SafetySnapshot_Serialize = {
 
 export type ScanEvent = ScanEvent_Serialize | ScanEvent_Deserialize;
 
-export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; message?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; scan_id?: never } | ({ type: "Error"; message: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never; scan_id?: never };
+export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; scan_id?: never };
 
-export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; message?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; message?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; message?: never; scan_id?: never } | ({ type: "Error"; message: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never; scan_id?: never };
+export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; scan_id?: never };
 
 export type ScanItem = ScanItem_Serialize | ScanItem_Deserialize;
 

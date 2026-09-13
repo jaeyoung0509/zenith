@@ -44,6 +44,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
           is_selected: true,
           last_modified: Date.now(),
           exists: true,
+          quality: 'fresh',
         },
       ],
       total_bytes: 1024 * 1024 * 100,
@@ -105,6 +106,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
           is_selected: true,
           last_modified: Date.now(),
           exists: true,
+          quality: 'fresh',
         },
       ],
       total_bytes: 1024 * 1024 * 500,
@@ -158,6 +160,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       is_selected: true,
       last_modified: null,
       exists: true,
+      quality: 'fresh' as const,
     };
     const manualItem = {
       ...safeItem,
@@ -341,6 +344,7 @@ describe('detected versus reclaimable storage copy', () => {
           is_selected: false,
           last_modified: null,
           exists: true,
+          quality: 'fresh',
         },
       ],
       total_bytes: bytes,
