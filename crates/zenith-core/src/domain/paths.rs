@@ -165,9 +165,16 @@ mod tests {
 
     #[test]
     fn joining_keeps_an_absolute_path_absolute() {
-        let root = AbsolutePath::new("/tmp").unwrap();
+        // The roots are taken from the platform rather than written as POSIX
+        // literals: `/tmp` is not absolute on Windows, and a rule that only
+        // holds on one runner is not the rule this type enforces.
+        let temporary = std::env::temp_dir();
+        let root = AbsolutePath::new(&temporary).expect("the temporary directory is absolute");
+
         assert!(root.join("child").as_path().is_absolute());
-        assert!(root.join("/elsewhere").as_path().is_absolute());
+
+        // Joining an absolute path replaces the base; the result is that path.
+        assert_eq!(root.join(&temporary).as_path(), temporary.as_path());
     }
 
     #[test]
