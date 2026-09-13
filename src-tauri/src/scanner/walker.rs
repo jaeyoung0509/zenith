@@ -12,6 +12,20 @@ use std::os::unix::fs::MetadataExt;
 
 pub struct DirectoryScanner;
 
+/// Whether a cache namespace name is excluded by the signature's prefix list.
+///
+/// Exclusion is case-insensitive: a cache namespace's on-disk casing is not
+/// stable (APFS is case-insensitive by default, so `familycircled` and
+/// `FamilyCircle` resolve to the same directory), and an exclusion that matches
+/// more is the fail-safe direction. `include_prefixes` stays case-sensitive,
+/// because widening an inclusion widens the cleanup surface.
+fn is_excluded_namespace(name: &str, exclude_prefixes: &[String]) -> bool {
+    let lowered = name.to_lowercase();
+    exclude_prefixes
+        .iter()
+        .any(|prefix| lowered.starts_with(&prefix.to_lowercase()))
+}
+
 impl DirectoryScanner {
     /// Scans all configured paths for a given signature and returns discovered ScanItems.
     pub fn scan_signature(
@@ -288,11 +302,7 @@ impl DirectoryScanner {
                     continue;
                 }
             }
-            if signature
-                .exclude_prefixes
-                .iter()
-                .any(|prefix| name.starts_with(prefix))
-            {
+            if is_excluded_namespace(&name, &signature.exclude_prefixes) {
                 continue;
             }
 
@@ -350,7 +360,7 @@ impl DirectoryScanner {
                 file_count: stats.file_count,
                 description,
                 cache_metadata: signature.cache_metadata(),
-                is_selected: signature.risk.is_auto_selectable(),
+                is_selected: signature.risk.is_auto_selectable() && size.reclaimable() > 0,
                 last_modified: modified
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .ok()
@@ -392,11 +402,9 @@ impl DirectoryScanner {
         reason: String,
     ) -> ScanItem {
         let mut cache_metadata = signature.cache_metadata();
-        cache_metadata.size_semantics = if size.reclaimable() == 0 {
-            CacheSizeSemantics::Informational
-        } else {
-            CacheSizeSemantics::ConservativeLowerBound
-        };
+        // An uninspectable candidate's size is informational: it can never be
+        // cleaned, so it must not render as a reclaimable lower bound.
+        cache_metadata.size_semantics = CacheSizeSemantics::Informational;
         ScanItem {
             id,
             signature_id: signature.id.clone(),
@@ -608,7 +616,9 @@ pub struct TreeStats {
 #[cfg(test)]
 mod tests {
     use super::DirectoryScanner;
-    use crate::models::{Category, CleanStrategy, ObservationQuality, RiskTier, Signature};
+    use crate::models::{
+        CacheSizeSemantics, Category, CleanStrategy, ObservationQuality, RiskTier, Signature,
+    };
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
 
@@ -736,6 +746,7 @@ mod tests {
         std::fs::create_dir_all(&standalone).unwrap();
         std::fs::create_dir(&eligible).unwrap();
         std::fs::write(eligible.join("data.bin"), vec![1u8; 4096]).unwrap();
+        std::fs::write(nested.join("data.bin"), vec![5u8; 2048]).unwrap();
         std::fs::write(bundle_root.join("tool"), vec![1u8; 4096]).unwrap();
         std::fs::write(mixed_case_bundle_root.join("tool"), vec![1u8; 4096]).unwrap();
         std::fs::write(standalone.join("tool"), vec![1u8; 4096]).unwrap();
@@ -767,6 +778,10 @@ mod tests {
             .find(|item| item.name == "plain.cache")
             .expect("complete cache remains visible");
         assert_eq!(plain.quality, ObservationQuality::Fresh);
+        assert!(
+            plain.is_selected,
+            "a complete aged safe cache with reclaimable bytes is auto-selected"
+        );
         for name in [
             "bundled.cache",
             "mixed-case-bundled.cache",
@@ -778,8 +793,22 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} should be retained as an incomplete item"));
             assert_eq!(blocked.quality, ObservationQuality::Unavailable);
             assert!(!blocked.is_selected);
+            assert_eq!(
+                blocked.cache_metadata.size_semantics,
+                CacheSizeSemantics::Informational,
+                "an uninspectable item's size is never a reclaimable lower bound"
+            );
+            assert_eq!(blocked.cleanable_bytes(), 0);
             assert!(blocked.incomplete_reason.is_some());
         }
+        let measured_blocked = items
+            .iter()
+            .find(|item| item.name == "bundled.cache")
+            .expect("the nested bundle candidate is retained");
+        assert!(
+            measured_blocked.size.reclaimable() > 0,
+            "what the walk could measure is still reported"
+        );
 
         // The guard must also fail closed at delete-time TOCTOU re-verification.
         let stats = DirectoryScanner::measure_tree_stats(&environment(), &nested, &[], 0, 32);
@@ -787,5 +816,59 @@ mod tests {
         let mixed_case_stats =
             DirectoryScanner::measure_tree_stats(&environment(), &mixed_case, &[], 0, 32);
         assert!(!mixed_case_stats.complete);
+    }
+
+    /// An excluded namespace is dropped regardless of the case it happens to
+    /// use on disk (APFS is case-insensitive), so the shipped signature's
+    /// `FamilyCircle` entry also removes the `familycircled` namespace the scan
+    /// actually observed, and the tool-managed `ms-playwright` namespace never
+    /// reaches the candidate list.
+    #[test]
+    fn aged_child_scan_drops_excluded_namespaces_case_insensitively() {
+        let root = tempfile::tempdir().unwrap();
+        let playwright = root.path().join("ms-playwright");
+        let apple_lowercase = root.path().join("familycircled");
+        let apple_declared_case = root.path().join("FamilyCircle");
+        let third_party = root.path().join("third.party.cache");
+        for dir in [
+            &playwright,
+            &apple_lowercase,
+            &apple_declared_case,
+            &third_party,
+        ] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::write(dir.join("data.bin"), vec![1u8; 4096]).unwrap();
+        }
+
+        let signature = Signature {
+            id: "system.test.namespaces".into(),
+            name: "Test cache namespaces".into(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteDirectory,
+            paths: vec![root.path().to_string_lossy().into_owned()],
+            exclusions: vec![],
+            description: String::new(),
+            min_age_days: Some(0),
+            include_prefixes: vec![],
+            exclude_prefixes: vec!["ms-playwright".into(), "FamilyCircle".into()],
+            intensive_only: true,
+            platforms: vec![],
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        };
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment());
+        let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["third.party.cache"],
+            "only the ordinary third-party cache is offered"
+        );
+        assert_eq!(items[0].quality, ObservationQuality::Fresh);
+        assert!(items[0].is_selected);
     }
 }

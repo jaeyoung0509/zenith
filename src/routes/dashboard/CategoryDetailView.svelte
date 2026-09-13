@@ -3,8 +3,11 @@
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import {
+    cleanableBytes,
     filterAndSortCleanupItems,
-    reclaimableBytes,
+    isCleanable,
+    presentedItems,
+    riskCounts,
     type CleanupSortMode,
   } from '../../lib/utils/cleanup';
   import Button from '../../lib/components/Button.svelte';
@@ -48,20 +51,21 @@
     );
   });
 
-  let cleanableFilteredItems = $derived(
-    filteredItems.filter((i) => i.risk !== 'manual'
-      && (i.quality === 'fresh' || i.quality === 'partial'))
-  );
+  let cleanableFilteredItems = $derived(filteredItems.filter(isCleanable));
 
   let allFilteredSelected = $derived.by(() => {
     if (cleanableFilteredItems.length === 0) return false;
     return cleanableFilteredItems.every((i) => scanStore.selectedMap[i.id]);
   });
 
+  // "Detected locations" is a property of the category, not of the current
+  // search or risk filter, and the tab counts read the same presented set.
+  let presentedCount = $derived(presentedItems(categoryResult.items).length);
+  let tabs = $derived(riskCounts(categoryResult.items));
+
   let categorySelectedBytes = $derived.by(() =>
     categoryResult.items.reduce(
-      (total, item) =>
-        total + (item.risk !== 'manual' && scanStore.selectedMap[item.id] ? reclaimableBytes(item) : 0),
+      (total, item) => total + (scanStore.selectedMap[item.id] ? cleanableBytes(item) : 0),
       0
     )
   );
@@ -101,7 +105,7 @@
           {/if}
         </div>
         <p class="text-xs text-muted-foreground">
-          {filteredItems.length} detected {filteredItems.length === 1 ? 'location' : 'locations'} • {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)} detected
+          {presentedCount} detected {presentedCount === 1 ? 'location' : 'locations'} • {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)} detected
         </p>
       </div>
     </div>
@@ -241,7 +245,7 @@
           ? 'bg-background text-foreground shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
-        All ({categoryResult.items.length})
+        All ({tabs.all})
       </button>
       <button
         type="button"
@@ -251,7 +255,7 @@
           ? 'bg-background text-success shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
-        Safe ({categoryResult.items.filter((i) => i.risk === 'safe').length})
+        Safe ({tabs.safe})
       </button>
       <button
         type="button"
@@ -261,7 +265,7 @@
           ? 'bg-background text-warning shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
-        Rebuild ({categoryResult.items.filter((i) => i.risk === 'rebuild').length})
+        Rebuild ({tabs.rebuild})
       </button>
       <button
         type="button"
@@ -271,7 +275,7 @@
           ? 'bg-background text-destructive shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
       >
-        Manual ({categoryResult.items.filter((i) => i.risk === 'manual').length})
+        Manual ({tabs.manual})
       </button>
       </div>
     </div>

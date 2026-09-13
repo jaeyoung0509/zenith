@@ -70,4 +70,86 @@ describe('developer artifact review workflow', () => {
     expect(rendered.body).toContain('Terraform');
     expect(rendered.body).not.toContain('Incomplete · blocked');
   });
+
+  it('reports the gated Downloads folder as uninspected in the whole-home preview', async () => {
+    const workspace = await mockStorageApi.registerDeveloperHomeWorkspace();
+    const events: string[] = [];
+    const result = await mockStorageApi.startDeveloperArtifactScan([workspace.id], (event) => {
+      events.push(event.type === 'uninspected' ? `uninspected:${event.name}` : event.type);
+    });
+
+    expect(result.uninspected).toMatchObject([
+      { name: 'Downloads', path: '/Users/mock/Downloads', reason: 'permission_denied', retryable: true },
+    ]);
+    expect(result.skipped_entries).toBeGreaterThan(0);
+    expect(events).toContain('uninspected:Downloads');
+  });
+
+  it('renders a refused folder notice with its reason and an actionable rescan', () => {
+    const rendered = render(DeveloperArtifactsView, {
+      props: {
+        onBack: () => undefined,
+        initialResult: {
+          scan_id: 'mock-developer-scan-downloads',
+          items: [],
+          discovered_count: 0,
+          measured_count: 0,
+          skipped_entries: 1,
+          cancelled: false,
+          truncated: false,
+          uninspected: [
+            {
+              path: '/Users/mock/Downloads',
+              name: 'Downloads',
+              reason: 'permission_denied',
+              retryable: true,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('role="status"');
+    expect(rendered.body).toContain('data-testid="developer-artifact-uninspected-notice"');
+    expect(rendered.body).toContain('Downloads');
+    expect(rendered.body).toContain('/Users/mock/Downloads');
+    expect(rendered.body).toContain('The operating system refused access, so this folder was not inspected.');
+    expect(rendered.body).toContain('Permission refused · retry allowed');
+    expect(rendered.body).toContain('System Settings');
+    expect(rendered.body).toContain('Files and Folders');
+    expect(rendered.body).toContain('Scan again');
+    expect(rendered.body).toContain('1 uninspected');
+    expect(rendered.body).toContain('Result is partial');
+  });
+
+  it('omits the permission guidance for an unreadable folder that a retry cannot include', () => {
+    const rendered = render(DeveloperArtifactsView, {
+      props: {
+        onBack: () => undefined,
+        initialResult: {
+          scan_id: 'mock-developer-scan-unreadable',
+          items: [],
+          discovered_count: 0,
+          measured_count: 0,
+          skipped_entries: 1,
+          cancelled: false,
+          truncated: false,
+          uninspected: [
+            {
+              path: '/Users/mock/work/broken',
+              name: 'broken',
+              reason: 'unreadable',
+              retryable: false,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('data-testid="developer-artifact-uninspected-notice"');
+    expect(rendered.body).toContain('This folder could not be read, so it was not inspected.');
+    expect(rendered.body).toContain('Unreadable');
+    expect(rendered.body).not.toContain('System Settings');
+    expect(rendered.body).not.toContain('Permission refused');
+  });
 });

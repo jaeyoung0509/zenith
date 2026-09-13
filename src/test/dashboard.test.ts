@@ -32,6 +32,7 @@ beforeEach(() => {
             is_selected: true,
             last_modified: Date.now(),
             exists: true,
+            quality: 'fresh',
           },
         ],
         total_bytes: 14 * 1024 * 1024,

@@ -139,6 +139,24 @@ impl CleanExecutor {
         clean_result
     }
 
+    /// A target that disappeared after the scan is already in the desired
+    /// state: nothing is mutated and nothing failed, so it is reported as a
+    /// successful no-op with zero reclaimed bytes rather than as a failed
+    /// cleanup item. Only genuine absence is routed here; a permission or
+    /// identity failure still fails closed.
+    fn already_absent(target: &DeleteTarget) -> CleanItemResult {
+        CleanItemResult {
+            item_id: target.item_id.clone(),
+            name: target.name.clone(),
+            path: target.path.to_string_lossy().to_string(),
+            status: CleanStatus::Success,
+            success: true,
+            bytes_reclaimed: 0,
+            failure_reason: None,
+            error_message: None,
+        }
+    }
+
     fn clean_target(target: &DeleteTarget, environment: &PlatformEnvironment) -> CleanItemResult {
         // Special case: DockerPrune strategy doesn't operate on standard filesystem paths
         if target.strategy == CleanStrategy::DockerPrune {
@@ -184,6 +202,35 @@ impl CleanExecutor {
             };
         }
 
+        // 0. Presence probe. A path that no longer exists is not a mutation
+        // failure: the postcondition already holds. `symlink_metadata` is used
+        // rather than `exists()` because `exists()` collapses `EACCES` into
+        // `false` and would turn a permission refusal into a silent success.
+        // A present-but-dangling symlink still has link metadata and continues.
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self::already_absent(target);
+            }
+            Err(error) => {
+                let error_str = error.to_string();
+                return CleanItemResult {
+                    item_id: target.item_id.clone(),
+                    name: target.name.clone(),
+                    path: path.to_string_lossy().to_string(),
+                    status: CleanStatus::Failed,
+                    success: false,
+                    bytes_reclaimed: 0,
+                    failure_reason: Some(CleanFailureReason::PermissionDenied),
+                    error_message: Some(crate::platform::environment::describe_access_refusal(
+                        environment,
+                        path,
+                        &error_str,
+                    )),
+                };
+            }
+        }
+
         // 1. Blacklist check (lexical & canonical, fail closed on mutation)
         if let Err(e) = Blacklist::validate_with(path, environment) {
             return CleanItemResult {
@@ -198,6 +245,9 @@ impl CleanExecutor {
             };
         }
         if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
+            if crate::safety::is_already_absent(&e) {
+                return Self::already_absent(target);
+            }
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -212,6 +262,9 @@ impl CleanExecutor {
 
         // 1b. Symlink metadata must be readable; failure fails closed.
         if let Err(e) = SymlinkGuard::is_symlink_strict(path) {
+            if crate::safety::is_already_absent(&e) {
+                return Self::already_absent(target);
+            }
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
@@ -224,23 +277,20 @@ impl CleanExecutor {
             };
         }
 
-        // 2. Check path existence
+        // 2. Check path existence. The strict checks above read metadata, so a
+        // path that is gone now vanished inside the race window between them
+        // and this guard. That is still absence: report the same no-op success
+        // rather than a mutation failure.
         if !path.exists() && !SymlinkGuard::is_symlink(path) {
-            return CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Success,
-                success: true,
-                bytes_reclaimed: 0,
-                failure_reason: None,
-                error_message: None,
-            };
+            return Self::already_absent(target);
         }
 
         // 3. TOCTOU identity verification
-        if let Some(ref expected_identity) = target.identity {
+        if let Some(expected_identity) = &target.identity {
             if let Err(e) = ToctouGuard::verify(path, expected_identity) {
+                if crate::safety::is_already_absent(&e) {
+                    return Self::already_absent(target);
+                }
                 return CleanItemResult {
                     item_id: target.item_id.clone(),
                     name: target.name.clone(),
@@ -265,6 +315,15 @@ impl CleanExecutor {
                     32,
                 );
                 if !stats.complete {
+                    // An incomplete measurement because the tree vanished is
+                    // absence, not a partial read: the postcondition already
+                    // holds. A tree that is still present but unreadable keeps
+                    // failing closed below.
+                    if let Err(error) = std::fs::symlink_metadata(path) {
+                        if error.kind() == std::io::ErrorKind::NotFound {
+                            return Self::already_absent(target);
+                        }
+                    }
                     return CleanItemResult {
                         item_id: target.item_id.clone(),
                         name: target.name.clone(),
@@ -699,5 +758,99 @@ mod tests {
             classify_cleanup_failure("unknown disk failure"),
             CleanFailureReason::Unknown
         );
+    }
+
+    /// A plan whose single target is the given path, with the identity captured
+    /// while the path still existed.
+    fn volatile_plan(path: &std::path::Path, is_dir: bool) -> DeletePlan {
+        let identity = ToctouGuard::capture(path).expect("capture identity while present");
+        assert_eq!(identity.is_dir, is_dir);
+        DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-volatile".to_string(),
+            targets: vec![DeleteTarget {
+                item_id: "volatile-target".to_string(),
+                signature_id: "test.volatile".to_string(),
+                name: "Volatile temp".to_string(),
+                path: path.to_path_buf(),
+                strategy: CleanStrategy::DeleteDirectory,
+                expected_bytes: 4096,
+                risk: crate::models::RiskTier::Safe,
+                identity: Some(identity),
+                exclusions: vec![],
+                min_age_days: None,
+            }],
+            expected_reclaim_bytes: 4096,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+        }
+    }
+
+    /// A directory that vanished after the scan is a successful no-op, never a
+    /// failed item reporting `Could not verify canonical location`.
+    #[test]
+    fn vanished_directory_target_is_a_noop_success() {
+        let fixture = tempfile::tempdir().unwrap();
+        let target_dir = fixture.path().join("codex-clipboard-temp");
+        std::fs::create_dir(&target_dir).unwrap();
+        std::fs::write(target_dir.join("clipboard.png"), b"volatile").unwrap();
+
+        let plan = volatile_plan(&target_dir, true);
+        std::fs::remove_dir_all(&target_dir).unwrap();
+
+        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        assert_eq!(result.failed_count, 0);
+        assert_eq!(result.partial_count, 0);
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Success);
+        assert!(item.success);
+        assert_eq!(item.bytes_reclaimed, 0);
+        assert_eq!(item.failure_reason, None);
+        assert_eq!(item.error_message, None);
+    }
+
+    /// The same for a regular file: absence is the postcondition, not a
+    /// mutation failure.
+    #[test]
+    fn vanished_file_target_is_a_noop_success() {
+        let fixture = tempfile::tempdir().unwrap();
+        let target_file = fixture.path().join("tauri-stop-dev-processes.sh");
+        std::fs::write(&target_file, b"#!/bin/sh\nexit 0\n").unwrap();
+
+        let plan = volatile_plan(&target_file, false);
+        std::fs::remove_file(&target_file).unwrap();
+
+        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        assert_eq!(result.failed_count, 0);
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Success);
+        assert!(item.success);
+        assert_eq!(item.bytes_reclaimed, 0);
+        assert_eq!(item.failure_reason, None);
+        assert_eq!(item.error_message, None);
+    }
+
+    /// A present target whose identity changed must still fail closed: absence
+    /// is the only condition treated as success.
+    #[test]
+    fn identity_mismatch_on_a_present_target_still_fails_closed() {
+        let fixture = tempfile::tempdir().unwrap();
+        let target = fixture.path().join("cache.dat");
+        std::fs::write(&target, b"v1").unwrap();
+
+        let plan = volatile_plan(&target, false);
+        std::fs::remove_file(&target).unwrap();
+        std::fs::write(&target, b"v2 replaced contents").unwrap();
+
+        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        assert_eq!(result.failed_count, 1);
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Failed);
+        assert!(!item.success);
+        assert_eq!(
+            item.failure_reason,
+            Some(CleanFailureReason::ChangedSinceScan)
+        );
+        assert!(target.exists(), "the replacement must not be deleted");
     }
 }

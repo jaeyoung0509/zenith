@@ -62,6 +62,21 @@ signatures with `min_age_days`, where the executor re-measures the full tree
 newest-mtime immediately before deletion instead of relying on the single
 directory mtime captured at plan time.
 
+## Absent targets
+
+A target that no longer exists when cleanup reaches it is already in the desired
+state. The executor probes the target's own metadata before the canonical,
+symlink, and identity guards — `exists()` is never used as that probe, because it
+collapses a permission refusal into a silent success — and reports absence as a
+successful no-op that reclaimed nothing. The same rule applies to a nested entry
+that disappears mid-walk: it is skipped, not recorded as a deletion failure.
+
+Absence is a distinct signal (`ZenithError::Missing`), not a variant of
+"changed since scan". Every other failure keeps failing closed: an identity,
+mtime, size, symlink, ownership, or permission failure still aborts the target
+that reports it, and cleanup events still report per-target results instead of
+converting a partial failure into a success.
+
 ## Platform coverage
 
 Safety guarantees are equivalent in policy and testable on both platforms,
@@ -98,7 +113,11 @@ Broad user cache and log signatures are constrained as follows:
 
 - only direct children of the registered root can become targets;
 - the root itself is never returned as a cleanup item;
-- symlink children and protected Apple/system prefixes are skipped;
+- symlink children and protected Apple/system prefixes are skipped, with prefix
+  exclusions matched case-insensitively so a namespace cannot be admitted by
+  casing alone;
+- a cache namespace whose owner publishes its own download, validation, and
+  invalidation command is excluded rather than treated as a generic cache; and
 - the newest timestamp anywhere in the candidate tree must exceed the declared
   minimum inactivity age;
 - incomplete traversal, permission failure, or recursion depth cutoff excludes
@@ -109,7 +128,9 @@ Broad user cache and log signatures are constrained as follows:
 
 The current thresholds are seven days for third-party children under
 `~/Library/Caches` and fourteen days for application-log groups under
-`~/Library/Logs`. Diagnostic and crash-report groups remain protected.
+`~/Library/Logs`. Diagnostic and crash-report groups remain protected, as are
+the Apple cache namespaces and the tool-managed namespaces named in the
+signature, such as `dotslash` and `ms-playwright`.
 Intensive mode does not scan user documents, preferences, credentials,
 databases, browser profiles, model weights, arbitrary system cache roots, or
 unknown `/tmp` children.

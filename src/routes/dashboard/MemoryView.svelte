@@ -259,8 +259,8 @@
           <input
             type="text"
             bind:value={searchQuery}
-            placeholder="Search process or PID…"
-            aria-label="Search processes by name or PID"
+            placeholder="Search process, PID, or parent…"
+            aria-label="Search processes by name, PID, or parent process"
             class="w-full h-8 pl-8 pr-7 text-xs rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
           {#if searchQuery}
@@ -275,6 +275,10 @@
           {/if}
         </div>
       </div>
+
+      <p class="text-meta text-muted-foreground">
+        Zenith observes these processes in the system snapshot, ranked by memory. Quit is offered only for processes Zenith has verified it may stop.
+      </p>
 
       {#if filteredProcesses.length > 0}
         <div class="border border-border/80 rounded-xl overflow-hidden bg-card/70 divide-y divide-border/60">
@@ -293,6 +297,14 @@
                     <span class="text-muted-foreground ml-1.5 text-meta">
                       ({proc.process_count} instances)
                     </span>
+                  {/if}
+                  {#if proc.parent_process_names?.length}
+                    <span class="text-muted-foreground ml-1.5 text-meta">
+                      parent: {proc.parent_process_names.join(', ')}
+                    </span>
+                  {/if}
+                  {#if proc.ownership === 'zenith_child'}
+                    <Badge variant="secondary" class="ml-1.5">Started by Zenith</Badge>
                   {/if}
                 </div>
               </div>

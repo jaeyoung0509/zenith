@@ -509,6 +509,21 @@ const mockStorageApi: StorageManagementApi = {
       scan_id: scanId,
       workspace_count: selectedWorkspaces.length,
     });
+    // A whole-home preview reports the gated Downloads folder the way a macOS
+    // denial does, so the preview exercises the uninspected notice and retry.
+    const uninspected: Required<DeveloperArtifactScanResult>['uninspected'] = wholeHome
+      ? [
+          {
+            path: '/Users/mock/Downloads',
+            name: 'Downloads',
+            reason: 'permission_denied',
+            retryable: true,
+          },
+        ]
+      : [];
+    for (const entry of uninspected) {
+      onEvent({ type: 'uninspected', ...entry });
+    }
     const items: DeveloperArtifact[] = [];
     for (const workspace of selectedWorkspaces) {
       if (mockDeveloperScanCancelled) break;
@@ -550,9 +565,11 @@ const mockStorageApi: StorageManagementApi = {
       items,
       discovered_count: items.length,
       measured_count: items.length,
-      skipped_entries: items.filter((item) => item.status !== 'complete').length,
+      skipped_entries:
+        items.filter((item) => item.status !== 'complete').length + uninspected.length,
       cancelled: mockDeveloperScanCancelled,
       truncated: false,
+      uninspected,
     };
     mockDeveloperScans.set(scanId, result);
     if (result.cancelled) onEvent({ type: 'cancelled', scan_id: scanId });

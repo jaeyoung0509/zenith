@@ -6,6 +6,11 @@ pub enum ZenithError {
     PathNotAllowed(String),
     SymlinkEscape(String),
     ChangedSinceScan(String),
+    /// The path no longer exists. Absence is deliberately not
+    /// [`ZenithError::ChangedSinceScan`]: the caller's postcondition already
+    /// holds, so it is classified as already-absent rather than as a mutation
+    /// failure. Every other failure still fails closed.
+    Missing(String),
     SignatureMismatch(String),
     ToolUnavailable(String),
     ExternalCommandFailed(String),
@@ -22,6 +27,7 @@ impl fmt::Display for ZenithError {
             ZenithError::PathNotAllowed(p) => write!(f, "Path is not allowed: {}", p),
             ZenithError::SymlinkEscape(p) => write!(f, "Symlink escape attempt rejected: {}", p),
             ZenithError::ChangedSinceScan(p) => write!(f, "File changed since scan: {}", p),
+            ZenithError::Missing(p) => write!(f, "Path no longer exists: {}", p),
             ZenithError::SignatureMismatch(id) => write!(f, "Signature mismatch: {}", id),
             ZenithError::ToolUnavailable(t) => write!(f, "Tool unavailable: {}", t),
             ZenithError::ExternalCommandFailed(e) => write!(f, "External command failed: {}", e),

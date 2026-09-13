@@ -1,7 +1,8 @@
 import type { ProcessMemory } from '../models/types';
 
 /**
- * Filter a list of top processes case-insensitively by process/app name or any constituent PID substring.
+ * Filter a list of top processes case-insensitively by process/app name, any constituent
+ * PID substring, or a parent process name (so "everything Warp started" is searchable).
  * Empty queries return the entire list untouched.
  */
 export function filterProcesses(processes: ProcessMemory[], query: string): ProcessMemory[] {
@@ -14,6 +15,9 @@ export function filterProcesses(processes: ProcessMemory[], query: string): Proc
     const pidMatch =
       String(proc.pid).includes(trimmed) ||
       (Array.isArray(proc.pids) && proc.pids.some((p) => String(p).includes(trimmed)));
-    return nameMatch || pidMatch;
+    const parentMatch =
+      Array.isArray(proc.parent_process_names) &&
+      proc.parent_process_names.some((parent) => parent.toLowerCase().includes(trimmed));
+    return nameMatch || pidMatch || parentMatch;
   });
 }

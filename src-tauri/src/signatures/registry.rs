@@ -758,6 +758,38 @@ mod tests {
         );
     }
 
+    /// The shipped signature claims Apple/system/tool-managed namespaces are
+    /// excluded; this pins every namespace it names, so the policy cannot drift
+    /// away from the description the user reads.
+    #[test]
+    fn user_app_caches_exclude_tool_managed_and_apple_namespaces() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let signature = registry.get("system.intensive.user_app_caches").unwrap();
+
+        for prefix in [
+            "com.apple.",
+            "CloudKit",
+            "FamilyCircle",
+            "GeoServices",
+            "HomeKit",
+            "Safari",
+            "ms-playwright",
+        ] {
+            assert!(
+                signature
+                    .exclude_prefixes
+                    .iter()
+                    .any(|entry| entry == prefix),
+                "missing excluded namespace: {prefix}"
+            );
+        }
+
+        assert!(
+            signature.description.contains("ms-playwright"),
+            "the description must name the tool-managed Playwright cache it excludes"
+        );
+    }
+
     #[test]
     fn platform_specific_gpu_signatures_do_not_cross_platforms() {
         let registry = SignatureRegistry::load_embedded().unwrap();

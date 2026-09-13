@@ -721,6 +721,7 @@ export const mockApi = {
             is_selected: true,
             last_modified: null,
             exists: true,
+            quality: 'fresh',
           },
         });
         onEvent({
@@ -739,6 +740,7 @@ export const mockApi = {
             is_selected: true,
             last_modified: null,
             exists: true,
+            quality: 'fresh',
           },
         });
         onEvent({ type: 'CategoryFinished', category: 'ai', bytes: 3.2 * 1024 * 1024 * 1024, item_count: 2 });
@@ -762,6 +764,7 @@ export const mockApi = {
             is_selected: true,
             last_modified: null,
             exists: true,
+            quality: 'fresh',
           },
         });
         onEvent({
@@ -780,6 +783,7 @@ export const mockApi = {
             is_selected: false,
             last_modified: null,
             exists: true,
+            quality: 'fresh',
           },
         });
         onEvent({ type: 'CategoryFinished', category: 'developer', bytes: 5.1 * 1024 * 1024 * 1024, item_count: 2 });
@@ -810,27 +814,58 @@ export const mockApi = {
           is_selected: true,
           last_modified: Math.floor(Date.now() / 1000) - 8 * 86400,
           exists: true,
+          quality: 'fresh',
+        };
+        const blockedItem: ScanItem = {
+          id: 'system.intensive.user_app_caches.mock-bundled',
+          signature_id: 'system.intensive.user_app_caches',
+          name: 'Stale Third-Party Application Cache (Mock Bundled App)',
+          category: 'system',
+          risk: 'safe',
+          path: '~/Library/Caches/com.example.bundled-cache',
+          size: { logical: 198.6 * 1024 * 1024, allocated: 198.6 * 1024 * 1024 },
+          file_count: 0,
+          description: 'Third-party cache inactive for at least 7 days',
+          cache_metadata: {
+            provider: 'Zenith',
+            management_mode: 'zenith',
+            artifact_kind: 'temporary',
+            consequence: '',
+            size_semantics: 'informational',
+            last_used_confidence: 'approximate',
+          },
+          is_selected: false,
+          last_modified: Math.floor(Date.now() / 1000) - 9 * 86400,
+          exists: true,
+          quality: 'unavailable',
+          incomplete_reason:
+            'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
+          skipped_entry_count: 1,
         };
         const intensiveCategory: ScanResult['categories'][number] = {
           category: 'system',
           display_name: 'System',
-          items: [intensiveItem],
+          items: [intensiveItem, blockedItem],
+          // The uninspectable item contributes no cleanable byte: totals and
+          // risk buckets come from the same predicate the UI selects with.
           total_bytes: intensiveBytes,
           safe_bytes: intensiveBytes,
           rebuild_bytes: 0,
           manual_bytes: 0,
-          skipped_entry_count: 0,
-          incomplete_item_count: 0,
+          skipped_entry_count: 1,
+          incomplete_item_count: 1,
+          quality: 'partial',
         };
 
         if (intensiveCleanup) {
           onEvent({ type: 'CategoryStarted', category: 'system' });
           onEvent({ type: 'ItemFound', item: intensiveItem });
+          onEvent({ type: 'ItemFound', item: blockedItem });
           onEvent({
             type: 'CategoryFinished',
             category: 'system',
             bytes: intensiveBytes,
-            item_count: 1,
+            item_count: 2,
           });
         }
 
@@ -857,6 +892,7 @@ export const mockApi = {
                   is_selected: true,
                   last_modified: null,
                   exists: true,
+                  quality: 'fresh',
                 },
                 {
                   id: 'ai.claude.logs',
@@ -871,6 +907,7 @@ export const mockApi = {
                   is_selected: true,
                   last_modified: null,
                   exists: true,
+                  quality: 'fresh',
                 },
               ],
               total_bytes: 3.2 * 1024 * 1024 * 1024,
@@ -879,6 +916,7 @@ export const mockApi = {
               manual_bytes: 0,
               skipped_entry_count: 0,
               incomplete_item_count: 0,
+              quality: 'fresh',
             },
             {
               category: 'developer',
@@ -897,6 +935,7 @@ export const mockApi = {
                   is_selected: true,
                   last_modified: null,
                   exists: true,
+                  quality: 'fresh',
                 },
                 {
                   id: 'dev.cargo.registry.cache',
@@ -911,6 +950,7 @@ export const mockApi = {
                   is_selected: false,
                   last_modified: null,
                   exists: true,
+                  quality: 'fresh',
                 },
               ],
               total_bytes: 5.1 * 1024 * 1024 * 1024,
@@ -919,6 +959,7 @@ export const mockApi = {
               manual_bytes: 0,
               skipped_entry_count: 0,
               incomplete_item_count: 0,
+              quality: 'fresh',
             },
             ...(intensiveCleanup ? [intensiveCategory] : []),
           ],
@@ -926,8 +967,17 @@ export const mockApi = {
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
-          skipped_entry_count: 0,
-          incomplete_item_count: 0,
+          skipped_entry_count: intensiveCleanup ? 1 : 0,
+          incomplete_item_count: intensiveCleanup ? 1 : 0,
+          // The real response always states the scan's observation quality and
+          // the durable reasons behind it; the preview states them too so a
+          // partial scan is presented the same way it is natively.
+          quality: intensiveCleanup ? 'partial' : 'fresh',
+          incomplete_reasons: intensiveCleanup
+            ? [
+                'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
+              ]
+            : [],
         };
 
         lastMockScan = result;
