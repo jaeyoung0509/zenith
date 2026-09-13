@@ -16,6 +16,7 @@ import type {
   TrashPlanPreview,
   TrashResult,
 } from '../models/types';
+import { isSelectedAppTrashLowerBound } from '../utils/storageManagement';
 type CommandResult<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
 
 async function unwrap<T, E>(promise: Promise<CommandResult<T, E>>): Promise<T> {
@@ -489,6 +490,7 @@ const mockStorageApi: StorageManagementApi = {
       logical_size: selected.reduce((sum, item) => sum + item.logical_size, 0),
       allocated_size: selected.reduce((sum, item) => sum + item.allocated_size, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      size_is_lower_bound: false,
     };
     mockPlans.set(planId, { preview, itemIds: selected.map((item) => item.id) });
     return preview;
@@ -632,6 +634,7 @@ const mockStorageApi: StorageManagementApi = {
       logical_size: selected.reduce((sum, item) => sum + item.logical_bytes, 0),
       allocated_size: selected.reduce((sum, item) => sum + item.allocated_bytes, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      size_is_lower_bound: selected.some((item) => item.status === 'measurement_incomplete'),
     };
     mockPlans.set(planId, { preview, itemIds: selected.map((item) => item.id) });
     return preview;
@@ -670,6 +673,7 @@ const mockStorageApi: StorageManagementApi = {
         inspection.app.allocated_size +
         selectedRelated.reduce((sum, item) => sum + item.allocated_size, 0),
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      size_is_lower_bound: isSelectedAppTrashLowerBound(inspection, selectedRelatedIds),
     };
     mockPlans.set(planId, {
       preview,
@@ -692,6 +696,7 @@ const mockStorageApi: StorageManagementApi = {
         success: true,
         message: 'Moved to Trash',
       })),
+      size_is_lower_bound: plan.preview.size_is_lower_bound ?? false,
     };
   },
 };

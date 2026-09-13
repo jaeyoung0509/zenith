@@ -6,11 +6,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+const MAX_INCOMPLETE_REASONS: usize = 32;
+
 #[derive(Default)]
 pub struct ModelDiscoverySink {
     pub items: Vec<LocalModelItem>,
     pub skipped_entries: u64,
     pub incomplete_reasons: Vec<String>,
+}
+
+impl ModelDiscoverySink {
+    pub fn record_failure(&mut self, reason: String) {
+        self.record_skipped(1, Some(reason));
+    }
+
+    pub fn record_skipped(&mut self, skipped: u64, reason: Option<String>) {
+        self.skipped_entries = self.skipped_entries.saturating_add(skipped);
+        if let Some(reason) = reason {
+            if self.incomplete_reasons.len() < MAX_INCOMPLETE_REASONS {
+                self.incomplete_reasons.push(reason);
+            }
+        }
+    }
 }
 
 enum OllamaSizeObservation {
@@ -21,10 +38,46 @@ enum OllamaSizeObservation {
 pub struct LocalModelScanner;
 
 impl LocalModelScanner {
-    /// Resolves one model search root through the environment's own path rules
-    /// and keeps it only when the stated machine actually has that directory.
-    fn resolve_root(pattern: &str, environment: &PlatformEnvironment) -> Option<PathBuf> {
-        SignatureLoader::expand_path(pattern, environment).filter(|root| root.exists())
+    /// Resolves one model search root through the environment's own path rules.
+    /// Distinguishes normal absence (NotFound) from access/permission errors and symlinks,
+    /// recording failures into the discovery sink so partial/unavailable observation is preserved.
+    fn resolve_root(
+        pattern: &str,
+        environment: &PlatformEnvironment,
+        provider_name: &str,
+        sink: &mut ModelDiscoverySink,
+    ) -> Option<PathBuf> {
+        let root = SignatureLoader::expand_path(pattern, environment)?;
+        match fs::symlink_metadata(&root) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() || crate::safety::SymlinkGuard::is_symlink(&root) {
+                    sink.record_failure(format!(
+                        "{provider_name} root {} is a symlink and was excluded for safety",
+                        root.display()
+                    ));
+                    return None;
+                }
+                if !meta.is_dir() {
+                    sink.record_failure(format!(
+                        "{provider_name} root {} is not a directory",
+                        root.display()
+                    ));
+                    return None;
+                }
+                Some(root)
+            }
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    None
+                } else {
+                    sink.record_failure(format!(
+                        "Could not access {provider_name} root {}: {err}",
+                        root.display()
+                    ));
+                    None
+                }
+            }
+        }
     }
 
     /// Discovers all local models across Ollama, HuggingFace Hub, LM Studio, and Apple MLX.
@@ -80,7 +133,12 @@ impl LocalModelScanner {
     }
 
     pub fn scan_ollama_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
-        let manifests_root = match Self::resolve_root("~/.ollama/models/manifests", environment) {
+        let manifests_root = match Self::resolve_root(
+            "~/.ollama/models/manifests",
+            environment,
+            "Ollama",
+            sink,
+        ) {
             Some(root) => root,
             None => return,
         };
@@ -89,8 +147,7 @@ impl LocalModelScanner {
         let registries = match fs::read_dir(&manifests_root) {
             Ok(r) => r,
             Err(e) => {
-                sink.skipped_entries += 1;
-                sink.incomplete_reasons.push(format!(
+                sink.record_failure(format!(
                     "Could not read Ollama manifests directory {}: {e}",
                     manifests_root.display()
                 ));
@@ -102,9 +159,7 @@ impl LocalModelScanner {
             let reg = match reg {
                 Ok(r) => r,
                 Err(e) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons
-                        .push(format!("Could not read Ollama registry entry: {e}"));
+                    sink.record_failure(format!("Could not read Ollama registry entry: {e}"));
                     continue;
                 }
             };
@@ -114,8 +169,7 @@ impl LocalModelScanner {
                 Ok(m) if !m.is_dir() => continue,
                 Ok(_) => {}
                 Err(e) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read metadata for {}: {e}",
                         reg_path.display()
                     ));
@@ -126,8 +180,7 @@ impl LocalModelScanner {
             let namespaces = match fs::read_dir(&reg_path) {
                 Ok(ns) => ns,
                 Err(e) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read Ollama namespace directory {}: {e}",
                         reg_path.display()
                     ));
@@ -139,9 +192,7 @@ impl LocalModelScanner {
                 let ns = match ns {
                     Ok(n) => n,
                     Err(e) => {
-                        sink.skipped_entries += 1;
-                        sink.incomplete_reasons
-                            .push(format!("Could not read Ollama namespace entry: {e}"));
+                        sink.record_failure(format!("Could not read Ollama namespace entry: {e}"));
                         continue;
                     }
                 };
@@ -151,8 +202,7 @@ impl LocalModelScanner {
                     Ok(m) if !m.is_dir() => continue,
                     Ok(_) => {}
                     Err(e) => {
-                        sink.skipped_entries += 1;
-                        sink.incomplete_reasons.push(format!(
+                        sink.record_failure(format!(
                             "Could not read metadata for {}: {e}",
                             ns_path.display()
                         ));
@@ -163,8 +213,7 @@ impl LocalModelScanner {
                 let model_dirs = match fs::read_dir(&ns_path) {
                     Ok(md) => md,
                     Err(e) => {
-                        sink.skipped_entries += 1;
-                        sink.incomplete_reasons.push(format!(
+                        sink.record_failure(format!(
                             "Could not read Ollama model directory {}: {e}",
                             ns_path.display()
                         ));
@@ -176,9 +225,7 @@ impl LocalModelScanner {
                     let md = match md {
                         Ok(m) => m,
                         Err(e) => {
-                            sink.skipped_entries += 1;
-                            sink.incomplete_reasons
-                                .push(format!("Could not read Ollama model entry: {e}"));
+                            sink.record_failure(format!("Could not read Ollama model entry: {e}"));
                             continue;
                         }
                     };
@@ -188,8 +235,7 @@ impl LocalModelScanner {
                         Ok(m) if !m.is_dir() => continue,
                         Ok(_) => {}
                         Err(e) => {
-                            sink.skipped_entries += 1;
-                            sink.incomplete_reasons.push(format!(
+                            sink.record_failure(format!(
                                 "Could not read metadata for {}: {e}",
                                 md_path.display()
                             ));
@@ -201,8 +247,7 @@ impl LocalModelScanner {
                     let tags = match fs::read_dir(&md_path) {
                         Ok(t) => t,
                         Err(e) => {
-                            sink.skipped_entries += 1;
-                            sink.incomplete_reasons.push(format!(
+                            sink.record_failure(format!(
                                 "Could not read Ollama tags directory {}: {e}",
                                 md_path.display()
                             ));
@@ -214,9 +259,7 @@ impl LocalModelScanner {
                         let tag = match tag {
                             Ok(t) => t,
                             Err(e) => {
-                                sink.skipped_entries += 1;
-                                sink.incomplete_reasons
-                                    .push(format!("Could not read Ollama tag entry: {e}"));
+                                sink.record_failure(format!("Could not read Ollama tag entry: {e}"));
                                 continue;
                             }
                         };
@@ -225,8 +268,7 @@ impl LocalModelScanner {
                             Ok(m) if m.file_type().is_symlink() => continue,
                             Ok(_) => {}
                             Err(e) => {
-                                sink.skipped_entries += 1;
-                                sink.incomplete_reasons.push(format!(
+                                sink.record_failure(format!(
                                     "Could not read metadata for {}: {e}",
                                     path.display()
                                 ));
@@ -245,8 +287,7 @@ impl LocalModelScanner {
                                     (size, ObservationQuality::Fresh, None, 0)
                                 }
                                 OllamaSizeObservation::Unavailable(reason) => {
-                                    sink.skipped_entries += 1;
-                                    sink.incomplete_reasons.push(reason.clone());
+                                    sink.record_failure(reason.clone());
                                     (0, ObservationQuality::Unavailable, Some(reason), 1)
                                 }
                             };
@@ -322,7 +363,12 @@ impl LocalModelScanner {
 
     /// Scans HuggingFace Hub snapshots.
     pub fn scan_huggingface_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
-        let hf_root = match Self::resolve_root("~/.cache/huggingface/hub", environment) {
+        let hf_root = match Self::resolve_root(
+            "~/.cache/huggingface/hub",
+            environment,
+            "HuggingFace",
+            sink,
+        ) {
             Some(root) => root,
             None => return,
         };
@@ -330,8 +376,7 @@ impl LocalModelScanner {
         let entries = match fs::read_dir(&hf_root) {
             Ok(e) => e,
             Err(err) => {
-                sink.skipped_entries += 1;
-                sink.incomplete_reasons.push(format!(
+                sink.record_failure(format!(
                     "Could not read HuggingFace hub root {}: {err}",
                     hf_root.display()
                 ));
@@ -343,8 +388,7 @@ impl LocalModelScanner {
             let entry = match entry {
                 Ok(e) => e,
                 Err(err) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read HuggingFace hub entry in {}: {err}",
                         hf_root.display()
                     ));
@@ -353,8 +397,30 @@ impl LocalModelScanner {
             };
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("models--") {
-                let clean_name = name.trim_start_matches("models--").replace("--", "/");
                 let path = entry.path();
+                match fs::symlink_metadata(&path) {
+                    Ok(m) => {
+                        if m.file_type().is_symlink()
+                            || crate::safety::SymlinkGuard::is_symlink(&path)
+                        {
+                            // Deliberately exclude symlinked model entries for safety
+                            continue;
+                        }
+                        if !m.is_dir() {
+                            continue;
+                        }
+                    }
+                    Err(err) => {
+                        if err.kind() != std::io::ErrorKind::NotFound {
+                            sink.record_failure(format!(
+                                "Could not read metadata for HuggingFace model entry {}: {err}",
+                                path.display()
+                            ));
+                        }
+                        continue;
+                    }
+                }
+                let clean_name = name.trim_start_matches("models--").replace("--", "/");
                 let measurement = SizeCalculator::measure_path_logged(&path, &[], environment);
                 let quality = if measurement.complete && measurement.skipped_entries == 0 {
                     ObservationQuality::Fresh
@@ -364,12 +430,10 @@ impl LocalModelScanner {
                     ObservationQuality::Unavailable
                 };
                 if quality != ObservationQuality::Fresh {
-                    sink.skipped_entries = sink
-                        .skipped_entries
-                        .saturating_add(measurement.skipped_entries.max(1));
-                    if let Some(reason) = &measurement.incomplete_reason {
-                        sink.incomplete_reasons.push(reason.clone());
-                    }
+                    sink.record_skipped(
+                        measurement.skipped_entries.max(1),
+                        measurement.incomplete_reason.clone(),
+                    );
                 }
                 let last_modified = fs::metadata(&path)
                     .ok()
@@ -397,7 +461,12 @@ impl LocalModelScanner {
 
     /// Scans LM Studio downloaded models directory.
     pub fn scan_lmstudio_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
-        let lm_root = match Self::resolve_root("~/.cache/lm-studio/models", environment) {
+        let lm_root = match Self::resolve_root(
+            "~/.cache/lm-studio/models",
+            environment,
+            "LM Studio",
+            sink,
+        ) {
             Some(root) => root,
             None => return,
         };
@@ -407,7 +476,7 @@ impl LocalModelScanner {
 
     /// Scans MLX model weights directory.
     pub fn scan_mlx_into(environment: &PlatformEnvironment, sink: &mut ModelDiscoverySink) {
-        let mlx_root = match Self::resolve_root("~/.cache/mlx", environment) {
+        let mlx_root = match Self::resolve_root("~/.cache/mlx", environment, "Apple MLX", sink) {
             Some(root) => root,
             None => return,
         };
@@ -415,8 +484,7 @@ impl LocalModelScanner {
         let entries = match fs::read_dir(&mlx_root) {
             Ok(e) => e,
             Err(err) => {
-                sink.skipped_entries += 1;
-                sink.incomplete_reasons.push(format!(
+                sink.record_failure(format!(
                     "Could not read Apple MLX root {}: {err}",
                     mlx_root.display()
                 ));
@@ -428,8 +496,7 @@ impl LocalModelScanner {
             let entry = match entry {
                 Ok(e) => e,
                 Err(err) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read Apple MLX entry in {}: {err}",
                         mlx_root.display()
                     ));
@@ -440,15 +507,14 @@ impl LocalModelScanner {
             let meta = match fs::symlink_metadata(&path) {
                 Ok(m) => m,
                 Err(err) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read metadata for {}: {err}",
                         path.display()
                     ));
                     continue;
                 }
             };
-            if meta.file_type().is_symlink() {
+            if meta.file_type().is_symlink() || crate::safety::SymlinkGuard::is_symlink(&path) {
                 continue;
             }
 
@@ -463,12 +529,10 @@ impl LocalModelScanner {
                     ObservationQuality::Unavailable
                 };
                 if quality != ObservationQuality::Fresh {
-                    sink.skipped_entries = sink
-                        .skipped_entries
-                        .saturating_add(measurement.skipped_entries.max(1));
-                    if let Some(reason) = &measurement.incomplete_reason {
-                        sink.incomplete_reasons.push(reason.clone());
-                    }
+                    sink.record_skipped(
+                        measurement.skipped_entries.max(1),
+                        measurement.incomplete_reason.clone(),
+                    );
                 }
                 let last_modified = meta
                     .modified()
@@ -504,8 +568,7 @@ impl LocalModelScanner {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(err) => {
-                sink.skipped_entries += 1;
-                sink.incomplete_reasons.push(format!(
+                sink.record_failure(format!(
                     "Could not read LM Studio directory {}: {err}",
                     dir.display()
                 ));
@@ -517,8 +580,7 @@ impl LocalModelScanner {
             let entry = match entry {
                 Ok(e) => e,
                 Err(err) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read LM Studio entry in {}: {err}",
                         dir.display()
                     ));
@@ -529,8 +591,7 @@ impl LocalModelScanner {
             let meta = match fs::symlink_metadata(&path) {
                 Ok(m) => m,
                 Err(err) => {
-                    sink.skipped_entries += 1;
-                    sink.incomplete_reasons.push(format!(
+                    sink.record_failure(format!(
                         "Could not read metadata for {}: {err}",
                         path.display()
                     ));
@@ -539,7 +600,7 @@ impl LocalModelScanner {
             };
 
             // Anti-symlink protection: NEVER follow symlinks in local model scanning
-            if meta.file_type().is_symlink() {
+            if meta.file_type().is_symlink() || crate::safety::SymlinkGuard::is_symlink(&path) {
                 continue;
             }
 
@@ -675,10 +736,18 @@ mod tests {
 
         // The `~` spelling resolves through the stated profile and its own
         // separators, not through whatever home the host happens to have.
+        let mut sink = super::ModelDiscoverySink::default();
         assert!(
-            LocalModelScanner::resolve_root("~/.ollama/models/manifests", &environment).is_none(),
+            LocalModelScanner::resolve_root(
+                "~/.ollama/models/manifests",
+                &environment,
+                "Ollama",
+                &mut sink
+            )
+            .is_none(),
             "the stated machine has no Ollama install"
         );
+        assert_eq!(sink.skipped_entries, 0);
         assert_eq!(
             crate::signatures::SignatureLoader::expand_path(
                 "~/.ollama/models/manifests",
@@ -728,5 +797,54 @@ mod tests {
         assert_eq!(inventory.quality, ObservationQuality::Partial);
         assert!(inventory.skipped_entry_count >= 1);
         assert!(!inventory.incomplete_reasons.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn huggingface_scan_excludes_symlinked_model_entry() {
+        let home = tempfile::tempdir().unwrap();
+        let hf_hub = home.path().join(".cache/huggingface/hub");
+        let target_dir = home.path().join("external_target");
+        std::fs::create_dir_all(&hf_hub).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("model.bin"), b"payload").unwrap();
+
+        let symlink_entry = hf_hub.join("models--fake--escaped");
+        std::os::unix::fs::symlink(&target_dir, &symlink_entry).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let items = LocalModelScanner::scan_huggingface(&environment);
+        assert!(
+            items.is_empty(),
+            "symlinked HuggingFace model entry must be excluded from inventory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_model_root_is_excluded_and_records_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let real_manifests = home.path().join("real_manifests");
+        std::fs::create_dir_all(&real_manifests).unwrap();
+        let symlink_root = home.path().join(".ollama/models/manifests");
+        std::fs::create_dir_all(symlink_root.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_manifests, &symlink_root).unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(home.path());
+        let mut sink = super::ModelDiscoverySink::default();
+        let resolved = LocalModelScanner::resolve_root(
+            "~/.ollama/models/manifests",
+            &environment,
+            "Ollama",
+            &mut sink,
+        );
+        assert!(resolved.is_none());
+        assert_eq!(sink.skipped_entries, 1);
+        assert!(sink
+            .incomplete_reasons
+            .iter()
+            .any(|r| r.contains("is a symlink and was excluded")));
     }
 }

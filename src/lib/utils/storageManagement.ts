@@ -56,6 +56,19 @@ export function selectedAppTrashBytes(
   );
 }
 
+export function isSelectedAppTrashLowerBound(
+  inspection: AppUninstallInspection,
+  selectedRelatedIds: string[]
+): boolean {
+  if (inspection.app.quality !== 'fresh') {
+    return true;
+  }
+  const selected = new Set(selectedRelatedIds);
+  return inspection.related_items.some(
+    (item) => selected.has(item.id) && item.quality !== 'fresh'
+  );
+}
+
 export function largeFileKindLabel(kind: LargeFileKind): string {
   switch (kind) {
     case 'video':

@@ -231,6 +231,8 @@ pub struct TrashPlanPreview {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub expires_at: u64,
+    #[serde(default)]
+    pub size_is_lower_bound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -249,4 +251,6 @@ pub struct TrashResult {
     #[specta(type = u64)]
     pub moved_allocated_size: u64,
     pub items: Vec<TrashItemResult>,
+    #[serde(default)]
+    pub size_is_lower_bound: bool,
 }

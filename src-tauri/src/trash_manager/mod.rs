@@ -23,6 +23,7 @@ pub struct TrashTarget {
     pub identity: FileIdentity,
     pub logical_size: u64,
     pub allocated_size: u64,
+    pub size_is_lower_bound: bool,
     pub scope: TrashScope,
 }
 
@@ -64,6 +65,7 @@ impl TrashPlan {
                 .map(|target| target.allocated_size)
                 .sum(),
             expires_at: self.created_at + PLAN_TTL_SECS,
+            size_is_lower_bound: self.targets.iter().any(|target| target.size_is_lower_bound),
         }
     }
 
@@ -103,6 +105,7 @@ impl TrashPlanner {
                 identity: record.identity.clone(),
                 logical_size: record.item.logical_size,
                 allocated_size: record.item.allocated_size,
+                size_is_lower_bound: false,
                 scope: TrashScope::LargeFile {
                     approved_parent: parent,
                 },
@@ -132,6 +135,7 @@ impl TrashPlanner {
             identity: inspection.app_identity.clone(),
             logical_size: app_size.logical_size,
             allocated_size: app_size.allocated_size,
+            size_is_lower_bound: app_size.quality != crate::models::ObservationQuality::Fresh,
             scope: TrashScope::AppBundle,
         });
 
@@ -149,6 +153,7 @@ impl TrashPlanner {
                 identity: record.identity.clone(),
                 logical_size: record.item.logical_size,
                 allocated_size: record.item.allocated_size,
+                size_is_lower_bound: record.item.quality != crate::models::ObservationQuality::Fresh,
                 scope: TrashScope::AppRelated,
             });
         }
@@ -204,6 +209,8 @@ impl TrashPlanner {
                 identity: record.identity.clone(),
                 logical_size: record.artifact.logical_bytes,
                 allocated_size: record.artifact.allocated_bytes,
+                size_is_lower_bound: record.artifact.status
+                    == DeveloperArtifactStatus::MeasurementIncomplete,
                 scope: TrashScope::DeveloperArtifact {
                     workspace_root: record.workspace_path.clone(),
                     workspace_identity: record.workspace_identity.clone(),
@@ -250,6 +257,7 @@ impl TrashExecutor {
             skipped_count: 0,
             moved_allocated_size: 0,
             items: Vec::new(),
+            size_is_lower_bound: false,
         };
 
         let app_uninstall = matches!(
@@ -274,6 +282,9 @@ impl TrashExecutor {
                     Ok(()) => {
                         if matches!(target.scope, TrashScope::AppBundle) {
                             app_bundle_moved = true;
+                        }
+                        if target.size_is_lower_bound {
+                            result.size_is_lower_bound = true;
                         }
                         result.moved_count += 1;
                         result.moved_allocated_size = result
@@ -1061,6 +1072,7 @@ mod tests {
             identity: FileIdentity::from_path(&file).unwrap(),
             logical_size: 5,
             allocated_size: 5,
+            size_is_lower_bound: false,
             scope: TrashScope::LargeFile {
                 approved_parent: documents.clone(),
             },
@@ -1119,6 +1131,7 @@ mod tests {
                     identity: identity.clone(),
                     logical_size: 0,
                     allocated_size: 0,
+                    size_is_lower_bound: false,
                     scope: TrashScope::AppBundle,
                 },
                 TrashTarget {
@@ -1127,6 +1140,7 @@ mod tests {
                     identity,
                     logical_size: 0,
                     allocated_size: 0,
+                    size_is_lower_bound: false,
                     scope: TrashScope::AppRelated,
                 },
             ],
@@ -1163,6 +1177,7 @@ mod tests {
             identity: FileIdentity::for_test(0, 0, 7, None),
             logical_size: 7,
             allocated_size: 7,
+            size_is_lower_bound: false,
             scope: TrashScope::DeveloperArtifact {
                 workspace_root: workspace,
                 workspace_identity,
@@ -1231,5 +1246,76 @@ mod tests {
             "oldest plan should have been evicted"
         );
         assert!(plans.values().any(|p| p.inventory_id == "inv-64"));
+    }
+
+    #[test]
+    fn trash_plan_preview_and_result_reflect_size_is_lower_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        let documents = home.join("Documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let file1 = documents.join("video1.mov");
+        let file2 = documents.join("video2.mov");
+        std::fs::write(&file1, b"vid1").unwrap();
+        std::fs::write(&file2, b"vid2").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(&home)
+            .with_known_folder(KnownFolder::Documents, documents.clone());
+
+        let plan = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: "test".to_string(),
+            targets: vec![
+                TrashTarget {
+                    item_id: "target1".to_string(),
+                    path: file1.clone(),
+                    identity: FileIdentity::from_path(&file1).unwrap(),
+                    logical_size: 4,
+                    allocated_size: 4,
+                    size_is_lower_bound: false,
+                    scope: TrashScope::LargeFile {
+                        approved_parent: documents.clone(),
+                    },
+                },
+                TrashTarget {
+                    item_id: "target2".to_string(),
+                    path: file2.clone(),
+                    identity: FileIdentity::from_path(&file2).unwrap(),
+                    logical_size: 4,
+                    allocated_size: 4,
+                    size_is_lower_bound: true,
+                    scope: TrashScope::LargeFile {
+                        approved_parent: documents.clone(),
+                    },
+                },
+            ],
+        };
+
+        let preview = plan.preview();
+        assert!(preview.size_is_lower_bound);
+
+        // If only target1 moves:
+        let single_target_plan = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: "test".to_string(),
+            targets: vec![plan.targets[0].clone()],
+        };
+        let res1 = TrashExecutor::execute_with(&environment, single_target_plan, |_| Ok(()));
+        assert!(!res1.size_is_lower_bound);
+        assert_eq!(res1.moved_count, 1);
+
+        // If target2 moves:
+        let lower_target_plan = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: "test".to_string(),
+            targets: vec![plan.targets[1].clone()],
+        };
+        let res2 = TrashExecutor::execute_with(&environment, lower_target_plan, |_| Ok(()));
+        assert!(res2.size_is_lower_bound);
+        assert_eq!(res2.moved_count, 1);
     }
 }

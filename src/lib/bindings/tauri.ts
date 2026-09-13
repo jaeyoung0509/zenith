@@ -2129,6 +2129,7 @@ export type TrashPlanPreview_Deserialize = {
 	logical_size: number,
 	allocated_size: number,
 	expires_at: number,
+	size_is_lower_bound?: boolean,
 };
 
 export type TrashPlanPreview_Serialize = {
@@ -2137,6 +2138,7 @@ export type TrashPlanPreview_Serialize = {
 	logical_size: number,
 	allocated_size: number,
 	expires_at: number,
+	size_is_lower_bound: boolean,
 };
 
 export type TrashResult = TrashResult_Serialize | TrashResult_Deserialize;
@@ -2147,6 +2149,7 @@ export type TrashResult_Deserialize = {
 	skipped_count: number,
 	moved_allocated_size: number,
 	items: TrashItemResult[],
+	size_is_lower_bound?: boolean,
 };
 
 export type TrashResult_Serialize = {
@@ -2155,6 +2158,7 @@ export type TrashResult_Serialize = {
 	skipped_count: number,
 	moved_allocated_size: number,
 	items: TrashItemResult[],
+	size_is_lower_bound: boolean,
 };
 
 export type UsageSummary = UsageSummary_Serialize | UsageSummary_Deserialize;

@@ -713,4 +713,50 @@ fn test_local_model_and_app_inventory_serialization_enforces_safe_integers() {
     };
     let app_error = serde_json::to_string(&unsafe_app).unwrap_err().to_string();
     assert!(app_error.contains("Number.MAX_SAFE_INTEGER"));
+
+    use zenith_lib::models::{TrashPlanPreview, TrashResult};
+
+    let safe_preview = TrashPlanPreview {
+        id: uuid::Uuid::nil(),
+        item_count: 1,
+        logical_size: 100,
+        allocated_size: 1024,
+        expires_at: 5000,
+        size_is_lower_bound: true,
+    };
+    let preview_json = serde_json::to_string(&safe_preview).expect("safe preview serializes");
+    assert!(preview_json.contains("\"size_is_lower_bound\":true"));
+
+    let unsafe_preview = TrashPlanPreview {
+        id: uuid::Uuid::nil(),
+        item_count: 1,
+        logical_size: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        allocated_size: 1024,
+        expires_at: 5000,
+        size_is_lower_bound: false,
+    };
+    let preview_error = serde_json::to_string(&unsafe_preview).unwrap_err().to_string();
+    assert!(preview_error.contains("Number.MAX_SAFE_INTEGER"));
+
+    let safe_result = TrashResult {
+        moved_count: 1,
+        failed_count: 0,
+        skipped_count: 0,
+        moved_allocated_size: 1024,
+        items: vec![],
+        size_is_lower_bound: true,
+    };
+    let result_json = serde_json::to_string(&safe_result).expect("safe result serializes");
+    assert!(result_json.contains("\"size_is_lower_bound\":true"));
+
+    let unsafe_result = TrashResult {
+        moved_count: 1,
+        failed_count: 0,
+        skipped_count: 0,
+        moved_allocated_size: zenith_lib::ipc_numeric::MAX_SAFE_INTEGER + 1,
+        items: vec![],
+        size_is_lower_bound: false,
+    };
+    let result_error = serde_json::to_string(&unsafe_result).unwrap_err().to_string();
+    assert!(result_error.contains("Number.MAX_SAFE_INTEGER"));
 }

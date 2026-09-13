@@ -15,6 +15,7 @@
   import { getVirtualWindow } from '../../lib/utils/virtualList';
   import {
     defaultRelatedIds,
+    isSelectedAppTrashLowerBound,
     selectedAppTrashBytes,
   } from '../../lib/utils/storageManagement';
   import {
@@ -43,23 +44,49 @@
 
   interface Props {
     onBack: () => void;
+    initialApps?: InstalledApp[];
+    initialInventoryQuality?: ObservationQuality;
+    initialSkippedEntryCount?: number;
+    initialIncompleteReasons?: string[];
+    initialInspection?: AppUninstallInspection | null;
+    initialPlan?: TrashPlanPreview | null;
+    initialTrashResult?: TrashResult | null;
   }
 
-  let { onBack }: Props = $props();
+  let {
+    onBack,
+    initialApps = [],
+    initialInventoryQuality = 'fresh',
+    initialSkippedEntryCount = 0,
+    initialIncompleteReasons = [],
+    initialInspection = null,
+    initialPlan = null,
+    initialTrashResult = null,
+  }: Props = $props();
 
-  let apps = $state<InstalledApp[]>([]);
-  let inventoryQuality = $state<ObservationQuality>('fresh');
-  let skippedEntryCount = $state<number>(0);
-  let incompleteReasons = $state<string[]>([]);
+  // svelte-ignore state_referenced_locally
+  let apps = $state<InstalledApp[]>(initialApps);
+  // svelte-ignore state_referenced_locally
+  let inventoryQuality = $state<ObservationQuality>(initialInventoryQuality);
+  // svelte-ignore state_referenced_locally
+  let skippedEntryCount = $state<number>(initialSkippedEntryCount);
+  // svelte-ignore state_referenced_locally
+  let incompleteReasons = $state<string[]>(initialIncompleteReasons);
   let query = $state('');
   let isLoading = $state(false);
   let isInspecting = $state(false);
   let isPreparing = $state(false);
   let isExecuting = $state(false);
-  let inspection = $state<AppUninstallInspection | null>(null);
-  let selectedRelatedIds = $state<string[]>([]);
-  let plan = $state<TrashPlanPreview | null>(null);
-  let trashResult = $state<TrashResult | null>(null);
+  // svelte-ignore state_referenced_locally
+  let inspection = $state<AppUninstallInspection | null>(initialInspection);
+  // svelte-ignore state_referenced_locally
+  let selectedRelatedIds = $state<string[]>(
+    initialInspection ? defaultRelatedIds(initialInspection) : []
+  );
+  // svelte-ignore state_referenced_locally
+  let plan = $state<TrashPlanPreview | null>(initialPlan);
+  // svelte-ignore state_referenced_locally
+  let trashResult = $state<TrashResult | null>(initialTrashResult);
   let error = $state<string | null>(null);
   let revealError = $state<string | null>(null);
 
@@ -117,6 +144,9 @@
 
   let selectedBytes = $derived(
     inspection ? selectedAppTrashBytes(inspection, selectedRelatedIds) : 0
+  );
+  let isSelectedLowerBound = $derived(
+    inspection ? isSelectedAppTrashLowerBound(inspection, selectedRelatedIds) : false
   );
 
   function confidenceLabel(confidence: AppRelatedConfidence): string {
@@ -340,7 +370,7 @@
             · {trashResult.failed_count + trashResult.skipped_count} not moved
           {/if}
         </span>
-        <span class="font-mono text-muted-foreground">{formatBytes(trashResult.moved_allocated_size)}</span>
+        <span class="font-mono text-muted-foreground">{trashResult.size_is_lower_bound ? '≥ ' : ''}{formatBytes(trashResult.moved_allocated_size)}</span>
       </div>
     </Card>
   {/if}
@@ -515,7 +545,7 @@
                     </span>
                   </div>
                   <p class="text-xs text-muted-foreground mt-1">
-                    App bundle plus reviewed data: {plan.item_count} items · {formatBytes(plan.allocated_size)}
+                    App bundle plus reviewed data: {plan.item_count} items · {plan.size_is_lower_bound ? '≥ ' : ''}{formatBytes(plan.allocated_size)}
                   </p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
@@ -545,7 +575,7 @@
               <div>
                 <div class="text-xs font-medium">Ready to review this uninstall?</div>
                 <p class="text-meta text-muted-foreground mt-1">
-                  {formatBytes(selectedBytes)} selected for review. You can adjust related {platformContextStore.appDataLabel} below before creating the one-shot {platformContextStore.trashLabel} plan.
+                  {isSelectedLowerBound ? '≥ ' : ''}{formatBytes(selectedBytes)} selected for review. You can adjust related {platformContextStore.appDataLabel} below before creating the one-shot {platformContextStore.trashLabel} plan.
                 </p>
               </div>
               <Button

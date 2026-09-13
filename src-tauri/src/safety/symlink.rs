@@ -75,15 +75,15 @@ fn windows_root(text: &str) -> String {
 /// so that Windows-shaped paths (including 8.3 alias fallback and reparse points)
 /// can be verified on macOS and Linux runners.
 pub trait SymlinkInspector: Send + Sync {
-    fn is_symlink(&self, path: &Path) -> bool;
+    fn is_symlink(&self, path: &Path) -> std::io::Result<bool>;
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
 }
 
 pub struct NativeSymlinkInspector;
 
 impl SymlinkInspector for NativeSymlinkInspector {
-    fn is_symlink(&self, path: &Path) -> bool {
-        SymlinkGuard::is_symlink(path)
+    fn is_symlink(&self, path: &Path) -> std::io::Result<bool> {
+        SymlinkGuard::is_symlink_metadata(path)
     }
 
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
@@ -94,26 +94,26 @@ impl SymlinkInspector for NativeSymlinkInspector {
 impl SymlinkGuard {
     /// Checks whether the path is a symbolic link or reparse point (junction, mount point) without following it.
     /// Cloud placeholders (OneDrive), deduplication, and WOF compression are treated as regular entries.
+    /// For inspection pipelines that must fail closed on access/permission errors, use `is_symlink_metadata`.
     pub fn is_symlink(path: &Path) -> bool {
-        match fs::symlink_metadata(path) {
-            Ok(meta) => {
-                if meta.file_type().is_symlink() {
-                    return true;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    if meta.file_attributes() & 0x400 != 0 {
-                        // This API cannot return an error; if the reparse tag
-                        // cannot be classified, treat it as a potential escape
-                        // rather than as an ordinary entry.
-                        return classify_name_surrogate_reparse_point(path).unwrap_or(true);
-                    }
-                }
-                false
-            }
-            Err(_) => false,
+        Self::is_symlink_metadata(path).unwrap_or(false)
+    }
+
+    /// Reads metadata to check whether the path is a symbolic link or name-surrogate reparse point.
+    /// Preserves I/O and permission errors so verification paths can fail closed.
+    pub fn is_symlink_metadata(path: &Path) -> std::io::Result<bool> {
+        let meta = fs::symlink_metadata(path)?;
+        if meta.file_type().is_symlink() {
+            return Ok(true);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 {
+                return classify_name_surrogate_reparse_point(path);
+            }
+        }
+        Ok(false)
     }
 
     /// Resolves the trusted base anchor for a given target path.
@@ -216,9 +216,21 @@ impl SymlinkGuard {
                             )?;
                         }
                         let canonical_target =
-                            inspector.canonicalize(target).map_err(|_| outside_base())?;
+                            inspector.canonicalize(target).map_err(|err| match err.kind() {
+                                std::io::ErrorKind::PermissionDenied => {
+                                    ZenithError::PermissionDenied(target.display().to_string())
+                                }
+                                std::io::ErrorKind::NotFound => outside_base(),
+                                _ => ZenithError::Io(err.to_string()),
+                            })?;
                         let canonical_base =
-                            inspector.canonicalize(base).map_err(|_| outside_base())?;
+                            inspector.canonicalize(base).map_err(|err| match err.kind() {
+                                std::io::ErrorKind::PermissionDenied => {
+                                    ZenithError::PermissionDenied(base.display().to_string())
+                                }
+                                std::io::ErrorKind::NotFound => outside_base(),
+                                _ => ZenithError::Io(err.to_string()),
+                            })?;
                         let norm_canonical_base =
                             path_algebra::normalize(&canonical_base.to_string_lossy(), flavor);
                         let norm_canonical_target =
@@ -243,11 +255,25 @@ impl SymlinkGuard {
             }
             current_text.push_str(&component);
             let current = PathBuf::from(&current_text);
-            if inspector.is_symlink(&current) {
-                return Err(ZenithError::SymlinkEscape(format!(
-                    "Path component is a symlink or reparse escape: {}",
-                    current.display()
-                )));
+            match inspector.is_symlink(&current) {
+                Ok(true) => {
+                    return Err(ZenithError::SymlinkEscape(format!(
+                        "Path component is a symlink or reparse escape: {}",
+                        current.display()
+                    )));
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    return Err(match err.kind() {
+                        std::io::ErrorKind::PermissionDenied => {
+                            ZenithError::PermissionDenied(current.display().to_string())
+                        }
+                        std::io::ErrorKind::NotFound => {
+                            ZenithError::Missing(current.display().to_string())
+                        }
+                        _ => ZenithError::Io(err.to_string()),
+                    });
+                }
             }
         }
 
@@ -679,15 +705,23 @@ mod tests {
     #[derive(Default)]
     struct TestSymlinkInspector {
         symlinks: std::collections::HashSet<PathBuf>,
+        errors: std::collections::HashMap<PathBuf, std::io::ErrorKind>,
         canonical_map: std::collections::HashMap<PathBuf, PathBuf>,
+        canonical_errors: std::collections::HashMap<PathBuf, std::io::ErrorKind>,
     }
 
     impl SymlinkInspector for TestSymlinkInspector {
-        fn is_symlink(&self, path: &Path) -> bool {
-            self.symlinks.contains(path)
+        fn is_symlink(&self, path: &Path) -> std::io::Result<bool> {
+            if let Some(kind) = self.errors.get(path) {
+                return Err(std::io::Error::new(*kind, "simulated metadata error"));
+            }
+            Ok(self.symlinks.contains(path))
         }
 
         fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+            if let Some(kind) = self.canonical_errors.get(path) {
+                return Err(std::io::Error::new(*kind, "simulated canonical error"));
+            }
             if let Some(canonical) = self.canonical_map.get(path) {
                 Ok(canonical.clone())
             } else {
@@ -724,6 +758,28 @@ mod tests {
         assert!(
             matches!(err, ZenithError::SymlinkEscape(_)),
             "must reject component symlink: {err}"
+        );
+    }
+
+    #[test]
+    fn symlink_guard_fails_closed_when_component_metadata_inspection_fails_with_permission_denied() {
+        let environment = crate::platform::PlatformEnvironment::simulated(
+            crate::platform::path_algebra::PathFlavor::Windows,
+        );
+        let base = Path::new(r"C:\Users\Tester\AppData\Local\Temp");
+        let target = Path::new(r"C:\Users\Tester\AppData\Local\Temp\npm_cache\payload.bin");
+
+        let mut inspector = TestSymlinkInspector::default();
+        inspector.errors.insert(
+            PathBuf::from(r"C:\Users\Tester\AppData\Local\Temp\npm_cache"),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let err =
+            SymlinkGuard::validate_components_between_with(target, base, &environment, &inspector)
+                .unwrap_err();
+        assert!(
+            matches!(err, ZenithError::PermissionDenied(_)),
+            "must fail closed as PermissionDenied, not SymlinkEscape or success: {err:?}"
         );
     }
 
@@ -771,6 +827,32 @@ mod tests {
         assert!(
             matches!(err, ZenithError::SymlinkEscape(_)),
             "junction in alias ancestor must fail closed: {err}"
+        );
+    }
+
+    #[test]
+    fn windows_8_3_alias_canonicalization_failure_preserves_permission_denied() {
+        let environment = crate::platform::PlatformEnvironment::simulated(
+            crate::platform::path_algebra::PathFlavor::Windows,
+        );
+        let base_alias = Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp");
+        let target = Path::new(r"C:\Users\runneradmin\AppData\Local\Temp\cache\item.bin");
+
+        let mut inspector = TestSymlinkInspector::default();
+        inspector.canonical_errors.insert(
+            base_alias.to_path_buf(),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let err = SymlinkGuard::validate_components_between_with(
+            target,
+            base_alias,
+            &environment,
+            &inspector,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ZenithError::PermissionDenied(_)),
+            "canonicalize PermissionDenied must fail closed as PermissionDenied: {err:?}"
         );
     }
 }
