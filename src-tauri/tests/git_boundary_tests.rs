@@ -16,7 +16,7 @@ use std::process::Command;
 use std::time::Duration;
 
 /// The one module allowed to construct a `git` command.
-const CHOKEPOINT: &str = "src/tooling.rs";
+const CHOKEPOINT: &str = "src-tauri/src/tooling.rs";
 
 /// Constructor spellings that would bypass the neutralized configuration.
 const BYPASSES: [&str; 3] = [
@@ -48,16 +48,22 @@ fn rust_sources(directory: &Path, files: &mut Vec<PathBuf>) {
 
 /// The production half of a source file: everything before its `#[cfg(test)]`
 /// module, so a fixture helper in a test may build its own `git` command.
-fn production_source(text: &str) -> &str {
-    match text.find("#[cfg(test)]\nmod tests") {
-        Some(index) => &text[..index],
-        None => text,
+///
+/// Line endings differ per checkout, so the marker is matched after normalizing
+/// them: a scan that quietly matched nothing on a Windows checkout would report
+/// coverage it does not have.
+fn production_source(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n");
+    match normalized.find("#[cfg(test)]\nmod tests") {
+        Some(index) => normalized[..index].to_string(),
+        None => normalized,
     }
 }
 
 #[test]
 fn every_git_invocation_goes_through_the_neutralizing_constructor() {
     let workspace = workspace_root();
+    let chokepoint = workspace.join(CHOKEPOINT);
     let mut sources = Vec::new();
     for directory in [workspace.join("src-tauri/src"), workspace.join("crates")] {
         rust_sources(&directory, &mut sources);
@@ -70,14 +76,10 @@ fn every_git_invocation_goes_through_the_neutralizing_constructor() {
 
     let mut offenders = Vec::new();
     for source in &sources {
-        let relative = source
-            .strip_prefix(&workspace)
-            .unwrap_or(source)
-            .to_string_lossy()
-            .to_string();
-        if relative.ends_with(CHOKEPOINT) {
+        if is_chokepoint(source, &workspace) {
             continue;
         }
+        let relative = source.strip_prefix(&workspace).unwrap_or(source).display();
         let text = std::fs::read_to_string(source).expect("a Rust source is readable");
         let production = production_source(&text);
         for bypass in BYPASSES {
@@ -93,12 +95,51 @@ fn every_git_invocation_goes_through_the_neutralizing_constructor() {
 
     // The constructor itself is the other half: it must still be the place the
     // neutralization lives, so a rename cannot silently empty this guard.
-    let chokepoint = std::fs::read_to_string(workspace.join("src-tauri").join(CHOKEPOINT))
-        .expect("the tooling module is readable");
+    let tooling = std::fs::read_to_string(&chokepoint).expect("the tooling module is readable");
     assert!(
-        chokepoint.contains("pub fn git_command("),
+        tooling.contains("pub fn git_command("),
         "the chokepoint constructor is missing from {CHOKEPOINT}"
     );
+}
+
+/// Whether a scanned file is the module allowed to build a `git` command.
+///
+/// Compared as paths, not as a string suffix: on Windows the same file can be
+/// spelled with either separator, and a suffix comparison that assumes one of
+/// them stops excluding the chokepoint without failing anything.
+fn is_chokepoint(source: &Path, workspace: &Path) -> bool {
+    source == workspace.join(CHOKEPOINT)
+}
+
+#[test]
+fn the_scan_reads_a_windows_shaped_checkout_the_same_way() {
+    // Line endings: a Windows checkout has CRLF, and the test-module marker must
+    // still be found, or a fixture helper's own `git` command is reported as a
+    // production violation.
+    let crlf = "#[cfg(test)]\r\nmod tests {\r\n    Command::new(\"git\");\r\n}\r\n";
+    assert!(
+        !production_source(crlf).contains("Command::new"),
+        "a test module must not be read as production code"
+    );
+
+    // Separators: the constant spells the module with `/`, and on Windows that
+    // joins into a mixed-separator path for the same file the walker reports.
+    let workspace = workspace_root();
+    assert!(is_chokepoint(&workspace.join(CHOKEPOINT), &workspace));
+    assert!(
+        is_chokepoint(
+            &workspace.join("src-tauri").join("src").join("tooling.rs"),
+            &workspace
+        ),
+        "the chokepoint must be recognized however its path was built"
+    );
+    assert!(!is_chokepoint(
+        &workspace
+            .join("src-tauri")
+            .join("src")
+            .join("tooling_two.rs"),
+        &workspace
+    ));
 }
 
 /// A repository that names programs in the configuration keys Git executes.
