@@ -142,6 +142,16 @@ fn the_scan_reads_a_windows_shaped_checkout_the_same_way() {
     ));
 }
 
+/// Which attribute source a poisoned fixture uses.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum AttributeSource {
+    /// `.gitattributes`, read from the tree the command line pins.
+    Tracked,
+    /// `$GIT_DIR/info/attributes`, which outranks every other source and has no
+    /// command-line replacement.
+    Untracked,
+}
+
 /// A repository that names programs in the configuration keys Git executes.
 struct PoisonedRepository {
     _temp: tempfile::TempDir,
@@ -156,6 +166,13 @@ struct PoisonedRepository {
 
 impl PoisonedRepository {
     fn create() -> Self {
+        Self::create_with_attribute_source(AttributeSource::Tracked)
+    }
+
+    /// `Tracked` poisons `.gitattributes`, which the command line can pin;
+    /// `Untracked` poisons `$GIT_DIR/info/attributes`, which no command-line
+    /// configuration replaces, so the invocation must be refused instead.
+    fn create_with_attribute_source(source: AttributeSource) -> Self {
         let temp = tempfile::tempdir().expect("a temporary directory is available");
         let root = temp.path().join("workspace");
         let missing = temp.path().join("no-such-program");
@@ -181,9 +198,20 @@ impl PoisonedRepository {
         git(&["config", "user.email", "fixture@example.invalid"]);
         git(&["config", "user.name", "Fixture"]);
         std::fs::write(root.join("tracked.txt"), "baseline content\n").expect("fixture file");
-        std::fs::write(root.join(".gitattributes"), "* filter=probe\n").expect("fixture file");
+        if source == AttributeSource::Tracked {
+            std::fs::write(root.join(".gitattributes"), "* filter=probe\n").expect("fixture file");
+        }
         git(&["add", "-A"]);
         git(&["commit", "-qm", "initial"]);
+
+        if source == AttributeSource::Untracked {
+            // Written after the commit: it is not a tracked file, and the fixture
+            // needs a repository that was created legitimately and configured
+            // afterwards.
+            std::fs::create_dir_all(root.join(".git/info")).expect("fixture directory");
+            std::fs::write(root.join(".git/info/attributes"), "* filter=probe\n")
+                .expect("fixture file");
+        }
 
         // The poisoned configuration goes in after the commit: a clean filter
         // is also applied by `git add`, and the fixture needs a repository that
@@ -215,6 +243,32 @@ impl PoisonedRepository {
         }
     }
 
+    fn configure(&self, entry: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .arg("config")
+            .args(entry)
+            .output()
+            .expect("git is installed on this host");
+        assert!(
+            output.status.success(),
+            "fixture `git config {entry:?}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Removes one poisoned key: a `core.fsmonitor` that cannot start makes Git
+    /// report a failure before it renders content, which would hide the program
+    /// a different test is about.
+    fn unset(&self, key: &str) {
+        let _ = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["config", "--unset", key])
+            .output();
+    }
+
     /// A `git` invocation that does not go through the neutralized constructor,
     /// used as the fixture's positive control.
     fn unguarded(&self, args: &[&str]) -> std::process::Output {
@@ -227,7 +281,8 @@ impl PoisonedRepository {
     }
 
     fn guarded(&self, args: &[&str]) -> std::process::Output {
-        let mut command = zenith_lib::tooling::git_command(&self.root);
+        let mut command = zenith_lib::tooling::git_command(&self.root)
+            .expect("the fixture repository is not refused");
         command.args(args);
         zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(10))
             .expect("the neutralized invocation completes")
@@ -314,4 +369,64 @@ fn a_repository_cannot_name_a_program_that_reading_working_tree_content_runs() {
         "`diff.external` reached the repository's program: {}",
         stderr_of(&unflagged)
     );
+}
+
+#[test]
+fn a_repository_that_carries_info_attributes_is_refused_rather_than_read() {
+    let repository = PoisonedRepository::create_with_attribute_source(AttributeSource::Untracked);
+    let program = repository.filter_program.to_string_lossy().to_string();
+
+    // Positive control: this source outranks the tracked one the command line
+    // pins, so an unguarded invocation reaches the repository's program.
+    let unguarded = repository.unguarded(&["status", "--porcelain=v1", "-z"]);
+    assert!(
+        stderr_of(&unguarded).contains(&program),
+        "the fixture is expected to make git reach the repository's clean filter: {}",
+        stderr_of(&unguarded)
+    );
+
+    // No configuration Zenith can pass replaces that file, so the invocation is
+    // refused instead of run, and the reason names it.
+    let refusal = zenith_lib::tooling::git_inspection_refusal(&repository.root)
+        .expect("a repository carrying info/attributes is refused");
+    assert!(
+        refusal.contains("info") && refusal.contains("attributes"),
+        "the refusal must name the file it refused to read: {refusal}"
+    );
+    let error = zenith_lib::tooling::git_command(&repository.root)
+        .expect_err("the constructor must refuse the repository");
+    assert_eq!(error, refusal);
+}
+
+#[test]
+fn a_repository_cannot_name_a_textconv_program_through_info_attributes() {
+    let repository = PoisonedRepository::create_with_attribute_source(AttributeSource::Untracked);
+    let sentinel = repository
+        .external_diff_program
+        .to_string_lossy()
+        .to_string();
+    std::fs::write(
+        repository.root.join(".git/info/attributes"),
+        "tracked.txt diff=probe\n",
+    )
+    .expect("fixture file");
+    repository.configure(&["diff.probe.textconv", &sentinel]);
+    // A `core.fsmonitor` that cannot start makes Git report a failure before it
+    // renders content, which would hide the program this test is about.
+    repository.unset("core.fsmonitor");
+
+    // Positive control: `--no-ext-diff` does not cover textconv, which Git gates
+    // with its own switch, so an unguarded content diff reaches the program.
+    let unguarded = repository.unguarded(&["diff", "--no-ext-diff", "--no-color"]);
+    assert!(
+        stderr_of(&unguarded).contains(&sentinel),
+        "the fixture is expected to make git reach the repository's textconv program: {}",
+        stderr_of(&unguarded)
+    );
+
+    // The refusal happens before the invocation, so the diff never runs and the
+    // program is never reached.
+    let error = zenith_lib::tooling::git_command(&repository.root)
+        .expect_err("a repository selecting a textconv program is refused");
+    assert!(error.contains("attributes"), "{error}");
 }

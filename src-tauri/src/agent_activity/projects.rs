@@ -1,5 +1,7 @@
 use crate::models::ProjectIdentity;
-use crate::safety::symlink::SymlinkGuard;
+use crate::tooling::{
+    git_directory, git_inspection_refusal, read_capped, CappedRead, GitDirectory,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -9,7 +11,7 @@ use zenith_platform::PlatformEnvironment;
 
 pub fn resolve_project(
     cwd: &Path,
-    environment: &zenith_platform::PlatformEnvironment,
+    environment: &PlatformEnvironment,
 ) -> Option<(PathBuf, ProjectIdentity)> {
     let canonical_cwd = cwd.canonicalize().ok()?;
     if !canonical_cwd.is_dir() {
@@ -30,6 +32,17 @@ pub fn resolve_project(
     }
     let is_repository = matches!(repository, GitDirectory::Resolved { .. });
     let is_worktree = is_repository && marker.is_file();
+    // A repository whose attribute sources cannot be neutralized is still
+    // identified, but no `git` invocation is made in it: the branch is a bounded
+    // file read, and the dirty state stays unread.
+    let inspection_refusal = if is_repository {
+        git_inspection_refusal(&root)
+    } else {
+        None
+    };
+    if let Some(reason) = &inspection_refusal {
+        crate::diagnostics::log_error("project_identity", reason);
+    }
 
     let display_name = root.file_name()?.to_string_lossy().to_string();
     let location_hint =
@@ -53,7 +66,7 @@ pub fn resolve_project(
         _ => (None, false),
     };
 
-    let is_dirty = if is_repository {
+    let is_dirty = if is_repository && inspection_refusal.is_none() {
         check_git_dirty(&root)
     } else {
         false
@@ -112,7 +125,11 @@ fn find_git_root(start: &Path, home: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn check_git_dirty(root: &Path) -> bool {
-    let mut cmd = crate::tooling::git_command(root);
+    let Ok(mut cmd) = crate::tooling::git_command(root) else {
+        // The refusal itself is reported where the project identity is resolved;
+        // here the state is simply not read.
+        return false;
+    };
     cmd.args(["status", "--porcelain=v1", "-z"]);
     if let Ok(output) =
         zenith_platform::subprocess::run_with_timeout(cmd, Duration::from_millis(800))
@@ -124,166 +141,11 @@ fn check_git_dirty(root: &Path) -> bool {
     false
 }
 
-/// Byte cap for the files a repository pointer makes Zenith read: `<root>/.git`
-/// when it is a pointer, and the `HEAD` it resolves to. Both are stated before
-/// the read, following the stat-then-cap convention the tree already uses for
-/// hashed and audited files.
-const MAX_GIT_METADATA_BYTES: u64 = 4_096;
-
-/// Longest branch name returned across IPC. Git refuses to create a ref whose
-/// name does not fit in a single path component, so a longer value is not a ref
-/// name, and truncating it would invent one that never existed.
-const MAX_BRANCH_NAME_BYTES: usize = 255;
-
-/// The git directory that describes a project root.
-enum GitDirectory {
-    /// Usable: `git_dir` holds the `HEAD` this project reads, and `identity` is
-    /// the path hashed into the repository id. The two differ for a linked
-    /// worktree, whose own `HEAD` sits in the repository's git directory.
-    Resolved { git_dir: PathBuf, identity: PathBuf },
-    /// No `.git` entry, or one that names nothing.
-    Absent,
-    /// Present but refused. The reason is reported instead of the state being
-    /// downgraded to "not a repository".
-    Refused(String),
-}
-
-/// Outcome of a capped read: the size is checked before the read, so an
-/// oversized file is refused instead of loaded.
-enum CappedRead {
-    Read(String),
-    Absent,
-    OverCap,
-}
-
-/// Reads one Git metadata file under [`MAX_GIT_METADATA_BYTES`], without
-/// following a link at the path itself.
-fn read_capped(path: &Path) -> CappedRead {
-    let Ok(metadata) = std::fs::symlink_metadata(path) else {
-        return CappedRead::Absent;
-    };
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return CappedRead::Absent;
-    }
-    if metadata.len() > MAX_GIT_METADATA_BYTES {
-        return CappedRead::OverCap;
-    }
-    match std::fs::read_to_string(path) {
-        Ok(contents) => CappedRead::Read(contents),
-        Err(_) => CappedRead::Absent,
-    }
-}
-
-/// The git directory for `root`, contained and bounded.
-///
-/// `.git` may be a *file* holding a `gitdir:` pointer — how a linked worktree
-/// and a submodule record where their git directory actually lives. That is a
-/// second pointer mechanism, and its legitimate target is usually *outside* the
-/// project, so `SymlinkGuard`'s containment rule cannot be the whole decision:
-///
-/// - a target inside the project is validated by `SymlinkGuard`, the guard that
-///   already governs pointer following in this tree;
-/// - a target outside it is accepted only in a shape Git itself writes for a
-///   repository whose git directory lives elsewhere (`worktrees/<name>` and
-///   `modules/<path>`, both beside a real git directory holding a `HEAD`);
-/// - anything else is refused with a reason, because a pointer that merely
-///   leaves the project names a directory with nothing tying it to this
-///   repository.
-///
-/// `root` is workspace content, not a nominated directory: it comes from an
-/// observed agent process working directory.
-fn git_directory(root: &Path, environment: &PlatformEnvironment) -> GitDirectory {
-    let marker = root.join(".git");
-    match std::fs::symlink_metadata(&marker) {
-        Ok(metadata) if metadata.is_dir() => GitDirectory::resolved_whole(marker),
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            // A link is not followed on faith: its target is judged by the same
-            // rules as a `gitdir:` pointer.
-            match std::fs::canonicalize(&marker) {
-                Ok(canonical)
-                    if SymlinkGuard::validate_components_between(&canonical, root, environment)
-                        .is_ok() =>
-                {
-                    GitDirectory::resolved_whole(canonical)
-                }
-                Ok(canonical) => match external_git_directory(&canonical) {
-                    Some((git_dir, identity)) => GitDirectory::Resolved { git_dir, identity },
-                    None => GitDirectory::Refused(format!(
-                        "The .git entry is a symbolic link to {}, which is outside the project",
-                        canonical.display()
-                    )),
-                },
-                Err(_) => GitDirectory::Absent,
-            }
-        }
-        Ok(metadata) if metadata.is_file() => match read_capped(&marker) {
-            CappedRead::Absent => GitDirectory::Absent,
-            CappedRead::OverCap => GitDirectory::Refused(format!(
-                "The .git pointer file is larger than {MAX_GIT_METADATA_BYTES} bytes and was not read"
-            )),
-            CappedRead::Read(contents) => {
-                let Some(value) = contents.trim().strip_prefix("gitdir:") else {
-                    return GitDirectory::Absent;
-                };
-                let value = value.trim();
-                if value.is_empty() {
-                    return GitDirectory::Absent;
-                }
-                let pointer = Path::new(value);
-                let target = if pointer.is_absolute() {
-                    pointer.to_path_buf()
-                } else {
-                    root.join(pointer)
-                };
-                if SymlinkGuard::validate_components_between(&target, root, environment).is_ok() {
-                    return GitDirectory::resolved_whole(target);
-                }
-                match external_git_directory(&target) {
-                    Some((git_dir, identity)) => GitDirectory::Resolved { git_dir, identity },
-                    None => GitDirectory::Refused(format!(
-                        "The .git pointer resolves to {}, which is outside the project and is not a linked-worktree or submodule git directory",
-                        target.display()
-                    )),
-                }
-            }
-        },
-        _ => GitDirectory::Absent,
-    }
-}
-
-impl GitDirectory {
-    /// A git directory that is both the `HEAD` source and the identity, which
-    /// is the ordinary case: the repository's own `.git`.
-    fn resolved_whole(git_dir: PathBuf) -> Self {
-        GitDirectory::Resolved {
-            identity: git_dir.clone(),
-            git_dir,
-        }
-    }
-}
-
-/// The `(HEAD source, identity)` pair for a `gitdir:` pointer that leaves the
-/// project.
-///
-/// Only the two shapes Git writes for a git directory that lives outside the
-/// checkout are accepted, and only when the git directory they hang from is a
-/// real one. A linked worktree reads its own `HEAD` but is identified by the
-/// repository's git directory, exactly as identity resolution did before this
-/// check existed; a submodule keeps both under its superproject. Everything
-/// else, including a `separate-git-dir` checkout whose pointer has no shape
-/// tying it to this repository, is refused.
-fn external_git_directory(target: &Path) -> Option<(PathBuf, PathBuf)> {
-    let container = target.parent()?;
-    let git_dir = container.parent()?;
-    if !git_dir.is_dir() || !git_dir.join("HEAD").is_file() {
-        return None;
-    }
-    match container.file_name()?.to_str()? {
-        "worktrees" => Some((target.to_path_buf(), git_dir.to_path_buf())),
-        "modules" => Some((target.to_path_buf(), target.to_path_buf())),
-        _ => None,
-    }
-}
+/// Longest branch name or detached label returned across IPC. Git bounds the
+/// length of a ref name component, not of a whole hierarchical name, so this is
+/// Zenith's own bound on what it hands the interface: a longer value is refused
+/// rather than truncated into a name that never existed.
+const MAX_BRANCH_NAME_BYTES: usize = 1_024;
 
 /// Branch and detached state of the repository whose git directory is
 /// `git_dir`, read under the same cap as the pointer file that named it.
@@ -298,9 +160,10 @@ fn read_head_status(git_dir: &Path) -> (Option<String>, bool) {
         }
         return (Some(branch.to_string()), false);
     }
-    // A detached HEAD holds a raw object id. Anything else is not a state
-    // Zenith can name, so it reports nothing instead of echoing the file.
-    if trimmed.len() >= 7 && trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    // A detached HEAD holds an object id: 40 hex digits in a SHA-1 repository,
+    // 64 in a SHA-256 one. Anything else is not a state Zenith can name, so it
+    // reports nothing instead of echoing the file back.
+    if matches!(trimmed.len(), 40 | 64) && trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         (Some(format!("Detached ({})", &trimmed[..7])), true)
     } else {
         (None, false)
@@ -348,6 +211,7 @@ pub fn opaque_id(namespace: &str, value: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tooling::MAX_GIT_METADATA_BYTES;
 
     /// The host machine these project fixtures live on.
     fn test_environment() -> zenith_platform::PlatformEnvironment {
@@ -531,50 +395,157 @@ mod tests {
         assert!(!identity.is_worktree);
     }
 
+    /// Runs `git` for a fixture: the assertions below are about how Zenith reads
+    /// what Git itself wrote, so the metadata comes from Git rather than from a
+    /// hand-written copy of its layout.
+    fn fixture_git(root: &Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git is installed on this host")
+    }
+
+    fn fixture_git_ok(root: &Path, args: &[&str]) {
+        let output = fixture_git(root, args);
+        assert!(
+            output.status.success(),
+            "fixture `git {args:?}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn fixture_repository(root: &Path) {
+        std::fs::create_dir_all(root).unwrap();
+        fixture_git_ok(root, &["init", "-q"]);
+        fixture_git_ok(root, &["config", "user.email", "fixture@example.invalid"]);
+        fixture_git_ok(root, &["config", "user.name", "Fixture"]);
+        std::fs::write(root.join("tracked.txt"), "baseline\n").unwrap();
+        fixture_git_ok(root, &["add", "-A"]);
+        fixture_git_ok(root, &["commit", "-qm", "initial"]);
+    }
+
     #[test]
-    fn a_linked_worktree_and_a_submodule_keep_resolving() {
+    fn a_linked_worktree_resolves_through_the_backlink_git_recorded() {
         let temp = tempfile::tempdir().unwrap();
         let repository = temp.path().join("repository");
-        let git_dir = repository.join(".git");
-        // The repository's own git directory, as Git lays it out.
-        write_head(&git_dir, "ref: refs/heads/main\n");
-        write_head(
-            &git_dir.join("worktrees/branch-x"),
-            "ref: refs/heads/worktree-branch\n",
+        fixture_repository(&repository);
+        let worktree = temp.path().join("checked-out-elsewhere");
+        fixture_git_ok(
+            &repository,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &worktree.to_string_lossy(),
+                "-b",
+                "worktree-branch",
+            ],
         );
-        // A submodule keeps its git directory under the superproject's.
-        write_head(&git_dir.join("modules/vendor-lib"), "ref: refs/heads/sub\n");
-
-        let worktree = temp.path().join("worktree");
-        std::fs::create_dir_all(&worktree).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}", git_dir.join("worktrees/branch-x").display()),
-        )
-        .unwrap();
 
         let (_, identity) = resolve_project(&worktree, &test_environment()).unwrap();
         assert_eq!(identity.branch.as_deref(), Some("worktree-branch"));
         assert!(identity.is_worktree);
+        assert!(!identity.is_dirty, "a fresh worktree has no changes");
+        // The identity is the repository's own git directory, derived from the
+        // pointer the fixture wrote rather than from a canonicalized spelling.
+        let pointer = std::fs::read_to_string(worktree.join(".git")).unwrap();
+        let target = Path::new(pointer.trim().strip_prefix("gitdir:").unwrap().trim());
+        let repository_git_dir = target.parent().unwrap().parent().unwrap();
         assert_eq!(
             identity.repository_id,
-            Some(opaque_id("repository", &git_dir)),
-            "a worktree is identified by the repository's own git directory"
+            Some(opaque_id("repository", repository_git_dir))
         );
+    }
 
-        let submodule = repository.join("vendor-lib");
-        std::fs::create_dir_all(&submodule).unwrap();
+    #[test]
+    fn a_worktree_shaped_git_directory_without_the_backlink_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repository");
+        fixture_repository(&repository);
+        let real_worktree = temp.path().join("real-worktree");
+        fixture_git_ok(
+            &repository,
+            &["worktree", "add", "-q", &real_worktree.to_string_lossy()],
+        );
+        let worktree_git_dir = repository.join(".git/worktrees/real-worktree");
+        assert!(worktree_git_dir.join("HEAD").is_file());
+
+        // A directory that merely points at another repository's worktree git
+        // directory has the shape of a worktree without being one: the backlink
+        // Git records names the real checkout, not this one.
+        let unrelated = temp.path().join("unrelated");
+        std::fs::create_dir_all(&unrelated).unwrap();
         std::fs::write(
-            submodule.join(".git"),
-            format!("gitdir: {}", git_dir.join("modules/vendor-lib").display()),
+            unrelated.join(".git"),
+            format!("gitdir: {}", worktree_git_dir.display()),
         )
         .unwrap();
 
+        match git_directory(&unrelated, &test_environment()) {
+            GitDirectory::Refused(reason) => assert!(
+                reason.contains("outside the project"),
+                "the refusal must name the reason: {reason}"
+            ),
+            _ => panic!("a worktree shape without the recorded backlink must be refused"),
+        }
+        let (_, identity) = resolve_project(&unrelated, &test_environment()).unwrap();
+        assert_eq!(identity.repository_id, None);
+        assert_eq!(identity.branch, None);
+
+        // The checkout the backlink does name keeps resolving.
+        let (_, identity) = resolve_project(&real_worktree, &test_environment()).unwrap();
+        assert!(identity.repository_id.is_some());
+    }
+
+    #[test]
+    fn a_nested_submodule_resolves_through_its_recorded_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let superproject = temp.path().join("superproject");
+        fixture_repository(&superproject);
+        let dependency = temp.path().join("dependency");
+        fixture_repository(&dependency);
+
+        // Nested by more than one path component: the submodule git directory is
+        // `.git/modules/<path>`, not `.git/modules/<name>`.
+        fixture_git_ok(
+            &superproject,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &dependency.to_string_lossy(),
+                "tools/nested/dependency",
+            ],
+        );
+
+        let submodule = superproject.join("tools/nested/dependency");
+        let submodule_git_dir = superproject.join(".git/modules/tools/nested/dependency");
+        assert!(submodule_git_dir.join("config").is_file());
+        let head = std::fs::read_to_string(submodule_git_dir.join("HEAD")).unwrap();
+        let expected_branch = head
+            .trim()
+            .strip_prefix("ref: refs/heads/")
+            .expect("a fixture repository starts on a branch")
+            .to_string();
+
         let (_, identity) = resolve_project(&submodule, &test_environment()).unwrap();
-        assert_eq!(identity.branch.as_deref(), Some("sub"));
+        assert_eq!(identity.branch.as_deref(), Some(expected_branch.as_str()));
+        // The identity is the git directory the pointer names, resolved against
+        // the canonicalized checkout the way resolution itself does it.
+        let pointer = std::fs::read_to_string(submodule.join(".git")).unwrap();
+        let recorded = Path::new(pointer.trim().strip_prefix("gitdir:").unwrap().trim());
+        let expected_identity = if recorded.is_absolute() {
+            recorded.to_path_buf()
+        } else {
+            submodule.canonicalize().unwrap().join(recorded)
+        };
         assert_eq!(
             identity.repository_id,
-            Some(opaque_id("repository", &git_dir.join("modules/vendor-lib"))),
+            Some(opaque_id("repository", &expected_identity)),
             "a submodule keeps its own identity under the superproject"
         );
     }
@@ -593,7 +564,8 @@ mod tests {
         .unwrap();
         assert_eq!(read_head_status(&git_dir), (None, false));
 
-        // A ref name longer than Git would create is not truncated into one.
+        // A ref name longer than Zenith's own bound is refused rather than
+        // truncated into one that never existed.
         let long_branch = "c".repeat(MAX_BRANCH_NAME_BYTES + 1);
         std::fs::write(
             git_dir.join("HEAD"),
@@ -602,10 +574,28 @@ mod tests {
         .unwrap();
         assert_eq!(read_head_status(&git_dir), (None, false));
 
-        // A detached HEAD holds an object id; anything else is not a state that
-        // can be named, so the file is not echoed across IPC.
-        std::fs::write(git_dir.join("HEAD"), "not an object id\n").unwrap();
-        assert_eq!(read_head_status(&git_dir), (None, false));
+        // Git bounds a ref name component, not the whole hierarchical name, so
+        // a name longer than 255 bytes is still a ref Git created and is
+        // reported as one.
+        let hierarchical = format!("{}/{}", "d".repeat(130), "e".repeat(130));
+        std::fs::write(
+            git_dir.join("HEAD"),
+            format!("ref: refs/heads/{hierarchical}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_head_status(&git_dir),
+            (Some(hierarchical), false),
+            "a hierarchical ref name must survive intact"
+        );
+
+        // A detached HEAD holds an object id — 40 hex digits in a SHA-1
+        // repository, 64 in a SHA-256 one. Anything else is not a state that can
+        // be named, so the file is not echoed across IPC.
+        for unnamed in ["not an object id\n", "deadbee\n", "0123456789abcdef\n"] {
+            std::fs::write(git_dir.join("HEAD"), unnamed).unwrap();
+            assert_eq!(read_head_status(&git_dir), (None, false), "{unnamed:?}");
+        }
 
         std::fs::write(
             git_dir.join("HEAD"),

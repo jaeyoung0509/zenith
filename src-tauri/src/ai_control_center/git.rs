@@ -17,6 +17,9 @@ pub(crate) struct GitBaseline {
     statuses: HashMap<String, String>,
     fingerprints: HashMap<String, String>,
     captured_at: u64,
+    /// Why this observation could not be read, when the repository's own
+    /// attribute sources make an invocation unsafe.
+    refusal: Option<String>,
 }
 
 impl GitBaselineStore {
@@ -142,6 +145,18 @@ impl GitBaselineStore {
 }
 
 fn capture(root: &Path, now: u64) -> GitBaseline {
+    // A repository whose attribute sources cannot be neutralized is not read at
+    // all: the reason travels with the observation so the interface reports why
+    // the state is missing instead of showing an unchanged tree.
+    if let Some(refusal) = tooling::git_inspection_refusal(root) {
+        return GitBaseline {
+            head: None,
+            statuses: HashMap::new(),
+            fingerprints: HashMap::new(),
+            captured_at: now,
+            refusal: Some(refusal),
+        };
+    }
     let head = run_git(root, &["rev-parse", "--verify", "HEAD"])
         .ok()
         .and_then(|value| value.lines().next().map(str::to_string));
@@ -160,6 +175,7 @@ fn capture(root: &Path, now: u64) -> GitBaseline {
         statuses,
         fingerprints,
         captured_at: now,
+        refusal: None,
     }
 }
 
@@ -169,6 +185,22 @@ fn compare(
     baseline: &GitBaseline,
     current: &GitBaseline,
 ) -> GitChangeSummary {
+    if let Some(refusal) = &current.refusal {
+        return GitChangeSummary {
+            project_id: project_id.into(),
+            baseline_head: None,
+            current_head: None,
+            baseline_at: baseline.captured_at,
+            added: 0,
+            modified: 0,
+            deleted: 0,
+            renamed: 0,
+            untracked: 0,
+            changed_paths: vec![],
+            available: false,
+            status_message: refusal.clone(),
+        };
+    }
     if baseline.head.is_none() && current.head.is_none() && current.statuses.is_empty() {
         return GitChangeSummary {
             project_id: project_id.into(),
@@ -339,7 +371,7 @@ fn parse_status(bytes: &[u8]) -> HashMap<String, String> {
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = tooling::git_command(root);
+    let mut command = tooling::git_command(root)?;
     command.args(args);
     let output = zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
@@ -352,7 +384,7 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_diff_command(root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = tooling::git_command(root);
+    let mut command = tooling::git_command(root)?;
     command.args(args);
     let output = zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
@@ -371,13 +403,18 @@ pub fn explicit_diff(
     if paths.is_empty() {
         return Ok(String::new());
     }
+    // A refused repository is not an unchanged one: reporting an empty diff
+    // would present unread state as a measurement.
+    if let Some(refusal) = tooling::git_inspection_refusal(root) {
+        return Err(refusal);
+    }
     const MAX: usize = 262_144;
     let mut combined_diff = String::new();
 
     // 1. Try git diff HEAD for tracked modifications
     let mut head_args = vec!["diff"];
     head_args.push(baseline_head.unwrap_or("HEAD"));
-    head_args.extend(["--no-ext-diff", "--no-color", "--"]);
+    head_args.extend(["--no-ext-diff", "--no-textconv", "--no-color", "--"]);
     for p in paths {
         head_args.push(p);
     }
@@ -385,7 +422,7 @@ pub fn explicit_diff(
         combined_diff.push_str(&tracked_diff);
     } else {
         // Fallback for fresh repos before initial commit
-        let mut empty_args = vec!["diff", "--no-ext-diff", "--no-color", "--"];
+        let mut empty_args = vec!["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--"];
         for p in paths {
             empty_args.push(p);
         }
@@ -413,6 +450,7 @@ pub fn explicit_diff(
                             "diff",
                             "--no-index",
                             "--no-ext-diff",
+                            "--no-textconv",
                             "--no-color",
                             "--",
                             "/dev/null",
