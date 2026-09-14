@@ -736,10 +736,10 @@ impl KeepAwakeManager {
         // The shared flavor-parameterized rule, so Keep Awake matching cannot
         // drift from the rest of the tree and the Windows semantics are
         // covered by `platform::path_algebra` on every runner.
-        crate::platform::path_algebra::equal(
+        zenith_platform::path_algebra::equal(
             &left.to_string_lossy(),
             &right.to_string_lossy(),
-            crate::platform::path_algebra::PathFlavor::current(),
+            zenith_platform::path_algebra::PathFlavor::current(),
         )
     }
 

@@ -5,11 +5,11 @@ use crate::models::{
     Category, CategoryResult, ObservationQuality, RiskTier, ScanEvent, ScanItem, ScanResult,
 };
 use crate::orbstack::OrbStackAdapter;
-use crate::platform::PlatformEnvironment;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
 use std::time::SystemTime;
 use uuid::Uuid;
+use zenith_platform::PlatformEnvironment;
 
 pub struct ScanEngine;
 
@@ -96,6 +96,43 @@ impl CategoryAccumulator {
         self.items.push(item);
         self.items.last()
     }
+
+    fn finalize(
+        mut self,
+        category: Category,
+        forced_quality: Option<ObservationQuality>,
+    ) -> CategoryResult {
+        self.items.sort_by(|left, right| {
+            right
+                .size
+                .observed_bytes()
+                .cmp(&left.size.observed_bytes())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+
+        let quality = forced_quality
+            .unwrap_or_else(|| aggregate_quality(self.items.iter().map(|item| item.quality)));
+        let skipped_entry_count = self.items.iter().map(|item| item.skipped_entry_count).sum();
+        let incomplete_item_count = self
+            .items
+            .iter()
+            .filter(|item| item.quality != ObservationQuality::Fresh)
+            .count() as u64;
+
+        CategoryResult {
+            category,
+            display_name: category.display_name().to_string(),
+            items: self.items,
+            total_bytes: self.total_bytes,
+            cleanable_bytes: self.cleanable_bytes,
+            safe_bytes: self.safe_bytes,
+            rebuild_bytes: self.rebuild_bytes,
+            manual_bytes: self.manual_bytes,
+            quality,
+            skipped_entry_count,
+            incomplete_item_count,
+        }
+    }
 }
 
 impl ScanEngine {
@@ -110,6 +147,7 @@ impl ScanEngine {
         excluded_signatures: &[String],
         intensive_cleanup: bool,
         environment: &PlatformEnvironment,
+        cancellation: &dyn crate::models::CancellationProbe,
         mut on_event: F,
     ) -> ScanResult
     where
@@ -140,11 +178,17 @@ impl ScanEngine {
         let mut manual_bytes = 0u64;
         let mut skipped_entry_count = 0u64;
         let mut incomplete_item_count = 0u64;
+        let mut was_cancelled = false;
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
         let directory_pool = shared_scan_pool();
 
         for &category in target_categories {
+            if cancellation.is_cancelled() {
+                was_cancelled = true;
+                break;
+            }
+
             on_event(ScanEvent::CategoryStarted { category });
 
             let mut accumulator = CategoryAccumulator::default();
@@ -152,11 +196,19 @@ impl ScanEngine {
             // 1. Scan filesystem signatures for this category
             let signatures = registry.by_category_for_mode(category, intensive_cleanup);
             for sig in signatures {
+                if cancellation.is_cancelled() {
+                    was_cancelled = true;
+                    break;
+                }
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
                 }
-                let items =
-                    DirectoryScanner::scan_signature_with_pool(sig, directory_pool, environment);
+                let items = DirectoryScanner::scan_signature_with_pool(
+                    sig,
+                    directory_pool,
+                    environment,
+                    cancellation,
+                );
                 for item in items {
                     if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
@@ -167,8 +219,12 @@ impl ScanEngine {
             }
 
             // 2. Typed container adapters can report cleanable or observation-only storage.
-            if category == Category::Developer {
+            if !was_cancelled && category == Category::Developer {
                 for item in CacheProviderRegistry::scan_items(registry, environment) {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
                     if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
@@ -178,11 +234,15 @@ impl ScanEngine {
             }
 
             // 3. Typed container adapters can report cleanable or observation-only storage.
-            if category == Category::Container {
+            if !was_cancelled && category == Category::Container {
                 let adapter_items = DockerAdapter::scan_items(environment)
                     .into_iter()
                     .chain(OrbStackAdapter::scan_items(environment));
                 for item in adapter_items {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
                     if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
@@ -191,57 +251,30 @@ impl ScanEngine {
                 }
             }
 
-            accumulator.items.sort_by(|left, right| {
-                right
-                    .size
-                    .observed_bytes()
-                    .cmp(&left.size.observed_bytes())
-                    .then_with(|| left.name.cmp(&right.name))
-            });
-
-            total_bytes += accumulator.total_bytes;
-            cleanable_bytes += accumulator.cleanable_bytes;
-            safe_bytes += accumulator.safe_bytes;
-            rebuild_bytes += accumulator.rebuild_bytes;
-            manual_bytes += accumulator.manual_bytes;
-
-            let cat_quality = aggregate_quality(accumulator.items.iter().map(|item| item.quality));
-            // Both counts describe the items this category retains, so a scan
-            // that could not read every entry says so instead of reporting a
-            // smaller, clean-looking total.
-            let cat_skipped_entry_count: u64 = accumulator
-                .items
-                .iter()
-                .map(|item| item.skipped_entry_count)
-                .sum();
-            let cat_incomplete_item_count = accumulator
-                .items
-                .iter()
-                .filter(|item| item.quality != ObservationQuality::Fresh)
-                .count() as u64;
-
-            let cat_item_count = accumulator.items.len();
-            category_results.push(CategoryResult {
+            let category_result = accumulator.finalize(
                 category,
-                display_name: category.display_name().to_string(),
-                items: accumulator.items,
-                total_bytes: accumulator.total_bytes,
-                cleanable_bytes: accumulator.cleanable_bytes,
-                safe_bytes: accumulator.safe_bytes,
-                rebuild_bytes: accumulator.rebuild_bytes,
-                manual_bytes: accumulator.manual_bytes,
-                quality: cat_quality,
-                skipped_entry_count: cat_skipped_entry_count,
-                incomplete_item_count: cat_incomplete_item_count,
-            });
-            skipped_entry_count += cat_skipped_entry_count;
-            incomplete_item_count += cat_incomplete_item_count;
+                was_cancelled.then_some(ObservationQuality::Partial),
+            );
+            total_bytes += category_result.total_bytes;
+            cleanable_bytes += category_result.cleanable_bytes;
+            safe_bytes += category_result.safe_bytes;
+            rebuild_bytes += category_result.rebuild_bytes;
+            manual_bytes += category_result.manual_bytes;
+            skipped_entry_count += category_result.skipped_entry_count;
+            incomplete_item_count += category_result.incomplete_item_count;
 
-            on_event(ScanEvent::CategoryFinished {
-                category,
-                bytes: accumulator.total_bytes,
-                item_count: cat_item_count,
-            });
+            if !was_cancelled {
+                on_event(ScanEvent::CategoryFinished {
+                    category,
+                    bytes: category_result.total_bytes,
+                    item_count: category_result.items.len(),
+                });
+            }
+            category_results.push(category_result);
+
+            if was_cancelled {
+                break;
+            }
         }
 
         let finished_at = SystemTime::now()
@@ -259,7 +292,14 @@ impl ScanEngine {
                 }
             }
         }
-        let scan_quality = aggregate_quality(category_results.iter().map(|cat| cat.quality));
+        if was_cancelled {
+            incomplete_reasons.push("Scan was cancelled before completion".to_string());
+        }
+        let scan_quality = if was_cancelled {
+            ObservationQuality::Partial
+        } else {
+            aggregate_quality(category_results.iter().map(|cat| cat.quality))
+        };
 
         let result = ScanResult {
             scan_id,
@@ -292,10 +332,11 @@ mod tests {
     use crate::models::{
         Category, CleanStrategy, ObservationQuality, RiskTier, ScanEvent, Signature,
     };
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
     use crate::signatures::SignatureRegistry;
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     /// A scan environment with no tools and no stated profile, so a scan in a
     /// test only reports the fixture signatures it was given.
@@ -377,7 +418,15 @@ mod tests {
             Some(0),
         ));
 
-        let result = ScanEngine::scan(&registry, None, &[], false, &scan_environment(), |_| {});
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
 
         let developer = result
             .categories
@@ -453,7 +502,15 @@ mod tests {
             None,
         ));
 
-        let result = ScanEngine::scan(&registry, None, &[], false, &scan_environment(), |_| {});
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
 
         let category_skipped: u64 = result
             .categories
@@ -533,6 +590,7 @@ mod tests {
             &[],
             false,
             &scan_environment(),
+            &crate::models::NeverCancelled,
             |event| events.push(event),
         );
 
@@ -595,6 +653,145 @@ mod tests {
                 "finished",
             ],
             "an item-level measurement gap is never a destructive scan event"
+        );
+    }
+
+    #[test]
+    fn scan_engine_honors_cancellation_probe() {
+        struct AlwaysCancelled;
+        impl crate::models::CancellationProbe for AlwaysCancelled {
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let dev_root = fixture.path().join("dev-cache");
+        std::fs::create_dir_all(&dev_root).unwrap();
+        std::fs::write(dev_root.join("data.bin"), vec![1u8; 100]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.cancel",
+            "Cancelled cache",
+            Category::Developer,
+            &dev_root,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &AlwaysCancelled,
+            |_| {},
+        );
+
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result
+            .incomplete_reasons
+            .iter()
+            .any(|reason| reason.contains("cancelled")));
+    }
+
+    #[test]
+    fn cancellation_between_signatures_preserves_global_accounting() {
+        // Cancellation is observed through the progress stream rather than by
+        // counting probe calls: the traversal consults the probe at every
+        // directory boundary, so a call count would describe the walk instead
+        // of the behaviour this test is about. The probe reports cancellation
+        // as soon as the first item has been observed, which stops the run
+        // between signatures exactly as a user cancel does.
+        struct CancelAfterFirstItem {
+            cancelled: AtomicBool,
+        }
+
+        impl crate::models::CancellationProbe for CancelAfterFirstItem {
+            fn is_cancelled(&self) -> bool {
+                self.cancelled.load(Ordering::SeqCst)
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let first_root = fixture.path().join("first-cache");
+        let second_root = fixture.path().join("second-cache");
+        std::fs::create_dir_all(&first_root).unwrap();
+        std::fs::create_dir_all(&second_root).unwrap();
+        std::fs::write(first_root.join("data.bin"), vec![1u8; 100]).unwrap();
+        std::fs::write(second_root.join("data.bin"), vec![2u8; 200]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.cancel.first",
+            "First cache",
+            Category::Developer,
+            &first_root,
+            vec![],
+            None,
+        ));
+        registry.register(signature(
+            "test.cancel.second",
+            "Second cache",
+            Category::Developer,
+            &second_root,
+            vec![],
+            None,
+        ));
+
+        let cancellation = CancelAfterFirstItem {
+            cancelled: AtomicBool::new(false),
+        };
+        let result = ScanEngine::scan(
+            &registry,
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &cancellation,
+            |event| {
+                if matches!(event, ScanEvent::ItemFound { .. }) {
+                    cancellation.cancelled.store(true, Ordering::SeqCst);
+                }
+            },
+        );
+
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert_eq!(result.categories.len(), 1);
+        assert!(result.categories[0].total_bytes > 0);
+        assert_eq!(
+            result.total_bytes,
+            result
+                .categories
+                .iter()
+                .map(|category| category.total_bytes)
+                .sum::<u64>()
+        );
+        assert_eq!(
+            result.cleanable_bytes,
+            result
+                .categories
+                .iter()
+                .map(|category| category.cleanable_bytes)
+                .sum::<u64>()
+        );
+        assert_eq!(
+            result.skipped_entry_count,
+            result
+                .categories
+                .iter()
+                .map(|category| category.skipped_entry_count)
+                .sum::<u64>()
+        );
+        assert_eq!(
+            result.incomplete_item_count,
+            result
+                .categories
+                .iter()
+                .map(|category| category.incomplete_item_count)
+                .sum::<u64>()
         );
     }
 }

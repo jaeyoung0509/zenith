@@ -3,8 +3,6 @@ use crate::models::{
     CacheMetadata, CacheSizeSemantics, CanonicalPath, Category, CleanupEligibility,
     ObservationQuality, RiskTier, ScanItem,
 };
-use crate::platform::path_algebra::{self, PathFlavor};
-use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard};
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureRegistry;
@@ -14,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 use sysinfo::{ProcessesToUpdate, System};
+use zenith_platform::path_algebra::{self, PathFlavor};
+use zenith_platform::PlatformEnvironment;
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DISCOVERY_OUTPUT: usize = 16 * 1024;
@@ -289,7 +289,8 @@ fn run_provider(
     validate_executable(&executable, environment)?;
     let mut command = Command::new(executable);
     command.args(args);
-    tooling::run_with_timeout(command, PROVIDER_TIMEOUT).map_err(|error| error.to_string())
+    zenith_platform::subprocess::run_with_timeout(command, PROVIDER_TIMEOUT)
+        .map_err(|error| error.to_string())
 }
 
 fn discover_path(
@@ -393,7 +394,7 @@ fn relocated_cache_roots(environment: &PlatformEnvironment) -> Vec<PathBuf> {
         .flatten()
         .chain(overrides)
         .filter_map(|root| std::fs::canonicalize(root).ok())
-        .map(|root| crate::platform::NativePlatformPaths::normalize_verbatim_path(&root))
+        .map(|root| zenith_platform::NativePlatformPaths::normalize_verbatim_path(&root))
         .collect()
 }
 
@@ -446,13 +447,13 @@ fn node_manager_roots(home: &Path) -> Vec<PathBuf> {
 fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result<(), String> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|_| "Could not validate the provider executable".to_string())?;
-    let canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
+    let canonical = zenith_platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
     let mut roots = vec![
         PathBuf::from("/usr/bin"),
         PathBuf::from("/usr/local/bin"),
         PathBuf::from("/opt/homebrew"),
     ];
-    roots.extend(crate::platform::NativePlatformPaths::trusted_tool_roots(
+    roots.extend(zenith_platform::NativePlatformPaths::trusted_tool_roots(
         environment.user_home().as_deref(),
     ));
     if let Some(home) = environment.user_home() {
@@ -480,9 +481,9 @@ fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result
 /// so the fixtures remain meaningful on Unix hosts.
 fn executable_under_roots(canonical: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| {
-        let norm_root = crate::platform::NativePlatformPaths::normalize_verbatim_path(root);
+        let norm_root = zenith_platform::NativePlatformPaths::normalize_verbatim_path(root);
         if looks_like_windows_path(canonical) || looks_like_windows_path(&norm_root) {
-            crate::platform::NativePlatformPaths::windows_path_starts_with(canonical, &norm_root)
+            zenith_platform::NativePlatformPaths::windows_path_starts_with(canonical, &norm_root)
         } else {
             canonical.starts_with(&norm_root)
         }
@@ -536,11 +537,11 @@ fn bounded_message(bytes: &[u8]) -> String {
 mod tests {
     use super::ProviderKind;
     use super::{cache_location_approved, node_manager_roots, parse_discovered_path, AbsolutePath};
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::paths::SimulatedPaths;
-    use crate::platform::PlatformEnvironment;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
+    use zenith_platform::PlatformEnvironment;
 
     #[test]
     fn npm_provider_is_wired_to_its_signature_and_commands() {
@@ -636,7 +637,7 @@ mod tests {
         // `canonicalize` returns a verbatim path on Windows; the relocation
         // decision is made on the normalized spelling, so the expectation is
         // normalized the same way instead of encoding the host's prefix.
-        let expected = crate::platform::NativePlatformPaths::normalize_verbatim_path(
+        let expected = zenith_platform::NativePlatformPaths::normalize_verbatim_path(
             &local_app_data.path().canonicalize().unwrap(),
         );
         assert_eq!(
@@ -753,7 +754,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn trusted_tool_roots_exclude_bare_user_writable_containers() {
-        use crate::platform::NativePlatformPaths;
+        use zenith_platform::NativePlatformPaths;
 
         let roots = NativePlatformPaths::trusted_tool_roots(
             PlatformEnvironment::native().user_home().as_deref(),
@@ -779,7 +780,7 @@ mod tests {
         }
 
         // The documented %APPDATA%\npm install root stays trusted.
-        let app_data = crate::platform::PlatformEnvironment::native()
+        let app_data = zenith_platform::PlatformEnvironment::native()
             .roaming_app_data()
             .expect("a Windows session exposes the roaming application data root");
         let npm = app_data.join("npm");

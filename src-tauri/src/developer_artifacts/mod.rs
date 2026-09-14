@@ -5,8 +5,6 @@ use crate::models::{
     DeveloperArtifactUninspectedReason, DeveloperEcosystem, DeveloperWorkspace,
     ReviewedFileIdentity,
 };
-use crate::platform::description::PlatformEnvironment;
-use crate::platform::path_algebra;
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -16,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use zenith_platform::description::PlatformEnvironment;
+use zenith_platform::path_algebra;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -65,7 +65,11 @@ pub struct DeveloperArtifactInventory {
 
 impl DeveloperArtifactInventory {
     pub fn is_fresh(&self) -> bool {
-        unix_timestamp().saturating_sub(self.created_at) < INVENTORY_TTL_SECS
+        self.is_fresh_at(unix_timestamp())
+    }
+
+    pub fn is_fresh_at(&self, now: u64) -> bool {
+        zenith_core::domain::is_within_window(self.created_at, now, INVENTORY_TTL_SECS)
     }
 }
 
@@ -578,7 +582,7 @@ fn store_workspace(
         workspace: DeveloperWorkspace {
             id: id.clone(),
             name,
-            display_path: Blacklist::normalize_path(&canonical)
+            display_path: zenith_platform::path_algebra::normalize_lexical(&canonical)
                 .to_string_lossy()
                 .into_owned(),
         },
@@ -1783,8 +1787,8 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::description::KnownFolder;
     use std::fs;
+    use zenith_platform::description::KnownFolder;
 
     /// A simulated environment whose profile is the stated directory.
     fn environment_with_home(home: &Path) -> PlatformEnvironment {
@@ -1804,6 +1808,26 @@ mod tests {
             created_at: unix_timestamp(),
             whole_home: false,
         }
+    }
+
+    #[test]
+    fn developer_inventory_is_stale_when_the_clock_moves_backwards() {
+        let inventory = DeveloperArtifactInventory {
+            scan_id: "scan".to_string(),
+            records: HashMap::new(),
+            workspace_ids: Vec::new(),
+            created_at: 1_000,
+            discovered_count: 0,
+            measured_count: 0,
+            skipped_entries: 0,
+            cancelled: false,
+            truncated: false,
+            uninspected: Vec::new(),
+        };
+
+        assert!(inventory.is_fresh_at(1_899));
+        assert!(!inventory.is_fresh_at(1_900));
+        assert!(!inventory.is_fresh_at(999));
     }
 
     #[test]
@@ -2456,7 +2480,7 @@ mod tests {
         assert!(!record.workspace.display_path.starts_with(r"\\?\"));
         assert_eq!(
             PathBuf::from(&record.workspace.display_path),
-            Blacklist::normalize_path(&record.path)
+            zenith_platform::path_algebra::normalize_lexical(&record.path)
         );
     }
 

@@ -91,8 +91,8 @@ pub async fn get_disk_volumes(state: State<'_, AppState>) -> Result<Vec<DiskVolu
 pub async fn open_storage_settings() -> Result<(), String> {
     run_blocking(
         || {
-            use crate::platform::SystemActionProvider;
-            crate::platform::NativeSystemActions::new().open_storage_settings()
+            use zenith_platform::SystemActionProvider;
+            zenith_platform::NativeSystemActions::new().open_storage_settings()
         },
         "Storage settings worker panicked",
     )
@@ -371,9 +371,9 @@ pub async fn show_in_file_manager(path: String, state: State<'_, AppState>) -> R
     let environment = state.environment.clone();
     run_blocking(
         move || {
-            use crate::platform::SystemActionProvider;
+            use zenith_platform::SystemActionProvider;
             let path_buf = expand_display_path(&path, &environment)?;
-            crate::platform::NativeSystemActions::new().reveal_path(&path_buf)
+            zenith_platform::NativeSystemActions::new().reveal_path(&path_buf)
         },
         "File manager worker panicked",
     )
@@ -386,9 +386,9 @@ pub async fn open_in_terminal(path: String, state: State<'_, AppState>) -> Resul
     let environment = state.environment.clone();
     run_blocking(
         move || {
-            use crate::platform::SystemActionProvider;
+            use zenith_platform::SystemActionProvider;
             let path_buf = expand_display_path(&path, &environment)?;
-            crate::platform::NativeSystemActions::new().open_terminal(&path_buf)
+            zenith_platform::NativeSystemActions::new().open_terminal(&path_buf)
         },
         "Terminal worker panicked",
     )
@@ -397,10 +397,10 @@ pub async fn open_in_terminal(path: String, state: State<'_, AppState>) -> Resul
 
 fn expand_display_path(
     path: &str,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Result<PathBuf, String> {
     let path_obj = Path::new(path);
-    let normalized = crate::platform::NativePlatformPaths::normalize_verbatim_path(path_obj);
+    let normalized = zenith_platform::NativePlatformPaths::normalize_verbatim_path(path_obj);
     let path_str = normalized.to_string_lossy();
     let expanded = if let Some(relative) = path_str
         .strip_prefix("~/")
@@ -416,7 +416,7 @@ fn expand_display_path(
     let canonical = expanded
         .canonicalize()
         .map_err(|error| format!("Path is no longer available: {error}"))?;
-    Ok(crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical))
+    Ok(zenith_platform::NativePlatformPaths::normalize_verbatim_path(&canonical))
 }
 
 #[tauri::command]

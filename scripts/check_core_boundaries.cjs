@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Enforces the zenith-core dependency boundary.
+ * Enforces the workspace dependency boundaries.
  *
  * `zenith-core` exists so Zenith's product semantics can outlive the desktop
  * framework: the crate must still compile and make sense if Zenith grew a CLI
@@ -9,16 +9,21 @@
  * module imports a webview, a window, or a Win32 binding, and a review comment
  * is not a mechanism.
  *
- * So this check reads the resolved dependency graph from `cargo metadata` and
- * applies two rules:
+ * `zenith-platform` exists so every native OS integration has one owner: the
+ * same probing, path resolution, process control, and Trash adapter has to be
+ * usable by a scan, a service, or a future CLI without a window, which fails
+ * the first time a platform module imports the framework.
  *
- *   1. Every dependency `zenith-core` declares, of any kind, must be outside
- *      the forbidden set. Pulling `tauri` in as a dev-dependency "just for a
+ * So this check reads the resolved dependency graph from `cargo metadata` and
+ * applies two rules to each crate that declares a boundary:
+ *
+ *   1. Every dependency the crate declares, of any kind, must be outside its
+ *      forbidden set. Pulling `tauri` in as a dev-dependency "just for a
  *      test" recouples the crate's own test surface, so it is refused too.
  *
- *   2. Every crate reachable from `zenith-core` over normal and build edges
- *      must be outside the forbidden set, at any depth. Transitive
- *      reachability is the point: a direct-edge check would pass while
+ *   2. Every crate reachable from it over normal and build edges must be
+ *      outside the forbidden set, at any depth. Transitive reachability is the
+ *      point: a direct-edge check would pass while
  *      `zenith-core -> some-helper -> tauri` rebuilt the coupling one layer
  *      down. Dev-only edges are excluded here because they describe what the
  *      test harness links, not what the library is; `tempfile` reaching
@@ -35,22 +40,45 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const rootDir = path.resolve(__dirname, '..');
-const CORE_CRATE = 'zenith-core';
 
 /**
- * Crates the domain must never reach.
+ * The crates with a dependency boundary, and what each one may never reach.
  *
  * The `tauri` and `windows` rules are prefixes rather than exact names:
  * `tauri-build` and `tauri-plugin-*` are named in the boundary directly, and a
  * rule that listed them one by one would go stale the next time the framework
  * adds a crate. Every crate those prefixes match is a binding to the desktop
  * framework or to Win32.
+ *
+ * `zenith-platform` is the layer that *owns* the native bindings, so Win32 and
+ * macOS frameworks are the point of the crate rather than a violation. What it
+ * must never gain is the desktop framework: the reason the platform layer
+ * exists is that the same native probing has to be usable by a scanner, a
+ * service, or a future CLI without a window.
  */
-const FORBIDDEN = [
-  { name: 'tauri', kind: 'prefix', why: 'desktop framework' },
-  { name: 'windows', kind: 'prefix', why: 'Win32 bindings' },
-  { name: 'security-framework', kind: 'prefix', why: 'macOS keychain bindings' },
-  { name: 'rfd', kind: 'exact', why: 'native file dialogs' },
+const BOUNDARIES = [
+  {
+    crate: 'zenith-core',
+    intent: 'the domain must not depend on the desktop framework or on native platform bindings',
+    forbidden: [
+      { name: 'tauri', kind: 'prefix', why: 'desktop framework' },
+      { name: 'windows', kind: 'prefix', why: 'Win32 bindings' },
+      { name: 'security-framework', kind: 'prefix', why: 'macOS keychain bindings' },
+      { name: 'rfd', kind: 'exact', why: 'native file dialogs' },
+    ],
+    remedy:
+      'Move the dependency to `zenith-desktop` or `zenith-platform`, or express what the\n' +
+      'domain needs as a trait in `zenith-core` and implement it in the adapter that owns\n' +
+      'the binding.',
+  },
+  {
+    crate: 'zenith-platform',
+    intent: 'the platform adapter layer must not depend on the desktop framework',
+    forbidden: [{ name: 'tauri', kind: 'prefix', why: 'desktop framework' }],
+    remedy:
+      'Move the framework-facing part to `zenith-desktop` and keep the native call here,\n' +
+      'behind a port the adapter implements.',
+  },
 ];
 
 function fail(message) {
@@ -58,8 +86,8 @@ function fail(message) {
   process.exit(1);
 }
 
-function forbiddenReason(crateName) {
-  for (const rule of FORBIDDEN) {
+function forbiddenReason(forbidden, crateName) {
+  for (const rule of forbidden) {
     const matches =
       rule.kind === 'exact' ? crateName === rule.name : crateName.startsWith(rule.name);
     if (matches) {
@@ -136,65 +164,66 @@ function reachableFrom(metadata, rootId) {
 function main() {
   const metadata = readMetadata(process.argv.slice(2));
   const members = new Set(metadata.workspace_members ?? []);
-  const core = metadata.packages.find((pkg) => pkg.name === CORE_CRATE);
 
-  if (!core) {
-    fail(`no workspace member named \`${CORE_CRATE}\` was found`);
-  }
-  if (!members.has(core.id)) {
-    fail(`\`${CORE_CRATE}\` exists but is not a workspace member`);
-  }
   if (!metadata.resolve) {
     fail('cargo metadata did not include a resolve graph; run it without --no-deps');
   }
 
-  const violations = [];
+  for (const boundary of BOUNDARIES) {
+    const crate = metadata.packages.find((pkg) => pkg.name === boundary.crate);
 
-  // Rule 1: what the crate declares, of any kind.
-  for (const dependency of core.dependencies ?? []) {
-    const why = forbiddenReason(dependency.name);
-    if (why) {
-      violations.push({
-        label: `${dependency.name} (${dependency.req}) — declared as a ${dependency.kind ?? 'normal'} dependency`,
-        why,
-      });
+    if (!crate) {
+      fail(`no workspace member named \`${boundary.crate}\` was found`);
     }
-  }
-
-  // Rule 2: what the library actually links, transitively.
-  const reached = reachableFrom(metadata, core.id);
-  for (const [id, introducedBy] of reached) {
-    const pkg = metadata.packages.find((candidate) => candidate.id === id);
-    if (!pkg) {
-      continue;
+    if (!members.has(crate.id)) {
+      fail(`\`${boundary.crate}\` exists but is not a workspace member`);
     }
-    const why = forbiddenReason(pkg.name);
-    if (why) {
-      const via = introducedBy ? ` (via ${introducedBy})` : '';
-      violations.push({ label: `${pkg.name} ${pkg.version}${via}`, why });
+
+    const violations = [];
+
+    // Rule 1: what the crate declares, of any kind.
+    for (const dependency of crate.dependencies ?? []) {
+      const why = forbiddenReason(boundary.forbidden, dependency.name);
+      if (why) {
+        violations.push({
+          label: `${dependency.name} (${dependency.req}) — declared as a ${dependency.kind ?? 'normal'} dependency`,
+          why,
+        });
+      }
     }
-  }
 
-  violations.sort((left, right) => left.label.localeCompare(right.label));
+    // Rule 2: what the library actually links, transitively.
+    const reached = reachableFrom(metadata, crate.id);
+    for (const [id, introducedBy] of reached) {
+      const pkg = metadata.packages.find((candidate) => candidate.id === id);
+      if (!pkg) {
+        continue;
+      }
+      const why = forbiddenReason(boundary.forbidden, pkg.name);
+      if (why) {
+        const via = introducedBy ? ` (via ${introducedBy})` : '';
+        violations.push({ label: `${pkg.name} ${pkg.version}${via}`, why });
+      }
+    }
 
-  if (violations.length > 0) {
-    console.error(
-      `\`${CORE_CRATE}\` must not depend on the desktop framework or on native platform bindings.`,
+    violations.sort((left, right) => left.label.localeCompare(right.label));
+
+    if (violations.length > 0) {
+      console.error(`\`${boundary.crate}\` ${boundary.intent}.`);
+      console.error(
+        `Reached ${reached.size} crates over runtime edges; ${violations.length} violations:\n`,
+      );
+      for (const violation of violations) {
+        console.error(`  ✗ ${violation.label} — ${violation.why}`);
+      }
+      console.error(`\n${boundary.remedy}`);
+      process.exit(1);
+    }
+
+    console.log(
+      `✅ ${boundary.crate} declares no forbidden dependency and reaches ${reached.size} crates over runtime edges without touching one.`,
     );
-    console.error(`Reached ${reached.size} crates over runtime edges; ${violations.length} violations:\n`);
-    for (const violation of violations) {
-      console.error(`  ✗ ${violation.label} — ${violation.why}`);
-    }
-    console.error(
-      '\nMove the dependency to `zenith-desktop`, or express what the domain needs as a\n' +
-        'trait in `zenith-core` and implement it in the adapter that owns the binding.',
-    );
-    process.exit(1);
   }
-
-  console.log(
-    `✅ ${CORE_CRATE} declares no forbidden dependency and reaches ${reached.size} crates over runtime edges without touching one.`,
-  );
 }
 
 main();

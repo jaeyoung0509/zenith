@@ -464,7 +464,7 @@ impl PlatformEnvironment {
         let flavor = self.flavor;
         let profile_shape = match home_text.as_deref() {
             None => ProfileShape::Unresolved,
-            Some(home) if crate::platform::path_algebra::is_unc(home, flavor) => ProfileShape::Unc,
+            Some(home) if crate::path_algebra::is_unc(home, flavor) => ProfileShape::Unc,
             Some(_) if flavor.is_windows() => ProfileShape::DriveRooted,
             Some(_) => ProfileShape::PosixHome,
         };
@@ -480,13 +480,11 @@ impl PlatformEnvironment {
         let known_folder_redirected = self.known_folders.iter().any(|(_, folder)| match home_text
             .as_deref()
         {
-            Some(home) => {
-                !crate::platform::path_algebra::contains(home, &folder.to_string_lossy(), flavor)
-            }
+            Some(home) => !crate::path_algebra::contains(home, &folder.to_string_lossy(), flavor),
             None => true,
         });
         let temp_inside_profile = match (self.temp_dir().to_str(), home_text.as_deref()) {
-            (Some(temp), Some(home)) => crate::platform::path_algebra::contains(home, temp, flavor),
+            (Some(temp), Some(home)) => crate::path_algebra::contains(home, temp, flavor),
             _ => false,
         };
         let volume_identity = self
@@ -567,7 +565,7 @@ impl PlatformPathsProvider for PlatformEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::path_algebra::{protected_root, PathFlavor, ProtectedRoot};
+    use crate::path_algebra::{protected_root, PathFlavor, ProtectedRoot};
 
     #[test]
     fn simulated_profile_can_live_on_a_non_system_drive() {
@@ -751,7 +749,7 @@ mod tests {
             Some(ProtectedRoot::WindowsDirectory)
         );
         let home = environment.user_home().expect("fixture home");
-        assert!(crate::platform::path_algebra::contains(
+        assert!(crate::path_algebra::contains(
             r"D:\Users\fixture",
             &home.to_string_lossy(),
             environment.flavor()
@@ -780,7 +778,7 @@ mod tests {
         let desktop = environment
             .known_folder(KnownFolder::Desktop)
             .expect("redirected desktop");
-        assert!(crate::platform::path_algebra::contains(
+        assert!(crate::path_algebra::contains(
             r"D:\Users\me\Desktop",
             &desktop.to_string_lossy(),
             environment.flavor()

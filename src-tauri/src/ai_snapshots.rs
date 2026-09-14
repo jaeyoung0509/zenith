@@ -205,7 +205,7 @@ pub async fn fetch_activity_registry(
     singleflight: &Arc<SingleFlight<AgentActivityRegistry, ()>>,
     generation: &Arc<AtomicU64>,
     metrics: &Arc<RuntimeMetrics>,
-    environment: &Arc<crate::platform::PlatformEnvironment>,
+    environment: &Arc<zenith_platform::PlatformEnvironment>,
     inactivity_threshold_secs: u64,
     force: bool,
 ) -> Result<AgentActivityRegistry, String> {
@@ -252,8 +252,8 @@ pub async fn fetch_activity_registry(
 pub fn enrich_activity_for_project_view(
     mut registry: AgentActivityRegistry,
     dev_store: &Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
-    storage_state: &Arc<crate::storage_commands::StorageWorkflowState>,
-    environment: &crate::platform::PlatformEnvironment,
+    storage_service: &Arc<crate::services::StorageService>,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     let listeners = crate::dev_ports::list_listeners_with_context(
         dev_store,
@@ -261,7 +261,7 @@ pub fn enrich_activity_for_project_view(
         environment.user_home().as_deref(),
     )
     .unwrap_or_default();
-    let artifact_sizes = storage_state.cached_developer_artifact_sizes();
+    let artifact_sizes = storage_service.cached_developer_artifact_sizes();
     for project in &mut registry.snapshot.projects {
         if let Some(root) = registry.project_roots.get(&project.identity.id) {
             project.artifact_size_bytes = artifact_sizes.get(root).copied();
@@ -503,7 +503,7 @@ mod tests {
         let barrier = Arc::new(tokio::sync::Barrier::new(4));
         let mut handles = Vec::new();
         for _ in 0..4 {
-            let environment = Arc::new(crate::platform::PlatformEnvironment::native());
+            let environment = Arc::new(zenith_platform::PlatformEnvironment::native());
             let (cache, flight, generation, metrics) = (
                 cache.clone(),
                 flight.clone(),

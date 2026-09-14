@@ -1,18 +1,17 @@
 use crate::collection::SingleFlight;
 use crate::execution_budget::ExecutionBudgets;
-use crate::models::{AiProviderUsage, AiUsageSnapshot, DeletePlan, ScanResult, ZenithSettings};
+use crate::models::{AiProviderUsage, AiUsageSnapshot, ZenithSettings};
 use crate::operation_gate::StorageOperationGate;
 use crate::power::KeepAwakeManager;
 use crate::runtime_metrics::RuntimeMetrics;
 use crate::signatures::SignatureRegistry;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 pub struct AppState {
     /// Platform facts the backend may depend on. Tests inject a simulated
     /// environment here instead of reading the host's.
-    pub environment: Arc<crate::platform::PlatformEnvironment>,
+    pub environment: Arc<zenith_platform::PlatformEnvironment>,
     /// Container host observed at startup, so no adapter reads the process
     /// environment on its own.
     pub container_host: crate::docker::adapter::ContainerHost,
@@ -24,15 +23,16 @@ pub struct AppState {
     pub registry_load_error: Option<String>,
     pub awake_manager: Arc<KeepAwakeManager>,
     pub settings: Arc<Mutex<ZenithSettings>>,
-    pub last_scan: Arc<Mutex<Option<ScanResult>>>,
     pub credentials: Arc<dyn crate::ai_providers::CredentialStore>,
     pub ai_collection_service: Arc<crate::ai_providers::ProviderCollectionService>,
     pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
     pub usage_singleflight: Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     pub usage_generation: Arc<AtomicU64>,
-    pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
     pub storage_operation_gate: StorageOperationGate,
-    pub storage_state: Arc<crate::storage_commands::StorageWorkflowState>,
+    /// Reviewed storage management: Large Files, Developer Artifact Review,
+    /// and App Uninstaller, including their inventories, plans, and the Trash
+    /// executor.
+    pub storage_service: Arc<crate::services::StorageService>,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
     pub memory_termination_store: Arc<Mutex<crate::metrics::MemoryTerminationStore>>,
     pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
@@ -42,10 +42,11 @@ pub struct AppState {
     pub ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     pub ai_control_refresh_lock: Arc<Mutex<()>>,
     pub ai_control_runtime: Arc<crate::ai_control_center::runtime::AiControlRuntime>,
-    pub platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider>,
+    pub platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider>,
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
+    pub cleanup_service: Arc<crate::services::CleanupService>,
 }
 
 impl AppState {
@@ -58,7 +59,7 @@ impl AppState {
     /// commands' dependencies (the environment self-check, the metrics handles,
     /// the shared caches) without a Tauri app handle.
     pub fn new(
-        environment: Arc<crate::platform::PlatformEnvironment>,
+        environment: Arc<zenith_platform::PlatformEnvironment>,
         container_host: crate::docker::adapter::ContainerHost,
     ) -> Self {
         // The catalog is loaded against the same description every other
@@ -75,7 +76,7 @@ impl AppState {
     /// seam exists so a test can assert that a catalog which failed to load
     /// refuses a scan instead of reporting an empty, healthy-looking one.
     pub fn with_catalog(
-        environment: Arc<crate::platform::PlatformEnvironment>,
+        environment: Arc<zenith_platform::PlatformEnvironment>,
         container_host: crate::docker::adapter::ContainerHost,
         registry: SignatureRegistry,
         registry_load_error: Option<String>,
@@ -84,7 +85,6 @@ impl AppState {
         let awake_manager = Arc::new(KeepAwakeManager::new());
         awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
         let settings = Arc::new(Mutex::new(ZenithSettings::default()));
-        let last_scan = Arc::new(Mutex::new(None));
         let credentials: Arc<dyn crate::ai_providers::CredentialStore> =
             Arc::new(crate::ai_providers::OsCredentialStore::default());
         let ai_collection_service =
@@ -93,9 +93,7 @@ impl AppState {
         let runtime_metrics = Arc::new(RuntimeMetrics::new());
         let usage_singleflight = Arc::new(SingleFlight::with_metrics(runtime_metrics.clone()));
         let usage_generation = Arc::new(AtomicU64::new(1));
-        let delete_plans = Arc::new(Mutex::new(HashMap::new()));
         let storage_operation_gate = StorageOperationGate::default();
-        let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
         let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
         let memory_termination_store =
             Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
@@ -122,10 +120,50 @@ impl AppState {
                 awake_manager.clone(),
                 settings.clone(),
             ));
-        let platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider> =
-            Arc::new(crate::platform::NativePlatformCapabilities::new(
+        let trash_executor = Arc::new(crate::trash_manager::TrashExecutor::new(Arc::new(
+            zenith_platform::NativeTrashBackend,
+        )));
+        let platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider> =
+            Arc::new(zenith_platform::NativePlatformCapabilities::new(
                 environment.clone(),
+                // The container answer is asked exactly once, where the CLI
+                // resolution lives, and the capability snapshot reports it.
+                Arc::new(crate::docker::container_cli_detected),
             ));
+
+        // The reviewed-storage workflows own their gate, budgets, inventories,
+        // plan store, and the Trash executor, so a handler never orchestrates
+        // them. The executor is not kept separately: the raw port stays inside
+        // the service.
+        let storage_service = Arc::new(crate::services::StorageService::new(
+            storage_operation_gate.clone(),
+            execution_budgets.clone(),
+            environment.clone(),
+            trash_executor,
+            Arc::new(zenith_platform::NativeSystemActions::new()),
+            platform_capabilities.clone(),
+        ));
+
+        let docker_status_cache = Arc::new(Mutex::new(None));
+        let scan_service = Arc::new(crate::services::ScanService::new(
+            registry.clone(),
+            environment.clone(),
+        ));
+        let plan_store = Arc::new(crate::services::PlanStore::new(
+            crate::services::PlanLifecycle::cleanup(),
+        ));
+        let scan_store = Arc::new(crate::services::ScanStore::new());
+        let cleanup_service = Arc::new(crate::services::CleanupService::new(
+            scan_service.clone(),
+            plan_store.clone(),
+            scan_store.clone(),
+            storage_operation_gate.clone(),
+            execution_budgets.clone(),
+            environment.clone(),
+            registry.clone(),
+            docker_status_cache.clone(),
+            platform_capabilities.clone(),
+        ));
 
         Self {
             environment,
@@ -134,15 +172,13 @@ impl AppState {
             registry_load_error,
             awake_manager,
             settings,
-            last_scan,
             credentials,
             ai_collection_service,
             ai_usage_cache,
             usage_singleflight,
             usage_generation,
-            delete_plans,
             storage_operation_gate,
-            storage_state,
+            storage_service,
             memory_sampler,
             memory_termination_store,
             dev_port_store,
@@ -155,7 +191,8 @@ impl AppState {
             platform_capabilities,
             runtime_metrics,
             execution_budgets,
-            docker_status_cache: Arc::new(Mutex::new(None)),
+            docker_status_cache,
+            cleanup_service,
         }
     }
 

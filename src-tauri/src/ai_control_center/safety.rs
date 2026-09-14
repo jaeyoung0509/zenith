@@ -1,11 +1,11 @@
 use crate::models::*;
-use crate::platform::description::PlatformEnvironment;
-use crate::platform::path_algebra;
 use crate::privacy::secrets;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
+use zenith_platform::description::PlatformEnvironment;
+use zenith_platform::path_algebra;
 
 const MAX_ENTRIES_PER_ROOT: usize = 2_000;
 const MAX_FILE_BYTES: u64 = 1_048_576;
@@ -754,7 +754,7 @@ fn device(_path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::path_algebra::PathFlavor;
+    use zenith_platform::path_algebra::PathFlavor;
 
     /// An environment that states no profile, so the host's home never decides
     /// whether a temporary project root is eligible.

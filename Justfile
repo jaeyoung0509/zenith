@@ -172,11 +172,14 @@ lint: lint-rust
 check-rust:
     cargo check --workspace
 
-# Architecture rule: the domain crate must build without the desktop crate and
-# must not reach a desktop framework or a native platform binding, at any depth.
-# Enforced from the resolved dependency graph rather than by convention.
+# Architecture rule: the domain and platform crates must build without the
+# desktop crate. The domain must not reach a desktop framework or a native
+# platform binding at any depth; the platform crate owns those bindings and must
+# not reach the framework. Enforced from the resolved dependency graph rather
+# than by convention.
 check-architecture:
     cargo check -p zenith-core
+    cargo check -p zenith-platform
     node scripts/check_core_boundaries.cjs
 
 # Check code types & compile check

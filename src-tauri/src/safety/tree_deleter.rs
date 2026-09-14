@@ -1,4 +1,3 @@
-use crate::platform::{PathFlavor, PlatformEnvironment};
 #[cfg(windows)]
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
@@ -8,6 +7,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::Path;
+use zenith_platform::{PathFlavor, PlatformEnvironment};
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -142,7 +142,7 @@ impl WindowsDeleteHandle {
             FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
         };
 
-        let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
+        let wide = zenith_platform::NativePlatformPaths::to_verbatim_wide(path);
 
         let handle = retry_on_sharing_violation(|| {
             let h = unsafe {
@@ -297,7 +297,7 @@ impl WindowsDeleteHandle {
 }
 
 impl SafeTreeDeleter {
-    pub fn delete_contents(
+    fn delete_contents_unchecked(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
@@ -391,7 +391,7 @@ impl SafeTreeDeleter {
         report
     }
 
-    pub fn delete_path(
+    fn delete_path_unchecked(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
@@ -422,6 +422,24 @@ impl SafeTreeDeleter {
         }
         Self::delete_entry(root, root, exclusions, environment, &mut report);
         report
+    }
+
+    /// Mutates the filesystem by deleting directory contents, requiring a verified deletion authority.
+    pub fn delete_contents_validated<'a>(
+        authority: impl Into<super::FilesystemDeleteAuthority<'a>>,
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
+        let auth = authority.into();
+        Self::delete_contents_unchecked(auth.path(), auth.exclusions(), environment)
+    }
+
+    /// Mutates the filesystem by deleting a path, requiring a verified deletion authority.
+    pub fn delete_path_validated<'a>(
+        authority: impl Into<super::FilesystemDeleteAuthority<'a>>,
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
+        let auth = authority.into();
+        Self::delete_path_unchecked(auth.path(), auth.exclusions(), environment)
     }
 
     /// Deletes directory children using the already-verified parent directory
@@ -1212,8 +1230,8 @@ impl SafeTreeDeleter {
     }
 
     fn validate_verified_scope(path: &Path, verified_root: &Path) -> Result<(), String> {
-        let normalized_path = Blacklist::normalize_path(path);
-        let normalized_root = Blacklist::normalize_path(verified_root);
+        let normalized_path = zenith_platform::path_algebra::normalize_lexical(path);
+        let normalized_root = zenith_platform::path_algebra::normalize_lexical(verified_root);
         if normalized_path != normalized_root && !normalized_path.starts_with(&normalized_root) {
             return Err(format!(
                 "Path escaped the verified cleanup target: {}",
@@ -1270,7 +1288,7 @@ impl SafeTreeDeleter {
     /// drift from the path algebra the rest of the tree uses and the Windows
     /// semantics are covered on every runner.
     fn paths_equal(left: &Path, right: &Path, flavor: PathFlavor) -> bool {
-        crate::platform::path_algebra::equal(
+        zenith_platform::path_algebra::equal(
             &left.to_string_lossy(),
             &right.to_string_lossy(),
             flavor,
@@ -1278,7 +1296,7 @@ impl SafeTreeDeleter {
     }
 
     fn path_starts_with(path: &Path, base: &Path, flavor: PathFlavor) -> bool {
-        crate::platform::path_algebra::contains(
+        zenith_platform::path_algebra::contains(
             &base.to_string_lossy(),
             &path.to_string_lossy(),
             flavor,
@@ -1301,8 +1319,8 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 mod tests {
     use super::*;
     use crate::models::ZenithError;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     /// Deletion tests exercise argument threading, not path resolution: no
     /// exclusion in these tests needs the environment to expand.
@@ -1398,7 +1416,7 @@ mod tests {
         let payload = root.join("payload.bin");
         std::fs::write(&payload, b"payload").unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_unchecked(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
         assert!(root.is_dir());
@@ -1412,7 +1430,7 @@ mod tests {
             SymlinkGuard::is_symlink_strict(&missing),
             Err(ZenithError::Missing(_))
         ));
-        let environment = crate::platform::PlatformEnvironment::native();
+        let environment = zenith_platform::PlatformEnvironment::native();
         assert!(matches!(
             SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment),
             Err(ZenithError::Missing(_))
@@ -1460,7 +1478,7 @@ mod tests {
 
         std::fs::remove_file(&vanished).unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_unchecked(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(report.errors.is_empty());
         assert_eq!(report.reclaimed_bytes, expected_bytes);
@@ -1478,7 +1496,7 @@ mod tests {
         std::fs::create_dir(&missing).unwrap();
         std::fs::remove_dir(&missing).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&missing, &[], &environment());
+        let report = SafeTreeDeleter::delete_path_unchecked(&missing, &[], &environment());
         assert!(report.is_success());
         assert!(report.errors.is_empty());
         assert_eq!(report.reclaimed_bytes, 0);
@@ -1500,7 +1518,7 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(&file1, perms).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_path_unchecked(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!root.exists());
     }
@@ -1517,7 +1535,7 @@ mod tests {
         std::fs::set_permissions(&target, perms).unwrap();
         assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_unchecked(dir.path(), &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!target.exists(), "readonly file must be deleted");
     }
@@ -1549,7 +1567,7 @@ mod tests {
         root_p.set_readonly(true);
         std::fs::set_permissions(&root, root_p).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_path_unchecked(&root, &[], &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!root.exists(), "readonly directory tree must be deleted");
     }
@@ -1570,7 +1588,7 @@ mod tests {
             .open(&target)
             .unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_unchecked(dir.path(), &[], &environment());
         assert!(
             !report.is_success(),
             "deletion must fail while file is exclusively locked"
@@ -1587,7 +1605,7 @@ mod tests {
 
         drop(lock_handle);
 
-        let report2 = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report2 = SafeTreeDeleter::delete_contents_unchecked(dir.path(), &[], &environment());
         assert!(report2.is_success(), "errors: {:?}", report2.errors);
         assert!(!target.exists());
     }
@@ -1612,7 +1630,7 @@ mod tests {
             drop(lock_handle);
         });
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_unchecked(dir.path(), &[], &environment());
         handle.join().unwrap();
 
         assert!(

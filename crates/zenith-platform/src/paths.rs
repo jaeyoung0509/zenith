@@ -1,4 +1,4 @@
-use crate::platform::path_algebra::PathFlavor;
+use crate::path_algebra::PathFlavor;
 use std::path::{Path, PathBuf};
 
 /// Platform-owned path resolution interface for user directories and reviewed system roots.
@@ -111,7 +111,7 @@ pub trait PlatformPathsProvider: Send + Sync {
             // Normalization cannot be trusted to decide this: `C:cache` is
             // drive-relative while `C:\cache` is rooted, and a normalizer that
             // inserted a separator would accept the relative form.
-            if !crate::platform::path_algebra::is_absolute(pattern, self.flavor()) {
+            if !crate::path_algebra::is_absolute(pattern, self.flavor()) {
                 return None;
             }
             PathBuf::from(pattern)
@@ -121,10 +121,10 @@ pub trait PlatformPathsProvider: Send + Sync {
         // is the host's: that keeps POSIX normalization byte-exact. A simulated
         // environment is normalized by the algebra for its own flavor, so a
         // POSIX environment produces POSIX spellings on a Windows runner.
-        let normalized = if flavor == crate::platform::path_algebra::PathFlavor::current() {
-            crate::safety::Blacklist::normalize_path(&raw_path)
+        let normalized = if flavor == crate::path_algebra::PathFlavor::current() {
+            crate::path_algebra::normalize_lexical(&raw_path)
         } else {
-            PathBuf::from(crate::platform::path_algebra::normalize(
+            PathBuf::from(crate::path_algebra::normalize(
                 &raw_path.to_string_lossy(),
                 flavor,
             ))
@@ -132,16 +132,16 @@ pub trait PlatformPathsProvider: Send + Sync {
 
         // Safety: the path must be absolute under its own flavor's rules and
         // must not be a broad root such as `C:\` or `/`.
-        if flavor == crate::platform::path_algebra::PathFlavor::current() {
+        if flavor == crate::path_algebra::PathFlavor::current() {
             if !normalized.is_absolute() || is_broad_root(&normalized) {
                 return None;
             }
         } else {
             let text = normalized.to_string_lossy();
-            if !crate::platform::path_algebra::is_absolute(&text, flavor) {
+            if !crate::path_algebra::is_absolute(&text, flavor) {
                 return None;
             }
-            if crate::platform::path_algebra::is_root(&text, flavor) {
+            if crate::path_algebra::is_root(&text, flavor) {
                 return None;
             }
         }
@@ -151,8 +151,8 @@ pub trait PlatformPathsProvider: Send + Sync {
 
     /// Path flavor of the described environment. Implementations that simulate
     /// another platform override this; the default is the compiled target.
-    fn flavor(&self) -> crate::platform::path_algebra::PathFlavor {
-        crate::platform::path_algebra::PathFlavor::current()
+    fn flavor(&self) -> crate::path_algebra::PathFlavor {
+        crate::path_algebra::PathFlavor::current()
     }
 }
 
@@ -720,7 +720,7 @@ fn join_with_flavor(base: PathBuf, tail: &str, flavor: PathFlavor) -> PathBuf {
     if flavor == PathFlavor::current() {
         return base.join(tail);
     }
-    PathBuf::from(crate::platform::path_algebra::join(
+    PathBuf::from(crate::path_algebra::join(
         &base.to_string_lossy(),
         tail,
         flavor,
@@ -828,7 +828,7 @@ impl PlatformPathsProvider for SimulatedPaths {
         self.program_files.clone().or_else(|| {
             self.flavor
                 .is_windows()
-                .then(crate::platform::paths::windows_program_files)
+                .then(crate::paths::windows_program_files)
         })
     }
 
@@ -836,7 +836,7 @@ impl PlatformPathsProvider for SimulatedPaths {
         self.program_data.clone().or_else(|| {
             self.flavor
                 .is_windows()
-                .then(crate::platform::paths::windows_program_data)
+                .then(crate::paths::windows_program_data)
         })
     }
 

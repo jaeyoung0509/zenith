@@ -5,11 +5,11 @@ use zenith_lib::docker::DockerAdapter;
 use zenith_lib::models::{
     AwakeBehavior, Category, CleanStrategy, DiskMetrics, RiskTier, Signature,
 };
-use zenith_lib::platform::path_algebra::PathFlavor;
-use zenith_lib::platform::PlatformEnvironment;
 use zenith_lib::power::{KeepAwakeManager, PowerAssertion};
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
+use zenith_platform::path_algebra::PathFlavor;
+use zenith_platform::PlatformEnvironment;
 
 #[test]
 fn test_signature_registry_categories_and_risk_counts() {
@@ -90,7 +90,11 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         reclaimable_is_lower_bound: false,
     };
 
-    let items = DirectoryScanner::scan_signature(&signature, &PlatformEnvironment::native());
+    let items = DirectoryScanner::scan_signature(
+        &signature,
+        &PlatformEnvironment::native(),
+        &zenith_core::application::dto::scan::NeverCancelled,
+    );
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].path, known.to_string_lossy());
     assert!(items[0].is_selected);
@@ -148,6 +152,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         &[],
         false,
         &PlatformEnvironment::native(),
+        &zenith_lib::models::NeverCancelled,
         |_| {},
     );
     let items = &result.categories[0].items;
@@ -162,6 +167,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         &excluded,
         false,
         &PlatformEnvironment::native(),
+        &zenith_lib::models::NeverCancelled,
         |_| {},
     );
     assert_eq!(filtered.categories[0].items.len(), 1);
@@ -319,11 +325,11 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
 #[test]
 fn test_windows_blacklist_and_path_defense() {
     use std::path::Path;
-    use zenith_lib::platform::path_algebra::PathFlavor;
-    use zenith_lib::platform::paths::SimulatedPaths;
-    use zenith_lib::platform::KnownFolder;
     use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
     use zenith_lib::safety::Blacklist;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
+    use zenith_platform::KnownFolder;
 
     // Stated environment: the profile lives on `Z:`, the redirected Documents
     // folder lives on `D:`, and nothing here mirrors this host's layout.
@@ -423,16 +429,17 @@ fn test_windows_blacklist_and_path_defense() {
 fn test_windows_verbatim_paths_preserve_blacklist_boundaries() {
     use std::path::{Path, PathBuf};
     use zenith_lib::safety::Blacklist;
+    use zenith_platform::path_algebra;
 
     let host = PlatformEnvironment::native();
 
     let user_cache = Path::new(r"\\?\C:\Users\테스트\.gemini\antigravity-cli\log");
     assert_eq!(
-        Blacklist::normalize_path(user_cache),
+        path_algebra::normalize_lexical(user_cache),
         PathBuf::from(r"C:\Users\테스트\.gemini\antigravity-cli\log")
     );
     assert_eq!(
-        Blacklist::normalize_path(Path::new(r"\\?\UNC\server\share\cache")),
+        path_algebra::normalize_lexical(Path::new(r"\\?\UNC\server\share\cache")),
         PathBuf::from(r"\\server\share\cache")
     );
     assert!(!Blacklist::is_blacklisted_with(user_cache, &host));

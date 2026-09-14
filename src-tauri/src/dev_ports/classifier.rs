@@ -1,6 +1,6 @@
-use crate::platform::path_algebra::{self, PathFlavor};
 use crate::process_owner::ProcessOwner;
 use std::path::{Path, PathBuf};
+use zenith_platform::path_algebra::{self, PathFlavor};
 
 pub struct ProcessClassificationInput<'a> {
     pub pid: u32,

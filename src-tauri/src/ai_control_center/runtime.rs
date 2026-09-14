@@ -21,7 +21,7 @@ pub struct AiControlRuntime {
     /// The machine this runtime describes. Listener classification compares
     /// process paths and masks working directories, so it needs the stated
     /// environment rather than the host's.
-    environment: std::sync::Arc<crate::platform::PlatformEnvironment>,
+    environment: std::sync::Arc<zenith_platform::PlatformEnvironment>,
     agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
     activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,
     activity_generation: Arc<AtomicU64>,
@@ -39,7 +39,7 @@ impl AiControlRuntime {
     pub fn new(
         memory_sampler: Arc<crate::metrics::MemorySampler>,
         dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
-        environment: std::sync::Arc<crate::platform::PlatformEnvironment>,
+        environment: std::sync::Arc<zenith_platform::PlatformEnvironment>,
         agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
         activity_singleflight: Arc<SingleFlight<crate::agent_activity::AgentActivityRegistry, ()>>,
         activity_generation: Arc<AtomicU64>,
@@ -215,7 +215,7 @@ mod tests {
         Arc::new(AiControlRuntime::new(
             memory_sampler,
             Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
-            Arc::new(crate::platform::PlatformEnvironment::native()),
+            Arc::new(zenith_platform::PlatformEnvironment::native()),
             agent_activity_cache,
             Arc::new(SingleFlight::new()),
             Arc::new(AtomicU64::new(1)),

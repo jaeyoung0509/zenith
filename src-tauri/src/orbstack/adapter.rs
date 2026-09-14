@@ -2,10 +2,10 @@ use crate::models::{
     derive_cleanup_disposition, Category, CleanupEligibility, FileSize, ObservationQuality,
     RiskTier, ScanItem,
 };
-use crate::platform::description::PlatformEnvironment;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use zenith_platform::description::PlatformEnvironment;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -99,12 +99,12 @@ mod tests {
     use super::{OrbStackAdapter, ORBSTACK_STORAGE_PATH};
     #[cfg(unix)]
     use crate::models::{Category, RiskTier};
-    use crate::platform::description::PlatformEnvironment;
-    use crate::platform::path_algebra::PathFlavor;
     #[cfg(unix)]
     use std::fs::OpenOptions;
     #[cfg(unix)]
     use std::io::{Seek, SeekFrom, Write};
+    use zenith_platform::description::PlatformEnvironment;
+    use zenith_platform::path_algebra::PathFlavor;
 
     fn profile_with_storage() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
         let fixture = tempfile::tempdir().unwrap();

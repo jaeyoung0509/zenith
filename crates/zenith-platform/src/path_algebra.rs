@@ -15,6 +15,8 @@
 //! * Ambiguous input fails closed. A component that might be an 8.3 alias of a
 //!   protected directory is treated as protected rather than assumed benign.
 
+use std::path::{Path, PathBuf};
+
 /// Which platform's path syntax and comparison rules apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathFlavor {
@@ -325,7 +327,46 @@ pub fn fold(text: &str, flavor: PathFlavor) -> String {
     }
 }
 
-/// Comparison key: normalized, case folded, no trailing separator.
+/// Lexically normalizes a host path without touching the filesystem or
+/// following links: `.` components are dropped and `..` components are
+/// resolved against the preceding component.
+///
+/// This is the [`std::path::Path`] counterpart of [`normalize`], and the
+/// difference is deliberate: a host path is not necessarily valid UTF-8, so it
+/// must not be round-tripped through a string that could replace a component
+/// with `U+FFFD` and change which file the path denotes. Callers that hold a
+/// path the running process is about to use take this one; callers comparing a
+/// *stated* environment's spelling take the flavor-parameterized string algebra
+/// above.
+pub fn normalize_lexical(path: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    let platform_path = crate::paths::NativePlatformPaths::normalize_verbatim_path(path);
+    #[cfg(target_os = "windows")]
+    let path = platform_path.as_path();
+
+    let mut components = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Prefix(p) => components.push(std::path::Component::Prefix(p)),
+            std::path::Component::RootDir => components.push(std::path::Component::RootDir),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if let Some(last) = components.last() {
+                    if !matches!(
+                        last,
+                        std::path::Component::RootDir | std::path::Component::Prefix(_)
+                    ) {
+                        components.pop();
+                    }
+                }
+            }
+            std::path::Component::Normal(n) => components.push(std::path::Component::Normal(n)),
+        }
+    }
+    components.into_iter().collect()
+}
+
+/// Case folds a path into a comparison key with the environment's rules.
 pub fn key(path: &str, flavor: PathFlavor) -> String {
     fold(&normalize(path, flavor), flavor)
 }

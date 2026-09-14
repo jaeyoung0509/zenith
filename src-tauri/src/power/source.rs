@@ -104,7 +104,9 @@ impl PowerSourceProvider for SystemPowerSource {
 fn fallback_pmset_power_source() -> PowerSourceType {
     let mut cmd = std::process::Command::new("pmset");
     cmd.args(["-g", "batt"]);
-    if let Ok(output) = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(3)) {
+    if let Ok(output) =
+        zenith_platform::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(3))
+    {
         let text = String::from_utf8_lossy(&output.stdout);
         if text.contains("AC Power") {
             return PowerSourceType::Ac;

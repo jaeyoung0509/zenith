@@ -70,7 +70,7 @@ mod release_integration {
         }
 
         impl zenith_lib::dev_ports::DevPortSystem for TestIntegrationSystem {
-            fn path_flavor(&self) -> zenith_lib::platform::path_algebra::PathFlavor {
+            fn path_flavor(&self) -> zenith_platform::path_algebra::PathFlavor {
                 self.real.path_flavor()
             }
 

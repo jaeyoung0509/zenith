@@ -7,15 +7,14 @@ use crate::models::{
     DeveloperArtifactKind, DeveloperArtifactStatus, ReviewedFileIdentity, TrashItemResult,
     TrashPlanPreview, TrashResult,
 };
-use crate::platform::description::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
-
-const PLAN_TTL_SECS: u64 = 300;
+use zenith_platform::description::PlatformEnvironment;
 
 #[derive(Debug, Clone)]
 pub struct TrashTarget {
@@ -54,8 +53,23 @@ pub struct TrashPlan {
     pub targets: Vec<TrashTarget>,
 }
 
+impl crate::services::OneShotPlan for TrashPlan {
+    fn plan_id(&self) -> Uuid {
+        self.id
+    }
+
+    fn created_at(&self) -> u64 {
+        self.created_at
+    }
+}
+
 impl TrashPlan {
-    pub fn preview(&self) -> TrashPlanPreview {
+    /// The preview shown for review, with the window the store enforces.
+    ///
+    /// The TTL is a parameter for the same reason it is on `DeletePlan`: the
+    /// bounded store owns the lifecycle, so the number the interface displays
+    /// cannot drift from the number that refuses a stale plan.
+    pub fn preview(&self, ttl_secs: u64) -> TrashPlanPreview {
         TrashPlanPreview {
             id: self.id,
             item_count: self.targets.len(),
@@ -65,13 +79,9 @@ impl TrashPlan {
                 .iter()
                 .map(|target| target.allocated_size)
                 .sum(),
-            expires_at: self.created_at + PLAN_TTL_SECS,
+            expires_at: self.created_at.saturating_add(ttl_secs),
             size_is_lower_bound: self.targets.iter().any(|target| target.size_is_lower_bound),
         }
-    }
-
-    pub fn is_expired(&self) -> bool {
-        unix_timestamp().saturating_sub(self.created_at) >= PLAN_TTL_SECS
     }
 }
 
@@ -236,12 +246,56 @@ impl TrashPlanner {
     }
 }
 
-pub struct TrashExecutor;
+/// A reviewed target that passed execution-time validation.
+///
+/// The type has no constructor outside this module: [`validate_target`]
+/// produces it immediately before a move, and it is what [`TrashExecutor`]
+/// passes to the port. Its purpose is to keep the ordering of
+/// validate-then-move structural inside the reviewed-storage context, not to
+/// seal the port itself: the port is a raw OS primitive, and the authority is
+/// this layer's validation plus the fact that `TrashExecutor` holds the only
+/// production handle to the backend.
+#[derive(Debug)]
+struct ApprovedTrashTarget<'a> {
+    target: &'a TrashTarget,
+}
+
+impl<'a> ApprovedTrashTarget<'a> {
+    fn new(target: &'a TrashTarget) -> Self {
+        Self { target }
+    }
+
+    /// The reviewed path to move.
+    fn path(&self) -> &Path {
+        &self.target.path
+    }
+}
+
+/// Moves reviewed targets to the OS Trash, one at a time.
+///
+/// The executor owns the backend, so the raw port is not reachable from a
+/// command, a service, or any other module that could hand it a path: the only
+/// production call site is [`Self::execute`], which validates each target
+/// immediately before the move.
+pub struct TrashExecutor {
+    backend: Arc<dyn zenith_platform::TrashBackend>,
+}
 
 impl TrashExecutor {
-    pub fn execute(environment: &PlatformEnvironment, plan: TrashPlan) -> TrashResult {
-        Self::execute_with(environment, plan, |path| {
-            trash::delete(path).map_err(|error| format!("Could not move to Trash: {error}"))
+    /// Builds the executor with the backend this process moves through.
+    ///
+    /// The composition root decides which adapter is in use — the native one in
+    /// production, a recording one in a test — and every reviewed-storage
+    /// workflow goes through that decision.
+    pub fn new(backend: Arc<dyn zenith_platform::TrashBackend>) -> Self {
+        Self { backend }
+    }
+
+    /// Moves every target of `plan`, validating each immediately before its move.
+    pub fn execute(&self, environment: &PlatformEnvironment, plan: TrashPlan) -> TrashResult {
+        let backend = self.backend.as_ref();
+        Self::execute_with(environment, plan, |approved| {
+            backend.move_to_trash(approved.path())
         })
     }
 
@@ -251,7 +305,7 @@ impl TrashExecutor {
         mut move_to_trash: F,
     ) -> TrashResult
     where
-        F: FnMut(&Path) -> Result<(), String>,
+        F: FnMut(&ApprovedTrashTarget<'_>) -> Result<(), String>,
     {
         let mut result = TrashResult {
             moved_count: 0,
@@ -280,7 +334,7 @@ impl TrashExecutor {
                 continue;
             }
             match validate_target(environment, &target) {
-                Ok(()) => match move_to_trash(&target.path) {
+                Ok(approved) => match move_to_trash(&approved) {
                     Ok(()) => {
                         if matches!(target.scope, TrashScope::AppBundle) {
                             app_bundle_moved = true;
@@ -305,7 +359,7 @@ impl TrashExecutor {
                             success: false,
                             // A refused move reads as a generic OS error; when
                             // the policy explains it, the text says so.
-                            message: crate::platform::environment::describe_access_refusal(
+                            message: zenith_platform::environment::describe_access_refusal(
                                 environment,
                                 Path::new(&target.path),
                                 &message,
@@ -327,7 +381,15 @@ impl TrashExecutor {
     }
 }
 
-fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> Result<(), String> {
+/// Revalidates one reviewed target immediately before it moves.
+///
+/// Scope, symlink components, identity, developer-artifact evidence, and the
+/// app-related checks all run here, and the return value is the authority the
+/// Trash port accepts, so a target that failed a check cannot reach the port.
+fn validate_target<'a>(
+    environment: &PlatformEnvironment,
+    target: &'a TrashTarget,
+) -> Result<ApprovedTrashTarget<'a>, String> {
     match &target.scope {
         TrashScope::LargeFile { .. } => {
             if !is_allowed_large_file_path(environment, &target.path) {
@@ -425,7 +487,7 @@ fn validate_target(environment: &PlatformEnvironment, target: &TrashTarget) -> R
             }
         }
     }
-    Ok(())
+    Ok(ApprovedTrashTarget::new(target))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -592,7 +654,7 @@ fn app_data_root_for_path(environment: &PlatformEnvironment, path: &Path) -> Opt
 fn validate_no_symlink_components(
     path: &Path,
     root: &Path,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Result<(), String> {
     SymlinkGuard::validate_no_symlink_ancestors(path, root, environment)
         .map_err(|_| "Skipped because the reviewed path contains a symbolic link.".to_string())
@@ -604,7 +666,7 @@ fn is_application_running(path: &Path) -> bool {
     let Ok(canonical) = path.canonicalize() else {
         return true;
     };
-    let canonical = crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
+    let canonical = zenith_platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
     system
@@ -614,7 +676,7 @@ fn is_application_running(path: &Path) -> bool {
         .any(|executable| {
             #[cfg(target_os = "windows")]
             {
-                crate::platform::NativePlatformPaths::windows_path_starts_with(
+                zenith_platform::NativePlatformPaths::windows_path_starts_with(
                     executable, &canonical,
                 )
             }
@@ -636,11 +698,11 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use crate::models::FileIdentity;
-    use crate::platform::description::KnownFolder;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::paths::SimulatedPaths;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use zenith_platform::description::KnownFolder;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
 
     /// A POSIX environment stating exactly the profile the test means.
     fn posix_environment(home: &Path) -> PlatformEnvironment {
@@ -818,7 +880,7 @@ mod tests {
         };
 
         let plan = TrashPlanner::from_app_inspection(&environment, &inspection, &[]).unwrap();
-        assert!(plan.preview().size_is_lower_bound);
+        assert!(plan.preview(300).size_is_lower_bound);
     }
 
     #[test]
@@ -1088,9 +1150,9 @@ mod tests {
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
         let environment =
             PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(temp.path());
-        let result = TrashExecutor::execute_with(&environment, plan, |path| {
-            assert_eq!(path, target);
-            std::fs::rename(path, &trashed).map_err(|error| error.to_string())
+        let result = TrashExecutor::execute_with(&environment, plan, |approved| {
+            assert_eq!(approved.path(), target);
+            std::fs::rename(approved.path(), &trashed).map_err(|error| error.to_string())
         });
 
         assert_eq!(result.moved_count, 1);
@@ -1201,6 +1263,63 @@ mod tests {
     }
 
     #[test]
+    fn a_reviewed_target_that_changed_after_review_is_refused_before_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = dir.path().join("Documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let reviewed = documents.join("archive.zip");
+        std::fs::write(&reviewed, vec![1u8; 32]).unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(dir.path())
+            .with_known_folder(KnownFolder::Documents, &documents);
+
+        // The reviewed identity is a fresh capture taken at review time, then
+        // the item is replaced underneath it the way another process would.
+        let captured = identity_from_path(&reviewed).unwrap();
+        std::fs::write(&reviewed, vec![2u8; 64]).unwrap();
+
+        let item = TrashTarget {
+            item_id: "file".to_string(),
+            path: reviewed.clone(),
+            identity: captured,
+            logical_size: 32,
+            allocated_size: 32,
+            size_is_lower_bound: false,
+            scope: TrashScope::LargeFile {
+                approved_parent: documents.clone(),
+            },
+        };
+
+        let mut move_attempts = 0;
+        let result = TrashExecutor::execute_with(
+            &environment,
+            TrashPlan {
+                id: Uuid::new_v4(),
+                created_at: unix_timestamp(),
+                inventory_id: "inventory".to_string(),
+                targets: vec![item],
+            },
+            |_| {
+                move_attempts += 1;
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            move_attempts, 0,
+            "a target whose identity changed must not reach the Trash adapter"
+        );
+        assert_eq!(result.skipped_count, 1);
+        assert_eq!(result.moved_count, 0);
+        assert!(
+            result.items[0].message.contains("changed after review"),
+            "unexpected message: {}",
+            result.items[0].message
+        );
+    }
+
+    #[test]
     fn zero_identity_fails_verification() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().join("workspace");
@@ -1242,37 +1361,58 @@ mod tests {
     }
 
     #[test]
-    fn trash_plan_ttl_boundary_and_expiry() {
+    fn the_shared_plan_store_expires_reviewed_trash_plans_at_the_boundary() {
+        use crate::services::{PlanLifecycle, PlanStore};
+
+        let store: PlanStore<TrashPlan> = PlanStore::new(PlanLifecycle::trash());
+        let ttl = store.ttl_seconds();
         let now = unix_timestamp();
-        let valid = TrashPlan {
+        let fresh = TrashPlan {
             id: Uuid::new_v4(),
-            created_at: now - (PLAN_TTL_SECS - 1),
+            created_at: now - (ttl - 1),
             inventory_id: "test".to_string(),
             targets: vec![],
         };
-        let expired = TrashPlan {
+        let stale = TrashPlan {
             id: Uuid::new_v4(),
-            created_at: now - (PLAN_TTL_SECS + 1),
+            created_at: now - ttl,
             inventory_id: "test".to_string(),
             targets: vec![],
         };
-        let at_boundary = TrashPlan {
+
+        let fresh_id = fresh.id;
+        let stale_id = stale.id;
+        // The window the interface advertises is the window that is enforced,
+        // so a review cannot expire earlier or later than the user was told.
+        let preview = TrashPlan {
             id: Uuid::new_v4(),
-            created_at: now - PLAN_TTL_SECS,
+            created_at: now,
             inventory_id: "test".to_string(),
             targets: vec![],
-        };
-        assert!(!valid.is_expired());
-        assert!(expired.is_expired());
-        // At exactly TTL should be considered expired (fail-closed, >=)
-        assert!(at_boundary.is_expired());
+        }
+        .preview(ttl);
+        assert_eq!(preview.expires_at, now + ttl);
+
+        store.insert(fresh, now).unwrap();
+        store.insert(stale, now).unwrap();
+
+        assert!(store.take_valid(fresh_id, now).is_ok());
+        let refused = store
+            .take_valid(stale_id, now)
+            .expect_err("a plan at its TTL boundary is expired");
+        assert!(
+            refused.contains("Trash plan expired"),
+            "unexpected message: {refused}"
+        );
     }
 
     #[test]
-    fn store_plan_caps_at_64_and_evicts_oldest() {
-        use crate::storage_commands::StorageWorkflowState;
-        let storage_state = StorageWorkflowState::new();
+    fn the_shared_plan_store_caps_reviewed_trash_plans_and_evicts_the_oldest() {
+        use crate::services::{PlanLifecycle, PlanStore};
+
+        let store: PlanStore<TrashPlan> = PlanStore::new(PlanLifecycle::trash());
         let now = unix_timestamp();
+        let mut ids = Vec::new();
         for i in 0..65 {
             let plan = TrashPlan {
                 id: Uuid::new_v4(),
@@ -1280,15 +1420,18 @@ mod tests {
                 inventory_id: format!("inv-{i}"),
                 targets: vec![],
             };
-            storage_state.store_plan(plan);
+            ids.push(plan.id);
+            store.insert(plan, now + i).unwrap();
         }
-        let plans = storage_state.trash_plans.lock().unwrap();
-        assert_eq!(plans.len(), 64);
+
+        // Nothing was consumed, and the store evicted exactly the oldest plan:
+        // the newest 64 are still takeable and the first is gone.
         assert!(
-            !plans.values().any(|p| p.inventory_id == "inv-0"),
-            "oldest plan should have been evicted"
+            store.take_valid(ids[0], now + 65).is_err(),
+            "the oldest plan is the one evicted at capacity"
         );
-        assert!(plans.values().any(|p| p.inventory_id == "inv-64"));
+        assert!(store.take_valid(ids[64], now + 65).is_ok());
+        assert!(store.take_valid(ids[1], now + 65).is_ok());
     }
 
     #[test]
@@ -1336,7 +1479,7 @@ mod tests {
             ],
         };
 
-        let preview = plan.preview();
+        let preview = plan.preview(300);
         assert!(preview.size_is_lower_bound);
 
         // If only target1 moves:
@@ -1360,5 +1503,43 @@ mod tests {
         let res2 = TrashExecutor::execute_with(&environment, lower_target_plan, |_| Ok(()));
         assert!(res2.size_is_lower_bound);
         assert_eq!(res2.moved_count, 1);
+    }
+
+    #[test]
+    fn trash_executor_can_use_mock_trash_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        let documents = home.join("Documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let file = documents.join("video.mov");
+        std::fs::write(&file, b"video data").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(&home)
+            .with_known_folder(KnownFolder::Documents, documents.clone());
+
+        let plan = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: "test".to_string(),
+            targets: vec![TrashTarget {
+                item_id: "target1".to_string(),
+                path: file.clone(),
+                identity: identity_from_path(&file).unwrap(),
+                logical_size: 10,
+                allocated_size: 10,
+                size_is_lower_bound: false,
+                scope: TrashScope::LargeFile {
+                    approved_parent: documents,
+                },
+            }],
+        };
+
+        let mock_backend = Arc::new(zenith_platform::MockTrashBackend::new());
+        let executor = TrashExecutor::new(mock_backend.clone());
+        let result = executor.execute(&environment, plan);
+        assert_eq!(result.moved_count, 1);
+        assert_eq!(result.failed_count, 0);
+        assert_eq!(mock_backend.moved(), vec![file]);
     }
 }

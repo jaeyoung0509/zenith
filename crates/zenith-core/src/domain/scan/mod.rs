@@ -460,9 +460,11 @@ impl ScanResult {
 
     pub fn is_fresh_at(&self, now: u64) -> bool {
         self.quality == ObservationQuality::Fresh
-            && now
-                .checked_sub(self.finished_at)
-                .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS))
+            && crate::domain::is_within_window(
+                self.finished_at,
+                now,
+                u64::from(Self::VALID_FOR_SECONDS),
+            )
     }
 
     pub fn validate_for_cleanup(
@@ -476,9 +478,11 @@ impl ScanResult {
                 "The scan is no longer current. Scan again before cleaning.".into(),
             ));
         }
-        let is_current = now
-            .checked_sub(self.finished_at)
-            .is_some_and(|age| age < u64::from(Self::VALID_FOR_SECONDS));
+        let is_current = crate::domain::is_within_window(
+            self.finished_at,
+            now,
+            u64::from(Self::VALID_FOR_SECONDS),
+        );
         if !is_current {
             return Err(ZenithError::InvalidPlan(
                 "Scan expired. Scan again and review the new results before cleaning.".into(),

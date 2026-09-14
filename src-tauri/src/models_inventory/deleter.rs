@@ -1,10 +1,57 @@
 use crate::models::{LocalModelItem, ModelSource, ZenithError};
 use crate::models_inventory::LocalModelScanner;
-use crate::platform::PlatformEnvironment;
-use crate::safety::{SafeTreeDeleter, TreeDeleteReport};
+use crate::safety::{Blacklist, SafeTreeDeleter, SymlinkGuard, TreeDeleteReport};
 use crate::signatures::SignatureLoader;
 use crate::tooling;
 use std::path::{Path, PathBuf};
+use zenith_platform::PlatformEnvironment;
+
+/// A local model path that passed model-inventory scope and symlink validation.
+///
+/// The type is minted only inside this module, and [`Self::validate`] resolves
+/// the allowed root from the model's own source, so a caller cannot present a
+/// root of its choosing and thereby turn model-inventory authority into general
+/// filesystem authority. `SafeTreeDeleter` accepts it only through
+/// `FilesystemDeleteAuthority`.
+#[derive(Debug, Clone)]
+pub struct ValidatedModelTarget {
+    path: PathBuf,
+}
+
+impl ValidatedModelTarget {
+    /// Validates that `path` is directly scoped under the managed root of
+    /// `source`, is not blacklisted, and contains no intermediate symlink
+    /// ancestors.
+    fn validate(
+        source: ModelSource,
+        path: &Path,
+        environment: &PlatformEnvironment,
+    ) -> Result<Self, ZenithError> {
+        let managed_root = source
+            .managed_root()
+            .ok_or_else(|| ZenithError::PathNotAllowed(path.to_string_lossy().to_string()))?;
+        let allowed_root = SignatureLoader::expand_path(managed_root, environment)
+            .ok_or_else(|| ZenithError::PathNotAllowed(managed_root.to_string()))?;
+
+        if path == allowed_root || !path.starts_with(&allowed_root) {
+            return Err(ZenithError::PathNotAllowed(
+                path.to_string_lossy().to_string(),
+            ));
+        }
+
+        Blacklist::validate_with(path, environment)?;
+        SymlinkGuard::validate_canonical_blacklist_strict(path, environment)?;
+        SymlinkGuard::validate_no_symlink_ancestors(path, &allowed_root, environment)?;
+
+        Ok(Self {
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
 
 pub struct LocalModelManager;
 
@@ -16,14 +63,10 @@ impl LocalModelManager {
         let inventory = LocalModelScanner::scan_all_models(environment);
         let model = Self::resolve_by_id(&inventory.items, model_id)?;
         match model.source {
+            // A CLI-owned model is removed through the CLI; only a source with a
+            // managed filesystem root reaches the deletion primitive.
             ModelSource::Ollama => Self::delete_ollama(environment, model),
-            ModelSource::HuggingFace => {
-                Self::delete_filesystem_model(environment, model, "~/.cache/huggingface/hub")
-            }
-            ModelSource::LmStudio => {
-                Self::delete_filesystem_model(environment, model, "~/.cache/lm-studio/models")
-            }
-            ModelSource::Mlx => Self::delete_filesystem_model(environment, model, "~/.cache/mlx"),
+            source => Self::delete_filesystem_model(environment, model, source),
         }
     }
 
@@ -53,16 +96,16 @@ impl LocalModelManager {
 
         let mut cmd = tooling::command("ollama");
         cmd.args(Self::ollama_delete_args(model));
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(15)).map_err(
-            |error| {
-                let err_str = error.to_string();
-                if err_str.contains("No such file") || err_str.contains("not found") {
-                    ZenithError::ToolUnavailable("ollama".into())
-                } else {
-                    ZenithError::ExternalCommandFailed(err_str)
-                }
-            },
-        )?;
+        let output =
+            zenith_platform::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(15))
+                .map_err(|error| {
+                    let err_str = error.to_string();
+                    if err_str.contains("No such file") || err_str.contains("not found") {
+                        ZenithError::ToolUnavailable("ollama".into())
+                    } else {
+                        ZenithError::ExternalCommandFailed(err_str)
+                    }
+                })?;
         if !output.status.success() {
             let err_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
             crate::diagnostics::log_error("models", &err_str);
@@ -88,19 +131,11 @@ impl LocalModelManager {
     fn delete_filesystem_model(
         environment: &PlatformEnvironment,
         model: &LocalModelItem,
-        allowed_root: &str,
+        source: ModelSource,
     ) -> Result<Option<u64>, ZenithError> {
-        let root = SignatureLoader::expand_path(allowed_root, environment)
-            .ok_or_else(|| ZenithError::PathNotAllowed(allowed_root.into()))?;
         let path = PathBuf::from(&model.path);
-        if !Self::is_directly_scoped(&path, &root) {
-            return Err(ZenithError::PathNotAllowed(model.path.clone()));
-        }
-
-        // Ancestor symlink protection
-        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root, environment)?;
-
-        let report = SafeTreeDeleter::delete_path(&path, &[], environment);
+        let validated = ValidatedModelTarget::validate(source, &path, environment)?;
+        let report = SafeTreeDeleter::delete_path_validated(&validated, environment);
         Self::filesystem_delete_result(report)
     }
 
@@ -122,20 +157,15 @@ impl LocalModelManager {
             Err(ZenithError::Io(message))
         }
     }
-
-    fn is_directly_scoped(path: &Path, root: &Path) -> bool {
-        path != root && path.starts_with(root)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::LocalModelManager;
+    use super::{LocalModelManager, ValidatedModelTarget};
     use crate::models::{LocalModelItem, ModelSource, ZenithError};
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
     use crate::safety::TreeDeleteReport;
-    use std::path::Path;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     fn model(id: &str, name: &str, path: &str) -> LocalModelItem {
         LocalModelItem {
@@ -174,15 +204,28 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_models_must_be_below_their_adapter_root() {
-        assert!(LocalModelManager::is_directly_scoped(
-            Path::new("/Users/me/.cache/mlx/model"),
-            Path::new("/Users/me/.cache/mlx")
-        ));
-        assert!(!LocalModelManager::is_directly_scoped(
-            Path::new("/Users/me/Documents"),
-            Path::new("/Users/me/.cache/mlx")
-        ));
+    fn filesystem_models_must_be_below_their_source_managed_root() {
+        let dir = tempfile::tempdir().unwrap();
+        // The root is where the source keeps its blobs, under the stated
+        // profile: `~/.cache/mlx` for the MLX source.
+        let root = dir.path().join(".cache/mlx");
+        let model = root.join("model");
+        std::fs::create_dir_all(&model).unwrap();
+        let outside = dir.path().join("Documents");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        // The allowed root is the model source's own managed root, resolved
+        // through the stated profile: no caller supplies one.
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::current(),
+        )
+        .with_home(dir.path());
+        assert!(ValidatedModelTarget::validate(ModelSource::Mlx, &model, &environment).is_ok());
+        assert!(ValidatedModelTarget::validate(ModelSource::Mlx, &outside, &environment).is_err());
+        assert!(ValidatedModelTarget::validate(ModelSource::Mlx, &root, &environment).is_err());
+        // A source whose deletion runs through its CLI has no filesystem root
+        // to validate against, so it can never mint filesystem authority.
+        assert!(ValidatedModelTarget::validate(ModelSource::Ollama, &model, &environment).is_err());
     }
 
     #[test]
@@ -217,7 +260,7 @@ mod tests {
         let environment =
             PlatformEnvironment::simulated(PathFlavor::current()).with_home(stated_home.path());
         let reclaimed =
-            LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
+            LocalModelManager::delete_filesystem_model(&environment, &item, ModelSource::Mlx)
                 .expect("a model under the stated root is deletable");
         assert!(
             reclaimed.is_some_and(|bytes| bytes > 0),
@@ -243,8 +286,9 @@ mod tests {
 
         let environment =
             PlatformEnvironment::simulated(PathFlavor::current()).with_home(stated_home.path());
-        let error = LocalModelManager::delete_filesystem_model(&environment, &item, "~/.cache/mlx")
-            .expect_err("a path outside the adapter root must be refused");
+        let error =
+            LocalModelManager::delete_filesystem_model(&environment, &item, ModelSource::Mlx)
+                .expect_err("a path outside the adapter root must be refused");
         assert!(matches!(error, ZenithError::PathNotAllowed(_)));
         assert!(outside.path().exists());
     }

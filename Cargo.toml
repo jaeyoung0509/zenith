@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/zenith-core",
+    "crates/zenith-platform",
     "src-tauri",
 ]
 resolver = "2"

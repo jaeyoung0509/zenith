@@ -346,7 +346,7 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C");
-    let output = tooling::run_with_timeout(command, Duration::from_secs(3))
+    let output = zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err("Git command unavailable".into());
@@ -364,7 +364,7 @@ fn run_diff_command(root: &Path, args: &[&str]) -> Result<String, String> {
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C");
-    let output = tooling::run_with_timeout(command, Duration::from_secs(3))
+    let output = zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
     if output.status.success() || output.status.code() == Some(1) {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())

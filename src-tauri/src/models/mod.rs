@@ -40,23 +40,29 @@ pub use local_model::*;
 pub use metrics::*;
 pub use settings::*;
 pub use signature::*;
+pub use zenith_platform::PlatformCapabilitiesProvider;
 
 // ---------------------------------------------------------------------------
 // Zenith domain semantics, re-exported from `zenith_core`.
 // ---------------------------------------------------------------------------
 
 pub use zenith_core::application::dto::cleanup::{
-    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, PlanPreview,
-    PlanTargetPreview,
+    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanupProgressSink,
+    PlanPreview, PlanTargetPreview,
 };
-pub use zenith_core::application::dto::scan::ScanEvent;
+pub use zenith_core::application::dto::scan::{
+    CancellationProbe, NeverCancelled, ScanEvent, ScanProgressSink, ScanRequest,
+};
 pub use zenith_core::application::dto::storage::{
     AppRelatedItem, AppUninstallInspection, InstalledApp, InstalledAppInventory, LargeFileItem,
     LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult, TrashItemResult,
     TrashPlanPreview, TrashResult,
 };
 pub use zenith_core::domain::category::Category;
-pub use zenith_core::domain::cleanup::{CleanStrategy, DeletePlan, DeleteTarget};
+pub use zenith_core::domain::cleanup::{
+    CleanStrategy, CleanupOperation, ContainerCleanup, DeletePlan, DeleteTarget, FilesystemCleanup,
+    FilesystemMutation, ProviderCleanup,
+};
 pub use zenith_core::domain::error::{ZenithError, ZenithResult};
 pub use zenith_core::domain::identity::{
     CleanupIdentity, FileIdentity, ModifiedStamp, ReviewedFileIdentity,

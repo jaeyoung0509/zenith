@@ -25,7 +25,7 @@ const cargoLockPath = path.join(rootDir, 'Cargo.lock');
  * alphabetically, so a single `name = "zenith-core"` lookup would match the
  * domain crate and silently stop comparing the application.
  */
-const VERSIONED_PACKAGES = ['zenith-core', 'zenith-desktop'];
+const VERSIONED_PACKAGES = ['zenith-core', 'zenith-desktop', 'zenith-platform'];
 
 /** Half-open range of the `[workspace.package]` table inside the manifest. */
 function workspacePackageTableRange(manifest) {

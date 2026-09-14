@@ -1,10 +1,10 @@
 use crate::models::{LocalModelInventory, LocalModelItem, ModelSource, ObservationQuality};
-use crate::platform::PlatformEnvironment;
 use crate::scanner::SizeCalculator;
 use crate::signatures::SignatureLoader;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use zenith_platform::PlatformEnvironment;
 
 const MAX_INCOMPLETE_REASONS: usize = 32;
 
@@ -663,9 +663,9 @@ impl LocalModelScanner {
 mod tests {
     use super::LocalModelScanner;
     use crate::models::ObservationQuality;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::{KnownFolder, PlatformEnvironment};
     use std::path::{Path, PathBuf};
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::{KnownFolder, PlatformEnvironment};
 
     /// A stated POSIX home holding one fixture per supported model source.
     fn fixture_home() -> tempfile::TempDir {

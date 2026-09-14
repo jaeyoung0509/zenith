@@ -1,0 +1,44 @@
+[package]
+name = "zenith-platform"
+description = "Zenith platform adapters: native OS integrations for macOS and Windows behind narrow domain ports."
+publish = false
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "zenith_platform"
+path = "src/lib.rs"
+
+[dependencies]
+zenith-core = { path = "../zenith-core" }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.10", features = ["v4"] }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "process", "io-util"] }
+trash = "5.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_Globalization",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+] }
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.13"

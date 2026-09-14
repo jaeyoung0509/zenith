@@ -5,16 +5,19 @@ use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
     derive_cleanup_disposition, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category,
-    CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, FileSize,
+    CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, DeleteTarget, FileSize,
     ObservationQuality, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
 };
-use zenith_lib::platform::path_algebra::PathFlavor;
-use zenith_lib::platform::paths::SimulatedPaths;
-use zenith_lib::platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
-use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
+use zenith_lib::safety::{
+    Blacklist, RevalidationOutcome, SafeTreeDeleter, SafetyPlanner, SafetyValidator, SymlinkGuard,
+    ToctouGuard, ValidatedTarget,
+};
 use zenith_lib::scanner::SizeCalculator;
 use zenith_lib::signatures::SignatureRegistry;
+use zenith_platform::path_algebra::PathFlavor;
+use zenith_platform::paths::SimulatedPaths;
+use zenith_platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 
 /// The Windows environment every Windows blacklist assertion is computed
 /// against. The classifier's input is derived from the same value the runtime
@@ -47,6 +50,67 @@ fn windows_classifier(home: Option<&str>, temp_dir: &str) -> BlacklistEnvironmen
 /// intended input.
 fn native_environment() -> PlatformEnvironment {
     PlatformEnvironment::native()
+}
+
+fn validated_filesystem_target(
+    path: &Path,
+    strategy: CleanStrategy,
+    exclusions: &[String],
+    environment: &PlatformEnvironment,
+) -> ValidatedTarget {
+    let target = DeleteTarget {
+        item_id: "test-target".into(),
+        signature_id: "test.signature".into(),
+        name: "Test target".into(),
+        path: path.to_path_buf(),
+        strategy,
+        expected_bytes: 0,
+        risk: RiskTier::Safe,
+        identity: ToctouGuard::capture(path),
+        exclusions: exclusions.to_vec(),
+        min_age_days: None,
+    };
+
+    match SafetyValidator::revalidate(&target, environment) {
+        RevalidationOutcome::Validated(validated) => validated,
+        RevalidationOutcome::AlreadyAbsent(result) | RevalidationOutcome::Failed(result) => {
+            panic!("test target did not pass the production validator: {result:?}")
+        }
+    }
+}
+
+#[test]
+fn present_filesystem_target_without_identity_fails_closed() {
+    let fixture = tempdir().expect("create fixture");
+    let target_path = fixture.path().join("cache");
+    fs::create_dir(&target_path).expect("create target");
+    let target = DeleteTarget {
+        item_id: "missing-identity".into(),
+        signature_id: "test.signature".into(),
+        name: "Missing identity".into(),
+        path: target_path.clone(),
+        strategy: CleanStrategy::DeleteContents,
+        expected_bytes: 0,
+        risk: RiskTier::Safe,
+        identity: None,
+        exclusions: vec![],
+        min_age_days: None,
+    };
+
+    match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Failed(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::ChangedSinceScan)
+            );
+            assert!(result
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("identity is missing")));
+        }
+        other => panic!("missing filesystem identity must fail closed, got {other:?}"),
+    }
+    assert!(target_path.exists());
 }
 
 #[test]
@@ -492,7 +556,14 @@ fn cleaner_removes_user_owned_read_only_cache_trees_without_privilege_escalation
     fs::set_permissions(&nested, fs::Permissions::from_mode(0o555))
         .expect("make app resources read-only");
 
-    let report = SafeTreeDeleter::delete_path(&cache_root, &[], &PlatformEnvironment::native());
+    let environment = PlatformEnvironment::native();
+    let validated = validated_filesystem_target(
+        &cache_root,
+        CleanStrategy::DeleteDirectory,
+        &[],
+        &environment,
+    );
+    let report = SafeTreeDeleter::delete_path_validated(&validated, &environment);
 
     assert!(
         report.is_success(),
@@ -520,7 +591,14 @@ fn cleaner_restores_read_only_root_after_delete_contents() {
     fs::set_permissions(cache_root.join("nested"), fs::Permissions::from_mode(0o555))
         .expect("make nested directory read-only");
 
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &[], &PlatformEnvironment::native());
+    let environment = PlatformEnvironment::native();
+    let validated = validated_filesystem_target(
+        &cache_root,
+        CleanStrategy::DeleteContents,
+        &[],
+        &environment,
+    );
+    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
 
     assert!(
         report.is_success(),
@@ -557,7 +635,14 @@ fn cleaner_unlinks_symlink_without_changing_target_permissions() {
     let link = cache_root.join("outside-link");
     symlink(outside.path(), &link).expect("create symlink");
 
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &[], &PlatformEnvironment::native());
+    let environment = PlatformEnvironment::native();
+    let validated = validated_filesystem_target(
+        &cache_root,
+        CleanStrategy::DeleteContents,
+        &[],
+        &environment,
+    );
+    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
 
     assert!(
         report.is_success(),
@@ -771,8 +856,14 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     fs::write(&removable, b"cache").unwrap();
 
     let exclusions = vec![excluded.to_string_lossy().into_owned()];
-    let report =
-        SafeTreeDeleter::delete_contents(&cache_root, &exclusions, &PlatformEnvironment::native());
+    let environment = PlatformEnvironment::native();
+    let validated = validated_filesystem_target(
+        &cache_root,
+        CleanStrategy::DeleteContents,
+        &exclusions,
+        &environment,
+    );
+    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
     assert!(report.is_success());
 
     assert!(cache_root.exists());
@@ -1009,11 +1100,14 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
     );
 
     // Perform delete_contents
-    let report = SafeTreeDeleter::delete_contents(
+    let environment = PlatformEnvironment::native();
+    let validated = validated_filesystem_target(
         &cache_dir,
+        CleanStrategy::DeleteContents,
         &gemini_sig.exclusions,
-        &PlatformEnvironment::native(),
+        &environment,
     );
+    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
     assert!(report.is_success());
     assert_eq!(report.deleted_files, 1);
     assert_eq!(report.skipped_files, 2);
@@ -1748,7 +1842,10 @@ mod windows_safety {
             "the junction must be classified as an indirection"
         );
 
-        let report = SafeTreeDeleter::delete_contents(&cache, &[], &PlatformEnvironment::native());
+        let environment = PlatformEnvironment::native();
+        let validated =
+            validated_filesystem_target(&cache, CleanStrategy::DeleteContents, &[], &environment);
+        let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
         assert!(report.is_success(), "errors: {:?}", report.errors);
         // The junction itself is removed, never traversed: its target must be
         // untouched, and the cache root must be gone.
@@ -1795,7 +1892,10 @@ mod windows_safety {
             &verbatim_path,
             &PlatformEnvironment::native()
         ));
-        let report = SafeTreeDeleter::delete_contents(&deep, &[], &PlatformEnvironment::native());
+        let environment = PlatformEnvironment::native();
+        let validated =
+            validated_filesystem_target(&deep, CleanStrategy::DeleteContents, &[], &environment);
+        let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
     }

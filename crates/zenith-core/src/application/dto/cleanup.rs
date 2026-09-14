@@ -194,3 +194,16 @@ pub enum CleanEvent {
         message: String,
     },
 }
+
+pub trait CleanupProgressSink: Send + Sync {
+    fn emit(&self, event: CleanEvent);
+}
+
+impl<F> CleanupProgressSink for F
+where
+    F: Fn(CleanEvent) + Send + Sync,
+{
+    fn emit(&self, event: CleanEvent) {
+        self(event);
+    }
+}

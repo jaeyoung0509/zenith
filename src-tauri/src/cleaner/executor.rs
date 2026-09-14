@@ -3,11 +3,11 @@ use crate::docker::DockerAdapter;
 use crate::metrics::DiskMetricsCollector;
 use crate::models::{
     CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanStrategy,
-    DeletePlan, DeleteTarget,
+    CleanupOperation, DeletePlan, DeleteTarget,
 };
-use crate::platform::PlatformEnvironment;
-use crate::safety::{Blacklist, SafeTreeDeleter, SymlinkGuard, ToctouGuard};
+use crate::safety::SafeTreeDeleter;
 use std::time::SystemTime;
+use zenith_platform::PlatformEnvironment;
 
 pub struct CleanExecutor;
 
@@ -139,58 +139,34 @@ impl CleanExecutor {
         clean_result
     }
 
-    /// A target that disappeared after the scan is already in the desired
-    /// state: nothing is mutated and nothing failed, so it is reported as a
-    /// successful no-op with zero reclaimed bytes rather than as a failed
-    /// cleanup item. Only genuine absence is routed here; a permission or
-    /// identity failure still fails closed.
-    fn already_absent(target: &DeleteTarget) -> CleanItemResult {
-        CleanItemResult {
-            item_id: target.item_id.clone(),
-            name: target.name.clone(),
-            path: target.path.to_string_lossy().to_string(),
-            status: CleanStatus::Success,
-            success: true,
-            bytes_reclaimed: 0,
-            failure_reason: None,
-            error_message: None,
-        }
-    }
-
     fn clean_target(target: &DeleteTarget, environment: &PlatformEnvironment) -> CleanItemResult {
-        // Special case: DockerPrune strategy doesn't operate on standard filesystem paths
-        if target.strategy == CleanStrategy::DockerPrune {
-            return match DockerAdapter::prune_category(environment, &target.signature_id) {
-                Ok(reclaimed) => CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: target.path.to_string_lossy().to_string(),
-                    status: CleanStatus::Success,
-                    success: true,
-                    bytes_reclaimed: reclaimed,
-                    failure_reason: None,
-                    error_message: None,
-                },
-                Err(e) => CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: target.path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::ExternalCommandFailed),
-                    error_message: Some(e.to_string()),
-                },
-            };
-        }
-
-        let path = &target.path;
-
-        if crate::cache_providers::mutation_blocked_by_active_runtime(&target.signature_id) {
+        // The classification decides what the target authorizes: a container
+        // prune runs through the runtime's own CLI, a provider prune runs
+        // through the tool's own fixed arguments, and only a filesystem
+        // operation can reach a deletion primitive with `target.path`.
+        let Some(operation) = CleanupOperation::of(target) else {
             return CleanItemResult {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
-                path: path.to_string_lossy().into_owned(),
+                path: target.path.to_string_lossy().to_string(),
+                status: CleanStatus::Failed,
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(CleanFailureReason::Unknown),
+                error_message: Some("Manual cleanup requires a dedicated adapter".to_string()),
+            };
+        };
+
+        // A runtime that owns the cache is a reason to refuse a mutation that
+        // would corrupt it. A container prune asks the runtime itself, which is
+        // running by definition when it answers.
+        if !matches!(operation, CleanupOperation::Container(_))
+            && crate::cache_providers::mutation_blocked_by_active_runtime(&target.signature_id)
+        {
+            return CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: target.path.to_string_lossy().into_owned(),
                 status: CleanStatus::Failed,
                 success: false,
                 bytes_reclaimed: 0,
@@ -202,209 +178,44 @@ impl CleanExecutor {
             };
         }
 
-        // 0. Presence probe. A path that no longer exists is not a mutation
-        // failure: the postcondition already holds. `symlink_metadata` is used
-        // rather than `exists()` because `exists()` collapses `EACCES` into
-        // `false` and would turn a permission refusal into a silent success.
-        // A present-but-dangling symlink still has link metadata and continues.
-        match std::fs::symlink_metadata(path) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Self::already_absent(target);
-            }
-            Err(error) => {
-                let error_str = error.to_string();
-                return CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::PermissionDenied),
-                    error_message: Some(crate::platform::environment::describe_access_refusal(
-                        environment,
-                        path,
-                        &error_str,
-                    )),
-                };
-            }
-        }
-
-        // 1. Blacklist check (lexical & canonical, fail closed on mutation)
-        if let Err(e) = Blacklist::validate_with(path, environment) {
-            return CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::Blacklisted),
-                error_message: Some(e.to_string()),
-            };
-        }
-        if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
-            if crate::safety::is_already_absent(&e) {
-                return Self::already_absent(target);
-            }
-            return CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::Blacklisted),
-                error_message: Some(e.to_string()),
-            };
-        }
-
-        // 1b. Symlink metadata must be readable; failure fails closed.
-        if let Err(e) = SymlinkGuard::is_symlink_strict(path) {
-            if crate::safety::is_already_absent(&e) {
-                return Self::already_absent(target);
-            }
-            return CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                error_message: Some(e.to_string()),
-            };
-        }
-
-        // 2. Check path existence. The strict checks above read metadata, so a
-        // path that is gone now vanished inside the race window between them
-        // and this guard. That is still absence: report the same no-op success
-        // rather than a mutation failure.
-        if !path.exists() && !SymlinkGuard::is_symlink(path) {
-            return Self::already_absent(target);
-        }
-
-        // 3. TOCTOU identity verification
-        if let Some(expected_identity) = &target.identity {
-            if let Err(e) = ToctouGuard::verify(path, expected_identity) {
-                if crate::safety::is_already_absent(&e) {
-                    return Self::already_absent(target);
+        match operation {
+            CleanupOperation::Container(cleanup) => {
+                match DockerAdapter::prune_category(environment, cleanup.signature_id()) {
+                    Ok(reclaimed) => CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: target.path.to_string_lossy().to_string(),
+                        status: CleanStatus::Success,
+                        success: true,
+                        bytes_reclaimed: reclaimed,
+                        failure_reason: None,
+                        error_message: None,
+                    },
+                    Err(e) => CleanItemResult {
+                        item_id: target.item_id.clone(),
+                        name: target.name.clone(),
+                        path: target.path.to_string_lossy().to_string(),
+                        status: CleanStatus::Failed,
+                        success: false,
+                        bytes_reclaimed: 0,
+                        failure_reason: Some(CleanFailureReason::ExternalCommandFailed),
+                        error_message: Some(e.to_string()),
+                    },
                 }
-                return CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                    error_message: Some(e.to_string()),
-                };
             }
-        }
-
-        // 3b. Stale Temp Directory TOCTOU: re-verify freshness invariant if target has min_age_days
-        if let Some(days) = target.min_age_days {
-            if path.is_dir() {
-                let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+            CleanupOperation::Provider(cleanup) => {
+                match CacheProviderRegistry::prune(
+                    cleanup.signature_id(),
+                    cleanup.expected_location(),
                     environment,
-                    path,
-                    &target.exclusions,
-                    0,
-                    32,
-                );
-                if !stats.complete {
-                    // An incomplete measurement because the tree vanished is
-                    // absence, not a partial read: the postcondition already
-                    // holds. A tree that is still present but unreadable keeps
-                    // failing closed below.
-                    if let Err(error) = std::fs::symlink_metadata(path) {
-                        if error.kind() == std::io::ErrorKind::NotFound {
-                            return Self::already_absent(target);
-                        }
-                    }
-                    return CleanItemResult {
-                        item_id: target.item_id.clone(),
-                        name: target.name.clone(),
-                        path: path.to_string_lossy().to_string(),
-                        status: CleanStatus::Failed,
-                        success: false,
-                        bytes_reclaimed: 0,
-                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                        error_message: Some(
-                            "Directory structure could not be fully verified; aborted to protect active files"
-                                .to_string(),
-                        ),
-                    };
-                }
-                let Some(newest) = stats.newest_mtime else {
-                    return CleanItemResult {
-                        item_id: target.item_id.clone(),
-                        name: target.name.clone(),
-                        path: path.to_string_lossy().to_string(),
-                        status: CleanStatus::Failed,
-                        success: false,
-                        bytes_reclaimed: 0,
-                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                        error_message: Some(
-                            "Directory modification timestamp unavailable; aborted to protect active files"
-                                .to_string(),
-                        ),
-                    };
-                };
-                let minimum_age = std::time::Duration::from_secs(days as u64 * 86_400);
-                if std::time::SystemTime::now()
-                    .duration_since(newest)
-                    .unwrap_or_default()
-                    < minimum_age
-                {
-                    return CleanItemResult {
-                        item_id: target.item_id.clone(),
-                        name: target.name.clone(),
-                        path: path.to_string_lossy().to_string(),
-                        status: CleanStatus::Failed,
-                        success: false,
-                        bytes_reclaimed: 0,
-                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                        error_message: Some(format!(
-                            "Directory contains files modified within the last {} day(s); aborted to protect active files",
-                            days
-                        )),
-                    };
-                }
-            }
-        }
-
-        // 4. Perform non-destructive deletion according to strategy
-        let report = match target.strategy {
-            CleanStrategy::DeleteContents => {
-                SafeTreeDeleter::delete_contents(path, &target.exclusions, environment)
-            }
-            CleanStrategy::DeleteDirectory => {
-                SafeTreeDeleter::delete_path(path, &target.exclusions, environment)
-            }
-            CleanStrategy::Manual => {
-                return CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::Unknown),
-                    error_message: Some("Manual cleanup requires a dedicated adapter".to_string()),
-                };
-            }
-            CleanStrategy::ExternalCommand => {
-                return match CacheProviderRegistry::prune(&target.signature_id, path, environment) {
+                ) {
                     // The provider pruned its own cache but the amount could not
                     // be measured completely: the target is partial, not clean,
                     // and no byte count is claimed for it.
                     Ok(None) => CleanItemResult {
                         item_id: target.item_id.clone(),
                         name: target.name.clone(),
-                        path: path.to_string_lossy().into_owned(),
+                        path: target.path.to_string_lossy().into_owned(),
                         status: CleanStatus::Partial,
                         success: true,
                         bytes_reclaimed: 0,
@@ -417,7 +228,7 @@ impl CleanExecutor {
                     Ok(Some(reclaimed)) => CleanItemResult {
                         item_id: target.item_id.clone(),
                         name: target.name.clone(),
-                        path: path.to_string_lossy().into_owned(),
+                        path: target.path.to_string_lossy().into_owned(),
                         status: CleanStatus::Success,
                         success: true,
                         bytes_reclaimed: reclaimed,
@@ -427,16 +238,64 @@ impl CleanExecutor {
                     Err(error) => CleanItemResult {
                         item_id: target.item_id.clone(),
                         name: target.name.clone(),
-                        path: path.to_string_lossy().into_owned(),
+                        path: target.path.to_string_lossy().into_owned(),
                         status: CleanStatus::Failed,
                         success: false,
                         bytes_reclaimed: 0,
                         failure_reason: Some(CleanFailureReason::ExternalCommandFailed),
                         error_message: Some(error),
                     },
+                }
+            }
+            CleanupOperation::Filesystem(_) => Self::clean_filesystem_target(target, environment),
+        }
+    }
+
+    /// Executes one signature-scoped filesystem mutation.
+    ///
+    /// The target is revalidated through the safety layer to produce a
+    /// `ValidatedTarget`: presence, lexical and canonical blacklist, symlink
+    /// integrity, TOCTOU identity, and intensive-cleanup age constraints are
+    /// all checked here, and the mutation primitive accepts only the validated
+    /// authority that comes back.
+    fn clean_filesystem_target(
+        target: &DeleteTarget,
+        environment: &PlatformEnvironment,
+    ) -> CleanItemResult {
+        let path = &target.path;
+
+        let validated_target = match crate::safety::SafetyValidator::revalidate(target, environment)
+        {
+            crate::safety::RevalidationOutcome::Validated(validated) => validated,
+            crate::safety::RevalidationOutcome::AlreadyAbsent(result) => return result,
+            crate::safety::RevalidationOutcome::Failed(result) => return result,
+        };
+
+        let report = match validated_target.strategy() {
+            CleanStrategy::DeleteContents => {
+                SafeTreeDeleter::delete_contents_validated(&validated_target, environment)
+            }
+            CleanStrategy::DeleteDirectory => {
+                SafeTreeDeleter::delete_path_validated(&validated_target, environment)
+            }
+            // The classification above produced a filesystem operation from one
+            // of these strategies, and `ValidatedTarget` carries the planned
+            // strategy unchanged, so no other arm is reachable. Refusing
+            // explicitly keeps a future strategy from silently deleting.
+            CleanStrategy::ExternalCommand | CleanStrategy::DockerPrune | CleanStrategy::Manual => {
+                return CleanItemResult {
+                    item_id: target.item_id.clone(),
+                    name: target.name.clone(),
+                    path: path.to_string_lossy().to_string(),
+                    status: CleanStatus::Failed,
+                    success: false,
+                    bytes_reclaimed: 0,
+                    failure_reason: Some(CleanFailureReason::Unknown),
+                    error_message: Some(
+                        "Target strategy does not authorize a filesystem mutation".to_string(),
+                    ),
                 };
             }
-            CleanStrategy::DockerPrune => unreachable!(),
         };
 
         if report.is_success() {
@@ -478,7 +337,7 @@ impl CleanExecutor {
             // A refusal under Controlled Folder Access is not something the user
             // can find from the raw OS error, so the message names the setting.
             let error_message = if failure_reason == CleanFailureReason::PermissionDenied {
-                crate::platform::environment::describe_access_refusal(environment, path, &error_str)
+                zenith_platform::environment::describe_access_refusal(environment, path, &error_str)
             } else {
                 error_str
             };
@@ -556,6 +415,7 @@ pub fn classify_cleanup_failure_with_codes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::safety::ToctouGuard;
 
     fn item_with_status(status: CleanStatus) -> CleanItemResult {
         CleanItemResult {
@@ -617,7 +477,7 @@ mod tests {
         // A link that resolves into the user profile is refused by the
         // canonical blacklist, so its sibling is deleted while this child is
         // recorded as an error: bytes were reclaimed without finishing.
-        let home = crate::platform::NativePlatformPaths::new()
+        let home = zenith_platform::NativePlatformPaths::new()
             .home()
             .expect("a POSIX host exposes a home directory");
         let refused = cache_root.join("linked-profile");
@@ -634,7 +494,7 @@ mod tests {
                 strategy: CleanStrategy::DeleteContents,
                 expected_bytes: 4096,
                 risk: crate::models::RiskTier::Safe,
-                identity: None,
+                identity: ToctouGuard::capture(&cache_root),
                 exclusions: vec![],
                 min_age_days: None,
             }],
@@ -784,6 +644,58 @@ mod tests {
             risk: crate::models::RiskSummary::default(),
             created_at: 0,
         }
+    }
+
+    /// A plan whose target is a provider-owned cache, identified by signature.
+    fn provider_plan(path: &std::path::Path, signature_id: &str) -> DeletePlan {
+        DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-provider".to_string(),
+            targets: vec![DeleteTarget {
+                item_id: "provider-target".to_string(),
+                signature_id: signature_id.to_string(),
+                name: "Provider cache".to_string(),
+                path: path.to_path_buf(),
+                strategy: CleanStrategy::ExternalCommand,
+                expected_bytes: 4096,
+                risk: crate::models::RiskTier::Safe,
+                identity: None,
+                exclusions: vec![],
+                min_age_days: None,
+            }],
+            expected_reclaim_bytes: 4096,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_provider_cleanup_failure_never_falls_through_to_filesystem_deletion() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache = fixture.path().join("provider-cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("payload.bin"), vec![3u8; 128]).unwrap();
+
+        // The signature names no provider Zenith knows, so the prune cannot be
+        // performed. The target still carries a real path, which is exactly the
+        // shape that must never become filesystem authority.
+        let plan = provider_plan(&cache, "test.unknown.provider");
+        let environment =
+            PlatformEnvironment::simulated(zenith_platform::path_algebra::PathFlavor::current());
+
+        let result = CleanExecutor::execute(plan, &environment, |_| {});
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].status, CleanStatus::Failed);
+        assert_eq!(
+            result.items[0].failure_reason,
+            Some(CleanFailureReason::ExternalCommandFailed)
+        );
+        assert_eq!(result.total_reclaimed_bytes, 0);
+        assert!(
+            cache.join("payload.bin").is_file(),
+            "a refused provider prune must leave the reviewed path untouched"
+        );
     }
 
     /// A directory that vanished after the scan is a successful no-op, never a
