@@ -7,35 +7,38 @@
 //! [`crate::services::StorageService`], so no handler decides when a mutation
 //! may start or touches backend state directly.
 
+use std::sync::Arc;
+
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::commands::AppState;
+use crate::commands::DesktopState;
+use crate::events::storage::{TauriDeveloperArtifactProgress, TauriLargeFileScanProgress};
 use crate::models::{
     AppUninstallInspection, DeveloperArtifactScanEvent, DeveloperArtifactScanResult,
     DeveloperWorkspace, InstalledAppInventory, LargeFileScanEvent, LargeFileScanRequest,
     LargeFileScanResult, TrashPlanPreview, TrashResult,
 };
+use crate::services::progress::{DeveloperArtifactScanSink, LargeFileScanSink};
 
 #[tauri::command]
 #[specta::specta]
 pub async fn start_large_file_scan(
     request: LargeFileScanRequest,
     on_event: Channel<LargeFileScanEvent>,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<LargeFileScanResult, String> {
-    state
-        .storage_service
-        .scan_large_files(request, move |event| {
-            let _ = on_event.send(event);
-        })
-        .await
+    let progress: Arc<dyn LargeFileScanSink> = Arc::new(TauriLargeFileScanProgress::new(on_event));
+    state.storage.scan_large_files(request, progress).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.storage_service.cancel_large_file_scan(&scan_id)
+pub fn cancel_large_file_scan(
+    scan_id: String,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    state.storage.cancel_large_file_scan(&scan_id)
 }
 
 /// Reveals a scanned large file in the platform file manager.
@@ -46,8 +49,11 @@ pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Re
 /// cannot point at a path the scan did not review.
 #[tauri::command]
 #[specta::specta]
-pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.storage_service.reveal_large_file(&item_id).await
+pub async fn reveal_large_file(
+    item_id: String,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    state.storage.reveal_large_file(&item_id).await
 }
 
 #[tauri::command]
@@ -55,30 +61,27 @@ pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> R
 pub fn prepare_large_file_trash(
     scan_id: String,
     selected_item_ids: Vec<String>,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<TrashPlanPreview, String> {
     state
-        .storage_service
+        .storage
         .prepare_large_file_trash(&scan_id, &selected_item_ids)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn pick_developer_workspace(
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<Option<DeveloperWorkspace>, String> {
-    state.storage_service.pick_developer_workspace().await
+    state.storage.pick_developer_workspace().await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn register_developer_home_workspace(
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<DeveloperWorkspace, String> {
-    state
-        .storage_service
-        .register_developer_home_workspace()
-        .await
+    state.storage.register_developer_home_workspace().await
 }
 
 #[tauri::command]
@@ -86,13 +89,13 @@ pub async fn register_developer_home_workspace(
 pub async fn start_developer_artifact_scan(
     workspace_ids: Vec<String>,
     on_event: Channel<DeveloperArtifactScanEvent>,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<DeveloperArtifactScanResult, String> {
+    let progress: Arc<dyn DeveloperArtifactScanSink> =
+        Arc::new(TauriDeveloperArtifactProgress::new(on_event));
     state
-        .storage_service
-        .scan_developer_artifacts(&workspace_ids, move |event| {
-            let _ = on_event.send(event);
-        })
+        .storage
+        .scan_developer_artifacts(&workspace_ids, progress)
         .await
 }
 
@@ -100,11 +103,9 @@ pub async fn start_developer_artifact_scan(
 #[specta::specta]
 pub fn cancel_developer_artifact_scan(
     scan_id: String,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<(), String> {
-    state
-        .storage_service
-        .cancel_developer_artifact_scan(&scan_id)
+    state.storage.cancel_developer_artifact_scan(&scan_id)
 }
 
 #[tauri::command]
@@ -112,28 +113,28 @@ pub fn cancel_developer_artifact_scan(
 pub fn prepare_developer_artifact_cleanup(
     scan_id: String,
     selected_item_ids: Vec<String>,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<TrashPlanPreview, String> {
     state
-        .storage_service
+        .storage
         .prepare_developer_artifact_trash(&scan_id, &selected_item_ids)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn get_installed_apps(
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<InstalledAppInventory, String> {
-    state.storage_service.installed_apps().await
+    state.storage.installed_apps().await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn inspect_app_uninstall(
     app_id: String,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<AppUninstallInspection, String> {
-    state.storage_service.inspect_app_uninstall(&app_id).await
+    state.storage.inspect_app_uninstall(&app_id).await
 }
 
 #[tauri::command]
@@ -141,10 +142,10 @@ pub async fn inspect_app_uninstall(
 pub fn prepare_app_uninstall(
     inspection_id: String,
     selected_related_ids: Vec<String>,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<TrashPlanPreview, String> {
     state
-        .storage_service
+        .storage
         .prepare_app_uninstall(&inspection_id, &selected_related_ids)
 }
 
@@ -152,7 +153,7 @@ pub fn prepare_app_uninstall(
 #[specta::specta]
 pub async fn execute_trash_plan(
     plan_id: uuid::Uuid,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<TrashResult, String> {
-    state.storage_service.execute_trash_plan(plan_id).await
+    state.storage.execute_trash_plan(plan_id).await
 }

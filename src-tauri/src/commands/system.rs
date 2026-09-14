@@ -1,30 +1,29 @@
 //! System metrics, preferences, Keep Awake, diagnostics, and development commands.
+//!
+//! Thin Tauri IPC adapters. The capability gates, execution budgets, storage
+//! operation gate, Docker status observation, memory leases, development-port
+//! store, and settings persistence belong to
+//! [`crate::services::SystemService`], so no handler decides when a mutation
+//! may start or writes shared state itself. Window, tray, and version commands
+//! stay here: they are the desktop shell's own surface, not application use
+//! cases.
 
-use super::state::AppState;
-use super::support::{lock_or_state_error, run_blocking};
-use crate::docker::DockerAdapter;
-use crate::metrics::{DiskMetricsCollector, MemoryInspector};
+use tauri::{AppHandle, Manager, State};
+
+use super::state::DesktopState;
+use crate::blocking::run_blocking;
+use crate::events::notifications::TauriNotifications;
 use crate::models::{
     AwakeBehavior, AwakeRule, AwakeState, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
     DiskVolume, DockerStatus, LocalModelInventory, MemoryMetrics, MemoryTerminationMode,
     MemoryTerminationResult, PlatformCapabilities, PlatformContext,
     ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
 };
-use crate::models_inventory::{LocalModelManager, LocalModelScanner};
-use crate::power::ApplicationPicker;
-use crate::settings_store;
-use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetrics, String> {
-    let sampler = state.memory_sampler.clone();
-    let lease_store = state.memory_termination_store.clone();
-    let observation = sampler
-        .get_observation(std::time::Duration::from_millis(800))
-        .await?;
-    Ok(observation.mint_metrics_with_leases(&lease_store))
+pub async fn get_memory_metrics(state: State<'_, DesktopState>) -> Result<MemoryMetrics, String> {
+    state.system.memory_metrics().await
 }
 
 #[tauri::command]
@@ -32,58 +31,31 @@ pub async fn get_memory_metrics(state: State<'_, AppState>) -> Result<MemoryMetr
 pub async fn terminate_memory_group(
     lease_id: String,
     mode: MemoryTerminationMode,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<MemoryTerminationResult, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::ProcessTermination,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let lease_store = state.memory_termination_store.clone();
-    run_blocking(
-        move || {
-            let system = crate::metrics::memory::RealMemorySystem::default();
-            MemoryInspector::execute_termination(&lease_id, mode, &lease_store, &system)
-        },
-        "Process termination worker panicked",
-    )
-    .await
+    state.system.terminate_memory_group(&lease_id, mode).await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn pick_keep_awake_application() -> Result<Option<SelectedApplication>, String> {
-    tauri::async_runtime::spawn_blocking(ApplicationPicker::pick)
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn get_disk_metrics(state: State<'_, AppState>) -> Result<DiskMetrics, String> {
-    let environment = state.environment.clone();
     run_blocking(
-        move || {
-            DiskMetricsCollector::get_primary_disk(&environment).map_err(|error| error.to_string())
-        },
-        "Disk metrics worker panicked",
+        crate::power::ApplicationPicker::pick,
+        "Keep Awake application picker worker panicked",
     )
     .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_disk_volumes(state: State<'_, AppState>) -> Result<Vec<DiskVolume>, String> {
-    let environment = state.environment.clone();
-    run_blocking(
-        move || Ok(DiskMetricsCollector::get_volumes(&environment)),
-        "Disk volume worker panicked",
-    )
-    .await
+pub async fn get_disk_metrics(state: State<'_, DesktopState>) -> Result<DiskMetrics, String> {
+    state.system.disk_metrics().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_disk_volumes(state: State<'_, DesktopState>) -> Result<Vec<DiskVolume>, String> {
+    state.system.disk_volumes().await
 }
 
 #[tauri::command]
@@ -101,106 +73,25 @@ pub async fn open_storage_settings() -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_docker_status(state: State<'_, AppState>) -> Result<DockerStatus, String> {
-    const DOCKER_STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(3);
-    {
-        let cache = state
-            .docker_status_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        if let Some((status, fetched_at)) = &*cache {
-            if fetched_at.elapsed() < DOCKER_STATUS_TTL {
-                return Ok(status.clone());
-            }
-        }
-    }
-
-    let _permit = state.execution_budgets.acquire_subprocess().await?;
-    let cache_store = state.docker_status_cache.clone();
-    let operation_gate = state.storage_operation_gate.clone();
-    let environment = state.environment.clone();
-    let container_host = state.container_host.clone();
-    run_blocking(
-        move || {
-            operation_gate.run_read(|| {
-                // A Docker mutation may have completed while this cache miss
-                // waited for the read side of the storage gate.
-                {
-                    let cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Some((status, fetched_at)) = &*cache {
-                        if fetched_at.elapsed() < DOCKER_STATUS_TTL {
-                            return Ok(status.clone());
-                        }
-                    }
-                }
-
-                let fresh = DockerAdapter::get_status(&environment, &container_host);
-                let mut cache = cache_store.lock().unwrap_or_else(|p| p.into_inner());
-                *cache = Some((fresh.clone(), std::time::Instant::now()));
-                Ok(fresh)
-            })
-        },
-        "Docker status worker panicked",
-    )
-    .await
+pub async fn get_docker_status(state: State<'_, DesktopState>) -> Result<DockerStatus, String> {
+    state.system.docker_status().await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn prune_docker_target(
     signature_id: String,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<u64, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::Docker,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let _permit = state.execution_budgets.acquire_subprocess().await?;
-    let cache_store = state.docker_status_cache.clone();
-    let operation_gate = state.storage_operation_gate.clone();
-    let environment = state.environment.clone();
-    run_blocking(
-        move || {
-            operation_gate.run_write(|| {
-                *cache_store.lock().unwrap_or_else(|p| p.into_inner()) = None;
-                let result = DockerAdapter::prune_category(&environment, &signature_id)
-                    .map_err(|error| error.to_string());
-                // The command may have changed Docker state even if its final
-                // status/delta query failed, so never retain a pre-prune snapshot.
-                *cache_store.lock().unwrap_or_else(|p| p.into_inner()) = None;
-                result
-            })
-        },
-        "Docker cleanup worker panicked",
-    )
-    .await
+    state.system.prune_docker_target(&signature_id).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_local_models(state: State<'_, AppState>) -> Result<LocalModelInventory, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::LocalModels,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let _permit = state.execution_budgets.acquire_storage_read().await?;
-    let operation_gate = state.storage_operation_gate.clone();
-    let environment = state.environment.clone();
-    run_blocking(
-        move || operation_gate.run_read(|| Ok(LocalModelScanner::scan_all_models(&environment))),
-        "Local model scan worker panicked",
-    )
-    .await
+pub async fn get_local_models(
+    state: State<'_, DesktopState>,
+) -> Result<LocalModelInventory, String> {
+    state.system.local_models().await
 }
 
 #[tauri::command]
@@ -210,53 +101,24 @@ pub async fn get_local_models(state: State<'_, AppState>) -> Result<LocalModelIn
 /// measured completely; the interface must not present that as a number.
 pub async fn delete_local_model(
     model_id: String,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<crate::ipc_numeric::IpcOptionalU64, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::LocalModels,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let operation_gate = state.storage_operation_gate.clone();
-    let environment = state.environment.clone();
-    run_blocking(
-        move || {
-            operation_gate.run_write(|| {
-                LocalModelManager::delete_by_id(&environment, &model_id)
-                    .map_err(|error| error.to_string())
-            })
-        },
-        "Local model deletion worker panicked",
-    )
-    .await
-    .map(Into::into)
+    state.system.delete_local_model(&model_id).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_awake_state(state: State<'_, AppState>) -> Result<AwakeState, String> {
-    Ok(state.awake_manager.get_state())
+pub fn get_awake_state(state: State<'_, DesktopState>) -> Result<AwakeState, String> {
+    Ok(state.system.awake_state())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn set_awake_rules(
     rules: Vec<AwakeRule>,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<(), String> {
-    let awake_manager = state.awake_manager.clone();
-    run_blocking(
-        move || {
-            awake_manager.set_rules(rules);
-            Ok(())
-        },
-        "Keep Awake rule worker panicked",
-    )
-    .await
+    state.system.set_awake_rules(rules).await
 }
 
 #[tauri::command]
@@ -264,39 +126,21 @@ pub async fn set_awake_rules(
 pub async fn set_manual_awake(
     duration_secs: Option<u64>,
     behavior: AwakeBehavior,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<(), String> {
-    let awake_manager = state.awake_manager.clone();
-    run_blocking(
-        move || {
-            awake_manager
-                .set_manual(duration_secs, behavior)
-                .map_err(|error| error.to_string())
-        },
-        "Manual Keep Awake worker panicked",
-    )
-    .await
+    state.system.set_manual_awake(duration_secs, behavior).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn disable_manual_awake(state: State<'_, AppState>) -> Result<(), String> {
-    let awake_manager = state.awake_manager.clone();
-    run_blocking(
-        move || {
-            awake_manager.disable_manual();
-            Ok(())
-        },
-        "Manual Keep Awake worker panicked",
-    )
-    .await
+pub async fn disable_manual_awake(state: State<'_, DesktopState>) -> Result<(), String> {
+    state.system.disable_manual_awake().await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String> {
-    let s = lock_or_state_error(&state.settings, "Settings")?;
-    Ok(s.clone())
+pub fn get_settings(state: State<'_, DesktopState>) -> Result<ZenithSettings, String> {
+    state.system.settings()
 }
 
 #[tauri::command]
@@ -304,119 +148,32 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<ZenithSettings, String
 pub async fn save_settings(
     settings: ZenithSettings,
     app_handle: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<(), String> {
-    let settings = settings.sanitize();
-    let (provider_selection_changed, inactivity_threshold_changed) = {
-        let previous = lock_or_state_error(&state.settings, "Settings")?;
-        (
-            previous.ai_accounts_quota_providers != settings.ai_accounts_quota_providers,
-            previous.agent_notifications.inactivity_threshold_minutes
-                != settings.agent_notifications.inactivity_threshold_minutes,
-        )
-    };
-    let awake_manager = state.awake_manager.clone();
-    let settings_store_state = state.settings.clone();
-    let ai_usage_cache = state.ai_usage_cache.clone();
-    let agent_activity_cache = state.agent_activity_cache.clone();
-    let ai_control_state = state.ai_control_state.clone();
-    let usage_generation = state.usage_generation.clone();
-    let activity_generation = state.activity_generation.clone();
-
-    run_blocking(
-        move || {
-            if settings.agent_notifications.enabled {
-                crate::ai_control_center::notifications::request_permission_if_needed(&app_handle)?;
-            }
-            let config_dir = app_handle
-                .path()
-                .app_config_dir()
-                .map_err(|error| error.to_string())?;
-            settings_store::save(&config_dir, &settings)?;
-            awake_manager.set_rules(settings.awake_rules.clone());
-            *lock_or_state_error(&settings_store_state, "Settings")? = settings;
-            if provider_selection_changed {
-                crate::ai_snapshots::invalidate_snapshot(&ai_usage_cache, &usage_generation);
-                ai_control_state
-                    .lock()
-                    .expect("ai control poisoned")
-                    .last_snapshot = None;
-            }
-            if inactivity_threshold_changed {
-                crate::ai_snapshots::invalidate_snapshot(
-                    &agent_activity_cache,
-                    &activity_generation,
-                );
-            }
-            Ok(())
-        },
-        "Settings save worker panicked",
-    )
-    .await?;
-    state.ai_control_runtime.notify_wake();
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn show_in_file_manager(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::SystemActions,
-            crate::models::CapabilityAccess::Inspect,
-        )
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
         .map_err(|error| error.to_string())?;
-    let environment = state.environment.clone();
-    run_blocking(
-        move || {
-            use zenith_platform::SystemActionProvider;
-            let path_buf = expand_display_path(&path, &environment)?;
-            zenith_platform::NativeSystemActions::new().reveal_path(&path_buf)
-        },
-        "File manager worker panicked",
-    )
-    .await
+    let notifications = TauriNotifications::new(app_handle);
+    state
+        .system
+        .save_settings(&config_dir, settings, &notifications)
+        .await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_in_terminal(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    let environment = state.environment.clone();
-    run_blocking(
-        move || {
-            use zenith_platform::SystemActionProvider;
-            let path_buf = expand_display_path(&path, &environment)?;
-            zenith_platform::NativeSystemActions::new().open_terminal(&path_buf)
-        },
-        "Terminal worker panicked",
-    )
-    .await
+pub async fn show_in_file_manager(
+    path: String,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    state.system.reveal_path(&path).await
 }
 
-fn expand_display_path(
-    path: &str,
-    environment: &zenith_platform::PlatformEnvironment,
-) -> Result<PathBuf, String> {
-    let path_obj = Path::new(path);
-    let normalized = zenith_platform::NativePlatformPaths::normalize_verbatim_path(path_obj);
-    let path_str = normalized.to_string_lossy();
-    let expanded = if let Some(relative) = path_str
-        .strip_prefix("~/")
-        .or_else(|| path_str.strip_prefix("~\\"))
-    {
-        let home = environment
-            .user_home()
-            .ok_or_else(|| "Home environment variable is not set.".to_string())?;
-        home.join(relative)
-    } else {
-        normalized
-    };
-    let canonical = expanded
-        .canonicalize()
-        .map_err(|error| format!("Path is no longer available: {error}"))?;
-    Ok(zenith_platform::NativePlatformPaths::normalize_verbatim_path(&canonical))
+#[tauri::command]
+#[specta::specta]
+pub async fn open_in_terminal(path: String, state: State<'_, DesktopState>) -> Result<(), String> {
+    state.system.open_terminal(&path).await
 }
 
 #[tauri::command]
@@ -434,8 +191,8 @@ pub fn get_app_version() -> String {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_platform_capabilities(state: State<'_, AppState>) -> PlatformCapabilities {
-    state.platform_capabilities.capabilities()
+pub fn get_platform_capabilities(state: State<'_, DesktopState>) -> PlatformCapabilities {
+    state.system.capabilities()
 }
 
 /// Platform vocabulary and locations the interface renders.
@@ -449,14 +206,9 @@ pub fn get_platform_capabilities(state: State<'_, AppState>) -> PlatformCapabili
 #[tauri::command]
 #[specta::specta]
 pub async fn run_environment_self_check(
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<crate::diagnostics::doctor::EnvironmentReport, String> {
-    let environment = state.environment.clone();
-    run_blocking(
-        move || Ok(crate::diagnostics::doctor::self_check(&environment)),
-        "Environment self-check worker panicked",
-    )
-    .await
+    state.system.environment_self_check().await
 }
 
 #[tauri::command]
@@ -476,21 +228,13 @@ pub fn toggle_quick_panel(app_handle: AppHandle) -> Result<(), String> {
 #[specta::specta]
 pub async fn get_diagnostics(
     app_handle: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<DiagnosticsSnapshot, String> {
-    let settings = state.settings.clone();
-    run_blocking(
-        move || {
-            let settings = lock_or_state_error(&settings, "Settings")?.clone();
-            let config_dir = app_handle
-                .path()
-                .app_config_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            Ok(crate::diagnostics::get_snapshot(&settings, &config_dir))
-        },
-        "Diagnostics worker panicked",
-    )
-    .await
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    state.system.diagnostics(&config_dir).await
 }
 
 #[tauri::command]
@@ -506,29 +250,9 @@ pub async fn open_logs_folder() -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn list_development_listeners(
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<Vec<DevelopmentListener>, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::DevelopmentPorts,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let store = state.dev_port_store.clone();
-    let flavor = state.environment.flavor();
-    let home = state.environment.user_home();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::dev_ports::list_listeners(
-            &store,
-            &crate::dev_ports::RealDevPortSystem::new(flavor),
-            home.as_deref(),
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    state.system.development_listeners().await
 }
 
 #[tauri::command]
@@ -536,31 +260,9 @@ pub async fn list_development_listeners(
 pub async fn release_development_listener(
     id: String,
     mode: ReleaseMode,
-    state: State<'_, AppState>,
+    state: State<'_, DesktopState>,
 ) -> Result<ReleaseDevelopmentListenerResult, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::DevelopmentPorts,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let store = state.dev_port_store.clone();
-    let flavor = state.environment.flavor();
-    let home = state.environment.user_home();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::dev_ports::release_listener(
-            &store,
-            &crate::dev_ports::RealDevPortSystem::new(flavor),
-            &id,
-            mode,
-            home.as_deref(),
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    state.system.release_development_listener(&id, mode).await
 }
 
 #[cfg(test)]

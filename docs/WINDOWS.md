@@ -38,6 +38,27 @@ pnpm tauri dev
 scoped with a macOS attribute, so they are absent from `just --list` here
 instead of failing halfway.
 
+## Architecture contracts on Windows
+
+The layering rules are platform-independent and are checked on this runner as
+well as on macOS. `just check-architecture` compiles `zenith-core` and
+`zenith-platform` and refuses any dependency edge from either crate to the
+desktop framework, to Win32 bindings from the domain, or to the
+`zenith-desktop` crate; the Windows Rust job runs it beside the workspace test
+suite, which is where the Windows-native contract tests execute. A rule that
+only holds on one platform is a rule only one runner checks, so:
+path-algebra rules stay pure functions over an explicit `PathFlavor` (asserted
+on every host), OS entry points stay `#[cfg]`-gated inside the module that owns
+them, and nothing under `crates/` may gain a Tauri dependency to reach a
+Windows API.
+
+The Tauri adapter rule applies here unchanged: commands decode IPC, call one
+application service, and map the result, while window, tray, and capability
+handling stay in `src-tauri`. `src-tauri/src/composition` is the one place that
+binds a port to its Windows adapter (PowerShell pickers, process termination,
+Trash), so a Windows-specific binding is visible where the object graph is
+built instead of inside a handler.
+
 Build unsigned x64 NSIS installers for inspection:
 
 ```powershell

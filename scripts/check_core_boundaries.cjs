@@ -14,6 +14,15 @@
  * usable by a scan, a service, or a future CLI without a window, which fails
  * the first time a platform module imports the framework.
  *
+ * Both boundaries also name `zenith-desktop`, the crate that owns the window,
+ * the framework, and the command surface. Dependencies in this workspace point
+ * into the domain, never back out of it: `zenith-desktop` depends on
+ * `zenith-core` and `zenith-platform`, so an edge from either crate up to it
+ * inverts the layering and lets a domain or platform rule start depending on a
+ * window. Reaching only the framework one hop later — `zenith-core` to a
+ * helper crate to `zenith-desktop` — is the same coupling, which is why rule 2
+ * below is transitive rather than a direct-edge check.
+ *
  * So this check reads the resolved dependency graph from `cargo metadata` and
  * applies two rules to each crate that declares a boundary:
  *
@@ -55,29 +64,49 @@ const rootDir = path.resolve(__dirname, '..');
  * must never gain is the desktop framework: the reason the platform layer
  * exists is that the same native probing has to be usable by a scanner, a
  * service, or a future CLI without a window.
+ *
+ * `zenith-desktop` is matched exactly, not by prefix: it is a workspace member
+ * that rule 1 and rule 2 both have to recognize by package name, and no
+ * crates.io package shares it.
  */
 const BOUNDARIES = [
   {
     crate: 'zenith-core',
-    intent: 'the domain must not depend on the desktop framework or on native platform bindings',
+    intent:
+      'the domain must not depend on the desktop framework, on native platform bindings, or on the desktop adapter',
     forbidden: [
       { name: 'tauri', kind: 'prefix', why: 'desktop framework' },
       { name: 'windows', kind: 'prefix', why: 'Win32 bindings' },
       { name: 'security-framework', kind: 'prefix', why: 'macOS keychain bindings' },
       { name: 'rfd', kind: 'exact', why: 'native file dialogs' },
+      {
+        name: 'zenith-desktop',
+        kind: 'exact',
+        why: 'the outer adapter, which owns the window and the framework',
+      },
     ],
     remedy:
-      'Move the dependency to `zenith-desktop` or `zenith-platform`, or express what the\n' +
-      'domain needs as a trait in `zenith-core` and implement it in the adapter that owns\n' +
-      'the binding.',
+      'Move the code that needs the binding or the window up to `zenith-desktop`, or express\n' +
+      'what the domain needs as a trait in `zenith-core` and implement it in the adapter that\n' +
+      'owns the binding. An edge from here to `zenith-desktop` is deleted rather than moved:\n' +
+      'the desktop crate depends on this one, never the other way round.',
   },
   {
     crate: 'zenith-platform',
-    intent: 'the platform adapter layer must not depend on the desktop framework',
-    forbidden: [{ name: 'tauri', kind: 'prefix', why: 'desktop framework' }],
+    intent:
+      'the platform adapter layer must not depend on the desktop framework or on the desktop adapter',
+    forbidden: [
+      { name: 'tauri', kind: 'prefix', why: 'desktop framework' },
+      {
+        name: 'zenith-desktop',
+        kind: 'exact',
+        why: 'the outer adapter, which owns the window and the framework',
+      },
+    ],
     remedy:
       'Move the framework-facing part to `zenith-desktop` and keep the native call here,\n' +
-      'behind a port the adapter implements.',
+      'behind a port the adapter implements. `zenith-desktop` already depends on this crate,\n' +
+      'so an edge back to it inverts the layering and is removed, not relocated.',
   },
 ];
 
