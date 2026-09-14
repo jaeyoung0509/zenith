@@ -339,13 +339,8 @@ fn parse_status(bytes: &[u8]) -> HashMap<String, String> {
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = tooling::command("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("LC_ALL", "C");
+    let mut command = tooling::git_command(root);
+    command.args(args);
     let output = zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -357,13 +352,8 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_diff_command(root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = tooling::command("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("LC_ALL", "C");
+    let mut command = tooling::git_command(root);
+    command.args(args);
     let output = zenith_platform::subprocess::run_with_timeout(command, Duration::from_secs(3))
         .map_err(|error| error.to_string())?;
     if output.status.success() || output.status.code() == Some(1) {
@@ -419,7 +409,15 @@ pub fn explicit_diff(
                 if !combined_diff.contains(&marker) {
                     if let Ok(untracked_diff) = run_diff_command(
                         root,
-                        &["diff", "--no-index", "--no-color", "--", "/dev/null", p],
+                        &[
+                            "diff",
+                            "--no-index",
+                            "--no-ext-diff",
+                            "--no-color",
+                            "--",
+                            "/dev/null",
+                            p,
+                        ],
                     ) {
                         if !combined_diff.is_empty() && !combined_diff.ends_with('\n') {
                             combined_diff.push('\n');

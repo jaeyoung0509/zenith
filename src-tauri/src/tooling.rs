@@ -18,6 +18,75 @@ pub fn command_with(name: &str, environment: &zenith_platform::PlatformEnvironme
     command
 }
 
+/// The empty tree object, used as the attribute source for every Git call.
+///
+/// `attr.tree` (Git 2.43+) decides which tree `.gitattributes` files are read
+/// from. Pinning it to the empty tree keeps a repository that Zenith did not
+/// create from naming a filter driver: `filter.<driver>.clean` and `.smudge`
+/// are programs Git runs while reading working-tree content, and the driver is
+/// selected by a `.gitattributes` file that the repository supplies. Git 2.43's
+/// own release notes document this variable, and pointing it at the empty tree
+/// is the documented way to stop attribute lookup from reaching the repository.
+/// Older Git ignores the key, which `docs/THREAT_MODEL.md` records as the one
+/// residual in the neutralization below.
+const EMPTY_TREE_OBJECT: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// A path no repository can turn into a hooks or attributes directory: `/dev/null`
+/// and `NUL` are character devices, not directories, on their platforms.
+#[cfg(windows)]
+const INERT_PATH: &str = "NUL";
+#[cfg(not(windows))]
+const INERT_PATH: &str = "/dev/null";
+
+/// A program name that cannot resolve to anything. `core.sshCommand` is only
+/// consulted for transport, which Zenith never uses; if that ever changes, the
+/// invocation fails closed instead of running a repository-supplied program.
+const DISABLED_SSH_COMMAND: &str = "zenith-disabled-ssh";
+
+/// Every `git` invocation in Zenith goes through this constructor.
+///
+/// Git reads the repository's own `.git/config` whenever it operates on a
+/// repository, and several documented keys name a program Git then runs:
+/// `core.fsmonitor` is consulted by `git status` specifically, and
+/// `core.pager`, `core.hooksPath`, `diff.external`, `core.sshCommand`, and the
+/// `filter.*` clean/smudge pair are the same class. The directories are not
+/// nominated by the user — `root` comes from an observed agent process working
+/// directory — so the invocation neutralizes each of those keys on the command
+/// line, where Git gives them precedence over the repository's configuration,
+/// and skips the system configuration entirely.
+///
+/// Command-line flags that are specific to a subcommand stay at the call site
+/// (`--no-ext-diff` for `git diff`); this constructor owns everything that
+/// applies to every invocation.
+///
+/// `diff.external` is the one key Git has no "unset" spelling for: an empty
+/// value is still a value, so a content diff that omits `--no-ext-diff` fails
+/// instead of running the repository's program. That is the intended direction
+/// — a forgotten flag must not become an executed program — and
+/// `tests/git_boundary_tests.rs` asserts the program is never reached either way.
+pub fn git_command(root: &Path) -> Command {
+    let mut command = command("git");
+    command.arg("--no-pager");
+    for entry in [
+        "core.fsmonitor=false".to_string(),
+        format!("core.hooksPath={INERT_PATH}"),
+        "core.pager=".to_string(),
+        format!("core.sshCommand={DISABLED_SSH_COMMAND}"),
+        "diff.external=".to_string(),
+        format!("core.attributesFile={INERT_PATH}"),
+        format!("attr.tree={EMPTY_TREE_OBJECT}"),
+    ] {
+        command.arg("-c").arg(entry);
+    }
+    command
+        .arg("-C")
+        .arg(root)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("LC_ALL", "C");
+    command
+}
+
 /// Cap for version-manager directory scans so resolution work stays bounded.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_NODE_VERSION_DIRS: usize = 32;
@@ -282,5 +351,59 @@ mod tests {
     fn nvm_scan_returns_empty_for_missing_versions_dir() {
         let directory = tempfile::tempdir().unwrap();
         assert!(super::nvm_node_bin_dirs(&directory.path().join("versions/node")).is_empty());
+    }
+
+    #[test]
+    fn git_command_carries_the_neutralizing_configuration() {
+        use std::path::Path;
+
+        let command = super::git_command(Path::new("/workspace/project"));
+        let args = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        let config = args
+            .windows(2)
+            .filter(|pair| pair[0] == "-c")
+            .map(|pair| pair[1].clone())
+            .collect::<Vec<_>>();
+
+        // Every key a repository can set to name a program, plus the attribute
+        // source that selects a `filter.<driver>` in the first place.
+        for expected in [
+            "core.fsmonitor=false".to_string(),
+            format!("core.hooksPath={}", super::INERT_PATH),
+            "core.pager=".to_string(),
+            format!("core.sshCommand={}", super::DISABLED_SSH_COMMAND),
+            "diff.external=".to_string(),
+            format!("core.attributesFile={}", super::INERT_PATH),
+            format!("attr.tree={}", super::EMPTY_TREE_OBJECT),
+        ] {
+            assert!(
+                config.contains(&expected),
+                "`git` is invoked without `{expected}`; got {config:?}"
+            );
+        }
+        assert!(
+            args.contains(&"--no-pager".to_string()),
+            "a repository `core.pager` must not be reachable: {args:?}"
+        );
+        // The project directory is the one the caller hands over, not the
+        // process's own working directory.
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-C", "/workspace/project"]));
+
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value.map(|value| value.to_string_lossy().to_string()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(environment.contains(&("GIT_CONFIG_NOSYSTEM".into(), Some("1".into()))));
+        assert!(environment.contains(&("GIT_OPTIONAL_LOCKS".into(), Some("0".into()))));
     }
 }
