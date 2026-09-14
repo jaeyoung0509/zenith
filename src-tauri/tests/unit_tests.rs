@@ -148,6 +148,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         &[],
         false,
         &PlatformEnvironment::native(),
+        &zenith_lib::models::NeverCancelled,
         |_| {},
     );
     let items = &result.categories[0].items;
@@ -162,6 +163,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         &excluded,
         false,
         &PlatformEnvironment::native(),
+        &zenith_lib::models::NeverCancelled,
         |_| {},
     );
     assert_eq!(filtered.categories[0].items.len(), 1);

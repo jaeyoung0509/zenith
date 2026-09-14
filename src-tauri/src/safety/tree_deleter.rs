@@ -297,7 +297,7 @@ impl WindowsDeleteHandle {
 }
 
 impl SafeTreeDeleter {
-    pub fn delete_contents(
+    fn delete_contents_unchecked(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
@@ -391,7 +391,7 @@ impl SafeTreeDeleter {
         report
     }
 
-    pub fn delete_path(
+    fn delete_path_unchecked(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
@@ -424,22 +424,22 @@ impl SafeTreeDeleter {
         report
     }
 
-    /// Mutates the filesystem only for a pre-validated target that has passed
-    /// all safety revalidation checks.
-    pub fn delete_contents_validated(
-        target: &super::ValidatedTarget,
+    /// Mutates the filesystem by deleting directory contents, requiring a verified deletion authority.
+    pub fn delete_contents_validated<'a>(
+        authority: impl Into<super::FilesystemDeleteAuthority<'a>>,
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_contents(target.path(), target.exclusions(), environment)
+        let auth = authority.into();
+        Self::delete_contents_unchecked(auth.path(), auth.exclusions(), environment)
     }
 
-    /// Mutates the filesystem only for a pre-validated target that has passed
-    /// all safety revalidation checks.
-    pub fn delete_path_validated(
-        target: &super::ValidatedTarget,
+    /// Mutates the filesystem by deleting a path, requiring a verified deletion authority.
+    pub fn delete_path_validated<'a>(
+        authority: impl Into<super::FilesystemDeleteAuthority<'a>>,
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_path(target.path(), target.exclusions(), environment)
+        let auth = authority.into();
+        Self::delete_path_unchecked(auth.path(), auth.exclusions(), environment)
     }
 
     /// Deletes directory children using the already-verified parent directory
@@ -1416,7 +1416,8 @@ mod tests {
         let payload = root.join("payload.bin");
         std::fs::write(&payload, b"payload").unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(&root, &[], &environment());
+        let authority = crate::safety::FilesystemDeleteAuthority::test_direct(&root, &[]);
+        let report = SafeTreeDeleter::delete_contents_validated(authority, &environment());
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
         assert!(root.is_dir());
@@ -1478,7 +1479,10 @@ mod tests {
 
         std::fs::remove_file(&vanished).unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(&root, &[]),
+            &environment(),
+        );
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(report.errors.is_empty());
         assert_eq!(report.reclaimed_bytes, expected_bytes);
@@ -1496,7 +1500,10 @@ mod tests {
         std::fs::create_dir(&missing).unwrap();
         std::fs::remove_dir(&missing).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&missing, &[], &environment());
+        let report = SafeTreeDeleter::delete_path_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(&missing, &[]),
+            &environment(),
+        );
         assert!(report.is_success());
         assert!(report.errors.is_empty());
         assert_eq!(report.reclaimed_bytes, 0);
@@ -1518,7 +1525,10 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(&file1, perms).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_path_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(&root, &[]),
+            &environment(),
+        );
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!root.exists());
     }
@@ -1535,7 +1545,10 @@ mod tests {
         std::fs::set_permissions(&target, perms).unwrap();
         assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(dir.path(), &[]),
+            &environment(),
+        );
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!target.exists(), "readonly file must be deleted");
     }
@@ -1567,7 +1580,10 @@ mod tests {
         root_p.set_readonly(true);
         std::fs::set_permissions(&root, root_p).unwrap();
 
-        let report = SafeTreeDeleter::delete_path(&root, &[], &environment());
+        let report = SafeTreeDeleter::delete_path_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(&root, &[]),
+            &environment(),
+        );
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!root.exists(), "readonly directory tree must be deleted");
     }
@@ -1588,7 +1604,10 @@ mod tests {
             .open(&target)
             .unwrap();
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(dir.path(), &[]),
+            &environment(),
+        );
         assert!(
             !report.is_success(),
             "deletion must fail while file is exclusively locked"
@@ -1605,7 +1624,10 @@ mod tests {
 
         drop(lock_handle);
 
-        let report2 = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report2 = SafeTreeDeleter::delete_contents_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(dir.path(), &[]),
+            &environment(),
+        );
         assert!(report2.is_success(), "errors: {:?}", report2.errors);
         assert!(!target.exists());
     }
@@ -1630,7 +1652,10 @@ mod tests {
             drop(lock_handle);
         });
 
-        let report = SafeTreeDeleter::delete_contents(dir.path(), &[], &environment());
+        let report = SafeTreeDeleter::delete_contents_validated(
+            crate::safety::FilesystemDeleteAuthority::test_direct(dir.path(), &[]),
+            &environment(),
+        );
         handle.join().unwrap();
 
         assert!(

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::models::{
-    CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy, DeleteTarget,
+    CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy, DeleteTarget, ZenithError,
 };
 use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
@@ -24,7 +24,7 @@ pub struct ValidatedTarget {
 }
 
 impl ValidatedTarget {
-    pub(crate) fn from_planned(target: &DeleteTarget) -> Self {
+    fn from_planned(target: &DeleteTarget) -> Self {
         Self {
             item_id: target.item_id.clone(),
             name: target.name.clone(),
@@ -258,5 +258,92 @@ impl SafetyValidator {
         }
 
         RevalidationOutcome::Validated(ValidatedTarget::from_planned(target))
+    }
+}
+
+/// An authorized local AI model deletion target that has passed model inventory scope
+/// and symlink validations.
+///
+/// Can only be constructed through `ValidatedModelTarget::validate()`.
+#[derive(Debug, Clone)]
+pub struct ValidatedModelTarget {
+    path: PathBuf,
+}
+
+impl ValidatedModelTarget {
+    /// Validates that `path` is directly scoped under `allowed_root`, does not point to
+    /// `allowed_root` itself, is not blacklisted, and contains no intermediate symlink ancestors.
+    pub fn validate(
+        path: &Path,
+        allowed_root: &Path,
+        environment: &PlatformEnvironment,
+    ) -> Result<Self, ZenithError> {
+        if path == allowed_root || !path.starts_with(allowed_root) {
+            return Err(ZenithError::PathNotAllowed(
+                path.to_string_lossy().to_string(),
+            ));
+        }
+
+        Blacklist::validate_with(path, environment)?;
+        SymlinkGuard::validate_canonical_blacklist_strict(path, environment)?;
+        SymlinkGuard::validate_no_symlink_ancestors(path, allowed_root, environment)?;
+
+        Ok(Self {
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Authority token required by `SafeTreeDeleter` to perform filesystem mutations.
+///
+/// Ensures raw paths cannot be deleted without first obtaining an authority token
+/// through a domain safety gate (`ValidatedTarget` for general cleanup,
+/// `ValidatedModelTarget` for model inventory cleanup).
+pub enum FilesystemDeleteAuthority<'a> {
+    Cleanup(&'a ValidatedTarget),
+    ModelInventory(&'a ValidatedModelTarget),
+    #[doc(hidden)]
+    TestDirect {
+        path: &'a Path,
+        exclusions: &'a [String],
+    },
+}
+
+impl<'a> FilesystemDeleteAuthority<'a> {
+    #[doc(hidden)]
+    pub fn test_direct(path: &'a Path, exclusions: &'a [String]) -> Self {
+        Self::TestDirect { path, exclusions }
+    }
+
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Cleanup(target) => target.path(),
+            Self::ModelInventory(model) => model.path(),
+            Self::TestDirect { path, .. } => path,
+        }
+    }
+
+    pub fn exclusions(&self) -> &[String] {
+        match self {
+            Self::Cleanup(target) => target.exclusions(),
+            Self::ModelInventory(_) => &[],
+            Self::TestDirect { exclusions, .. } => exclusions,
+        }
+    }
+}
+
+impl<'a> From<&'a ValidatedTarget> for FilesystemDeleteAuthority<'a> {
+    fn from(target: &'a ValidatedTarget) -> Self {
+        Self::Cleanup(target)
+    }
+}
+
+impl<'a> From<&'a ValidatedModelTarget> for FilesystemDeleteAuthority<'a> {
+    fn from(target: &'a ValidatedModelTarget) -> Self {
+        Self::ModelInventory(target)
     }
 }

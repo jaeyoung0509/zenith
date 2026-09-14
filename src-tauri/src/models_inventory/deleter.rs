@@ -4,7 +4,7 @@ use crate::platform::PlatformEnvironment;
 use crate::safety::{SafeTreeDeleter, TreeDeleteReport};
 use crate::signatures::SignatureLoader;
 use crate::tooling;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct LocalModelManager;
 
@@ -93,14 +93,9 @@ impl LocalModelManager {
         let root = SignatureLoader::expand_path(allowed_root, environment)
             .ok_or_else(|| ZenithError::PathNotAllowed(allowed_root.into()))?;
         let path = PathBuf::from(&model.path);
-        if !Self::is_directly_scoped(&path, &root) {
-            return Err(ZenithError::PathNotAllowed(model.path.clone()));
-        }
 
-        // Ancestor symlink protection
-        crate::safety::SymlinkGuard::validate_no_symlink_ancestors(&path, &root, environment)?;
-
-        let report = SafeTreeDeleter::delete_path(&path, &[], environment);
+        let validated = crate::safety::ValidatedModelTarget::validate(&path, &root, environment)?;
+        let report = SafeTreeDeleter::delete_path_validated(&validated, environment);
         Self::filesystem_delete_result(report)
     }
 
@@ -122,10 +117,6 @@ impl LocalModelManager {
             Err(ZenithError::Io(message))
         }
     }
-
-    fn is_directly_scoped(path: &Path, root: &Path) -> bool {
-        path != root && path.starts_with(root)
-    }
 }
 
 #[cfg(test)]
@@ -135,7 +126,6 @@ mod tests {
     use crate::platform::path_algebra::PathFlavor;
     use crate::platform::PlatformEnvironment;
     use crate::safety::TreeDeleteReport;
-    use std::path::Path;
 
     fn model(id: &str, name: &str, path: &str) -> LocalModelItem {
         LocalModelItem {
@@ -175,14 +165,17 @@ mod tests {
 
     #[test]
     fn filesystem_models_must_be_below_their_adapter_root() {
-        assert!(LocalModelManager::is_directly_scoped(
-            Path::new("/Users/me/.cache/mlx/model"),
-            Path::new("/Users/me/.cache/mlx")
-        ));
-        assert!(!LocalModelManager::is_directly_scoped(
-            Path::new("/Users/me/Documents"),
-            Path::new("/Users/me/.cache/mlx")
-        ));
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("mlx");
+        let model = root.join("model");
+        std::fs::create_dir_all(&model).unwrap();
+        let outside = dir.path().join("Documents");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let env = crate::platform::PlatformEnvironment::native();
+        assert!(crate::safety::ValidatedModelTarget::validate(&model, &root, &env).is_ok());
+        assert!(crate::safety::ValidatedModelTarget::validate(&outside, &root, &env).is_err());
+        assert!(crate::safety::ValidatedModelTarget::validate(&root, &root, &env).is_err());
     }
 
     #[test]

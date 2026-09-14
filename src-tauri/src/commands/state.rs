@@ -1,11 +1,10 @@
 use crate::collection::SingleFlight;
 use crate::execution_budget::ExecutionBudgets;
-use crate::models::{AiProviderUsage, AiUsageSnapshot, DeletePlan, ScanResult, ZenithSettings};
+use crate::models::{AiProviderUsage, AiUsageSnapshot, ZenithSettings};
 use crate::operation_gate::StorageOperationGate;
 use crate::power::KeepAwakeManager;
 use crate::runtime_metrics::RuntimeMetrics;
 use crate::signatures::SignatureRegistry;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -24,13 +23,11 @@ pub struct AppState {
     pub registry_load_error: Option<String>,
     pub awake_manager: Arc<KeepAwakeManager>,
     pub settings: Arc<Mutex<ZenithSettings>>,
-    pub last_scan: Arc<Mutex<Option<ScanResult>>>,
     pub credentials: Arc<dyn crate::ai_providers::CredentialStore>,
     pub ai_collection_service: Arc<crate::ai_providers::ProviderCollectionService>,
     pub ai_usage_cache: Arc<Mutex<Option<AiUsageSnapshot>>>,
     pub usage_singleflight: Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     pub usage_generation: Arc<AtomicU64>,
-    pub delete_plans: Arc<Mutex<HashMap<uuid::Uuid, DeletePlan>>>,
     pub storage_operation_gate: StorageOperationGate,
     pub storage_state: Arc<crate::storage_commands::StorageWorkflowState>,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
@@ -46,9 +43,6 @@ pub struct AppState {
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
-    pub scan_service: Arc<crate::services::ScanService>,
-    pub plan_store: Arc<crate::services::PlanStore>,
-    pub scan_store: Arc<crate::services::ScanStore>,
     pub cleanup_service: Arc<crate::services::CleanupService>,
 }
 
@@ -88,7 +82,6 @@ impl AppState {
         let awake_manager = Arc::new(KeepAwakeManager::new());
         awake_manager.set_session_validator(crate::agent_activity::has_active_verified_session);
         let settings = Arc::new(Mutex::new(ZenithSettings::default()));
-        let last_scan = Arc::new(Mutex::new(None));
         let credentials: Arc<dyn crate::ai_providers::CredentialStore> =
             Arc::new(crate::ai_providers::OsCredentialStore::default());
         let ai_collection_service =
@@ -97,7 +90,6 @@ impl AppState {
         let runtime_metrics = Arc::new(RuntimeMetrics::new());
         let usage_singleflight = Arc::new(SingleFlight::with_metrics(runtime_metrics.clone()));
         let usage_generation = Arc::new(AtomicU64::new(1));
-        let delete_plans = Arc::new(Mutex::new(HashMap::new()));
         let storage_operation_gate = StorageOperationGate::default();
         let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
         let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
@@ -157,13 +149,11 @@ impl AppState {
             registry_load_error,
             awake_manager,
             settings,
-            last_scan,
             credentials,
             ai_collection_service,
             ai_usage_cache,
             usage_singleflight,
             usage_generation,
-            delete_plans,
             storage_operation_gate,
             storage_state,
             memory_sampler,
@@ -179,9 +169,6 @@ impl AppState {
             runtime_metrics,
             execution_budgets,
             docker_status_cache,
-            scan_service,
-            plan_store,
-            scan_store,
             cleanup_service,
         }
     }

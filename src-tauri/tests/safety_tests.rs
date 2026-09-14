@@ -12,7 +12,9 @@ use zenith_lib::platform::path_algebra::PathFlavor;
 use zenith_lib::platform::paths::SimulatedPaths;
 use zenith_lib::platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
-use zenith_lib::safety::{Blacklist, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard};
+use zenith_lib::safety::{
+    Blacklist, FilesystemDeleteAuthority, SafeTreeDeleter, SafetyPlanner, SymlinkGuard, ToctouGuard,
+};
 use zenith_lib::scanner::SizeCalculator;
 use zenith_lib::signatures::SignatureRegistry;
 
@@ -492,7 +494,10 @@ fn cleaner_removes_user_owned_read_only_cache_trees_without_privilege_escalation
     fs::set_permissions(&nested, fs::Permissions::from_mode(0o555))
         .expect("make app resources read-only");
 
-    let report = SafeTreeDeleter::delete_path(&cache_root, &[], &PlatformEnvironment::native());
+    let report = SafeTreeDeleter::delete_path_validated(
+        FilesystemDeleteAuthority::test_direct(&cache_root, &[]),
+        &PlatformEnvironment::native(),
+    );
 
     assert!(
         report.is_success(),
@@ -520,7 +525,10 @@ fn cleaner_restores_read_only_root_after_delete_contents() {
     fs::set_permissions(cache_root.join("nested"), fs::Permissions::from_mode(0o555))
         .expect("make nested directory read-only");
 
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &[], &PlatformEnvironment::native());
+    let report = SafeTreeDeleter::delete_contents_validated(
+        FilesystemDeleteAuthority::test_direct(&cache_root, &[]),
+        &PlatformEnvironment::native(),
+    );
 
     assert!(
         report.is_success(),
@@ -557,7 +565,10 @@ fn cleaner_unlinks_symlink_without_changing_target_permissions() {
     let link = cache_root.join("outside-link");
     symlink(outside.path(), &link).expect("create symlink");
 
-    let report = SafeTreeDeleter::delete_contents(&cache_root, &[], &PlatformEnvironment::native());
+    let report = SafeTreeDeleter::delete_contents_validated(
+        FilesystemDeleteAuthority::test_direct(&cache_root, &[]),
+        &PlatformEnvironment::native(),
+    );
 
     assert!(
         report.is_success(),
@@ -771,8 +782,10 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
     fs::write(&removable, b"cache").unwrap();
 
     let exclusions = vec![excluded.to_string_lossy().into_owned()];
-    let report =
-        SafeTreeDeleter::delete_contents(&cache_root, &exclusions, &PlatformEnvironment::native());
+    let report = SafeTreeDeleter::delete_contents_validated(
+        FilesystemDeleteAuthority::test_direct(&cache_root, &exclusions),
+        &PlatformEnvironment::native(),
+    );
     assert!(report.is_success());
 
     assert!(cache_root.exists());
@@ -1009,9 +1022,8 @@ fn test_antigravity_cache_exclusions_preserve_onboarding_and_auth() {
     );
 
     // Perform delete_contents
-    let report = SafeTreeDeleter::delete_contents(
-        &cache_dir,
-        &gemini_sig.exclusions,
+    let report = SafeTreeDeleter::delete_contents_validated(
+        FilesystemDeleteAuthority::test_direct(&cache_dir, &gemini_sig.exclusions),
         &PlatformEnvironment::native(),
     );
     assert!(report.is_success());
@@ -1748,7 +1760,10 @@ mod windows_safety {
             "the junction must be classified as an indirection"
         );
 
-        let report = SafeTreeDeleter::delete_contents(&cache, &[], &PlatformEnvironment::native());
+        let report = SafeTreeDeleter::delete_contents_validated(
+            FilesystemDeleteAuthority::test_direct(&cache, &[]),
+            &PlatformEnvironment::native(),
+        );
         assert!(report.is_success(), "errors: {:?}", report.errors);
         // The junction itself is removed, never traversed: its target must be
         // untouched, and the cache root must be gone.
@@ -1795,7 +1810,10 @@ mod windows_safety {
             &verbatim_path,
             &PlatformEnvironment::native()
         ));
-        let report = SafeTreeDeleter::delete_contents(&deep, &[], &PlatformEnvironment::native());
+        let report = SafeTreeDeleter::delete_contents_validated(
+            FilesystemDeleteAuthority::test_direct(&deep, &[]),
+            &PlatformEnvironment::native(),
+        );
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert!(!payload.exists());
     }

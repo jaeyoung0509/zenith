@@ -5952,11 +5952,8 @@ dependencies = [
 name = "zenith-platform"
 version = "0.3.27"
 dependencies = [
- "libc",
- "security-framework",
  "tempfile",
  "trash",
- "windows-sys 0.61.2",
  "zenith-core",
 ]
 

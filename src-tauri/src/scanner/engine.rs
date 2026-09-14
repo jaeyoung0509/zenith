@@ -110,6 +110,7 @@ impl ScanEngine {
         excluded_signatures: &[String],
         intensive_cleanup: bool,
         environment: &PlatformEnvironment,
+        cancellation: &dyn crate::models::CancellationProbe,
         mut on_event: F,
     ) -> ScanResult
     where
@@ -140,11 +141,17 @@ impl ScanEngine {
         let mut manual_bytes = 0u64;
         let mut skipped_entry_count = 0u64;
         let mut incomplete_item_count = 0u64;
+        let mut was_cancelled = false;
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
         let directory_pool = shared_scan_pool();
 
         for &category in target_categories {
+            if cancellation.is_cancelled() {
+                was_cancelled = true;
+                break;
+            }
+
             on_event(ScanEvent::CategoryStarted { category });
 
             let mut accumulator = CategoryAccumulator::default();
@@ -152,6 +159,10 @@ impl ScanEngine {
             // 1. Scan filesystem signatures for this category
             let signatures = registry.by_category_for_mode(category, intensive_cleanup);
             for sig in signatures {
+                if cancellation.is_cancelled() {
+                    was_cancelled = true;
+                    break;
+                }
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
                 }
@@ -166,9 +177,30 @@ impl ScanEngine {
                 }
             }
 
+            if was_cancelled {
+                category_results.push(CategoryResult {
+                    category,
+                    display_name: category.display_name().to_string(),
+                    items: accumulator.items,
+                    total_bytes: accumulator.total_bytes,
+                    cleanable_bytes: accumulator.cleanable_bytes,
+                    safe_bytes: accumulator.safe_bytes,
+                    rebuild_bytes: accumulator.rebuild_bytes,
+                    manual_bytes: accumulator.manual_bytes,
+                    quality: ObservationQuality::Partial,
+                    skipped_entry_count: 0,
+                    incomplete_item_count: 0,
+                });
+                break;
+            }
+
             // 2. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Developer {
                 for item in CacheProviderRegistry::scan_items(registry, environment) {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
                     if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
@@ -177,18 +209,56 @@ impl ScanEngine {
                 }
             }
 
+            if was_cancelled {
+                category_results.push(CategoryResult {
+                    category,
+                    display_name: category.display_name().to_string(),
+                    items: accumulator.items,
+                    total_bytes: accumulator.total_bytes,
+                    cleanable_bytes: accumulator.cleanable_bytes,
+                    safe_bytes: accumulator.safe_bytes,
+                    rebuild_bytes: accumulator.rebuild_bytes,
+                    manual_bytes: accumulator.manual_bytes,
+                    quality: ObservationQuality::Partial,
+                    skipped_entry_count: 0,
+                    incomplete_item_count: 0,
+                });
+                break;
+            }
+
             // 3. Typed container adapters can report cleanable or observation-only storage.
             if category == Category::Container {
                 let adapter_items = DockerAdapter::scan_items(environment)
                     .into_iter()
                     .chain(OrbStackAdapter::scan_items(environment));
                 for item in adapter_items {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
                     if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
                     }
                 }
+            }
+
+            if was_cancelled {
+                category_results.push(CategoryResult {
+                    category,
+                    display_name: category.display_name().to_string(),
+                    items: accumulator.items,
+                    total_bytes: accumulator.total_bytes,
+                    cleanable_bytes: accumulator.cleanable_bytes,
+                    safe_bytes: accumulator.safe_bytes,
+                    rebuild_bytes: accumulator.rebuild_bytes,
+                    manual_bytes: accumulator.manual_bytes,
+                    quality: ObservationQuality::Partial,
+                    skipped_entry_count: 0,
+                    incomplete_item_count: 0,
+                });
+                break;
             }
 
             accumulator.items.sort_by(|left, right| {
@@ -259,7 +329,14 @@ impl ScanEngine {
                 }
             }
         }
-        let scan_quality = aggregate_quality(category_results.iter().map(|cat| cat.quality));
+        if was_cancelled {
+            incomplete_reasons.push("Scan was cancelled before completion".to_string());
+        }
+        let scan_quality = if was_cancelled {
+            ObservationQuality::Partial
+        } else {
+            aggregate_quality(category_results.iter().map(|cat| cat.quality))
+        };
 
         let result = ScanResult {
             scan_id,
@@ -377,7 +454,15 @@ mod tests {
             Some(0),
         ));
 
-        let result = ScanEngine::scan(&registry, None, &[], false, &scan_environment(), |_| {});
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
 
         let developer = result
             .categories
@@ -453,7 +538,15 @@ mod tests {
             None,
         ));
 
-        let result = ScanEngine::scan(&registry, None, &[], false, &scan_environment(), |_| {});
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
 
         let category_skipped: u64 = result
             .categories
@@ -533,6 +626,7 @@ mod tests {
             &[],
             false,
             &scan_environment(),
+            &crate::models::NeverCancelled,
             |event| events.push(event),
         );
 
@@ -596,5 +690,46 @@ mod tests {
             ],
             "an item-level measurement gap is never a destructive scan event"
         );
+    }
+
+    #[test]
+    fn scan_engine_honors_cancellation_probe() {
+        struct AlwaysCancelled;
+        impl crate::models::CancellationProbe for AlwaysCancelled {
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let dev_root = fixture.path().join("dev-cache");
+        std::fs::create_dir_all(&dev_root).unwrap();
+        std::fs::write(dev_root.join("data.bin"), vec![1u8; 100]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.cancel",
+            "Cancelled cache",
+            Category::Developer,
+            &dev_root,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &AlwaysCancelled,
+            |_| {},
+        );
+
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result
+            .incomplete_reasons
+            .iter()
+            .any(|reason| reason.contains("cancelled")));
     }
 }

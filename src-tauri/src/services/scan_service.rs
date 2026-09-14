@@ -35,7 +35,7 @@ impl ScanService {
         &self,
         request: &ScanRequest,
         progress: &dyn ScanProgressSink,
-        _cancellation: &dyn CancellationProbe,
+        cancellation: &dyn CancellationProbe,
     ) -> ScanResult {
         ScanEngine::scan(
             &self.registry,
@@ -43,6 +43,7 @@ impl ScanService {
             &request.excluded_signatures,
             request.intensive_cleanup,
             &self.environment,
+            cancellation,
             move |event| progress.emit(event),
         )
     }
