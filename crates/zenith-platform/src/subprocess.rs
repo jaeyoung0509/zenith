@@ -109,6 +109,15 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
     };
 
     let mut child = cmd.spawn().map_err(|e| {
+        // The job object was created before the spawn; leaving it open on a
+        // failed spawn leaks a kernel handle for every refused launch.
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            if !job_handle.is_null() {
+                CloseHandle(job_handle);
+            }
+        }
         let err = SubprocessError::SpawnFailed(program.clone(), e);
         log_subprocess_error(&err.to_string());
         err

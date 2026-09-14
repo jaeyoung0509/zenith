@@ -11,8 +11,7 @@ pub use symlink::SymlinkGuard;
 pub use toctou::ToctouGuard;
 pub use tree_deleter::{SafeTreeDeleter, TreeDeleteReport};
 pub use validator::{
-    FilesystemDeleteAuthority, RevalidationOutcome, SafetyValidator, ValidatedModelTarget,
-    ValidatedTarget,
+    FilesystemDeleteAuthority, RevalidationOutcome, SafetyValidator, ValidatedTarget,
 };
 
 use crate::models::ZenithError;

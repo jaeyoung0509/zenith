@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::models::{
-    CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy, DeleteTarget, ZenithError,
+    CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy, DeleteTarget,
 };
+use crate::models_inventory::ValidatedModelTarget;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
 use zenith_platform::PlatformEnvironment;
 
@@ -288,43 +289,6 @@ impl SafetyValidator {
     }
 }
 
-/// An authorized local AI model deletion target that has passed model inventory scope
-/// and symlink validations.
-///
-/// Can only be constructed through `ValidatedModelTarget::validate()`.
-#[derive(Debug, Clone)]
-pub struct ValidatedModelTarget {
-    path: PathBuf,
-}
-
-impl ValidatedModelTarget {
-    /// Validates that `path` is directly scoped under `allowed_root`, does not point to
-    /// `allowed_root` itself, is not blacklisted, and contains no intermediate symlink ancestors.
-    pub fn validate(
-        path: &Path,
-        allowed_root: &Path,
-        environment: &PlatformEnvironment,
-    ) -> Result<Self, ZenithError> {
-        if path == allowed_root || !path.starts_with(allowed_root) {
-            return Err(ZenithError::PathNotAllowed(
-                path.to_string_lossy().to_string(),
-            ));
-        }
-
-        Blacklist::validate_with(path, environment)?;
-        SymlinkGuard::validate_canonical_blacklist_strict(path, environment)?;
-        SymlinkGuard::validate_no_symlink_ancestors(path, allowed_root, environment)?;
-
-        Ok(Self {
-            path: path.to_path_buf(),
-        })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
 /// Authority token required by `SafeTreeDeleter` to perform filesystem mutations.
 ///
 /// Ensures raw paths cannot be deleted without first obtaining an authority token
@@ -336,6 +300,10 @@ pub struct FilesystemDeleteAuthority<'a> {
 
 enum AuthorityKind<'a> {
     Cleanup(&'a ValidatedTarget),
+    /// A model-inventory deletion. The type is minted by
+    /// `models_inventory::ValidatedModelTarget`, which resolves the allowed
+    /// root from the model's own source, so this arm cannot carry a path that
+    /// skipped that scope check.
     ModelInventory(&'a ValidatedModelTarget),
 }
 

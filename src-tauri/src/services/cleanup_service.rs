@@ -9,8 +9,8 @@ use crate::cleaner::CleanExecutor;
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
     CleanEvent, CleanResult, CleanStrategy, CleanupEligibility, CleanupProgressSink, DeletePlan,
-    DockerStatus, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature, ScanProgressSink,
-    ScanRequest, ScanResult, ZenithSettings,
+    DockerStatus, ObservationQuality, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature,
+    ScanProgressSink, ScanRequest, ScanResult, ZenithSettings,
 };
 use crate::operation_gate::StorageOperationGate;
 use crate::safety::SafetyPlanner;
@@ -31,7 +31,11 @@ fn unix_timestamp() -> u64 {
 /// - cleanable_bytes > 0
 /// - category enabled in settings
 ///
-/// Never includes Rebuild, Manual, Blocked, or Advisory items.
+/// Never includes Rebuild, Manual, Blocked, or Advisory items. The scan-level
+/// rule is the caller's: Quick Clean is the one path that deletes without a
+/// per-item review, so it runs only on a scan that observed everything
+/// (`CleanupIntent::QuickSafe`), while a user-reviewed selection may proceed
+/// from a partial scan whose items the user looked at.
 pub fn select_quick_clean_safe_candidates(
     scan: &ScanResult,
     settings: &ZenithSettings,
@@ -268,6 +272,19 @@ impl CleanupService {
                         scan.validate_for_cleanup(&scan.scan_id, now)
                             .map_err(|e| e.to_string())?;
 
+                        // Quick Clean deletes the Safe subset without a
+                        // per-item review, so it requires a scan that observed
+                        // everything. A partial scan may have missed items and
+                        // cannot prove the machine's state; a user-reviewed
+                        // selection is different, because the user saw exactly
+                        // what was inspected and chose from it.
+                        if scan.quality != ObservationQuality::Fresh {
+                            return Err(
+                                "Quick Clean needs a complete scan. Scan again before cleaning."
+                                    .to_string(),
+                            );
+                        }
+
                         let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
                         if eligible_ids.is_empty() {
                             return Ok(CleanResult {
@@ -356,6 +373,15 @@ mod tests {
     }
 
     fn make_test_scan(items: Vec<ScanItem>) -> ScanResult {
+        make_test_scan_with_quality(items, ObservationQuality::Fresh)
+    }
+
+    /// A scan whose overall quality is stated, so a caller can present the
+    /// partial observations a cancelled or bounded scan produces.
+    fn make_test_scan_with_quality(
+        items: Vec<ScanItem>,
+        quality: ObservationQuality,
+    ) -> ScanResult {
         let cleanable = items.iter().map(|i| i.cleanable_bytes()).sum();
         let now = unix_timestamp();
         ScanResult {
@@ -376,13 +402,13 @@ mod tests {
                 safe_bytes: cleanable,
                 rebuild_bytes: 0,
                 manual_bytes: 0,
-                quality: ObservationQuality::Fresh,
+                quality,
                 skipped_entry_count: 0,
                 incomplete_item_count: 0,
                 items,
             }],
-            incomplete_reasons: vec![],
-            quality: ObservationQuality::Fresh,
+            incomplete_reasons: Vec::new(),
+            quality,
             skipped_entry_count: 0,
             incomplete_item_count: 0,
         }
@@ -518,6 +544,86 @@ mod tests {
             error.contains("not found or already used"),
             "unexpected error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn quick_clean_refuses_a_partial_scan_but_a_reviewed_plan_may_proceed() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache = fixture.path().join("fixture-cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("payload.bin"), vec![9u8; 256]).unwrap();
+
+        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let mut registry = SignatureRegistry::new();
+        registry.register(Signature {
+            id: "test_sig".to_string(),
+            name: "Fixture cache".to_string(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteDirectory,
+            paths: vec![cache.to_string_lossy().to_string()],
+            description: "test-only signature".to_string(),
+            min_age_days: None,
+            include_prefixes: Vec::new(),
+            exclude_prefixes: Vec::new(),
+            intensive_only: false,
+            platforms: Vec::new(),
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+            exclusions: Vec::new(),
+        });
+        let registry = Arc::new(registry);
+
+        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
+        let scan_store = Arc::new(ScanStore::new());
+        let service = CleanupService::new(
+            scan_service,
+            plan_store,
+            scan_store.clone(),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            env,
+            registry,
+            Arc::new(Mutex::new(None)),
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        );
+
+        // A partial scan is the state a cancelled or bounded scan leaves behind:
+        // some items were observed, and the machine as a whole was not.
+        let mut item = ScanItem::mock(
+            "item1",
+            "test_sig",
+            "Fixture cache",
+            Category::System,
+            RiskTier::Safe,
+            cache.to_string_lossy().to_string(),
+            FileSize::new(256, Some(256)),
+            1,
+        );
+        item.disposition = item.derive_disposition();
+        scan_store.set(make_test_scan_with_quality(
+            vec![item],
+            ObservationQuality::Partial,
+        ));
+
+        let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
+        let settings = ZenithSettings::default();
+        let refused = service.quick_clean_safe(&settings, progress).await;
+        let error = refused.expect_err("Quick Clean needs a scan that observed everything");
+        assert!(error.contains("complete scan"), "unexpected error: {error}");
+        assert!(cache.join("payload.bin").is_file(), "nothing was deleted");
+
+        // The same partial scan still supports a reviewed selection: the user
+        // saw which items were inspected and chose one of them.
+        let preview = service
+            .create_delete_plan("scan_123".to_string(), vec!["item1".to_string()])
+            .await
+            .expect("a reviewed selection may proceed from a partial scan");
+        assert_eq!(preview.targets.len(), 1);
     }
 
     #[tokio::test]

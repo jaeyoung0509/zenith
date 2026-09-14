@@ -10,6 +10,7 @@ use crate::models::{
 use crate::safety::{Blacklist, SymlinkGuard};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
@@ -244,13 +245,15 @@ impl TrashPlanner {
 
 /// A reviewed target that passed execution-time validation.
 ///
-/// The type has no public constructor outside this module: [`validate_target`]
-/// produces it immediately before a move, and it is the only thing the Trash
-/// port accepts. A caller therefore cannot ask the OS Trash to move a path it
-/// has not just re-validated, and the review evidence travels with the target
-/// rather than being re-derived at the call site.
+/// The type has no constructor outside this module: [`validate_target`]
+/// produces it immediately before a move, and it is what [`TrashExecutor`]
+/// passes to the port. Its purpose is to keep the ordering of
+/// validate-then-move structural inside the reviewed-storage context, not to
+/// seal the port itself: the port is a raw OS primitive, and the authority is
+/// this layer's validation plus the fact that `TrashExecutor` holds the only
+/// production handle to the backend.
 #[derive(Debug)]
-pub struct ApprovedTrashTarget<'a> {
+struct ApprovedTrashTarget<'a> {
     target: &'a TrashTarget,
 }
 
@@ -260,37 +263,36 @@ impl<'a> ApprovedTrashTarget<'a> {
     }
 
     /// The reviewed path to move.
-    pub fn path(&self) -> &Path {
-        &self.target.path
-    }
-
-    /// The scope the target was reviewed under.
-    pub fn scope(&self) -> &TrashScope {
-        &self.target.scope
-    }
-}
-
-impl zenith_platform::ReviewedTrashEntry for ApprovedTrashTarget<'_> {
     fn path(&self) -> &Path {
         &self.target.path
     }
 }
 
-pub struct TrashExecutor;
+/// Moves reviewed targets to the OS Trash, one at a time.
+///
+/// The executor owns the backend, so the raw port is not reachable from a
+/// command, a service, or any other module that could hand it a path: the only
+/// production call site is [`Self::execute`], which validates each target
+/// immediately before the move.
+pub struct TrashExecutor {
+    backend: Arc<dyn zenith_platform::TrashBackend>,
+}
 
 impl TrashExecutor {
-    /// Moves each reviewed target through `backend`.
+    /// Builds the executor with the backend this process moves through.
     ///
-    /// Validation runs immediately before each move and produces the only value
-    /// the port accepts, so the checks and the move cannot be reordered into an
-    /// unvalidated call.
-    pub fn execute_with_backend(
-        environment: &PlatformEnvironment,
-        plan: TrashPlan,
-        backend: &dyn zenith_platform::TrashBackend,
-    ) -> TrashResult {
+    /// The composition root decides which adapter is in use — the native one in
+    /// production, a recording one in a test — and every reviewed-storage
+    /// workflow goes through that decision.
+    pub fn new(backend: Arc<dyn zenith_platform::TrashBackend>) -> Self {
+        Self { backend }
+    }
+
+    /// Moves every target of `plan`, validating each immediately before its move.
+    pub fn execute(&self, environment: &PlatformEnvironment, plan: TrashPlan) -> TrashResult {
+        let backend = self.backend.as_ref();
         Self::execute_with(environment, plan, |approved| {
-            backend.move_to_trash(approved)
+            backend.move_to_trash(approved.path())
         })
     }
 
@@ -1518,8 +1520,9 @@ mod tests {
             }],
         };
 
-        let mock_backend = zenith_platform::MockTrashBackend::new();
-        let result = TrashExecutor::execute_with_backend(&environment, plan, &mock_backend);
+        let mock_backend = Arc::new(zenith_platform::MockTrashBackend::new());
+        let executor = TrashExecutor::new(mock_backend.clone());
+        let result = executor.execute(&environment, plan);
         assert_eq!(result.moved_count, 1);
         assert_eq!(result.failed_count, 0);
         assert_eq!(mock_backend.moved(), vec![file]);

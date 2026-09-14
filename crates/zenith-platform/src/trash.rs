@@ -2,21 +2,17 @@
 
 use std::path::Path;
 
-/// A path the reviewed-storage layer has authorized for the OS Trash.
+/// Port for moving a path to the operating system's Trash / Recycle Bin.
 ///
-/// The port takes this rather than a `&Path` so a reviewed move cannot be
-/// requested by handing a string to the backend: the caller has to produce a
-/// value whose type records that scope, identity, and evidence checks already
-/// passed. The reviewed-storage context (`src-tauri/src/trash_manager`) owns
-/// the only implementation, and mints it immediately before the move.
-pub trait ReviewedTrashEntry {
-    /// The absolute path to move.
-    fn path(&self) -> &Path;
-}
-
-/// Port for moving files and directories to the operating system's Trash / Recycle Bin.
+/// This is the raw native primitive. It is deliberately *not* an authority
+/// boundary: a trait any crate can implement cannot be a capability, and a
+/// type-level seal across a crate edge is not expressible without moving the
+/// reviewer into this crate. Authorization therefore stays where the review
+/// evidence lives — `TrashExecutor` in the reviewed-storage context validates a
+/// target and is the only production caller — and this trait documents that
+/// obligation instead of pretending to enforce it.
 pub trait TrashBackend: Send + Sync {
-    fn move_to_trash(&self, entry: &dyn ReviewedTrashEntry) -> Result<(), String>;
+    fn move_to_trash(&self, path: &Path) -> Result<(), String>;
 }
 
 /// Native OS implementation using the `trash` crate.
@@ -24,8 +20,8 @@ pub trait TrashBackend: Send + Sync {
 pub struct NativeTrashBackend;
 
 impl TrashBackend for NativeTrashBackend {
-    fn move_to_trash(&self, entry: &dyn ReviewedTrashEntry) -> Result<(), String> {
-        trash::delete(entry.path()).map_err(|error| format!("Could not move to Trash: {error}"))
+    fn move_to_trash(&self, path: &Path) -> Result<(), String> {
+        trash::delete(path).map_err(|error| format!("Could not move to Trash: {error}"))
     }
 }
 
@@ -65,8 +61,7 @@ impl MockTrashBackend {
 }
 
 impl TrashBackend for MockTrashBackend {
-    fn move_to_trash(&self, entry: &dyn ReviewedTrashEntry) -> Result<(), String> {
-        let path = entry.path();
+    fn move_to_trash(&self, path: &Path) -> Result<(), String> {
         let refused = self
             .failing
             .lock()
@@ -88,22 +83,14 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    struct Entry(PathBuf);
-
-    impl ReviewedTrashEntry for Entry {
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
     #[test]
     fn mock_trash_backend_records_and_can_fail() {
         let backend = MockTrashBackend::new();
         let target = PathBuf::from("/tmp/test-item");
-        assert!(backend.move_to_trash(&Entry(target.clone())).is_ok());
+        assert!(backend.move_to_trash(&target).is_ok());
         assert_eq!(backend.moved(), vec![target.clone()]);
 
         let failing = MockTrashBackend::with_failing_path(&target);
-        assert!(failing.move_to_trash(&Entry(target)).is_err());
+        assert!(failing.move_to_trash(&target).is_err());
     }
 }

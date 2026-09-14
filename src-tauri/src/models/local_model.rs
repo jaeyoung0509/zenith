@@ -11,6 +11,23 @@ pub enum ModelSource {
 }
 
 impl ModelSource {
+    /// The managed root this source's downloaded model blobs live under.
+    ///
+    /// `None` for a source whose deletion is performed by its own CLI: an
+    /// Ollama model is removed with `ollama rm`, so there is no filesystem
+    /// root to validate a path against. The root is a property of the source
+    /// rather than a caller-supplied argument, so a filesystem model deletion
+    /// cannot be pointed at a directory the inventory does not own.
+    pub fn managed_root(&self) -> Option<&'static str> {
+        match self {
+            // Ollama: deletion goes through the CLI, never through a path.
+            ModelSource::Ollama => None,
+            ModelSource::HuggingFace => Some("~/.cache/huggingface/hub"),
+            ModelSource::LmStudio => Some("~/.cache/lm-studio/models"),
+            ModelSource::Mlx => Some("~/.cache/mlx"),
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             ModelSource::Ollama => "Ollama",

@@ -12,7 +12,7 @@ use crate::models::{
     LargeFileScanResult, TrashPlanPreview, TrashResult,
 };
 use crate::services::{PlanLifecycle, PlanStore};
-use crate::trash_manager::{TrashExecutor, TrashPlan, TrashPlanner};
+use crate::trash_manager::{TrashPlan, TrashPlanner};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -618,15 +618,11 @@ pub async fn execute_trash_plan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let environment = state.environment.clone();
-    let trash_backend = state.trash_backend.clone();
+    let trash_executor = state.trash_executor.clone();
     tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_write(|| {
             let plan = storage_state.take_plan(plan_id)?;
-            Ok(TrashExecutor::execute_with_backend(
-                &environment,
-                plan,
-                trash_backend.as_ref(),
-            ))
+            Ok(trash_executor.execute(&environment, plan))
         })
     })
     .await

@@ -40,12 +40,13 @@ pub struct AppState {
     pub ai_control_refresh_lock: Arc<Mutex<()>>,
     pub ai_control_runtime: Arc<crate::ai_control_center::runtime::AiControlRuntime>,
     pub platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider>,
-    /// The OS Trash adapter the reviewed-storage workflows move through.
+    /// The reviewed-storage Trash executor.
     ///
-    /// It is a field rather than a constructor called at the move site, so the
-    /// reviewed workflows can run against a recording backend in a test and the
-    /// production path is the same code.
-    pub trash_backend: Arc<dyn zenith_platform::TrashBackend>,
+    /// The executor owns the platform backend, so no command or service can
+    /// reach the raw port and hand it a path: every reviewed move goes through
+    /// the executor's validate-then-move flow, and a test builds the same
+    /// executor with a recording backend.
+    pub trash_executor: Arc<crate::trash_manager::TrashExecutor>,
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
@@ -124,8 +125,9 @@ impl AppState {
                 awake_manager.clone(),
                 settings.clone(),
             ));
-        let trash_backend: Arc<dyn zenith_platform::TrashBackend> =
-            Arc::new(zenith_platform::NativeTrashBackend);
+        let trash_executor = Arc::new(crate::trash_manager::TrashExecutor::new(Arc::new(
+            zenith_platform::NativeTrashBackend,
+        )));
         let platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider> =
             Arc::new(zenith_platform::NativePlatformCapabilities::new(
                 environment.clone(),
@@ -179,7 +181,7 @@ impl AppState {
             ai_control_refresh_lock,
             ai_control_runtime,
             platform_capabilities,
-            trash_backend,
+            trash_executor,
             runtime_metrics,
             execution_budgets,
             docker_status_cache,

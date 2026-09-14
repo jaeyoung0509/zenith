@@ -20,12 +20,19 @@ safety conventions below when changing Zenith.
 ## Crate boundary
 
 - Zenith is a Cargo workspace. `crates/zenith-core` owns product semantics,
-  `crates/zenith-platform` owns every native macOS/Windows integration behind
-  narrow ports, and the `src-tauri` package (`zenith-desktop`, library
-  `zenith_lib`, binary `Zenith`) owns the Tauri adapter. The version, edition,
-  and MSRV are stated once in the root `Cargo.toml` `[workspace.package]` table
-  and all members inherit them; `just check-version` and `just bump-patch`
-  maintain that one copy.
+  `crates/zenith-platform` owns the platform layer behind narrow ports
+  (environment probing, path resolution, process control, bounded child
+  execution, system actions, atomic file replacement, Trash), and the
+  `src-tauri` package (`zenith-desktop`, library `zenith_lib`, binary `Zenith`)
+  owns the Tauri adapter. The version, edition, and MSRV are stated once in the
+  root `Cargo.toml` `[workspace.package]` table and all members inherit them;
+  `just check-version` and `just bump-patch` maintain that one copy.
+- Native code that belongs to another bounded context stays with its owner:
+  keychain credentials in `ai_providers::credentials`, handle-level deletion
+  safety in `safety`, allocated-size measurement in `scanner::size`, and
+  process/machine introspection in `metrics`, `power`, `dev_ports`,
+  `process_owner`, and `diagnostics`. Moving one of those into
+  `zenith-platform` is its own change, not a boundary cleanup.
 - `zenith-core` must not depend on `tauri`, `tauri-build`, `tauri-plugin-*`,
   `windows-sys`, `security-framework`, or `rfd`, directly or transitively, and
   `zenith-platform` must never reach `tauri`. `scripts/check_core_boundaries.cjs`

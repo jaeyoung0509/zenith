@@ -1,11 +1,13 @@
-//! Zenith's platform layer: every native OS integration behind a narrow port.
+//! Zenith's platform layer: the native surfaces the runtime itself owns —
+//! platform description and probing, user-root and known-folder resolution,
+//! process control, bounded child execution, system actions, atomic file
+//! replacement, and the Trash adapter — behind narrow ports.
 //!
 //! The desktop crate depends on this crate; this crate never depends on the
 //! desktop crate or on Tauri. That direction is the point of the layer: a
 //! module that owns WebView IPC, tray or window lifecycle, or desktop
-//! composition lives in `zenith-desktop`, and a module that reads a Windows
-//! registry value, resolves a known folder, terminates a process, reveals a
-//! path in Finder, or moves a file to the Trash lives here.
+//! composition lives in `zenith-desktop`, and the platform facts a scan, a
+//! service, or a future CLI all need live here.
 //!
 //! Two rules keep the layer honest:
 //!
@@ -16,6 +18,21 @@
 //!   expressed as a pure function of a stated [`path_algebra::PathFlavor`], it
 //!   is, so a macOS runner asserts the same Windows rule a Windows runner does
 //!   instead of only compiling it.
+//!
+//! Native code that belongs to a different bounded context stays with its
+//! owner inside the desktop crate, because the boundary here is ownership, not
+//! "no OS call outside this crate":
+//!
+//! * `ai_providers::credentials` — keychain and Windows Credential Manager.
+//! * `safety::{tree_deleter, symlink, toctou}` — the handle-level identity and
+//!   deletion-safety primitives, which belong to the safety layer that reasons
+//!   about them.
+//! * `scanner::size` — allocated-size measurement on Windows.
+//! * `metrics`, `power`, `dev_ports`, `process_owner`, `diagnostics` — process
+//!   and machine introspection for their own features.
+//!
+//! Moving those is separate work with its own invariants; claiming otherwise
+//! would make this crate's boundary unverifiable.
 
 pub mod capabilities;
 pub mod description;
@@ -39,7 +56,7 @@ pub use paths::{NativePlatformPaths, PlatformPathsProvider};
 pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
 pub use subprocess::{run_with_timeout, run_with_timeout_async, set_error_sink, SubprocessError};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};
-pub use trash::{MockTrashBackend, NativeTrashBackend, ReviewedTrashEntry, TrashBackend};
+pub use trash::{MockTrashBackend, NativeTrashBackend, TrashBackend};
 
 use zenith_core::domain::platform::PlatformCapabilities;
 

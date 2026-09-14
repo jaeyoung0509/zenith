@@ -69,6 +69,14 @@ the container-CLI question is asked where tool resolution lives and injected
 into the capability provider, so the snapshot cannot disagree with the adapter
 that drives the CLI.
 
+The boundary is ownership, not "no OS call outside this crate". Native code
+that belongs to another bounded context stays with its owner in the desktop
+crate: keychain and Windows Credential Manager access in
+`ai_providers::credentials`, the handle-level identity and deletion-safety
+primitives in `safety`, Windows allocated-size measurement in `scanner::size`,
+and process/machine introspection in `metrics`, `power`, `dev_ports`,
+`process_owner`, and `diagnostics`. Moving one of those is its own change.
+
 Both macOS and Windows x64 implement the capability contract across all thirteen
 core features. Platform-specific actions, including workspace selection, use
 native adapters tailored to each OS; unsupported platforms report unavailable
