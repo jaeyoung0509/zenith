@@ -23,31 +23,16 @@ macOS menu bar / Windows system tray
                     |
                     v
         DesktopState (bounded services + platform facts)
-        +-----------+-----------+-------------+
-        |           |           |             |
-     cleanup      storage       ai          system
-   CleanupService StorageService AiService  SystemService
-        |           |           |             |
-     scanner +    reviewed     provider     metrics/power
-     safety +     storage      usage +      memory, disk,
-     plan store   workflows    activity +   Keep Awake,
-                               AI control   dev ports
-        |
-        +-- dedicated storage management (StorageWorkflowState)
-            large-file inventory, app inventory,
-            one-shot Trash plans
-
-        +-- developer artifact review (StorageWorkflowState)
-            picker-owned workspace roots, marker discovery,
-            bounded candidate measurement, one-shot Trash plans
-
-        +-- development-port management (DevelopmentPortStore)
-            listener discovery + classification,
-            one-shot leases, exact-process signaling
-
-        +-- AI control plane (AiControlRuntime)
-            event-driven condvar wake loop, process activity,
-            advisories, safety audit, git baselines
+        +--------------+--------------+--------------+
+        |              |              |              |
+     cleanup        storage          ai           system
+   CleanupService StorageService  AiService    SystemService
+        |              |              |              |
+   scan + safety   one-shot Trash  provider      metrics/power
+   + plan TTL      plans for       usage +       memory, disk,
+                   large files,    agent         Keep Awake,
+                   artifacts,      activity +    dev ports,
+                   apps            AI control    diagnostics
 ```
 
 The windows have separate frontend runtimes and stores. Shared authority and
