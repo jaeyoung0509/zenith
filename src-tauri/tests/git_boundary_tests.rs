@@ -390,8 +390,14 @@ fn a_repository_that_carries_info_attributes_is_refused_rather_than_read() {
     let refusal = zenith_lib::tooling::git_inspection_refusal(&repository.root)
         .expect("a repository carrying info/attributes is refused");
     assert!(
-        refusal.contains("info") && refusal.contains("attributes"),
+        refusal.contains("attributes"),
         "the refusal must name the file it refused to read: {refusal}"
+    );
+    // The reason crosses IPC, so it carries a masked location rather than the
+    // absolute path the file actually has.
+    assert!(
+        !refusal.contains(&repository.root.to_string_lossy().to_string()),
+        "the refusal leaked an absolute path: {refusal}"
     );
     let error = zenith_lib::tooling::git_command(&repository.root)
         .expect_err("the constructor must refuse the repository");

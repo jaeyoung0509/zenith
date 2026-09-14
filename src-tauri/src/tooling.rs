@@ -1,3 +1,4 @@
+use crate::privacy::paths::mask_paths_in_text;
 use crate::safety::symlink::SymlinkGuard;
 #[cfg(windows)]
 use std::env;
@@ -215,10 +216,10 @@ pub fn git_directory(root: &Path, environment: &PlatformEnvironment) -> GitDirec
             }
             Ok(target) => match external_git_directory(&target, root) {
                 Some((git_dir, identity)) => GitDirectory::Resolved { git_dir, identity },
-                None => GitDirectory::Refused(format!(
+                None => GitDirectory::Refused(mask_paths_in_text(&format!(
                     "The .git entry is a link to {}, which is not this project's git directory",
                     target.display()
-                )),
+                ))),
             },
             Err(_) => GitDirectory::Absent,
         };
@@ -240,10 +241,10 @@ pub fn git_directory(root: &Path, environment: &PlatformEnvironment) -> GitDirec
             }
             match external_git_directory(&target, root) {
                 Some((git_dir, identity)) => GitDirectory::Resolved { git_dir, identity },
-                None => GitDirectory::Refused(format!(
+                None => GitDirectory::Refused(mask_paths_in_text(&format!(
                     "The .git pointer resolves to {}, which is outside the project and is not this project's linked-worktree or submodule git directory",
                     target.display()
-                )),
+                ))),
             }
         }
     }
@@ -376,16 +377,19 @@ pub fn git_inspection_refusal(root: &Path) -> Option<String> {
             CappedRead::Absent => {}
             CappedRead::Read(contents) if contents.trim().is_empty() => {}
             CappedRead::Read(_) => {
-                return Some(format!(
+                // The reason travels to the interface as well as the log, so a
+                // path in it is masked the same way a log line is: no absolute
+                // location leaves this module.
+                return Some(mask_paths_in_text(&format!(
                     "{} exists and can select a program for git to run, which Zenith does not run",
                     git_dir.join("info").join("attributes").display()
-                ));
+                )));
             }
             CappedRead::OverCap => {
-                return Some(format!(
+                return Some(mask_paths_in_text(&format!(
                     "{} is larger than {MAX_GIT_METADATA_BYTES} bytes and cannot be inspected",
                     git_dir.join("info").join("attributes").display()
-                ));
+                )));
             }
         }
     }
