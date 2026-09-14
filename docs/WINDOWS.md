@@ -98,6 +98,21 @@ checks, uninstalls silently, and fails if the install directory survives. Both
 installers are gated: the machine-wide one additionally reports a missing
 elevated session instead of failing later with a generic installer error.
 
+## Logs
+
+The rotating diagnostics log is written under the per-user application data
+directory, not under the macOS location:
+
+```text
+%LOCALAPPDATA%\Zenith\Logs\zenith.log
+```
+
+Once the live log exceeds 1 MB it is rotated to `zenith.log.1` in the same
+directory, so a bug report can attach whichever file carries the failure. Log
+lines are redacted, and absolute paths are masked, before anything is written.
+The Settings diagnostics view prints the directory this machine actually
+resolved, which is the authoritative answer when `LOCALAPPDATA` is redirected.
+
 ## Windows release contract
 
 `src-tauri/tauri.conf.json` keeps the per-user installation as the default

@@ -139,7 +139,7 @@ user-initiated.
 
 - **100% Local**: Zero telemetry, zero cloud tracking, and zero remote analytics.
 - **Secret Redaction**: Subprocess errors and diagnostic messages automatically redact sensitive API keys (`sk-...`, tokens, passwords) before writing to disk.
-- **Local Logs**: Rotating error logs are stored on your Mac at `~/Library/Logs/Zenith/zenith.log`.
+- **Local Logs**: Error logs are written under your own platform's application-data directory -- `~/Library/Logs/Zenith/zenith.log` on macOS, `%LOCALAPPDATA%\Zenith\Logs\zenith.log` on Windows -- and rotate to `zenith.log.1` beside them once the live log exceeds 1 MB. The Settings diagnostics view shows the path this machine actually resolved, and Windows layout details are in [docs/WINDOWS.md](docs/WINDOWS.md).
 - **Diagnostics Export**: Inspect or export your local system snapshot anytime in **Dashboard -> Settings -> Diagnostics & Privacy Logs**.
 - **Doctor Self-Check**: run `Zenith --doctor` (or `Zenith --doctor --json`) to print a de-identified environment fingerprint and a self-check table; the command exits 1 when a self-check fails. It performs no network access, and nothing it prints contains a user name, machine name, drive letter, or profile path. Windows bug reports ask for this output because it is safe to paste.
 - **Minimized Agent Metadata**: Project Cockpit returns opaque project/session
