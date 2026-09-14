@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::models::DeletePlan;
@@ -54,14 +55,21 @@ impl PlanLifecycle {
 
 /// Backend-owned bounded store for one-shot plans.
 ///
-/// Encapsulates plan capacity, TTL expiration, oldest-first eviction,
+/// Encapsulates plan capacity, monotonic TTL expiration, oldest-first eviction,
 /// stale-plan rejection, and one-shot consumption so IPC commands do not
-/// coordinate plan lifecycle state directly. The underlying map is private:
-/// there is no accessor that hands it out, so a caller cannot bypass the
-/// lifecycle by editing it.
+/// coordinate plan lifecycle state directly. Wall-clock timestamps remain on
+/// plans for interface previews and fail-closed rollback detection; elapsed
+/// [`Instant`] time prevents an expired authority from reviving after the wall
+/// clock recovers. The underlying map is private: there is no accessor that
+/// hands it out, so a caller cannot bypass the lifecycle by editing it.
 pub struct PlanStore<P: OneShotPlan> {
-    plans: Mutex<HashMap<Uuid, P>>,
+    plans: Mutex<HashMap<Uuid, StoredPlan<P>>>,
     lifecycle: PlanLifecycle,
+}
+
+struct StoredPlan<P> {
+    plan: P,
+    inserted_at: Instant,
 }
 
 impl<P: OneShotPlan> PlanStore<P> {
@@ -84,22 +92,26 @@ impl<P: OneShotPlan> PlanStore<P> {
             .map_err(|_| "Plan store lock poisoned".to_string())?;
 
         // Purge expired plans first
-        plans.retain(|_, stored| {
-            now.saturating_sub(stored.created_at()) < self.lifecycle.ttl_seconds
-        });
+        plans.retain(|_, stored| self.is_valid(stored, now));
 
-        // If at capacity, evict the oldest plan by created_at
+        // If at capacity, evict the plan retained for the longest elapsed time.
         if plans.len() >= self.lifecycle.capacity {
             if let Some(oldest_id) = plans
                 .iter()
-                .min_by_key(|(_, stored)| stored.created_at())
+                .min_by_key(|(_, stored)| stored.inserted_at)
                 .map(|(id, _)| *id)
             {
                 plans.remove(&oldest_id);
             }
         }
 
-        plans.insert(plan.plan_id(), plan);
+        plans.insert(
+            plan.plan_id(),
+            StoredPlan {
+                plan,
+                inserted_at: Instant::now(),
+            },
+        );
         Ok(())
     }
 
@@ -114,15 +126,20 @@ impl<P: OneShotPlan> PlanStore<P> {
             .lock()
             .map_err(|_| "Plan store lock poisoned".to_string())?;
 
-        let plan = plans
+        let stored = plans
             .remove(&plan_id)
             .ok_or_else(|| self.lifecycle.not_found.to_string())?;
 
-        if !is_within_window(plan.created_at(), now, self.lifecycle.ttl_seconds) {
+        if !self.is_valid(&stored, now) {
             return Err(self.lifecycle.expired.to_string());
         }
 
-        Ok(plan)
+        Ok(stored.plan)
+    }
+
+    fn is_valid(&self, stored: &StoredPlan<P>, now: u64) -> bool {
+        is_within_window(stored.plan.created_at(), now, self.lifecycle.ttl_seconds)
+            && stored.inserted_at.elapsed() < Duration::from_secs(self.lifecycle.ttl_seconds)
     }
 
     /// Returns the number of currently retained plans (including any not-yet-purged expired ones).
@@ -201,6 +218,48 @@ mod tests {
             "a plan read through a rolled-back clock must be refused"
         );
         assert!(refused.unwrap_err().contains("expired"));
+    }
+
+    #[test]
+    fn elapsed_time_prevents_a_plan_from_reviving_after_clock_recovery() {
+        let store = cleanup_store();
+        let plan_id = Uuid::new_v4();
+        store.insert(make_test_plan(plan_id, 1_000), 1_000).unwrap();
+
+        store
+            .plans
+            .lock()
+            .unwrap()
+            .get_mut(&plan_id)
+            .unwrap()
+            .inserted_at = Instant::now()
+            .checked_sub(Duration::from_secs(301))
+            .expect("the monotonic clock has at least five minutes of range");
+
+        let refused = store.take_valid(plan_id, 1_001);
+        assert!(
+            refused.is_err(),
+            "elapsed monotonic time must keep an expired plan from reviving"
+        );
+        assert!(refused.unwrap_err().contains("expired"));
+    }
+
+    #[test]
+    fn insert_purges_a_plan_created_after_the_current_wall_clock() {
+        let store = cleanup_store();
+        let future_id = Uuid::new_v4();
+        let current_id = Uuid::new_v4();
+        store
+            .insert(make_test_plan(future_id, 1_100), 1_100)
+            .unwrap();
+
+        store
+            .insert(make_test_plan(current_id, 1_000), 1_000)
+            .unwrap();
+
+        assert_eq!(store.len(), 1, "rollback-stale plans are purged on insert");
+        assert!(store.take_valid(future_id, 1_000).is_err());
+        assert!(store.take_valid(current_id, 1_000).is_ok());
     }
 
     #[test]

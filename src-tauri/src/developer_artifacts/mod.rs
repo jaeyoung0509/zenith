@@ -65,7 +65,11 @@ pub struct DeveloperArtifactInventory {
 
 impl DeveloperArtifactInventory {
     pub fn is_fresh(&self) -> bool {
-        unix_timestamp().saturating_sub(self.created_at) < INVENTORY_TTL_SECS
+        self.is_fresh_at(unix_timestamp())
+    }
+
+    pub fn is_fresh_at(&self, now: u64) -> bool {
+        zenith_core::domain::is_within_window(self.created_at, now, INVENTORY_TTL_SECS)
     }
 }
 
@@ -1804,6 +1808,26 @@ mod tests {
             created_at: unix_timestamp(),
             whole_home: false,
         }
+    }
+
+    #[test]
+    fn developer_inventory_is_stale_when_the_clock_moves_backwards() {
+        let inventory = DeveloperArtifactInventory {
+            scan_id: "scan".to_string(),
+            records: HashMap::new(),
+            workspace_ids: Vec::new(),
+            created_at: 1_000,
+            discovered_count: 0,
+            measured_count: 0,
+            skipped_entries: 0,
+            cancelled: false,
+            truncated: false,
+            uninspected: Vec::new(),
+        };
+
+        assert!(inventory.is_fresh_at(1_899));
+        assert!(!inventory.is_fresh_at(1_900));
+        assert!(!inventory.is_fresh_at(999));
     }
 
     #[test]

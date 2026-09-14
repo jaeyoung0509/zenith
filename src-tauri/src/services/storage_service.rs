@@ -598,16 +598,20 @@ impl StorageService {
         let operation_gate = self.operation_gate.clone();
         let environment = self.environment.clone();
         let executor = self.trash_executor.clone();
-        let plan = self
-            .state
-            .trash_plans
-            .take_valid(plan_id, unix_timestamp())?;
+        let state = self.state.clone();
 
         tauri::async_runtime::spawn_blocking(move || {
-            operation_gate.run_write(|| executor.execute(&environment, plan))
+            execute_trash_plan_in_gate(
+                &state,
+                &operation_gate,
+                &environment,
+                &executor,
+                plan_id,
+                unix_timestamp,
+            )
         })
         .await
-        .map_err(|error| worker_failure("Trash execution worker panicked", error))
+        .map_err(|error| worker_failure("Trash execution worker panicked", error))?
     }
 
     /// Stores a freshly built plan and returns its preview with the store's TTL.
@@ -620,6 +624,20 @@ impl StorageService {
         self.state.store_plan(plan)?;
         Ok(preview)
     }
+}
+
+fn execute_trash_plan_in_gate(
+    state: &StorageWorkflowState,
+    operation_gate: &StorageOperationGate,
+    environment: &PlatformEnvironment,
+    executor: &TrashExecutor,
+    plan_id: uuid::Uuid,
+    now: impl FnOnce() -> u64,
+) -> Result<TrashResult, String> {
+    operation_gate.run_write(|| {
+        let plan = state.trash_plans.take_valid(plan_id, now())?;
+        Ok(executor.execute(environment, plan))
+    })
 }
 
 impl StorageWorkflowState {
@@ -715,6 +733,11 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+    use zenith_platform::path_algebra::PathFlavor;
 
     #[test]
     fn a_cancellation_registry_is_bounded_and_evicts_the_oldest() {
@@ -783,5 +806,74 @@ mod tests {
         // stale id must not reach a scan that is no longer running.
         assert!(state.large_file_cancel_signal("stale").is_none());
         assert!(!signal.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn trash_plan_ttl_is_checked_after_waiting_for_the_write_gate() {
+        let state = Arc::new(StorageWorkflowState::default());
+        let plan_id = uuid::Uuid::new_v4();
+        state
+            .trash_plans
+            .insert(
+                TrashPlan {
+                    id: plan_id,
+                    created_at: 1_000,
+                    inventory_id: "inventory".to_string(),
+                    targets: Vec::new(),
+                },
+                1_000,
+            )
+            .unwrap();
+
+        let operation_gate = StorageOperationGate::default();
+        let blocking_gate = operation_gate.clone();
+        let (read_entered_tx, read_entered_rx) = mpsc::channel();
+        let (release_read_tx, release_read_rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            blocking_gate.run_read(|| {
+                read_entered_tx.send(()).unwrap();
+                release_read_rx.recv().unwrap();
+            });
+        });
+        read_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("read operation did not acquire the gate");
+
+        let now = Arc::new(AtomicU64::new(1_299));
+        let worker_state = state.clone();
+        let worker_gate = operation_gate.clone();
+        let worker_now = now.clone();
+        let backend = Arc::new(zenith_platform::MockTrashBackend::new());
+        let worker_backend = backend.clone();
+        let (write_attempted_tx, write_attempted_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let environment = PlatformEnvironment::simulated(PathFlavor::current());
+            let executor = TrashExecutor::new(worker_backend);
+            write_attempted_tx.send(()).unwrap();
+            execute_trash_plan_in_gate(
+                &worker_state,
+                &worker_gate,
+                &environment,
+                &executor,
+                plan_id,
+                || worker_now.load(Ordering::SeqCst),
+            )
+        });
+
+        // The request began while the plan was fresh. It expires while the
+        // worker waits for the read operation to release the write gate.
+        write_attempted_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Trash execution did not attempt to enter the write gate");
+        now.store(1_300, Ordering::SeqCst);
+        release_read_tx.send(()).unwrap();
+
+        let error = worker
+            .join()
+            .unwrap()
+            .expect_err("a plan stale at mutation time must be refused");
+        assert!(error.contains("expired"), "unexpected error: {error}");
+        assert!(backend.moved().is_empty(), "the Trash port was not reached");
+        reader.join().unwrap();
     }
 }

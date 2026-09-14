@@ -39,6 +39,11 @@ pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Re
 }
 
 /// Reveals a scanned large file in the platform file manager.
+///
+/// The interface submits only the item id: the path is resolved from the
+/// backend-owned inventory, so the frontend never has to reassemble a path from
+/// display fields (which on Windows produced mixed separators) and a stale id
+/// cannot point at a path the scan did not review.
 #[tauri::command]
 #[specta::specta]
 pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<(), String> {

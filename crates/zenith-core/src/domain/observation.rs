@@ -40,8 +40,9 @@ impl ObservationQuality {
 /// The window is half-open, so an item exactly `window_seconds` old is stale.
 /// A clock that moved backwards — an NTP correction, a manual change, a VM
 /// snapshot restore — makes the subtraction fail, and that counts as stale
-/// rather than as age zero: a wall clock cannot extend the life of a plan, an
-/// inventory, or an authorization to delete.
+/// rather than as age zero. Stores for destructive authorization additionally
+/// enforce elapsed monotonic time, because wall-clock timestamps alone cannot
+/// prevent authority from reviving after a clock rollback and recovery.
 pub fn is_within_window(created_at: u64, now: u64, window_seconds: u64) -> bool {
     now.checked_sub(created_at)
         .is_some_and(|age| age < window_seconds)
