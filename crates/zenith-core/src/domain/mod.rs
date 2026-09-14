@@ -16,7 +16,7 @@
 //! - [`risk`] — how much consequence a cleanup carries
 //! - [`identity`] — whether a path still names the file that was measured
 //! - [`paths`] — path values whose invariants are enforced at construction
-//! - [`observation`] — how far a reading may be trusted
+//! - [`observation`] — how far a reading may be trusted, and how long
 
 pub mod category;
 pub mod cleanup;
@@ -33,7 +33,7 @@ pub use category::Category;
 pub use cleanup::{CleanStrategy, DeletePlan, DeleteTarget};
 pub use error::{ZenithError, ZenithResult};
 pub use identity::{CleanupIdentity, FileIdentity, ModifiedStamp, ReviewedFileIdentity};
-pub use observation::ObservationQuality;
+pub use observation::{is_within_window, ObservationQuality};
 pub use paths::{AbsolutePath, CanonicalPath, PathViolation};
 pub use platform::{
     CapabilityAccess, PlatformAccelerator, PlatformCapabilities, PlatformCapabilityError,

@@ -57,8 +57,13 @@ safety conventions below when changing Zenith.
   and provider integrations in dedicated Rust modules and expose typed results.
 - Keep `src-tauri/src/commands/mod.rs` as composition only. Add handlers to the
   closest domain module (`ai.rs`, `cleanup.rs`, or `system.rs`); dedicated
-  storage workflows remain in `storage_commands.rs`. Shared command state and
-  helpers belong in `state.rs` and `support.rs`, not in the composition root.
+  storage workflows remain in `storage_commands.rs` as thin adapters over
+  `services::StorageService`. Shared command state and helpers belong in
+  `state.rs` and `support.rs`, not in the composition root.
+- Application services own the invariants their workflows depend on: the
+  operation gate, the execution budgets, plan/inventory lifetimes, and the
+  Trash executor. A command adapts transport (a `Channel`, an opaque ID) and
+  never acquires the gate, stores a plan, or edits backend state itself.
 - Run blocking filesystem, process, and HTTP work through
   `tauri::async_runtime::spawn_blocking`. Use Tauri channels for operations that
   report progress over time.

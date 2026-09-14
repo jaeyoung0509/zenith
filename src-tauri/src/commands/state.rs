@@ -29,7 +29,10 @@ pub struct AppState {
     pub usage_singleflight: Arc<SingleFlight<AiUsageSnapshot, AiProviderUsage>>,
     pub usage_generation: Arc<AtomicU64>,
     pub storage_operation_gate: StorageOperationGate,
-    pub storage_state: Arc<crate::storage_commands::StorageWorkflowState>,
+    /// Reviewed storage management: Large Files, Developer Artifact Review,
+    /// and App Uninstaller, including their inventories, plans, and the Trash
+    /// executor.
+    pub storage_service: Arc<crate::services::StorageService>,
     pub memory_sampler: Arc<crate::metrics::MemorySampler>,
     pub memory_termination_store: Arc<Mutex<crate::metrics::MemoryTerminationStore>>,
     pub dev_port_store: Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
@@ -40,13 +43,6 @@ pub struct AppState {
     pub ai_control_refresh_lock: Arc<Mutex<()>>,
     pub ai_control_runtime: Arc<crate::ai_control_center::runtime::AiControlRuntime>,
     pub platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider>,
-    /// The reviewed-storage Trash executor.
-    ///
-    /// The executor owns the platform backend, so no command or service can
-    /// reach the raw port and hand it a path: every reviewed move goes through
-    /// the executor's validate-then-move flow, and a test builds the same
-    /// executor with a recording backend.
-    pub trash_executor: Arc<crate::trash_manager::TrashExecutor>,
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
@@ -98,7 +94,6 @@ impl AppState {
         let usage_singleflight = Arc::new(SingleFlight::with_metrics(runtime_metrics.clone()));
         let usage_generation = Arc::new(AtomicU64::new(1));
         let storage_operation_gate = StorageOperationGate::default();
-        let storage_state = Arc::new(crate::storage_commands::StorageWorkflowState::new());
         let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
         let memory_termination_store =
             Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
@@ -136,6 +131,19 @@ impl AppState {
                 Arc::new(crate::docker::container_cli_detected),
             ));
 
+        // The reviewed-storage workflows own their gate, budgets, inventories,
+        // plan store, and the Trash executor, so a handler never orchestrates
+        // them. The executor is not kept separately: the raw port stays inside
+        // the service.
+        let storage_service = Arc::new(crate::services::StorageService::new(
+            storage_operation_gate.clone(),
+            execution_budgets.clone(),
+            environment.clone(),
+            trash_executor,
+            Arc::new(zenith_platform::NativeSystemActions::new()),
+            platform_capabilities.clone(),
+        ));
+
         let docker_status_cache = Arc::new(Mutex::new(None));
         let scan_service = Arc::new(crate::services::ScanService::new(
             registry.clone(),
@@ -170,7 +178,7 @@ impl AppState {
             usage_singleflight,
             usage_generation,
             storage_operation_gate,
-            storage_state,
+            storage_service,
             memory_sampler,
             memory_termination_store,
             dev_port_store,
@@ -181,7 +189,6 @@ impl AppState {
             ai_control_refresh_lock,
             ai_control_runtime,
             platform_capabilities,
-            trash_executor,
             runtime_metrics,
             execution_budgets,
             docker_status_cache,

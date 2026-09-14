@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 use crate::models::DeletePlan;
 
+use zenith_core::domain::is_within_window;
+
 /// A plan a bounded store can expire, evict, and consume exactly once.
 ///
 /// The store owns the lifecycle; a plan type states only its identity and when
@@ -116,7 +118,7 @@ impl<P: OneShotPlan> PlanStore<P> {
             .remove(&plan_id)
             .ok_or_else(|| self.lifecycle.not_found.to_string())?;
 
-        if now.saturating_sub(plan.created_at()) >= self.lifecycle.ttl_seconds {
+        if !is_within_window(plan.created_at(), now, self.lifecycle.ttl_seconds) {
             return Err(self.lifecycle.expired.to_string());
         }
 
@@ -183,6 +185,22 @@ mod tests {
         assert!(expired.is_err(), "a plan at its TTL boundary is expired");
         assert!(expired.unwrap_err().contains("expired"));
         assert_eq!(store.len(), 0, "a refused plan is still consumed");
+    }
+
+    #[test]
+    fn a_clock_that_moved_backwards_does_not_extend_a_plan() {
+        let store = cleanup_store();
+        let plan_id = Uuid::new_v4();
+        store.insert(make_test_plan(plan_id, 1_000), 1_000).unwrap();
+
+        // The plan was created at 1000 and the wall clock now says 999: the
+        // deletion authority it carries must not survive the correction.
+        let refused = store.take_valid(plan_id, 999);
+        assert!(
+            refused.is_err(),
+            "a plan read through a rolled-back clock must be refused"
+        );
+        assert!(refused.unwrap_err().contains("expired"));
     }
 
     #[test]

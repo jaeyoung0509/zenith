@@ -70,11 +70,11 @@ pub async fn get_project_context(
     )
     .await?;
     let dev_store = state.dev_port_store.clone();
-    let storage_state = state.storage_state.clone();
+    let storage_service = state.storage_service.clone();
     let environment = state.environment.clone();
     let enriched = tauri::async_runtime::spawn_blocking(move || {
         let enriched_registry =
-            enrich_activity_for_project_view(raw, &dev_store, &storage_state, &environment);
+            enrich_activity_for_project_view(raw, &dev_store, &storage_service, &environment);
         let snapshot = enriched_registry.snapshot.clone();
         {
             let store = crate::agent_activity::global_store();

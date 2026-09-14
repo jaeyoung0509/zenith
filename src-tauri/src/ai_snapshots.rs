@@ -252,7 +252,7 @@ pub async fn fetch_activity_registry(
 pub fn enrich_activity_for_project_view(
     mut registry: AgentActivityRegistry,
     dev_store: &Arc<Mutex<crate::dev_ports::DevelopmentPortStore>>,
-    storage_state: &Arc<crate::storage_commands::StorageWorkflowState>,
+    storage_service: &Arc<crate::services::StorageService>,
     environment: &zenith_platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     let listeners = crate::dev_ports::list_listeners_with_context(
@@ -261,7 +261,7 @@ pub fn enrich_activity_for_project_view(
         environment.user_home().as_deref(),
     )
     .unwrap_or_default();
-    let artifact_sizes = storage_state.cached_developer_artifact_sizes();
+    let artifact_sizes = storage_service.cached_developer_artifact_sizes();
     for project in &mut registry.snapshot.projects {
         if let Some(root) = registry.project_roots.get(&project.identity.id) {
             project.artifact_size_bytes = artifact_sizes.get(root).copied();

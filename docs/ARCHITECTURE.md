@@ -197,8 +197,12 @@ Neither is stubbed.
   the safety layer.
 - `src-tauri/src/services`: the application services. `CleanupService` owns the
   cleanup lifecycle (gate, budgets, plan store, scan store, scan invalidation)
-  for Main Clean and Quick Clean alike, `ScanService` runs a framework-free
-  scan, and `PlanStore` bounds both cleanup and reviewed Trash plans.
+  for Main Clean and Quick Clean alike, `StorageService` owns the
+  reviewed-storage lifecycle (gate, budgets, ephemeral inventories,
+  cancellation registries, reviewed workspaces, plan store, Trash executor) for
+  Large Files, Developer Artifact Review, and App Uninstaller, `ScanService`
+  runs a framework-free scan, and `PlanStore` bounds both cleanup and reviewed
+  Trash plans under one lifecycle.
 - `src-tauri/src/cleaner`: execution of verified plans. Each target is
   classified into `CleanupOperation` first, so only a filesystem operation can
   reach the validated deletion primitive.
@@ -206,8 +210,9 @@ Neither is stubbed.
   streamed progress, file classification, and filesystem identity capture.
 - `src-tauri/src/applications`: installed-app inventory plus constrained related
   Library-data inspection.
-- `src-tauri/src/storage_commands`: IPC orchestration and ephemeral inventories
-  for Large Files and App Uninstaller.
+- `src-tauri/src/storage_commands`: thin IPC adapters for the reviewed-storage
+  workflows. The inventories, cancellation handles, workspace registry, gate,
+  budgets, and plan store belong to `services::StorageService`.
 - `src-tauri/src/developer_artifacts`: explicit workspace registration,
   ecosystem-marker discovery, bounded candidate-tree measurement, progress and
   cancellation events, and private artifact inventory records.
@@ -472,15 +477,21 @@ and synchronous HTTP work runs outside the async command thread.
 
 Ownership of that serialization is deliberate. `CleanupService` owns the
 operation gate, the execution budgets, the plan store, and the scan store for
-the cleanup lifecycle: its `start_scan`, `create_delete_plan`, `execute_clean`,
-and `quick_clean_safe` methods acquire the gate themselves, so no command
-handler decides when a mutation may start. `StorageOperationGate` and
-`ExecutionBudgets` are `Clone` over one `Arc`, so every other workflow
-(large-file traversal, app inventory, Trash execution, Docker prune, process
-termination) shares the same lock and the same permits rather than holding a
+the cleanup lifecycle, and `StorageService` owns the same gate and budgets
+alongside the reviewed-storage inventories, cancellation registries, workspace
+registry, plan store, and Trash executor. Their methods acquire the gate
+themselves, so no command handler decides when a mutation may start:
+`CleanupService::{start_scan, create_delete_plan, execute_clean,
+quick_clean_safe}` and `StorageService::{scan_large_files,
+scan_developer_artifacts, installed_apps, inspect_app_uninstall,
+execute_trash_plan}` take it inside the service.
+
+`StorageOperationGate` and `ExecutionBudgets` are `Clone` over one `Arc`, so
+every workflow shares the same lock and the same permits rather than holding a
 second, independent one. The gate is not re-acquired by lower-level helpers:
 `CleanExecutor`, `SafeTreeDeleter`, and the provider adapters mutate only after
-their caller has taken a write permit.
+their caller has taken a write permit, and the reviewed-storage scanners run
+inside a read permit their service acquired.
 
 One-shot plans — delete plans and reviewed Trash plans — live in the same
 bounded store. It owns TTL expiration, bounded capacity with oldest-first

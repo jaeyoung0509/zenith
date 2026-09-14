@@ -30,3 +30,41 @@ impl ObservationQuality {
         matches!(self, ObservationQuality::Fresh)
     }
 }
+
+/// Whether something taken at `created_at` is still inside its window at `now`.
+///
+/// One rule, used by every time-bounded reading and authority in Zenith: a
+/// scan result, a reviewed inventory, a cleanup plan, and a Trash plan all ask
+/// this question, and they must answer it the same way.
+///
+/// The window is half-open, so an item exactly `window_seconds` old is stale.
+/// A clock that moved backwards — an NTP correction, a manual change, a VM
+/// snapshot restore — makes the subtraction fail, and that counts as stale
+/// rather than as age zero: a wall clock cannot extend the life of a plan, an
+/// inventory, or an authorization to delete.
+pub fn is_within_window(created_at: u64, now: u64, window_seconds: u64) -> bool {
+    now.checked_sub(created_at)
+        .is_some_and(|age| age < window_seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_within_window;
+
+    #[test]
+    fn the_window_is_half_open() {
+        assert!(is_within_window(1_000, 1_299, 300));
+        assert!(!is_within_window(1_000, 1_300, 300));
+        assert!(!is_within_window(1_000, 1_301, 300));
+        // A zero-length window admits nothing, not even the same instant.
+        assert!(!is_within_window(1_000, 1_000, 0));
+    }
+
+    #[test]
+    fn a_clock_that_moved_backwards_reads_as_stale() {
+        // The reading was taken at 12:00 and the wall clock now says 11:05.
+        assert!(!is_within_window(12_000, 11_300, 300));
+        // Even one second backwards is not "fresh for one second longer".
+        assert!(!is_within_window(12_000, 11_999, 300));
+    }
+}

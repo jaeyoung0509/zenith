@@ -16,8 +16,6 @@ use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
 use zenith_platform::description::PlatformEnvironment;
 
-const PLAN_TTL_SECS: u64 = 300;
-
 #[derive(Debug, Clone)]
 pub struct TrashTarget {
     pub item_id: String,
@@ -66,7 +64,12 @@ impl crate::services::OneShotPlan for TrashPlan {
 }
 
 impl TrashPlan {
-    pub fn preview(&self) -> TrashPlanPreview {
+    /// The preview shown for review, with the window the store enforces.
+    ///
+    /// The TTL is a parameter for the same reason it is on `DeletePlan`: the
+    /// bounded store owns the lifecycle, so the number the interface displays
+    /// cannot drift from the number that refuses a stale plan.
+    pub fn preview(&self, ttl_secs: u64) -> TrashPlanPreview {
         TrashPlanPreview {
             id: self.id,
             item_count: self.targets.len(),
@@ -76,7 +79,7 @@ impl TrashPlan {
                 .iter()
                 .map(|target| target.allocated_size)
                 .sum(),
-            expires_at: self.created_at + PLAN_TTL_SECS,
+            expires_at: self.created_at.saturating_add(ttl_secs),
             size_is_lower_bound: self.targets.iter().any(|target| target.size_is_lower_bound),
         }
     }
@@ -877,7 +880,7 @@ mod tests {
         };
 
         let plan = TrashPlanner::from_app_inspection(&environment, &inspection, &[]).unwrap();
-        assert!(plan.preview().size_is_lower_bound);
+        assert!(plan.preview(300).size_is_lower_bound);
     }
 
     #[test]
@@ -1379,6 +1382,17 @@ mod tests {
 
         let fresh_id = fresh.id;
         let stale_id = stale.id;
+        // The window the interface advertises is the window that is enforced,
+        // so a review cannot expire earlier or later than the user was told.
+        let preview = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: now,
+            inventory_id: "test".to_string(),
+            targets: vec![],
+        }
+        .preview(ttl);
+        assert_eq!(preview.expires_at, now + ttl);
+
         store.insert(fresh, now).unwrap();
         store.insert(stale, now).unwrap();
 
@@ -1394,8 +1408,9 @@ mod tests {
 
     #[test]
     fn the_shared_plan_store_caps_reviewed_trash_plans_and_evicts_the_oldest() {
-        use crate::storage_commands::StorageWorkflowState;
-        let storage_state = StorageWorkflowState::new();
+        use crate::services::{PlanLifecycle, PlanStore};
+
+        let store: PlanStore<TrashPlan> = PlanStore::new(PlanLifecycle::trash());
         let now = unix_timestamp();
         let mut ids = Vec::new();
         for i in 0..65 {
@@ -1406,17 +1421,17 @@ mod tests {
                 targets: vec![],
             };
             ids.push(plan.id);
-            storage_state.store_plan(plan).unwrap();
+            store.insert(plan, now + i).unwrap();
         }
 
         // Nothing was consumed, and the store evicted exactly the oldest plan:
         // the newest 64 are still takeable and the first is gone.
         assert!(
-            storage_state.take_plan(ids[0]).is_err(),
+            store.take_valid(ids[0], now + 65).is_err(),
             "the oldest plan is the one evicted at capacity"
         );
-        assert!(storage_state.take_plan(ids[64]).is_ok());
-        assert!(storage_state.take_plan(ids[1]).is_ok());
+        assert!(store.take_valid(ids[64], now + 65).is_ok());
+        assert!(store.take_valid(ids[1], now + 65).is_ok());
     }
 
     #[test]
@@ -1464,7 +1479,7 @@ mod tests {
             ],
         };
 
-        let preview = plan.preview();
+        let preview = plan.preview(300);
         assert!(preview.size_is_lower_bound);
 
         // If only target1 moves:

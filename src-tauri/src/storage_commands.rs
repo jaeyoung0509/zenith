@@ -1,169 +1,21 @@
-use crate::applications::{AppInspectionRecord, AppInventory, ApplicationScanner};
-use crate::commands::support::join_failure;
+//! Reviewed storage-management command handlers.
+//!
+//! Thin Tauri IPC adapters: each handler adapts a `Channel` into the service's
+//! progress callback, or forwards the opaque identifiers the interface is
+//! allowed to submit. Inventory lifetime, the storage operation gate, the
+//! execution budgets, the plan store, and the Trash executor belong to
+//! [`crate::services::StorageService`], so no handler decides when a mutation
+//! may start or touches backend state directly.
+
+use tauri::ipc::Channel;
+use tauri::State;
+
 use crate::commands::AppState;
-use crate::developer_artifacts::{
-    result_from_inventory, DeveloperArtifactInventory, DeveloperArtifactScanner,
-    DeveloperWorkspaceRecord, FolderAccess,
-};
-use crate::large_files::{LargeFileInventory, LargeFileScanner};
 use crate::models::{
     AppUninstallInspection, DeveloperArtifactScanEvent, DeveloperArtifactScanResult,
     DeveloperWorkspace, InstalledAppInventory, LargeFileScanEvent, LargeFileScanRequest,
     LargeFileScanResult, TrashPlanPreview, TrashResult,
 };
-use crate::services::{PlanLifecycle, PlanStore};
-use crate::trash_manager::{TrashPlan, TrashPlanner};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::ipc::Channel;
-use tauri::State;
-
-const INVENTORY_TTL_SECS: u64 = 15 * 60;
-const CANCELLATION_TTL_SECS: u64 = 15 * 60;
-const MAX_ACTIVE_CANCELLATIONS: usize = 64;
-
-#[derive(Clone)]
-struct CancellationEntry {
-    signal: Arc<AtomicBool>,
-    created_at: u64,
-}
-
-pub struct StorageWorkflowState {
-    pub large_file_inventory: Mutex<Option<LargeFileInventory>>,
-    large_file_cancel: Mutex<HashMap<String, CancellationEntry>>,
-    pub developer_artifact_inventory: Mutex<Option<DeveloperArtifactInventory>>,
-    developer_artifact_cancel: Mutex<HashMap<String, CancellationEntry>>,
-    pub app_inventory: Mutex<Option<AppInventory>>,
-    pub app_inspection: Mutex<Option<AppInspectionRecord>>,
-    /// Reviewed Trash plans, bounded and expiring exactly like cleanup plans.
-    pub trash_plans: PlanStore<TrashPlan>,
-    pub workspaces: Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
-}
-
-impl Default for StorageWorkflowState {
-    fn default() -> Self {
-        Self {
-            large_file_inventory: Mutex::new(None),
-            large_file_cancel: Mutex::new(HashMap::new()),
-            developer_artifact_inventory: Mutex::new(None),
-            developer_artifact_cancel: Mutex::new(HashMap::new()),
-            app_inventory: Mutex::new(None),
-            app_inspection: Mutex::new(None),
-            trash_plans: PlanStore::new(PlanLifecycle::trash()),
-            workspaces: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-impl StorageWorkflowState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cached_developer_artifact_sizes(&self) -> HashMap<PathBuf, u64> {
-        let inventory = self
-            .developer_artifact_inventory
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-            .filter(DeveloperArtifactInventory::is_fresh);
-        let mut sizes = HashMap::new();
-        if let Some(inventory) = inventory {
-            for record in inventory.records.values() {
-                let total = sizes.entry(record.project_root.clone()).or_insert(0u64);
-                *total = total.saturating_add(record.artifact.allocated_bytes);
-            }
-        }
-        sizes
-    }
-
-    /// Stores a reviewed Trash plan under the shared bounded lifecycle.
-    ///
-    /// The store owns TTL, capacity, and eviction, so this workflow cannot
-    /// drift from the cleanup plan lifecycle by editing a map directly.
-    pub fn store_plan(&self, plan: TrashPlan) -> Result<(), String> {
-        self.trash_plans.insert(plan, unix_timestamp())
-    }
-
-    /// Consumes a reviewed Trash plan exactly once, refusing an expired one.
-    pub fn take_plan(&self, plan_id: uuid::Uuid) -> Result<TrashPlan, String> {
-        self.trash_plans.take_valid(plan_id, unix_timestamp())
-    }
-
-    fn register_large_file_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
-        store_cancellation(&self.large_file_cancel, scan_id, signal);
-    }
-
-    fn register_developer_artifact_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
-        store_cancellation(&self.developer_artifact_cancel, scan_id, signal);
-    }
-
-    fn remove_large_file_cancel(&self, scan_id: &str) {
-        remove_cancellation(&self.large_file_cancel, scan_id);
-    }
-
-    fn remove_developer_artifact_cancel(&self, scan_id: &str) {
-        remove_cancellation(&self.developer_artifact_cancel, scan_id);
-    }
-
-    fn large_file_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
-        cancellation_signal(&self.large_file_cancel, scan_id)
-    }
-
-    fn developer_artifact_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
-        cancellation_signal(&self.developer_artifact_cancel, scan_id)
-    }
-}
-
-fn store_cancellation(
-    store: &Mutex<HashMap<String, CancellationEntry>>,
-    scan_id: String,
-    signal: Arc<AtomicBool>,
-) {
-    let now = unix_timestamp();
-    let mut entries = store.lock().unwrap_or_else(|p| p.into_inner());
-    entries.retain(|_, entry| is_fresh_at(entry.created_at, CANCELLATION_TTL_SECS, now));
-    if entries.len() >= MAX_ACTIVE_CANCELLATIONS {
-        if let Some(oldest_id) = entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.created_at)
-            .map(|(id, _)| id.clone())
-        {
-            entries.remove(&oldest_id);
-        }
-    }
-    entries.insert(
-        scan_id,
-        CancellationEntry {
-            signal,
-            created_at: now,
-        },
-    );
-}
-
-fn remove_cancellation(store: &Mutex<HashMap<String, CancellationEntry>>, scan_id: &str) {
-    store
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .remove(scan_id);
-}
-
-fn cancellation_signal(
-    store: &Mutex<HashMap<String, CancellationEntry>>,
-    scan_id: &str,
-) -> Option<Arc<AtomicBool>> {
-    let now = unix_timestamp();
-    let mut entries = store.lock().unwrap_or_else(|p| p.into_inner());
-    entries.retain(|_, entry| is_fresh_at(entry.created_at, CANCELLATION_TTL_SECS, now));
-    entries.get(scan_id).map(|entry| entry.signal.clone())
-}
-
-fn is_fresh_at(created_at: u64, ttl_secs: u64, now: u64) -> bool {
-    now.saturating_sub(created_at) < ttl_secs
-}
 
 #[tauri::command]
 #[specta::specta]
@@ -173,282 +25,24 @@ pub async fn start_large_file_scan(
     state: State<'_, AppState>,
 ) -> Result<LargeFileScanResult, String> {
     state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::LargeFiles,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_for_worker = cancel.clone();
-    let operation_gate = state.storage_operation_gate.clone();
-    let storage_state = state.storage_state.clone();
-    let worker_storage_state = storage_state.clone();
-    let environment = state.environment.clone();
-    let _permit = state.execution_budgets.acquire_storage_read().await?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run_read(|| {
-            let mut emitted_result: Option<LargeFileScanResult> = None;
-            let mut active_scan_id: Option<String> = None;
-            let cancel_for_event = cancel.clone();
-            let inventory_result =
-                LargeFileScanner::scan(&environment, &request, cancel_for_worker, |event| {
-                    if let LargeFileScanEvent::Started { scan_id } = &event {
-                        active_scan_id = Some(scan_id.clone());
-                        worker_storage_state
-                            .register_large_file_cancel(scan_id.clone(), cancel_for_event.clone());
-                    }
-                    if let LargeFileScanEvent::Finished { result } = &event {
-                        emitted_result = Some(result.clone());
-                    }
-                    let _ = on_event.send(event);
-                });
-            if let Some(scan_id) = active_scan_id.as_deref() {
-                worker_storage_state.remove_large_file_cancel(scan_id);
-            }
-            let inventory = inventory_result?;
-            let result = emitted_result.unwrap_or_else(|| {
-                let mut items = inventory
-                    .records
-                    .values()
-                    .map(|record| record.item.clone())
-                    .collect::<Vec<_>>();
-                items.sort_by(|left, right| {
-                    right
-                        .allocated_size
-                        .cmp(&left.allocated_size)
-                        .then_with(|| right.logical_size.cmp(&left.logical_size))
-                        .then_with(|| left.name.cmp(&right.name))
-                });
-                LargeFileScanResult {
-                    scan_id: inventory.scan_id.clone(),
-                    items,
-                    entries_scanned: inventory.entries_scanned,
-                    skipped_entries: inventory.skipped_entries,
-                    cancelled: true,
-                    truncated: inventory.truncated,
-                }
-            });
-            *worker_storage_state
-                .large_file_inventory
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = Some(inventory);
-            Ok::<_, String>(result)
-        })
-    })
-    .await
-    .map_err(|error| join_failure("Large-file scan worker panicked", error))??;
-    Ok(result)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn pick_developer_workspace(
-    state: State<'_, AppState>,
-) -> Result<Option<DeveloperWorkspace>, String> {
-    let storage_state = state.storage_state.clone();
-    let environment = state.environment.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::developer_artifacts::pick_workspace(&environment, &storage_state.workspaces)
-    })
-    .await
-    .map_err(|error| join_failure("Developer workspace picker worker panicked", error))?
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn register_developer_home_workspace(
-    state: State<'_, AppState>,
-) -> Result<DeveloperWorkspace, String> {
-    let storage_state = state.storage_state.clone();
-    let environment = state.environment.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::developer_artifacts::register_home_workspace(&environment, &storage_state.workspaces)
-    })
-    .await
-    .map_err(|error| join_failure("Developer home workspace worker panicked", error))?
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn start_developer_artifact_scan(
-    workspace_ids: Vec<String>,
-    on_event: Channel<DeveloperArtifactScanEvent>,
-    state: State<'_, AppState>,
-) -> Result<DeveloperArtifactScanResult, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::DeveloperArtifacts,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_for_worker = cancel.clone();
-    let operation_gate = state.storage_operation_gate.clone();
-    let storage_state = state.storage_state.clone();
-    let worker_storage_state = storage_state.clone();
-    let environment = state.environment.clone();
-    // Resolve the workspace set and answer the Downloads consent prompt before
-    // taking the storage read gate. macOS parks the probing thread until the
-    // user answers, and every mutating storage command queues behind that gate,
-    // so probing inside it would stall unrelated operations on a dialog.
-    let workspaces =
-        crate::developer_artifacts::workspace_snapshot(&workspace_ids, &storage_state.workspaces)?;
-    let downloads_access = if workspaces.iter().any(|workspace| workspace.whole_home) {
-        let probe_environment = state.environment.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            crate::developer_artifacts::probe_downloads_access(&probe_environment)
+        .storage_service
+        .scan_large_files(request, move |event| {
+            let _ = on_event.send(event);
         })
         .await
-        .map_err(|error| join_failure("Developer artifact downloads probe panicked", error))?
-    } else {
-        // A scan that never looks at Downloads must not raise the prompt.
-        FolderAccess::NotGated
-    };
-    let _permit = state.execution_budgets.acquire_storage_read().await?;
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run_read(|| {
-            let mut emitted_result: Option<DeveloperArtifactScanResult> = None;
-            let mut active_scan_id: Option<String> = None;
-            let cancel_for_event = cancel.clone();
-            let inventory_result = DeveloperArtifactScanner::scan_workspaces(
-                &environment,
-                &workspaces,
-                downloads_access,
-                cancel_for_worker,
-                |event| {
-                    if let DeveloperArtifactScanEvent::Started { scan_id, .. } = &event {
-                        active_scan_id = Some(scan_id.clone());
-                        worker_storage_state.register_developer_artifact_cancel(
-                            scan_id.clone(),
-                            cancel_for_event.clone(),
-                        );
-                    }
-                    if let DeveloperArtifactScanEvent::Finished { result } = &event {
-                        emitted_result = Some(result.clone());
-                    }
-                    let _ = on_event.send(event);
-                },
-            );
-            if let Some(scan_id) = active_scan_id.as_deref() {
-                worker_storage_state.remove_developer_artifact_cancel(scan_id);
-            }
-            let inventory = inventory_result?;
-            let result = emitted_result.unwrap_or_else(|| result_from_inventory(&inventory));
-            *worker_storage_state
-                .developer_artifact_inventory
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = Some(inventory);
-            Ok::<_, String>(result)
-        })
-    })
-    .await
-    .map_err(|error| join_failure("Developer artifact scan worker panicked", error))??;
-    Ok(result)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn cancel_developer_artifact_scan(
-    scan_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let cancel = state
-        .storage_state
-        .developer_artifact_cancel_signal(&scan_id)
-        .ok_or_else(|| "Developer artifact scan is no longer running".to_string())?;
-    cancel.store(true, Ordering::Relaxed);
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn prepare_developer_artifact_cleanup(
-    scan_id: String,
-    selected_item_ids: Vec<String>,
-    state: State<'_, AppState>,
-) -> Result<TrashPlanPreview, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::DeveloperArtifacts,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-    let inventory = state
-        .storage_state
-        .developer_artifact_inventory
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
-        .filter(|inventory| inventory.scan_id == scan_id)
-        .filter(DeveloperArtifactInventory::is_fresh)
-        .ok_or_else(|| "Developer artifact inventory expired. Scan again.".to_string())?;
-    let plan = TrashPlanner::from_developer_artifacts(&inventory, &selected_item_ids)?;
-    let preview = plan.preview();
-    state.storage_state.store_plan(plan)?;
-    Ok(preview)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn cancel_large_file_scan(scan_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let cancel = state
-        .storage_state
-        .large_file_cancel_signal(&scan_id)
-        .ok_or_else(|| "Large-file scan is no longer running".to_string())?;
-    cancel.store(true, Ordering::Relaxed);
-    Ok(())
+    state.storage_service.cancel_large_file_scan(&scan_id)
 }
 
 /// Reveals a scanned large file in the platform file manager.
-///
-/// The interface submits only the item id: the path is resolved from the
-/// backend-owned inventory, so the frontend never has to reassemble a path from
-/// display fields (which on Windows produced mixed separators) and a stale id
-/// cannot point at a path the scan did not review.
 #[tauri::command]
 #[specta::specta]
 pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::SystemActions,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let inventory = state
-        .storage_state
-        .large_file_inventory
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
-        .filter(|inventory| is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp()))
-        .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
-
-    let path = inventory
-        .records
-        .get(&item_id)
-        .ok_or_else(|| "That item is no longer part of the current scan.".to_string())?
-        .path
-        .clone();
-
-    if !crate::large_files::is_allowed_large_file_path(&state.environment, &path) {
-        return Err("That path is no longer inside an approved folder.".to_string());
-    }
-
-    tauri::async_runtime::spawn_blocking(move || {
-        use zenith_platform::SystemActionProvider;
-        zenith_platform::NativeSystemActions::new().reveal_path(&path)
-    })
-    .await
-    .map_err(|error| join_failure("File manager worker panicked", error))?
+    state.storage_service.reveal_large_file(&item_id).await
 }
 
 #[tauri::command]
@@ -459,26 +53,65 @@ pub fn prepare_large_file_trash(
     state: State<'_, AppState>,
 ) -> Result<TrashPlanPreview, String> {
     state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::LargeFiles,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-    let inventory = state
-        .storage_state
-        .large_file_inventory
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
-        .filter(|inventory| inventory.scan_id == scan_id)
-        .filter(|inventory| is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp()))
-        .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
-    let plan = TrashPlanner::from_large_files(&inventory, &selected_item_ids)?;
-    let preview = plan.preview();
-    state.storage_state.store_plan(plan)?;
-    Ok(preview)
+        .storage_service
+        .prepare_large_file_trash(&scan_id, &selected_item_ids)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn pick_developer_workspace(
+    state: State<'_, AppState>,
+) -> Result<Option<DeveloperWorkspace>, String> {
+    state.storage_service.pick_developer_workspace().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn register_developer_home_workspace(
+    state: State<'_, AppState>,
+) -> Result<DeveloperWorkspace, String> {
+    state
+        .storage_service
+        .register_developer_home_workspace()
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn start_developer_artifact_scan(
+    workspace_ids: Vec<String>,
+    on_event: Channel<DeveloperArtifactScanEvent>,
+    state: State<'_, AppState>,
+) -> Result<DeveloperArtifactScanResult, String> {
+    state
+        .storage_service
+        .scan_developer_artifacts(&workspace_ids, move |event| {
+            let _ = on_event.send(event);
+        })
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_developer_artifact_scan(
+    scan_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .storage_service
+        .cancel_developer_artifact_scan(&scan_id)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn prepare_developer_artifact_cleanup(
+    scan_id: String,
+    selected_item_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<TrashPlanPreview, String> {
+    state
+        .storage_service
+        .prepare_developer_artifact_trash(&scan_id, &selected_item_ids)
 }
 
 #[tauri::command]
@@ -486,47 +119,7 @@ pub fn prepare_large_file_trash(
 pub async fn get_installed_apps(
     state: State<'_, AppState>,
 ) -> Result<InstalledAppInventory, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::InstalledApps,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let operation_gate = state.storage_operation_gate.clone();
-    let storage_state = state.storage_state.clone();
-    let environment = state.environment.clone();
-    let _permit = state.execution_budgets.acquire_storage_read().await?;
-    let inventory = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run_read(|| ApplicationScanner::scan(&environment))
-    })
-    .await
-    .map_err(|error| join_failure("Application inventory worker panicked", error))?;
-    let quality = inventory.quality;
-    let skipped_entry_count = inventory.skipped_entry_count;
-    let incomplete_reasons = inventory.incomplete_reasons.clone();
-    let mut apps = inventory
-        .records
-        .values()
-        .map(|record| record.app.clone())
-        .collect::<Vec<_>>();
-    apps.sort_by(|left, right| {
-        left.name
-            .to_ascii_lowercase()
-            .cmp(&right.name.to_ascii_lowercase())
-    });
-    *storage_state
-        .app_inventory
-        .lock()
-        .unwrap_or_else(|p| p.into_inner()) = Some(inventory);
-    Ok(InstalledAppInventory {
-        apps,
-        quality,
-        skipped_entry_count,
-        incomplete_reasons,
-    })
+    state.storage_service.installed_apps().await
 }
 
 #[tauri::command]
@@ -535,44 +128,7 @@ pub async fn inspect_app_uninstall(
     app_id: String,
     state: State<'_, AppState>,
 ) -> Result<AppUninstallInspection, String> {
-    state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::AppUninstall,
-            crate::models::CapabilityAccess::Inspect,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let operation_gate = state.storage_operation_gate.clone();
-    let storage_state = state.storage_state.clone();
-    let worker_storage_state = storage_state.clone();
-    let environment = state.environment.clone();
-    let _permit = state.execution_budgets.acquire_storage_read().await?;
-    let inspection = tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run_read(|| {
-            let inventory = worker_storage_state
-                .app_inventory
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
-                .filter(|inventory| {
-                    is_fresh_at(inventory.created_at, INVENTORY_TTL_SECS, unix_timestamp())
-                })
-                .ok_or_else(|| {
-                    "Application inventory expired. Refresh applications.".to_string()
-                })?;
-            ApplicationScanner::inspect(&environment, &inventory, &app_id)
-        })
-    })
-    .await
-    .map_err(|error| join_failure("App inspection worker panicked", error))??;
-    let result = inspection.inspection.clone();
-    *storage_state
-        .app_inspection
-        .lock()
-        .unwrap_or_else(|p| p.into_inner()) = Some(inspection);
-    Ok(result)
+    state.storage_service.inspect_app_uninstall(&app_id).await
 }
 
 #[tauri::command]
@@ -583,30 +139,8 @@ pub fn prepare_app_uninstall(
     state: State<'_, AppState>,
 ) -> Result<TrashPlanPreview, String> {
     state
-        .platform_capabilities
-        .capabilities()
-        .require(
-            crate::models::PlatformFeature::AppUninstall,
-            crate::models::CapabilityAccess::Mutate,
-        )
-        .map_err(|e| e.to_string())?;
-
-    let inspection = state
-        .storage_state
-        .app_inspection
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
-        .filter(|inspection| inspection.inspection.inspection_id == inspection_id)
-        .filter(|inspection| {
-            is_fresh_at(inspection.created_at, INVENTORY_TTL_SECS, unix_timestamp())
-        })
-        .ok_or_else(|| "App uninstall review expired. Review the app again.".to_string())?;
-    let plan =
-        TrashPlanner::from_app_inspection(&state.environment, &inspection, &selected_related_ids)?;
-    let preview = plan.preview();
-    state.storage_state.store_plan(plan)?;
-    Ok(preview)
+        .storage_service
+        .prepare_app_uninstall(&inspection_id, &selected_related_ids)
 }
 
 #[tauri::command]
@@ -615,90 +149,5 @@ pub async fn execute_trash_plan(
     plan_id: uuid::Uuid,
     state: State<'_, AppState>,
 ) -> Result<TrashResult, String> {
-    let operation_gate = state.storage_operation_gate.clone();
-    let storage_state = state.storage_state.clone();
-    let environment = state.environment.clone();
-    let trash_executor = state.trash_executor.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        operation_gate.run_write(|| {
-            let plan = storage_state.take_plan(plan_id)?;
-            Ok(trash_executor.execute(&environment, plan))
-        })
-    })
-    .await
-    .map_err(|error| join_failure("Trash execution worker panicked", error))?
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{is_fresh_at, StorageWorkflowState, INVENTORY_TTL_SECS, MAX_ACTIVE_CANCELLATIONS};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::Arc;
-
-    #[test]
-    fn inventory_and_plan_ttl_boundaries_fail_closed() {
-        let now = 1_000;
-
-        assert!(is_fresh_at(
-            now - (INVENTORY_TTL_SECS - 1),
-            INVENTORY_TTL_SECS,
-            now
-        ));
-        assert!(!is_fresh_at(
-            now - INVENTORY_TTL_SECS,
-            INVENTORY_TTL_SECS,
-            now
-        ));
-        assert!(!is_fresh_at(
-            now - (INVENTORY_TTL_SECS + 1),
-            INVENTORY_TTL_SECS,
-            now
-        ));
-    }
-
-    #[test]
-    fn the_reviewed_trash_plan_store_advertises_the_shared_five_minute_window() {
-        // The TTL is the store's, so a workflow cannot drift from the cleanup
-        // plan lifecycle by editing a map and a constant beside its commands.
-        let storage = StorageWorkflowState::new();
-        assert_eq!(storage.trash_plans.ttl_seconds(), 300);
-    }
-
-    #[test]
-    fn cancellation_registries_are_bounded_and_removable() {
-        let storage = StorageWorkflowState::new();
-        for index in 0..=MAX_ACTIVE_CANCELLATIONS {
-            storage.register_large_file_cancel(
-                format!("scan-{index}"),
-                Arc::new(AtomicBool::new(false)),
-            );
-        }
-
-        assert_eq!(
-            storage
-                .large_file_cancel
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .len(),
-            MAX_ACTIVE_CANCELLATIONS
-        );
-        storage.register_large_file_cancel(
-            "explicit-removal".into(),
-            Arc::new(AtomicBool::new(false)),
-        );
-        assert!(storage
-            .large_file_cancel_signal("explicit-removal")
-            .is_some());
-        storage.remove_large_file_cancel("explicit-removal");
-        assert!(storage
-            .large_file_cancel_signal("explicit-removal")
-            .is_none());
-    }
+    state.storage_service.execute_trash_plan(plan_id).await
 }
