@@ -173,62 +173,69 @@ impl StorageService {
         let operation_gate = self.operation_gate.clone();
         let environment = self.environment.clone();
         let worker_state = self.state.clone();
-        let _permit = self.budgets.acquire_storage_read().await?;
+        let permit = self.budgets.acquire_storage_read().await?;
 
-        tauri::async_runtime::spawn_blocking(move || {
-            operation_gate.run_read(|| {
-                let mut emitted_result: Option<LargeFileScanResult> = None;
-                let mut active_scan_id: Option<String> = None;
-                let cancel_for_event = cancel.clone();
-                let inventory_result =
-                    LargeFileScanner::scan(&environment, &request, cancel_for_worker, |event| {
-                        if let LargeFileScanEvent::Started { scan_id } = &event {
-                            active_scan_id = Some(scan_id.clone());
-                            worker_state.register_large_file_cancel(
-                                scan_id.clone(),
-                                cancel_for_event.clone(),
-                            );
-                        }
-                        if let LargeFileScanEvent::Finished { result } = &event {
-                            emitted_result = Some(result.clone());
-                        }
-                        progress.emit(event);
-                    });
-                if let Some(scan_id) = active_scan_id.as_deref() {
-                    worker_state.remove_large_file_cancel(scan_id);
-                }
-                let inventory = inventory_result?;
-                let result = emitted_result.unwrap_or_else(|| {
-                    let mut items = inventory
-                        .records
-                        .values()
-                        .map(|record| record.item.clone())
-                        .collect::<Vec<_>>();
-                    items.sort_by(|left, right| {
-                        right
-                            .allocated_size
-                            .cmp(&left.allocated_size)
-                            .then_with(|| right.logical_size.cmp(&left.logical_size))
-                            .then_with(|| left.name.cmp(&right.name))
-                    });
-                    LargeFileScanResult {
-                        scan_id: inventory.scan_id.clone(),
-                        items,
-                        entries_scanned: inventory.entries_scanned,
-                        skipped_entries: inventory.skipped_entries,
-                        cancelled: true,
-                        truncated: inventory.truncated,
+        crate::blocking::run_blocking(
+            move || {
+                let _permit = permit;
+                operation_gate.run_read(|| {
+                    let mut emitted_result: Option<LargeFileScanResult> = None;
+                    let mut active_scan_id: Option<String> = None;
+                    let cancel_for_event = cancel.clone();
+                    let inventory_result = LargeFileScanner::scan(
+                        &environment,
+                        &request,
+                        cancel_for_worker,
+                        |event| {
+                            if let LargeFileScanEvent::Started { scan_id } = &event {
+                                active_scan_id = Some(scan_id.clone());
+                                worker_state.register_large_file_cancel(
+                                    scan_id.clone(),
+                                    cancel_for_event.clone(),
+                                );
+                            }
+                            if let LargeFileScanEvent::Finished { result } = &event {
+                                emitted_result = Some(result.clone());
+                            }
+                            progress.emit(event);
+                        },
+                    );
+                    if let Some(scan_id) = active_scan_id.as_deref() {
+                        worker_state.remove_large_file_cancel(scan_id);
                     }
-                });
-                *worker_state
-                    .large_file_inventory
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(inventory);
-                Ok::<_, String>(result)
-            })
-        })
+                    let inventory = inventory_result?;
+                    let result = emitted_result.unwrap_or_else(|| {
+                        let mut items = inventory
+                            .records
+                            .values()
+                            .map(|record| record.item.clone())
+                            .collect::<Vec<_>>();
+                        items.sort_by(|left, right| {
+                            right
+                                .allocated_size
+                                .cmp(&left.allocated_size)
+                                .then_with(|| right.logical_size.cmp(&left.logical_size))
+                                .then_with(|| left.name.cmp(&right.name))
+                        });
+                        LargeFileScanResult {
+                            scan_id: inventory.scan_id.clone(),
+                            items,
+                            entries_scanned: inventory.entries_scanned,
+                            skipped_entries: inventory.skipped_entries,
+                            cancelled: true,
+                            truncated: inventory.truncated,
+                        }
+                    });
+                    *worker_state
+                        .large_file_inventory
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(inventory);
+                    Ok::<_, String>(result)
+                })
+            },
+            "Large-file scan worker panicked",
+        )
         .await
-        .map_err(|error| worker_failure("Large-file scan worker panicked", error))?
     }
 
     /// Asks a running large-file scan to stop.
@@ -280,9 +287,11 @@ impl StorageService {
         }
 
         let actions = self.system_actions.clone();
-        tauri::async_runtime::spawn_blocking(move || actions.reveal_path(&path))
-            .await
-            .map_err(|error| worker_failure("File manager worker panicked", error))?
+        crate::blocking::run_blocking(
+            move || actions.reveal_path(&path),
+            "File manager worker panicked",
+        )
+        .await
     }
 
     /// Builds a one-shot Trash plan from reviewed large-file IDs.
@@ -322,25 +331,29 @@ impl StorageService {
     pub async fn pick_developer_workspace(&self) -> Result<Option<DeveloperWorkspace>, String> {
         let environment = self.environment.clone();
         let worker_state = self.state.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            crate::developer_artifacts::pick_workspace(&environment, &worker_state.workspaces)
-        })
+        crate::blocking::run_blocking(
+            move || {
+                crate::developer_artifacts::pick_workspace(&environment, &worker_state.workspaces)
+            },
+            "Developer workspace picker worker panicked",
+        )
         .await
-        .map_err(|error| worker_failure("Developer workspace picker worker panicked", error))?
     }
 
     /// Registers the canonical current-user home as a review scope.
     pub async fn register_developer_home_workspace(&self) -> Result<DeveloperWorkspace, String> {
         let environment = self.environment.clone();
         let worker_state = self.state.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            crate::developer_artifacts::register_home_workspace(
-                &environment,
-                &worker_state.workspaces,
-            )
-        })
+        crate::blocking::run_blocking(
+            move || {
+                crate::developer_artifacts::register_home_workspace(
+                    &environment,
+                    &worker_state.workspaces,
+                )
+            },
+            "Developer home workspace worker panicked",
+        )
         .await
-        .map_err(|error| worker_failure("Developer home workspace worker panicked", error))?
     }
 
     /// Scans the registered workspaces for generated developer artifacts.
@@ -366,11 +379,15 @@ impl StorageService {
             crate::developer_artifacts::workspace_snapshot(workspace_ids, &self.state.workspaces)?;
         let downloads_access = if workspaces.iter().any(|workspace| workspace.whole_home) {
             let environment = self.environment.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                crate::developer_artifacts::probe_downloads_access(&environment)
-            })
-            .await
-            .map_err(|error| worker_failure("Developer artifact downloads probe panicked", error))?
+            crate::blocking::run_blocking(
+                move || {
+                    Ok(crate::developer_artifacts::probe_downloads_access(
+                        &environment,
+                    ))
+                },
+                "Developer artifact downloads probe panicked",
+            )
+            .await?
         } else {
             // A scan that never looks at Downloads must not raise the prompt.
             FolderAccess::NotGated
@@ -381,46 +398,50 @@ impl StorageService {
         let operation_gate = self.operation_gate.clone();
         let environment = self.environment.clone();
         let worker_state = self.state.clone();
-        let _permit = self.budgets.acquire_storage_read().await?;
+        let permit = self.budgets.acquire_storage_read().await?;
 
-        tauri::async_runtime::spawn_blocking(move || {
-            operation_gate.run_read(|| {
-                let mut emitted_result: Option<DeveloperArtifactScanResult> = None;
-                let mut active_scan_id: Option<String> = None;
-                let cancel_for_event = cancel.clone();
-                let inventory_result = DeveloperArtifactScanner::scan_workspaces(
-                    &environment,
-                    &workspaces,
-                    downloads_access,
-                    cancel_for_worker,
-                    |event| {
-                        if let DeveloperArtifactScanEvent::Started { scan_id, .. } = &event {
-                            active_scan_id = Some(scan_id.clone());
-                            worker_state.register_developer_artifact_cancel(
-                                scan_id.clone(),
-                                cancel_for_event.clone(),
-                            );
-                        }
-                        if let DeveloperArtifactScanEvent::Finished { result } = &event {
-                            emitted_result = Some(result.clone());
-                        }
-                        progress.emit(event);
-                    },
-                );
-                if let Some(scan_id) = active_scan_id.as_deref() {
-                    worker_state.remove_developer_artifact_cancel(scan_id);
-                }
-                let inventory = inventory_result?;
-                let result = emitted_result.unwrap_or_else(|| result_from_inventory(&inventory));
-                *worker_state
-                    .developer_artifact_inventory
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(inventory);
-                Ok::<_, String>(result)
-            })
-        })
+        crate::blocking::run_blocking(
+            move || {
+                let _permit = permit;
+                operation_gate.run_read(|| {
+                    let mut emitted_result: Option<DeveloperArtifactScanResult> = None;
+                    let mut active_scan_id: Option<String> = None;
+                    let cancel_for_event = cancel.clone();
+                    let inventory_result = DeveloperArtifactScanner::scan_workspaces(
+                        &environment,
+                        &workspaces,
+                        downloads_access,
+                        cancel_for_worker,
+                        |event| {
+                            if let DeveloperArtifactScanEvent::Started { scan_id, .. } = &event {
+                                active_scan_id = Some(scan_id.clone());
+                                worker_state.register_developer_artifact_cancel(
+                                    scan_id.clone(),
+                                    cancel_for_event.clone(),
+                                );
+                            }
+                            if let DeveloperArtifactScanEvent::Finished { result } = &event {
+                                emitted_result = Some(result.clone());
+                            }
+                            progress.emit(event);
+                        },
+                    );
+                    if let Some(scan_id) = active_scan_id.as_deref() {
+                        worker_state.remove_developer_artifact_cancel(scan_id);
+                    }
+                    let inventory = inventory_result?;
+                    let result =
+                        emitted_result.unwrap_or_else(|| result_from_inventory(&inventory));
+                    *worker_state
+                        .developer_artifact_inventory
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(inventory);
+                    Ok::<_, String>(result)
+                })
+            },
+            "Developer artifact scan worker panicked",
+        )
         .await
-        .map_err(|error| worker_failure("Developer artifact scan worker panicked", error))?
     }
 
     /// Asks a running developer-artifact scan to stop.
@@ -472,12 +493,15 @@ impl StorageService {
 
         let operation_gate = self.operation_gate.clone();
         let environment = self.environment.clone();
-        let _permit = self.budgets.acquire_storage_read().await?;
-        let inventory = tauri::async_runtime::spawn_blocking(move || {
-            operation_gate.run_read(|| ApplicationScanner::scan(&environment))
-        })
-        .await
-        .map_err(|error| worker_failure("Application inventory worker panicked", error))?;
+        let permit = self.budgets.acquire_storage_read().await?;
+        let inventory = crate::blocking::run_blocking(
+            move || {
+                let _permit = permit;
+                Ok(operation_gate.run_read(|| ApplicationScanner::scan(&environment)))
+            },
+            "Application inventory worker panicked",
+        )
+        .await?;
 
         let quality = inventory.quality;
         let skipped_entry_count = inventory.skipped_entry_count;
@@ -519,7 +543,7 @@ impl StorageService {
         let operation_gate = self.operation_gate.clone();
         let environment = self.environment.clone();
         let app_id = app_id.to_string();
-        let _permit = self.budgets.acquire_storage_read().await?;
+        let permit = self.budgets.acquire_storage_read().await?;
         let inventory = self
             .state
             .app_inventory
@@ -535,12 +559,15 @@ impl StorageService {
             })
             .ok_or_else(|| "Application inventory expired. Refresh applications.".to_string())?;
 
-        let inspection = tauri::async_runtime::spawn_blocking(move || {
-            operation_gate
-                .run_read(|| ApplicationScanner::inspect(&environment, &inventory, &app_id))
-        })
-        .await
-        .map_err(|error| worker_failure("App inspection worker panicked", error))??;
+        let inspection = crate::blocking::run_blocking(
+            move || {
+                let _permit = permit;
+                operation_gate
+                    .run_read(|| ApplicationScanner::inspect(&environment, &inventory, &app_id))
+            },
+            "App inspection worker panicked",
+        )
+        .await?;
 
         let result = inspection.inspection.clone();
         *self
@@ -595,18 +622,20 @@ impl StorageService {
         let executor = self.trash_executor.clone();
         let state = self.state.clone();
 
-        tauri::async_runtime::spawn_blocking(move || {
-            execute_trash_plan_in_gate(
-                &state,
-                &operation_gate,
-                &environment,
-                &executor,
-                plan_id,
-                unix_timestamp,
-            )
-        })
+        crate::blocking::run_blocking(
+            move || {
+                execute_trash_plan_in_gate(
+                    &state,
+                    &operation_gate,
+                    &environment,
+                    &executor,
+                    plan_id,
+                    unix_timestamp,
+                )
+            },
+            "Trash execution worker panicked",
+        )
         .await
-        .map_err(|error| worker_failure("Trash execution worker panicked", error))?
     }
 
     /// Stores a freshly built plan and returns its preview with the store's TTL.
@@ -659,12 +688,6 @@ impl StorageWorkflowState {
     fn developer_artifact_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
         cancellation_signal(&self.developer_artifact_cancel, scan_id)
     }
-}
-
-fn worker_failure(context: &str, error: impl std::fmt::Display) -> String {
-    let message = format!("{context}: {error}");
-    crate::diagnostics::log_error("worker", &message);
-    crate::diagnostics::sanitize_log(&message)
 }
 
 fn store_cancellation(

@@ -7,9 +7,11 @@
 //! poisoned lock means an interrupted settings transaction, and resuming a
 //! partially written snapshot is not a safe recovery.
 //!
-//! Persistence stays with the service that owns the surrounding use case; this
-//! module only holds what the process currently believes.
+//! Whole-file persistence is serialized here; each service supplies only the
+//! mutation its use case owns. This keeps concurrent commands from publishing
+//! two snapshots derived from the same stale value.
 
+use std::path::Path;
 use std::sync::Mutex;
 
 use crate::models::ZenithSettings;
@@ -18,12 +20,14 @@ use crate::services::desktop_notifications::DesktopNotifications;
 /// The process-wide settings snapshot.
 pub struct SettingsAuthority {
     settings: Mutex<ZenithSettings>,
+    write_transaction: Mutex<()>,
 }
 
 impl SettingsAuthority {
     pub(crate) fn new(initial: ZenithSettings) -> Self {
         Self {
             settings: Mutex::new(initial),
+            write_transaction: Mutex::new(()),
         }
     }
 
@@ -37,20 +41,41 @@ impl SettingsAuthority {
 
     /// Replaces the snapshot after the caller persisted it.
     pub fn replace(&self, next: ZenithSettings) -> Result<(), String> {
+        let _transaction = self
+            .write_transaction
+            .lock()
+            .map_err(|_| settings_unavailable())?;
+        self.publish(next)
+    }
+
+    /// Serializes a whole-file settings update from its latest snapshot through
+    /// atomic persistence and publication.
+    ///
+    /// Writers must mutate through this boundary rather than composing
+    /// `snapshot -> save -> replace` themselves. That sequence loses unrelated
+    /// fields when two async commands start from the same snapshot. The
+    /// transaction mutex keeps reads cheap while ensuring every writer derives
+    /// its update from the last successfully persisted value.
+    pub fn update_and_persist<R>(
+        &self,
+        config_dir: &Path,
+        update: impl FnOnce(&mut ZenithSettings) -> R,
+    ) -> Result<(ZenithSettings, R), String> {
+        let _transaction = self
+            .write_transaction
+            .lock()
+            .map_err(|_| settings_unavailable())?;
+        let mut next = self.snapshot()?;
+        let result = update(&mut next);
+        crate::settings_store::save(config_dir, &next)?;
+        self.publish(next.clone())?;
+        Ok((next, result))
+    }
+
+    fn publish(&self, next: ZenithSettings) -> Result<(), String> {
         let mut guard = self.settings.lock().map_err(|_| settings_unavailable())?;
         *guard = next;
         Ok(())
-    }
-
-    /// Mutates the snapshot in place and returns the result.
-    ///
-    /// The caller owns persistence: an edit that is not saved is only the
-    /// process's belief, which is why every caller pairs this with
-    /// [`crate::settings_store::save`] before publishing it to the interface.
-    pub fn edit(&self, edit: impl FnOnce(&mut ZenithSettings)) -> Result<ZenithSettings, String> {
-        let mut guard = self.settings.lock().map_err(|_| settings_unavailable())?;
-        edit(&mut guard);
-        Ok(guard.clone())
     }
 }
 
@@ -95,24 +120,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn edit_returns_the_published_snapshot() {
-        let authority = SettingsAuthority::new(ZenithSettings::default());
-
-        let edited = authority
-            .edit(|settings| settings.clean_developer_tools = false)
-            .expect("authority is healthy");
-
-        assert!(!edited.clean_developer_tools);
-        assert!(
-            !authority
-                .snapshot()
-                .expect("authority is healthy")
-                .clean_developer_tools,
-            "the edit must be visible to the next reader"
-        );
-    }
-
-    #[test]
     fn replace_publishes_the_persisted_snapshot() {
         let authority = SettingsAuthority::new(ZenithSettings::default());
         let next = ZenithSettings {
@@ -131,16 +138,66 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_update_transactions_preserve_unrelated_fields() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::time::Duration;
+
+        let config_dir = tempfile::tempdir().expect("temp config dir");
+        let authority = Arc::new(SettingsAuthority::new(ZenithSettings::default()));
+        let start = Arc::new(Barrier::new(3));
+        let active_transactions = Arc::new(AtomicUsize::new(0));
+        let max_active_transactions = Arc::new(AtomicUsize::new(0));
+        let mut workers = Vec::new();
+
+        for intensive in [false, true] {
+            let authority = authority.clone();
+            let config_dir = config_dir.path().to_path_buf();
+            let start = start.clone();
+            let active_transactions = active_transactions.clone();
+            let max_active_transactions = max_active_transactions.clone();
+            workers.push(std::thread::spawn(move || {
+                start.wait();
+                authority
+                    .update_and_persist(&config_dir, |settings| {
+                        let active = active_transactions.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active_transactions.fetch_max(active, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(25));
+                        if intensive {
+                            settings.intensive_cleanup = true;
+                        } else {
+                            settings.clean_developer_tools = false;
+                        }
+                        active_transactions.fetch_sub(1, Ordering::SeqCst);
+                    })
+                    .expect("concurrent update succeeds");
+            }));
+        }
+        start.wait();
+        for worker in workers {
+            worker.join().expect("settings worker completes");
+        }
+
+        let persisted = crate::settings_store::load(config_dir.path());
+        assert!(!persisted.clean_developer_tools);
+        assert!(persisted.intensive_cleanup);
+        assert_eq!(max_active_transactions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            authority.snapshot().expect("authority is healthy"),
+            persisted
+        );
+    }
+
+    #[test]
     fn poisoned_authority_refuses_to_answer() {
         use std::sync::Arc;
 
         let authority = Arc::new(SettingsAuthority::new(ZenithSettings::default()));
         let poisoner = authority.clone();
         let _ = std::thread::spawn(move || {
-            let _ = poisoner.edit(|settings| {
-                settings.intensive_cleanup = true;
-                panic!("interrupted settings transaction");
-            });
+            let mut settings = poisoner.settings.lock().expect("authority starts healthy");
+            settings.intensive_cleanup = true;
+            panic!("interrupted settings transaction");
         })
         .join();
 

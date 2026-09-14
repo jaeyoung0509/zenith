@@ -134,22 +134,28 @@ impl CleanupService {
                 .map_err(|e| e.to_string())?;
         }
 
-        let _permit = self.budgets.acquire_storage_read().await?;
+        let permit = self.budgets.acquire_storage_read().await?;
 
         let scan_service = self.scan_service.clone();
         let scan_store = self.scan_store.clone();
         let operation_gate = self.operation_gate.clone();
 
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            operation_gate.run_read(|| {
-                let result =
-                    scan_service.scan(&request, progress.as_ref(), &crate::models::NeverCancelled);
-                scan_store.set(result.clone());
-                result
-            })
-        })
-        .await
-        .map_err(|e| format!("Scan worker thread panicked: {e}"))?;
+        let result = crate::blocking::run_blocking(
+            move || {
+                let _permit = permit;
+                Ok(operation_gate.run_read(|| {
+                    let result = scan_service.scan(
+                        &request,
+                        progress.as_ref(),
+                        &crate::models::NeverCancelled,
+                    );
+                    scan_store.set(result.clone());
+                    result
+                }))
+            },
+            "Scan worker panicked",
+        )
+        .await?;
 
         Ok(result)
     }
@@ -178,36 +184,38 @@ impl CleanupService {
         let registry = self.registry.clone();
         let environment = self.environment.clone();
 
-        tauri::async_runtime::spawn_blocking(move || {
-            let scan = scan_store
-                .get()
-                .filter(|s| s.scan_id == scan_id)
-                .ok_or_else(|| {
-                    "The scan is no longer current. Scan again before cleaning.".to_string()
-                })?;
+        crate::blocking::run_blocking(
+            move || {
+                let scan = scan_store
+                    .get()
+                    .filter(|s| s.scan_id == scan_id)
+                    .ok_or_else(|| {
+                        "The scan is no longer current. Scan again before cleaning.".to_string()
+                    })?;
 
-            let plan = SafetyPlanner::create_plan_from_scan(
-                &scan,
-                &scan_id,
-                &selected_item_ids,
-                &registry,
-                &environment,
-            )
-            .map_err(|e| e.to_string())?;
+                let plan = SafetyPlanner::create_plan_from_scan(
+                    &scan,
+                    &scan_id,
+                    &selected_item_ids,
+                    &registry,
+                    &environment,
+                )
+                .map_err(|e| e.to_string())?;
 
-            let ttl = plan_store.ttl_seconds();
-            let mut preview = plan.preview(ttl);
-            preview.expires_at = preview.expires_at.min(
-                scan.finished_at
-                    .saturating_add(u64::from(ScanResult::VALID_FOR_SECONDS)),
-            );
+                let ttl = plan_store.ttl_seconds();
+                let mut preview = plan.preview(ttl);
+                preview.expires_at = preview.expires_at.min(
+                    scan.finished_at
+                        .saturating_add(u64::from(ScanResult::VALID_FOR_SECONDS)),
+                );
 
-            let now = unix_timestamp();
-            plan_store.insert(plan, now)?;
-            Ok(preview)
-        })
+                let now = unix_timestamp();
+                plan_store.insert(plan, now)?;
+                Ok(preview)
+            },
+            "Delete plan worker panicked",
+        )
         .await
-        .map_err(|e| format!("Delete plan worker panicked: {e}"))?
     }
 
     /// Executes a reviewed DeletePlan by plan_id.
@@ -256,91 +264,94 @@ impl CleanupService {
         let registry = self.registry.clone();
         let docker_status_cache = self.docker_status_cache.clone();
 
-        tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
-            operation_gate.run_write(|| {
-                let now = unix_timestamp();
+        crate::blocking::run_blocking(
+            move || -> Result<CleanResult, String> {
+                operation_gate.run_write(|| {
+                    let now = unix_timestamp();
 
-                let plan: DeletePlan = match intent {
-                    CleanupIntent::ReviewedSelection { plan_id } => {
-                        let plan = plan_store.take_valid(plan_id, now)?;
-                        // Invalidate scan atomically so pre-cleanup inventory cannot be reused
-                        scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
-                        plan
-                    }
-                    CleanupIntent::QuickSafe => {
-                        let settings = settings
-                            .ok_or_else(|| "Settings required for Quick Clean".to_string())?;
-                        let scan = scan_store.get().ok_or_else(|| {
-                            "The scan is no longer current. Scan again before cleaning.".to_string()
-                        })?;
+                    let plan: DeletePlan = match intent {
+                        CleanupIntent::ReviewedSelection { plan_id } => {
+                            let plan = plan_store.take_valid(plan_id, now)?;
+                            // Invalidate scan atomically so pre-cleanup inventory cannot be reused
+                            scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
+                            plan
+                        }
+                        CleanupIntent::QuickSafe => {
+                            let settings = settings
+                                .ok_or_else(|| "Settings required for Quick Clean".to_string())?;
+                            let scan = scan_store.get().ok_or_else(|| {
+                                "The scan is no longer current. Scan again before cleaning."
+                                    .to_string()
+                            })?;
 
-                        scan.validate_for_cleanup(&scan.scan_id, now)
-                            .map_err(|e| e.to_string())?;
+                            scan.validate_for_cleanup(&scan.scan_id, now)
+                                .map_err(|e| e.to_string())?;
 
-                        // Quick Clean deletes the Safe subset without a
-                        // per-item review, so it requires a scan that observed
-                        // everything. A partial scan may have missed items and
-                        // cannot prove the machine's state; a user-reviewed
-                        // selection is different, because the user saw exactly
-                        // what was inspected and chose from it.
-                        if scan.quality != ObservationQuality::Fresh {
-                            return Err(
+                            // Quick Clean deletes the Safe subset without a
+                            // per-item review, so it requires a scan that observed
+                            // everything. A partial scan may have missed items and
+                            // cannot prove the machine's state; a user-reviewed
+                            // selection is different, because the user saw exactly
+                            // what was inspected and chose from it.
+                            if scan.quality != ObservationQuality::Fresh {
+                                return Err(
                                 "Quick Clean needs a complete scan. Scan again before cleaning."
                                     .to_string(),
                             );
+                            }
+
+                            let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
+                            if eligible_ids.is_empty() {
+                                return Ok(CleanResult {
+                                    plan_id: Uuid::new_v4(),
+                                    started_at: now,
+                                    finished_at: now,
+                                    total_reclaimed_bytes: 0,
+                                    total_failed_bytes: 0,
+                                    partial_count: 0,
+                                    failed_count: 0,
+                                    items: vec![],
+                                    actual_disk_free_delta: Some(0),
+                                });
+                            }
+
+                            let plan = SafetyPlanner::create_plan_from_scan(
+                                &scan,
+                                &scan.scan_id,
+                                &eligible_ids,
+                                &registry,
+                                &environment,
+                            )
+                            .map_err(|e| e.to_string())?;
+
+                            // Invalidate scan atomically
+                            scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
+                            plan
                         }
+                    };
 
-                        let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
-                        if eligible_ids.is_empty() {
-                            return Ok(CleanResult {
-                                plan_id: Uuid::new_v4(),
-                                started_at: now,
-                                finished_at: now,
-                                total_reclaimed_bytes: 0,
-                                total_failed_bytes: 0,
-                                partial_count: 0,
-                                failed_count: 0,
-                                items: vec![],
-                                actual_disk_free_delta: Some(0),
-                            });
-                        }
-
-                        let plan = SafetyPlanner::create_plan_from_scan(
-                            &scan,
-                            &scan.scan_id,
-                            &eligible_ids,
-                            &registry,
-                            &environment,
-                        )
-                        .map_err(|e| e.to_string())?;
-
-                        // Invalidate scan atomically
-                        scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
-                        plan
+                    // A Docker prune may have changed the runtime's state, so the
+                    // shared observation is dropped rather than reported stale.
+                    if plan
+                        .targets
+                        .iter()
+                        .any(|t| t.strategy == CleanStrategy::DockerPrune)
+                    {
+                        docker_status_cache.invalidate();
                     }
-                };
 
-                // A Docker prune may have changed the runtime's state, so the
-                // shared observation is dropped rather than reported stale.
-                if plan
-                    .targets
-                    .iter()
-                    .any(|t| t.strategy == CleanStrategy::DockerPrune)
-                {
-                    docker_status_cache.invalidate();
-                }
-
-                Ok(CleanExecutor::execute(
-                    plan,
-                    &environment,
-                    move |event: CleanEvent| {
-                        progress.emit(event);
-                    },
-                ))
-            })
-        })
+                    Ok(CleanExecutor::execute(
+                        plan,
+                        &environment,
+                        move |event: CleanEvent| {
+                            progress.emit(event);
+                        },
+                    ))
+                })
+            },
+            "Cleanup worker panicked",
+        )
         .await
-        .map_err(|e| format!("Cleanup worker panicked: {e}"))?
     }
 }
 

@@ -47,6 +47,50 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
     "allow-get-app-version",
 ];
 
+/// Permissions that observe state or open a reviewed, non-authorizing shell
+/// surface. Together with [`MUTATING_PERMISSIONS`] this is an exhaustive
+/// partition of the generated command surface, so a new command cannot enter a
+/// capability file before its authority is classified here.
+const READ_ONLY_PERMISSIONS: [&str; 37] = [
+    "allow-cancel-developer-artifact-scan",
+    "allow-cancel-large-file-scan",
+    "allow-get-agent-integrations",
+    "allow-get-agent-quick-summary",
+    "allow-get-ai-control-center",
+    "allow-get-ai-control-git-diff",
+    "allow-get-ai-control-quick-summary",
+    "allow-get-ai-provider-descriptors",
+    "allow-get-ai-usage",
+    "allow-get-app-version",
+    "allow-get-awake-state",
+    "allow-get-diagnostics",
+    "allow-get-disk-metrics",
+    "allow-get-disk-volumes",
+    "allow-get-docker-status",
+    "allow-get-installed-apps",
+    "allow-get-last-scan",
+    "allow-get-local-models",
+    "allow-get-memory-metrics",
+    "allow-get-platform-capabilities",
+    "allow-get-platform-context",
+    "allow-get-project-context",
+    "allow-get-settings",
+    "allow-inspect-app-uninstall",
+    "allow-list-development-listeners",
+    "allow-open-dashboard-window",
+    "allow-open-logs-folder",
+    "allow-open-storage-settings",
+    "allow-pick-developer-workspace",
+    "allow-pick-keep-awake-application",
+    "allow-reveal-large-file",
+    "allow-run-environment-self-check",
+    "allow-show-in-file-manager",
+    "allow-start-developer-artifact-scan",
+    "allow-start-scan",
+    "allow-toggle-quick-panel",
+    "allow-run-ai-safety-scan",
+];
+
 /// Command permissions that change machine or persistent state, spawn a
 /// process, or end one.
 ///
@@ -57,31 +101,41 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
 /// permission that a rename retires is caught by
 /// [`mutation_guards_name_permissions_the_build_generates`], so the list cannot
 /// rot into an empty set of comparisons.
-const MUTATING_PERMISSIONS: [&str; 23] = [
+const MUTATING_PERMISSIONS: [&str; 28] = [
+    "allow-connect-openrouter-oauth",
+    "allow-consume-ai-recommendation-preview",
     "allow-create-delete-plan",
+    "allow-delete-ai-provider-credential",
+    "allow-delete-local-model",
+    "allow-disable-manual-awake",
+    "allow-dismiss-ai-safety-finding",
     "allow-execute-clean",
     "allow-execute-trash-plan",
-    "allow-prepare-large-file-trash",
     "allow-prepare-app-uninstall",
-    "allow-delete-local-model",
+    "allow-prepare-developer-artifact-cleanup",
+    "allow-prepare-large-file-trash",
+    "allow-preview-ai-recommendation",
     "allow-prune-docker-target",
-    "allow-terminate-memory-group",
-    "allow-save-settings",
-    "allow-save-ai-control-preferences",
-    "allow-delete-ai-provider-credential",
-    "allow-connect-openrouter-oauth",
-    "allow-start-large-file-scan",
-    "allow-setup-agent-integration",
-    "allow-remove-agent-integration",
-    "allow-set-awake-rules",
-    "allow-set-manual-awake",
-    "allow-disable-manual-awake",
+    "allow-quick-clean-safe",
     "allow-register-developer-home-workspace",
     "allow-open-in-terminal",
     "allow-post-agent-event",
-    "allow-request-stop-agent-session",
     "allow-release-development-listener",
+    "allow-remove-agent-integration",
+    "allow-request-stop-agent-session",
+    "allow-save-ai-control-preferences",
+    "allow-save-settings",
+    "allow-set-awake-rules",
+    "allow-set-manual-awake",
+    "allow-setup-agent-integration",
+    "allow-start-large-file-scan",
+    "allow-terminate-memory-group",
 ];
+
+/// The quick panel's one deliberately mutating use case. The backend chooses
+/// the Safe-tier targets from its current trusted scan; the panel cannot submit
+/// paths, strategies, or item identities.
+const QUICK_WINDOW_MUTATING_PERMISSIONS: [&str; 1] = ["allow-quick-clean-safe"];
 
 /// Registered commands the main window deliberately does not grant.
 ///
@@ -346,36 +400,49 @@ fn quick_window_grants_only_reviewed_read_mostly_permissions() {
          grants: {dropped:?}"
     );
 
-    let mut mutating: Vec<String> = quick
+    let mutating: BTreeSet<String> = quick
         .iter()
         .filter(|permission| MUTATING_PERMISSIONS.contains(&permission.as_str()))
         .cloned()
         .collect();
-    mutating.sort();
-    assert!(
-        mutating.is_empty(),
-        "the quick window must not hold mutation authority, even when the allowlist is \
-         edited in the same commit: {mutating:?}"
+    let reviewed_mutations: BTreeSet<String> = QUICK_WINDOW_MUTATING_PERMISSIONS
+        .iter()
+        .map(|permission| permission.to_string())
+        .collect();
+    assert_eq!(
+        mutating, reviewed_mutations,
+        "the quick window may hold only its narrow backend-owned mutation; editing the general \
+         allowlist cannot authorize another mutating command"
     );
 }
 
-/// The guard lists name commands the build still generates.
+/// Every generated permission has exactly one reviewed authority class.
 ///
-/// Both lists above are consulted by name, so a rename would leave them
-/// comparing against nothing and passing. This keeps every entry load-bearing.
+/// Equality catches a newly generated command that was added to a capability
+/// and quick allowlist without being security-classified. Disjointness catches
+/// an ambiguous classification whose safer interpretation would otherwise
+/// depend on which test happened to consume it.
 #[test]
-fn mutation_guards_name_permissions_the_build_generates() {
+fn generated_permissions_are_exhaustively_and_uniquely_classified() {
     let generated: BTreeSet<String> = generated_commands().into_values().collect();
-
-    let retired: Vec<&str> = MUTATING_PERMISSIONS
+    let read_only: BTreeSet<String> = READ_ONLY_PERMISSIONS
         .iter()
-        .chain(MAIN_WINDOW_EXEMPT_PERMISSIONS.iter())
-        .copied()
-        .filter(|permission| !generated.contains(*permission))
+        .map(|permission| permission.to_string())
         .collect();
+    let mutating: BTreeSet<String> = MUTATING_PERMISSIONS
+        .iter()
+        .map(|permission| permission.to_string())
+        .collect();
+
+    let overlap: Vec<String> = read_only.intersection(&mutating).cloned().collect();
     assert!(
-        retired.is_empty(),
-        "these guard entries name permissions no registered command declares; rename them \
-         with the command they were written for: {retired:?}"
+        overlap.is_empty(),
+        "permissions have two authority classes: {overlap:?}"
+    );
+
+    let classified: BTreeSet<String> = read_only.union(&mutating).cloned().collect();
+    assert_eq!(
+        classified, generated,
+        "every generated command permission must be classified exactly once as read-only or mutating"
     );
 }

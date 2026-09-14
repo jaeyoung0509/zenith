@@ -139,6 +139,7 @@ pub fn desktop_state_with_catalog(
 
     let ai_service = Arc::new(AiService::new(
         environment.clone(),
+        platform_capabilities.clone(),
         settings.clone(),
         credentials,
         ai_collection_service,

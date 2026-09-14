@@ -38,7 +38,6 @@ use crate::services::desktop_notifications::DesktopNotifications;
 use crate::services::settings_service::{
     SettingsAuthority, SettingsChange, SettingsChangeReaction,
 };
-use crate::settings_store;
 
 /// How long a Docker status observation answers before it is re-read.
 const DOCKER_STATUS_TTL: Duration = Duration::from_secs(3);
@@ -332,6 +331,7 @@ impl SystemService {
     }
 
     pub async fn set_awake_rules(&self, rules: Vec<AwakeRule>) -> Result<(), String> {
+        self.require(PlatformFeature::KeepAwake, CapabilityAccess::Mutate)?;
         let awake = self.awake.clone();
         crate::blocking::run_blocking(
             move || {
@@ -348,6 +348,7 @@ impl SystemService {
         duration_secs: Option<u64>,
         behavior: AwakeBehavior,
     ) -> Result<(), String> {
+        self.require(PlatformFeature::KeepAwake, CapabilityAccess::Mutate)?;
         let awake = self.awake.clone();
         crate::blocking::run_blocking(
             move || {
@@ -361,6 +362,7 @@ impl SystemService {
     }
 
     pub async fn disable_manual_awake(&self) -> Result<(), String> {
+        self.require(PlatformFeature::KeepAwake, CapabilityAccess::Mutate)?;
         let awake = self.awake.clone();
         crate::blocking::run_blocking(
             move || {
@@ -389,24 +391,35 @@ impl SystemService {
         notifications: &dyn DesktopNotifications,
     ) -> Result<(), String> {
         let next = settings.sanitize();
-        let previous = self.settings.snapshot()?;
         self.settings_reaction.before_save(&next, notifications)?;
-        let change = SettingsChange {
-            provider_selection_changed: previous.ai_accounts_quota_providers
-                != next.ai_accounts_quota_providers,
-            inactivity_threshold_changed: previous.agent_notifications.inactivity_threshold_minutes
-                != next.agent_notifications.inactivity_threshold_minutes,
-        };
 
         let config_dir = config_dir.to_path_buf();
         let authority = self.settings.clone();
         let awake = self.awake.clone();
-        crate::blocking::run_blocking(
+        let change = crate::blocking::run_blocking(
             move || {
-                settings_store::save(&config_dir, &next)?;
-                authority.replace(next.clone())?;
-                awake.set_rules(next.awake_rules.clone());
-                Ok(())
+                let (published, change) =
+                    authority.update_and_persist(&config_dir, |previous| {
+                        let change = SettingsChange {
+                            provider_selection_changed: previous.ai_accounts_quota_providers
+                                != next.ai_accounts_quota_providers,
+                            inactivity_threshold_changed: previous
+                                .agent_notifications
+                                .inactivity_threshold_minutes
+                                != next.agent_notifications.inactivity_threshold_minutes,
+                        };
+                        // AI Control owns this subtree through its dedicated
+                        // save/dismissal use cases. A general settings payload
+                        // may have been captured before one of those writes,
+                        // so preserve the latest authoritative value instead
+                        // of reintroducing the stale copy carried by the UI.
+                        let ai_control = previous.ai_control.clone();
+                        *previous = next;
+                        previous.ai_control = ai_control;
+                        change
+                    })?;
+                awake.set_rules(published.awake_rules);
+                Ok(change)
             },
             "Settings save worker panicked",
         )
@@ -431,6 +444,7 @@ impl SystemService {
     }
 
     pub async fn open_terminal(&self, path: &str) -> Result<(), String> {
+        self.require(PlatformFeature::SystemActions, CapabilityAccess::Mutate)?;
         let environment = self.environment.clone();
         let path = path.to_string();
         crate::blocking::run_blocking(
@@ -606,10 +620,17 @@ mod tests {
     }
 
     fn service_with_reaction(reaction: Arc<dyn SettingsChangeReaction>) -> SystemService {
+        service_with_capabilities(reaction, PlatformCapabilities::current())
+    }
+
+    fn service_with_capabilities(
+        reaction: Arc<dyn SettingsChangeReaction>,
+        capabilities: PlatformCapabilities,
+    ) -> SystemService {
         SystemService::new(
             Arc::new(PlatformEnvironment::native()),
             ContainerHost::unstated(),
-            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+            Arc::new(TestCapabilitiesProvider(capabilities)),
             StorageOperationGate::default(),
             Arc::new(ExecutionBudgets::new()),
             Arc::new(MemorySampler::new()),
@@ -620,6 +641,35 @@ mod tests {
             Arc::new(SettingsAuthority::new(ZenithSettings::default())),
             reaction,
         )
+    }
+
+    #[test]
+    fn native_system_mutations_require_their_service_capabilities() {
+        let service = service_with_capabilities(
+            Arc::new(RecordingReaction::default()),
+            PlatformCapabilities::unsupported(crate::models::PlatformKind::Linux),
+        );
+
+        let keep_awake_errors = [
+            tauri::async_runtime::block_on(service.set_awake_rules(Vec::new()))
+                .expect_err("rules require Keep Awake"),
+            tauri::async_runtime::block_on(
+                service.set_manual_awake(None, AwakeBehavior::PreventSystemSleep),
+            )
+            .expect_err("manual awake requires Keep Awake"),
+            tauri::async_runtime::block_on(service.disable_manual_awake())
+                .expect_err("disabling manual awake requires Keep Awake"),
+        ];
+        assert!(
+            keep_awake_errors
+                .iter()
+                .all(|error| error.contains("KeepAwake")),
+            "every Keep Awake mutation must fail at the same service gate: {keep_awake_errors:?}"
+        );
+
+        let terminal_error = tauri::async_runtime::block_on(service.open_terminal("/tmp"))
+            .expect_err("opening a terminal requires System Actions");
+        assert!(terminal_error.contains("SystemActions"), "{terminal_error}");
     }
 
     fn settings_with_notifications_enabled() -> ZenithSettings {
@@ -702,6 +752,39 @@ mod tests {
             ["before_save", "saved"],
             "the reaction is told after the snapshot is published"
         );
+    }
+
+    #[test]
+    fn a_general_save_preserves_a_newer_ai_control_transaction() {
+        let config_dir = tempfile::tempdir().expect("temp config dir");
+        let service = service_with_reaction(Arc::new(RecordingReaction::default()));
+        let mut stale_general_snapshot = service.settings().expect("authority is healthy");
+        stale_general_snapshot.theme = "dark".to_string();
+
+        service
+            .settings
+            .update_and_persist(config_dir.path(), |settings| {
+                settings
+                    .ai_control
+                    .dismissed_findings
+                    .push("finding.concurrent".to_string());
+            })
+            .expect("AI-owned transaction succeeds");
+
+        tauri::async_runtime::block_on(service.save_settings(
+            config_dir.path(),
+            stale_general_snapshot,
+            &TestNotifications { grant: true },
+        ))
+        .expect("general save succeeds");
+
+        let published = service.settings().expect("authority is healthy");
+        assert_eq!(published.theme, "dark");
+        assert_eq!(
+            published.ai_control.dismissed_findings,
+            ["finding.concurrent"]
+        );
+        assert_eq!(crate::settings_store::load(config_dir.path()), published);
     }
 
     #[test]
