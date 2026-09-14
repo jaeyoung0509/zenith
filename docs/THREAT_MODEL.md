@@ -67,42 +67,50 @@ local inspection surface. Cleanup trust boundaries live in
 Zenith inspects the projects an AI agent is observed working in. Those
 directories are chosen by the work, not nominated by the user: a project root
 comes from an observed agent process working directory, so the repositories
-Zenith reads are the directories the user happens to work in.
+Zenith reads are the directories the user happens to work in. Zenith reads state
+there; it does not execute or rewrite the configuration it finds.
 
-- **`git` is invoked with repository-supplied program configuration
-  neutralized.** Git reads a repository's own `.git/config` whenever it operates
-  on that repository, and `core.fsmonitor`, `core.pager`, `core.hooksPath`,
-  `diff.external`, `core.sshCommand`, and the `filter.*` clean/smudge pair each
-  name a program Git then runs; `core.fsmonitor` is consulted by `git status`
-  specifically. One constructor (`tooling::git_command`) builds every
-  invocation, overriding those keys on the command line (where Git gives them
-  precedence), pinning the attribute source to the empty tree (`attr.tree`) so a
-  repository `.gitattributes` file cannot select a filter driver, pinning the
-  attributes file, and skipping the system configuration
-  (`GIT_CONFIG_NOSYSTEM`). The invocation is allowed to report repository state
-  for the project it was pointed at — status, `HEAD`, name-status, and file
-  content it already limits to 256 KiB per diff — and to run no other program.
-  `src-tauri/tests/git_boundary_tests.rs` asserts both halves: no other call site
-  constructs a Git command, and a repository that names programs in those keys
-  reaches none of them.
-- **The residual is version-bound.** `attr.tree` exists from Git 2.43; an older
-  Git ignores the key and can therefore still reach a filter driver named by the
-  repository's `.gitattributes`. This is the one part of the neutralization that
-  relies on the toolchain rather than on an argument Zenith passes, and it is
-  recorded here rather than assumed.
-- **A `.git` pointer is bounded and contained.** `.git` may be a *file* naming
-  the git directory that holds the repository, which is how a linked worktree
-  and a submodule record it. The pointer file and the `HEAD` it resolves to are
-  read under a 4 KiB cap after a stat; a target inside the project is validated
-  by `SymlinkGuard`; a target outside it is accepted only in the two shapes Git
-  itself writes (`worktrees/<name>` and `modules/<path>` beside a real git
-  directory holding a `HEAD`); and any other target — including a symlinked
-  `.git` that leaves the project — is refused and recorded in the diagnostics
-  log rather than silently reported as "not a repository".
+- **One constructor builds every invocation, with repository-supplied program
+  configuration neutralized.** Git reads a repository's own `.git/config`
+  whenever it operates on that repository, and `core.fsmonitor`, `core.pager`,
+  `core.hooksPath`, `diff.external`, `core.sshCommand`, and the `filter.*`
+  clean/smudge pair each name a program Git then runs; `core.fsmonitor` is
+  consulted by `git status` specifically. `tooling::git_command` overrides those
+  keys on the command line (where Git gives them precedence), pins the attribute
+  source to the empty tree (`attr.tree`) and the attributes file, and skips the
+  system configuration and the system attributes file. Content diffs also pass
+  `--no-ext-diff` and `--no-textconv`, which Git gates separately from
+  configuration, and a content diff that omits `--no-ext-diff` fails closed
+  rather than running the repository's program. The allowed behavior of an
+  invocation is: report state for the project it was pointed at (status, `HEAD`,
+  name-status, and file content already limited to 256 KiB per diff).
+- **The two conditions the command line cannot neutralize are refused rather
+  than read.** The `attr.tree` pin requires Git 2.43 or newer, and
+  `$GIT_DIR/info/attributes` outranks every other attribute source with no
+  command-line replacement. A repository carrying a non-empty `info/attributes`,
+  or a machine whose `git` does not honor `attr.tree`, therefore has its
+  git-derived state refused: no invocation is made, the reason is recorded in
+  the diagnostics log, and the Control Center carries it as the summary's status
+  message. One value is weaker than that: `ProjectIdentity::is_dirty` is a
+  boolean, so a refused repository reads as "no observed changes" in the project
+  list while only the log carries the reason.
+- **A `.git` pointer must be tied to this checkout, not merely shaped like one.**
+  `.git` may be a *file* naming the git directory that holds the repository,
+  which is how a linked worktree and a submodule record it. The pointer file, the
+  `HEAD` it resolves to, and the metadata used to validate the relation are read
+  under a 4 KiB cap enforced on the open handle, so growth between a check and
+  the read cannot exceed it. A target inside the project is validated by
+  `SymlinkGuard`; a target outside it is accepted only through Git's own
+  backlink — a linked worktree records `gitdir` naming this project's `.git`, a
+  submodule records `core.worktree` naming this project — and anything else is
+  refused and recorded rather than reported as "not a repository". A link at
+  `.git`, including a Windows directory junction, is resolved and judged instead
+  of followed.
 - **Repository-derived strings are bounded before they cross IPC.** A branch
-  name longer than 255 bytes is reported as no branch rather than truncated into
+  name longer than Zenith's own 1 KiB bound is refused rather than truncated into
   a name Git never created, and a detached `HEAD` whose content is not an object
-  id is reported as no state rather than echoed to the interface.
+  id (40 hex digits, or 64 in a SHA-256 repository) is reported as no state
+  instead of being echoed to the interface.
 
 ## Platform ceilings recorded, not fixed
 
