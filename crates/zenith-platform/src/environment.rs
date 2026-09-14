@@ -7,8 +7,8 @@
 //! Optional newer APIs are only reached when they exist; a failure to read a
 //! value is reported as unknown rather than synthesized.
 
-use crate::platform::description::PlatformEnvironment;
-use crate::platform::path_algebra::{self, PathFlavor};
+use crate::description::PlatformEnvironment;
+use crate::path_algebra::{self, PathFlavor};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -162,7 +162,7 @@ impl RuntimeEnvironment {
         {
             let mut cmd = std::process::Command::new("sw_vers");
             cmd.arg("-productVersion");
-            crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(2))
+            crate::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(2))
                 .ok()
                 .map(|output| format!("macOS {}", String::from_utf8_lossy(&output.stdout).trim()))
                 .unwrap_or_else(|| "macOS".to_string())
@@ -354,7 +354,8 @@ fn probe_locale() -> Option<String> {
     {
         let mut cmd = std::process::Command::new("defaults");
         cmd.args(["read", "-g", "AppleLocale"]);
-        if let Ok(output) = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(2))
+        if let Ok(output) =
+            crate::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(2))
         {
             let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !value.is_empty() {
@@ -537,9 +538,9 @@ mod tests {
     /// a stated Windows environment on any host.
     #[test]
     fn access_refusal_attribution_follows_the_policy_and_the_profile() {
-        use crate::platform::description::{KnownFolder, PlatformEnvironment};
-        use crate::platform::path_algebra::PathFlavor;
-        use crate::platform::paths::SimulatedPaths;
+        use crate::description::{KnownFolder, PlatformEnvironment};
+        use crate::path_algebra::PathFlavor;
+        use crate::paths::SimulatedPaths;
         use std::path::Path;
         use std::sync::Arc;
         // The roots provider states where the app-data folders live; the

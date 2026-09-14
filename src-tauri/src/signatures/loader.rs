@@ -1,8 +1,8 @@
 use crate::models::{Signature, SignatureManifest, ZenithError};
-use crate::platform::path_algebra::PathFlavor;
-use crate::platform::{KnownFolder, PlatformEnvironment};
 use std::fs;
 use std::path::{Path, PathBuf};
+use zenith_platform::path_algebra::PathFlavor;
+use zenith_platform::{KnownFolder, PlatformEnvironment};
 
 pub struct SignatureLoader;
 
@@ -65,7 +65,7 @@ impl SignatureLoader {
         }
         let path_shaped = trimmed.starts_with('~')
             || trimmed.contains("${")
-            || crate::platform::path_algebra::is_absolute(trimmed, environment.flavor());
+            || zenith_platform::path_algebra::is_absolute(trimmed, environment.flavor());
         if !path_shaped {
             return None;
         }
@@ -82,7 +82,7 @@ impl SignatureLoader {
         if tail.is_empty() {
             return Some(root.to_string_lossy().into_owned());
         }
-        Some(crate::platform::path_algebra::join(
+        Some(zenith_platform::path_algebra::join(
             &root.to_string_lossy(),
             &tail,
             environment.flavor(),
@@ -124,11 +124,11 @@ fn known_folder_component(component: &str, flavor: PathFlavor) -> Option<KnownFo
 #[cfg(test)]
 mod tests {
     use super::SignatureLoader;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::paths::SimulatedPaths;
-    use crate::platform::{KnownFolder, PlatformEnvironment};
     use std::path::PathBuf;
     use std::sync::Arc;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
+    use zenith_platform::{KnownFolder, PlatformEnvironment};
 
     #[test]
     fn expand_path_preserves_absolute_paths_without_home_lookup() {

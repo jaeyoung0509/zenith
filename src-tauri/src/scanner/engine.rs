@@ -5,11 +5,11 @@ use crate::models::{
     Category, CategoryResult, ObservationQuality, RiskTier, ScanEvent, ScanItem, ScanResult,
 };
 use crate::orbstack::OrbStackAdapter;
-use crate::platform::PlatformEnvironment;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
 use std::time::SystemTime;
 use uuid::Uuid;
+use zenith_platform::PlatformEnvironment;
 
 pub struct ScanEngine;
 
@@ -203,8 +203,12 @@ impl ScanEngine {
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
                 }
-                let items =
-                    DirectoryScanner::scan_signature_with_pool(sig, directory_pool, environment);
+                let items = DirectoryScanner::scan_signature_with_pool(
+                    sig,
+                    directory_pool,
+                    environment,
+                    cancellation,
+                );
                 for item in items {
                     if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
@@ -328,11 +332,11 @@ mod tests {
     use crate::models::{
         Category, CleanStrategy, ObservationQuality, RiskTier, ScanEvent, Signature,
     };
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
     use crate::signatures::SignatureRegistry;
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     /// A scan environment with no tools and no stated profile, so a scan in a
     /// test only reports the fixture signatures it was given.
@@ -695,14 +699,19 @@ mod tests {
 
     #[test]
     fn cancellation_between_signatures_preserves_global_accounting() {
-        struct CancelAfter {
-            calls: AtomicUsize,
-            after: usize,
+        // Cancellation is observed through the progress stream rather than by
+        // counting probe calls: the traversal consults the probe at every
+        // directory boundary, so a call count would describe the walk instead
+        // of the behaviour this test is about. The probe reports cancellation
+        // as soon as the first item has been observed, which stops the run
+        // between signatures exactly as a user cancel does.
+        struct CancelAfterFirstItem {
+            cancelled: AtomicBool,
         }
 
-        impl crate::models::CancellationProbe for CancelAfter {
+        impl crate::models::CancellationProbe for CancelAfterFirstItem {
             fn is_cancelled(&self) -> bool {
-                self.calls.fetch_add(1, Ordering::SeqCst) >= self.after
+                self.cancelled.load(Ordering::SeqCst)
             }
         }
 
@@ -732,11 +741,8 @@ mod tests {
             None,
         ));
 
-        // Probe calls occur at the category boundary and before each
-        // signature. Allow the first signature, then cancel before the second.
-        let cancellation = CancelAfter {
-            calls: AtomicUsize::new(0),
-            after: 2,
+        let cancellation = CancelAfterFirstItem {
+            cancelled: AtomicBool::new(false),
         };
         let result = ScanEngine::scan(
             &registry,
@@ -745,7 +751,11 @@ mod tests {
             false,
             &scan_environment(),
             &cancellation,
-            |_| {},
+            |event| {
+                if matches!(event, ScanEvent::ItemFound { .. }) {
+                    cancellation.cancelled.store(true, Ordering::SeqCst);
+                }
+            },
         );
 
         assert_eq!(result.quality, ObservationQuality::Partial);

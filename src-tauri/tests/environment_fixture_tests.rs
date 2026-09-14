@@ -10,11 +10,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use zenith_lib::diagnostics::doctor::SelfCheckOutcome;
-use zenith_lib::platform::path_algebra::{self, PathFlavor, ProtectedRoot};
-use zenith_lib::platform::{
+use zenith_lib::signatures::SignatureRegistry;
+use zenith_platform::path_algebra::{self, PathFlavor, ProtectedRoot};
+use zenith_platform::{
     EnvironmentFixture, KnownFolder, PlatformEnvironment, ProfileShape, ToolResolution,
 };
-use zenith_lib::signatures::SignatureRegistry;
 
 const FIXTURE_DIR: &str = "tests/fixtures/environments";
 /// The fixtures below are the documented cases; the count is asserted so a

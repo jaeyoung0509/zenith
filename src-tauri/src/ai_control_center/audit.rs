@@ -126,7 +126,7 @@ impl AuditStore {
             let _ = std::fs::remove_file(&temp);
             return Err(error.to_string());
         }
-        if let Err(error) = crate::platform::file_ops::atomic_replace(&temp, &path) {
+        if let Err(error) = zenith_platform::file_ops::atomic_replace(&temp, &path) {
             let _ = std::fs::remove_file(&temp);
             return Err(error.to_string());
         }

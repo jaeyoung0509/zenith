@@ -47,7 +47,7 @@ pub fn global_store() -> Arc<Mutex<store::AgentActivityStore>> {
         .clone()
 }
 
-pub fn collect(environment: &crate::platform::PlatformEnvironment) -> AgentActivitySnapshot {
+pub fn collect(environment: &zenith_platform::PlatformEnvironment) -> AgentActivitySnapshot {
     collect_registry(environment).snapshot
 }
 
@@ -57,7 +57,7 @@ pub fn collect(environment: &crate::platform::PlatformEnvironment) -> AgentActiv
 /// process runs on. The command surfaces read the injected environment through
 /// [`collect`] instead.
 pub fn has_active_verified_session() -> bool {
-    let snapshot = collect(&crate::platform::PlatformEnvironment::native());
+    let snapshot = collect(&zenith_platform::PlatformEnvironment::native());
     snapshot
         .projects
         .iter()
@@ -76,14 +76,14 @@ pub fn has_active_verified_session() -> bool {
 }
 
 pub fn collect_registry(
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     collect_registry_with_inactivity_threshold(DEFAULT_INACTIVITY_THRESHOLD_SECONDS, environment)
 }
 
 pub fn collect_registry_with_inactivity_threshold(
     inactivity_threshold_seconds: u64,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     let observed_at = now();
     let current_owner = crate::process_owner::ProcessOwner::current();
@@ -137,7 +137,7 @@ pub fn registry_from_records(
     current_owner: crate::process_owner::ProcessOwner,
     observed_at: u64,
     store: &mut store::AgentActivityStore,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     registry_from_records_with_inactivity_threshold(
         records,
@@ -155,7 +155,7 @@ fn registry_from_records_with_inactivity_threshold(
     observed_at: u64,
     store: &mut store::AgentActivityStore,
     inactivity_threshold_seconds: u64,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> AgentActivityRegistry {
     store.prune_active_events(observed_at);
     let previous_snapshot = store.last_successful_snapshot.clone();
@@ -408,7 +408,7 @@ fn same_project_or_directory(left: &std::path::Path, right: &std::path::Path) ->
     match (left, right) {
         (Some(left), Some(right)) if left == right => true,
         (Some(left), Some(right)) => {
-            let host = crate::platform::PlatformEnvironment::native();
+            let host = zenith_platform::PlatformEnvironment::native();
             let left_project = resolve_project(&left, &host).map(|(root, _)| root);
             let right_project = resolve_project(&right, &host).map(|(root, _)| root);
             left_project.is_some() && left_project == right_project
@@ -429,8 +429,8 @@ mod tests {
     use super::*;
 
     /// The host machine these fixtures observe.
-    fn test_environment() -> crate::platform::PlatformEnvironment {
-        crate::platform::PlatformEnvironment::native()
+    fn test_environment() -> zenith_platform::PlatformEnvironment {
+        zenith_platform::PlatformEnvironment::native()
     }
 
     #[cfg(windows)]

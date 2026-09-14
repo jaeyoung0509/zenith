@@ -25,7 +25,6 @@ pub mod models;
 pub mod models_inventory;
 pub mod operation_gate;
 pub mod orbstack;
-pub mod platform;
 pub mod power;
 pub mod privacy;
 pub mod process_owner;
@@ -41,7 +40,6 @@ pub mod tooling;
 pub mod trash_manager;
 
 use commands::AppState;
-use platform::path_algebra::PathFlavor;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::image::Image;
@@ -52,6 +50,7 @@ use tauri::utils::TitleBarStyle;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow, WebviewWindowBuilder,
 };
+use zenith_platform::path_algebra::PathFlavor;
 
 /// How long after a dismissal a tray click is treated as part of that same
 /// click rather than as a new toggle request.
@@ -317,8 +316,11 @@ fn show_quick_panel_tracked(
 }
 
 pub fn run() {
-    crate::platform::environment::set_webview_version(tauri::webview_version().ok());
-    let environment = Arc::new(crate::platform::PlatformEnvironment::native());
+    zenith_platform::subprocess::set_error_sink(|message| {
+        crate::diagnostics::log_error("subprocess", message)
+    });
+    zenith_platform::environment::set_webview_version(tauri::webview_version().ok());
+    let environment = Arc::new(zenith_platform::PlatformEnvironment::native());
     // The container host is observed once, at the composition root. The
     // adapter never reads the process environment itself.
     let container_host =
@@ -565,11 +567,11 @@ mod tests {
     use super::QuickPanelVisibility;
     use super::TrayToggle;
     use super::TRAY_TOGGLE_SUPPRESSION;
-    use crate::platform::path_algebra::PathFlavor;
     use std::time::Duration;
     use tauri::utils::config::WindowConfig;
     use tauri::utils::TitleBarStyle;
     use tauri::{PhysicalPosition, PhysicalSize};
+    use zenith_platform::path_algebra::PathFlavor;
 
     #[test]
     fn quick_panel_is_right_aligned_below_tray_icon() {

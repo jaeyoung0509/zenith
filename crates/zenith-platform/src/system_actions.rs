@@ -55,7 +55,7 @@ impl SystemActionProvider for NativeSystemActions {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            let norm_path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
+            let norm_path = crate::NativePlatformPaths::normalize_verbatim_path(path);
             if norm_path.is_dir() {
                 Command::new("explorer.exe")
                     .arg(&norm_path)
@@ -93,7 +93,7 @@ impl SystemActionProvider for NativeSystemActions {
 
         #[cfg(target_os = "windows")]
         {
-            let norm_path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
+            let norm_path = crate::NativePlatformPaths::normalize_verbatim_path(path);
             Command::new("explorer.exe")
                 .arg(&norm_path)
                 .spawn()

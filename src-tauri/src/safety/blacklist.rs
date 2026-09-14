@@ -1,7 +1,7 @@
 use crate::models::ZenithError;
-use crate::platform::path_algebra::{self, PathFlavor};
-use crate::platform::PlatformPathsProvider;
 use std::path::{Path, PathBuf};
+use zenith_platform::path_algebra::{self, PathFlavor};
+use zenith_platform::PlatformPathsProvider;
 
 pub struct Blacklist;
 
@@ -29,9 +29,9 @@ impl BlacklistEnvironment {
     /// caller is acting on, not for the machine that happens to run the code:
     /// the manifest lint, the plan verifier, and the scanner all classify paths
     /// that came from an injected environment.
-    pub fn from_environment(environment: &crate::platform::PlatformEnvironment) -> Self {
+    pub fn from_environment(environment: &zenith_platform::PlatformEnvironment) -> Self {
         let text = |path: std::path::PathBuf| path.to_string_lossy().into_owned();
-        let known_content_dirs = crate::platform::KnownFolder::ALL
+        let known_content_dirs = zenith_platform::KnownFolder::ALL
             .into_iter()
             .filter_map(|folder| environment.content_dir(folder.token()))
             .map(text)
@@ -59,7 +59,7 @@ impl BlacklistEnvironment {
     /// Describes the running process. Only the composition boundary should
     /// prefer this over a stated environment.
     pub fn native() -> Self {
-        let paths = crate::platform::NativePlatformPaths::new();
+        let paths = zenith_platform::NativePlatformPaths::new();
         Self {
             home: paths.home().map(|path| path.to_string_lossy().into_owned()),
             temp_dir: std::env::temp_dir().to_string_lossy().into_owned(),
@@ -306,7 +306,7 @@ impl Blacklist {
     /// circumstances, decided for the environment the caller is acting on.
     pub fn is_blacklisted_with(
         path: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> bool {
         let described = BlacklistEnvironment::from_environment(environment);
         // The described flavor chooses the rule set, not the host that happens
@@ -492,7 +492,7 @@ impl Blacklist {
             "ProgramData",
         ] {
             if let Some(val) = std::env::var_os(env_var).map(PathBuf::from) {
-                let norm_sys = crate::platform::NativePlatformPaths::normalize_verbatim_path(&val);
+                let norm_sys = zenith_platform::NativePlatformPaths::normalize_verbatim_path(&val);
                 if path == norm_sys.as_path() || path.starts_with(&norm_sys) {
                     return true;
                 }
@@ -536,10 +536,10 @@ impl Blacklist {
     /// the environment the caller is acting on.
     pub fn validate_with(
         path: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         // Resolve parent components to catch ../ attacks
-        let normalized = Self::normalize_path(path);
+        let normalized = zenith_platform::path_algebra::normalize_lexical(path);
 
         if Self::is_blacklisted_with(&normalized, environment) {
             return Err(ZenithError::BlacklistedPath(
@@ -548,35 +548,6 @@ impl Blacklist {
         }
 
         Ok(())
-    }
-
-    /// Normalizes path without following symlinks (prevents path traversal `..`)
-    pub fn normalize_path(path: &Path) -> PathBuf {
-        #[cfg(target_os = "windows")]
-        let platform_path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
-        #[cfg(target_os = "windows")]
-        let path = platform_path.as_path();
-
-        let mut components = Vec::new();
-        for comp in path.components() {
-            match comp {
-                std::path::Component::Prefix(p) => components.push(std::path::Component::Prefix(p)),
-                std::path::Component::RootDir => components.push(std::path::Component::RootDir),
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    if let Some(last) = components.last() {
-                        if !matches!(
-                            last,
-                            std::path::Component::RootDir | std::path::Component::Prefix(_)
-                        ) {
-                            components.pop();
-                        }
-                    }
-                }
-                std::path::Component::Normal(n) => components.push(std::path::Component::Normal(n)),
-            }
-        }
-        components.into_iter().collect()
     }
 }
 

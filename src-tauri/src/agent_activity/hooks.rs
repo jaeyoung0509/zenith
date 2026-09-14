@@ -222,7 +222,7 @@ fn atomic_write_json(path: &Path, value: &serde_json::Value) -> Result<(), Strin
     }
     // `atomic_replace` uses ReplaceFileW on Windows, which keeps the replaced
     // file's ACL, and a plain rename on Unix where the temp mode is already set.
-    if let Err(error) = crate::platform::file_ops::atomic_replace(&temp_path, path) {
+    if let Err(error) = zenith_platform::file_ops::atomic_replace(&temp_path, path) {
         let _ = std::fs::remove_file(&temp_path);
         return Err(format!("Failed to atomically replace config file: {error}"));
     }

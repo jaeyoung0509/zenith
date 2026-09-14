@@ -219,7 +219,7 @@ pub fn windows_file_identity(path: &Path) -> Option<(u64, u64)> {
         FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
-    let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
+    let wide = zenith_platform::NativePlatformPaths::to_verbatim_wide(path);
 
     unsafe {
         // Request minimum access (0) so locked/open files (node.exe logs, docker vhdx) can still be measured

@@ -6,11 +6,11 @@ use super::store::{CreateLeaseParams, DevelopmentPortStore};
 use crate::models::{
     DevelopmentListener, ReleaseDevelopmentListenerResult, ReleaseMode, ReleaseOutcome,
 };
-use crate::platform::path_algebra::{self, PathFlavor};
 use crate::process_owner::ProcessOwner;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use zenith_platform::path_algebra::{self, PathFlavor};
 
 #[cfg(unix)]
 const GRACEFUL_TERMINATION_SIGNAL: i32 = libc::SIGTERM;
@@ -98,8 +98,8 @@ impl DevPortSystem for RealDevPortSystem {
             let mut cmd = std::process::Command::new("/usr/sbin/lsof");
             cmd.args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-F0pcuLn"]);
 
-            let output =
-                crate::tooling::run_with_timeout(cmd, Duration::from_secs(2)).map_err(|e| {
+            let output = zenith_platform::subprocess::run_with_timeout(cmd, Duration::from_secs(2))
+                .map_err(|e| {
                     crate::diagnostics::log_error(
                         "dev_ports",
                         "Listener inspection timed out or failed",
@@ -203,12 +203,12 @@ impl DevPortSystem for RealDevPortSystem {
             // Force terminates; a graceful signal routes through the shared
             // window-close and console-control chain.
             if signal != FORCE_TERMINATION_SIGNAL {
-                return crate::platform::terminate_process(
+                return zenith_platform::terminate_process(
                     pid,
-                    crate::platform::TerminationMode::Graceful,
+                    zenith_platform::TerminationMode::Graceful,
                 );
             }
-            crate::platform::terminate_process(pid, crate::platform::TerminationMode::Force)
+            zenith_platform::terminate_process(pid, zenith_platform::TerminationMode::Force)
         }
         #[cfg(not(any(unix, target_os = "windows")))]
         {

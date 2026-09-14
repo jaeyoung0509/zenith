@@ -35,7 +35,7 @@ pub(crate) fn join_failure(context: &str, error: impl std::fmt::Display) -> Stri
 
 /// The profile of the environment the command is acting on.
 pub(super) fn user_home(
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Result<PathBuf, String> {
     environment
         .user_home()

@@ -3,8 +3,8 @@ use crate::models::{
     DockerOverview, DockerStatus, DockerVolumeItem, FileSize, ObservationQuality, RiskTier,
     ScanItem, ZenithError,
 };
-use crate::platform::description::{PlatformEnvironment, ToolResolution};
 use crate::tooling;
+use zenith_platform::description::{PlatformEnvironment, ToolResolution};
 
 /// The container host the adapter may report, stated by the caller.
 ///
@@ -118,7 +118,7 @@ impl DockerAdapter {
         let mut cmd = Self::cli_command(environment, cli);
         cmd.args(["info", "--format", "{{.ServerVersion}}"]);
         matches!(
-            tooling::run_with_timeout(cmd, std::time::Duration::from_secs(4)),
+            zenith_platform::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(4)),
             Ok(output) if output.status.success()
         )
     }
@@ -141,7 +141,7 @@ impl DockerAdapter {
     fn cli_version(environment: &PlatformEnvironment, cli: ContainerCli) -> Option<String> {
         let mut cmd = Self::cli_command(environment, cli);
         cmd.arg("--version");
-        tooling::run_with_timeout(cmd, std::time::Duration::from_secs(3))
+        zenith_platform::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(3))
             .ok()
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -435,7 +435,10 @@ impl DockerAdapter {
     ) -> Vec<serde_json::Value> {
         let mut cmd = Self::cli_command(environment, cli);
         cmd.args(args);
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(timeout_secs));
+        let output = zenith_platform::subprocess::run_with_timeout(
+            cmd,
+            std::time::Duration::from_secs(timeout_secs),
+        );
         match output {
             Ok(out) if out.status.success() => {
                 Self::parse_json_records(&String::from_utf8_lossy(&out.stdout))
@@ -796,7 +799,7 @@ impl DockerAdapter {
                 let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["image", "prune", "-f"]);
                 (
-                    tooling::run_with_timeout(cmd, prune_timeout),
+                    zenith_platform::subprocess::run_with_timeout(cmd, prune_timeout),
                     CategoryDelta::Images,
                 )
             }
@@ -804,7 +807,7 @@ impl DockerAdapter {
                 let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["image", "prune", "-a", "-f"]);
                 (
-                    tooling::run_with_timeout(cmd, prune_timeout),
+                    zenith_platform::subprocess::run_with_timeout(cmd, prune_timeout),
                     CategoryDelta::Images,
                 )
             }
@@ -812,7 +815,7 @@ impl DockerAdapter {
                 let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["builder", "prune", "-f"]);
                 (
-                    tooling::run_with_timeout(cmd, prune_timeout),
+                    zenith_platform::subprocess::run_with_timeout(cmd, prune_timeout),
                     CategoryDelta::BuildCache,
                 )
             }
@@ -820,7 +823,7 @@ impl DockerAdapter {
                 let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["container", "prune", "-f"]);
                 (
-                    tooling::run_with_timeout(cmd, prune_timeout),
+                    zenith_platform::subprocess::run_with_timeout(cmd, prune_timeout),
                     CategoryDelta::Containers,
                 )
             }
@@ -828,7 +831,7 @@ impl DockerAdapter {
                 let mut cmd = Self::cli_command(environment, cli);
                 cmd.args(["volume", "prune", "-f"]);
                 (
-                    tooling::run_with_timeout(cmd, prune_timeout),
+                    zenith_platform::subprocess::run_with_timeout(cmd, prune_timeout),
                     CategoryDelta::Volumes,
                 )
             }
@@ -884,8 +887,8 @@ impl DockerAdapter {
 #[cfg(test)]
 mod tests {
     use super::{container_cli_detected, ContainerHost, DockerAdapter};
-    use crate::platform::description::PlatformEnvironment;
-    use crate::platform::path_algebra::PathFlavor;
+    use zenith_platform::description::PlatformEnvironment;
+    use zenith_platform::path_algebra::PathFlavor;
 
     #[test]
     fn volume_total_is_not_reported_as_reclaimable() {

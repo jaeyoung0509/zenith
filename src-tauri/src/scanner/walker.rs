@@ -1,14 +1,14 @@
 use crate::models::{
-    derive_cleanup_disposition, CacheSizeSemantics, CleanupEligibility, FileSize,
-    ObservationQuality, ScanItem, Signature,
+    derive_cleanup_disposition, CacheSizeSemantics, CancellationProbe, CleanupEligibility,
+    FileSize, ObservationQuality, ScanItem, Signature,
 };
-use crate::platform::PlatformEnvironment;
 use crate::scanner::{PathMeasurement, SizeCalculator};
 use crate::signatures::SignatureLoader;
 use rayon::ThreadPool;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
+use zenith_platform::PlatformEnvironment;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -34,14 +34,16 @@ impl DirectoryScanner {
     pub fn scan_signature(
         signature: &Signature,
         environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
     ) -> Vec<ScanItem> {
-        Self::scan_signature_with_pool(signature, None, environment)
+        Self::scan_signature_with_pool(signature, None, environment, cancellation)
     }
 
     pub(crate) fn scan_signature_with_pool(
         signature: &Signature,
         pool: Option<&ThreadPool>,
         environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
     ) -> Vec<ScanItem> {
         let mut items = Vec::new();
 
@@ -63,6 +65,7 @@ impl DirectoryScanner {
                     &path_buf,
                     idx,
                     min_age_days,
+                    cancellation,
                 ));
                 continue;
             }
@@ -85,6 +88,7 @@ impl DirectoryScanner {
                         &signature.exclusions,
                         pool,
                         environment,
+                        cancellation,
                     ),
                 ),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -199,6 +203,7 @@ impl DirectoryScanner {
         root: &std::path::Path,
         path_index: usize,
         min_age_days: u32,
+        cancellation: &dyn CancellationProbe,
     ) -> Vec<ScanItem> {
         match fs::symlink_metadata(root) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -318,7 +323,14 @@ impl DirectoryScanner {
             }
 
             // Single-pass fail-closed tree measurement
-            let stats = Self::measure_tree_stats(environment, &path, &signature.exclusions, 0, 32);
+            let stats = Self::measure_tree_stats(
+                environment,
+                &path,
+                &signature.exclusions,
+                0,
+                32,
+                cancellation,
+            );
             // An incomplete tree cannot prove the candidate's newest timestamp,
             // so retain it for observability but block cleanup.
             if !stats.complete {
@@ -467,6 +479,7 @@ impl DirectoryScanner {
         exclusions: &[String],
         current_depth: usize,
         max_depth: usize,
+        cancellation: &dyn CancellationProbe,
     ) -> TreeStats {
         let mut stats = TreeStats {
             logical: 0,
@@ -567,6 +580,15 @@ impl DirectoryScanner {
         };
 
         for entry in entries {
+            if cancellation.is_cancelled() {
+                stats.complete = false;
+                stats.skipped_entries += 1;
+                if stats.incomplete_reason.is_none() {
+                    stats.incomplete_reason =
+                        Some(format!("Scan cancelled while measuring {}", path.display()));
+                }
+                break;
+            }
             let ent = match entry {
                 Ok(e) => e,
                 Err(err) => {
@@ -608,6 +630,7 @@ impl DirectoryScanner {
                 exclusions,
                 current_depth + 1,
                 max_depth,
+                cancellation,
             );
             if !sub_stats.complete {
                 stats.complete = false;
@@ -646,12 +669,14 @@ pub struct TreeStats {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::NeverCancelled;
+
     use super::DirectoryScanner;
     use crate::models::{
         CacheSizeSemantics, Category, CleanStrategy, ObservationQuality, RiskTier, Signature,
     };
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     fn environment() -> PlatformEnvironment {
         PlatformEnvironment::simulated(PathFlavor::current())
@@ -697,7 +722,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature, &environment());
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
         let eligible_item = items
             .iter()
             .find(|item| item.name == "third.party.cache")
@@ -740,7 +765,8 @@ mod tests {
         std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
 
         let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
-        let stats = DirectoryScanner::measure_tree_stats(&windows, &candidate, &[], 0, 32);
+        let stats =
+            DirectoryScanner::measure_tree_stats(&windows, &candidate, &[], 0, 32, &NeverCancelled);
 
         assert_eq!(stats.file_count, 1);
         assert_eq!(stats.logical, 4_096);
@@ -755,7 +781,8 @@ mod tests {
         );
 
         let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
-        let stats = DirectoryScanner::measure_tree_stats(&posix, &candidate, &[], 0, 32);
+        let stats =
+            DirectoryScanner::measure_tree_stats(&posix, &candidate, &[], 0, 32, &NeverCancelled);
         assert_eq!(stats.skipped_entries, 1, "only `.git` is a POSIX boundary");
         assert_eq!(
             stats.logical,
@@ -803,7 +830,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature, &environment());
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
         let plain = items
             .iter()
             .find(|item| item.name == "plain.cache")
@@ -842,10 +869,23 @@ mod tests {
         );
 
         // The guard must also fail closed at delete-time TOCTOU re-verification.
-        let stats = DirectoryScanner::measure_tree_stats(&environment(), &nested, &[], 0, 32);
+        let stats = DirectoryScanner::measure_tree_stats(
+            &environment(),
+            &nested,
+            &[],
+            0,
+            32,
+            &NeverCancelled,
+        );
         assert!(!stats.complete);
-        let mixed_case_stats =
-            DirectoryScanner::measure_tree_stats(&environment(), &mixed_case, &[], 0, 32);
+        let mixed_case_stats = DirectoryScanner::measure_tree_stats(
+            &environment(),
+            &mixed_case,
+            &[],
+            0,
+            32,
+            &NeverCancelled,
+        );
         assert!(!mixed_case_stats.complete);
     }
 
@@ -892,7 +932,7 @@ mod tests {
             reclaimable_is_lower_bound: false,
         };
 
-        let items = DirectoryScanner::scan_signature(&signature, &environment());
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
         let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
         assert_eq!(
             names,

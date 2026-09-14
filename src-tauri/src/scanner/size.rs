@@ -1,11 +1,11 @@
-use crate::models::FileSize;
-use crate::platform::PlatformEnvironment;
+use crate::models::{CancellationProbe, FileSize, NeverCancelled};
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::{Scope, ThreadPool};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use zenith_platform::PlatformEnvironment;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -154,6 +154,14 @@ fn measurement_for_metadata_error(path: &Path, error: &std::io::Error) -> PathMe
     }
 }
 
+/// Why a measurement stopped early when the scan was cancelled.
+///
+/// The text is the same everywhere a cancelled walk can end, so a partial
+/// result is attributable to cancellation rather than to a read failure.
+fn cancelled_measurement_reason(dir: &Path) -> String {
+    format!("Scan cancelled while measuring {}", dir.display())
+}
+
 pub struct SizeCalculator;
 
 impl SizeCalculator {
@@ -168,7 +176,22 @@ impl SizeCalculator {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> PathMeasurement {
-        Self::measure_path_with_pool(path, exclusions, None, environment)
+        Self::measure_path_full_with_cancellation(path, exclusions, environment, &NeverCancelled)
+    }
+
+    /// [`Self::measure_path_full`] with the caller's cancellation contract.
+    ///
+    /// A scan that was cancelled mid-tree returns an incomplete measurement:
+    /// the walk stops at the next directory boundary, the bytes already
+    /// observed are kept, and the reason says why. Callers that are not part of
+    /// a cancellable scan use [`Self::measure_path_full`].
+    pub fn measure_path_full_with_cancellation<P: AsRef<Path>>(
+        path: P,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+    ) -> PathMeasurement {
+        Self::measure_path_with_pool(path, exclusions, None, environment, cancellation)
     }
 
     /// Measures a path and records an incomplete observation in the log.
@@ -205,6 +228,7 @@ impl SizeCalculator {
         exclusions: &[String],
         pool: Option<&ThreadPool>,
         environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
     ) -> PathMeasurement {
         let path = path.as_ref();
         // Check if path is in blacklist
@@ -244,9 +268,15 @@ impl SizeCalculator {
 
         if meta.is_dir() {
             if let Some(pool) = pool {
-                return Self::measure_dir_parallel(path, exclusions, pool, environment);
+                return Self::measure_dir_parallel(
+                    path,
+                    exclusions,
+                    pool,
+                    environment,
+                    cancellation,
+                );
             }
-            return Self::measure_dir_recursive(path, exclusions, 0, 32, environment);
+            return Self::measure_dir_recursive(path, exclusions, 0, 32, environment, cancellation);
         }
 
         PathMeasurement::complete(FileSize::default(), 0)
@@ -257,6 +287,7 @@ impl SizeCalculator {
         exclusions: &[String],
         pool: &ThreadPool,
         environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
     ) -> PathMeasurement {
         let logical = AtomicU64::new(0);
         let allocated = AtomicU64::new(0);
@@ -279,6 +310,7 @@ impl SizeCalculator {
                 &skipped,
                 &reason,
                 environment,
+                cancellation,
             );
         });
 
@@ -310,8 +342,21 @@ impl SizeCalculator {
         skipped: &'scope AtomicU64,
         reason: &'scope Mutex<Option<String>>,
         environment: &'scope PlatformEnvironment,
+        cancellation: &'scope dyn CancellationProbe,
     ) {
         scope.spawn(move |scope| {
+            // A cancelled scan stops at the next directory boundary: the bytes
+            // already observed are kept and reported as an incomplete
+            // measurement rather than silently becoming a smaller total.
+            if cancellation.is_cancelled() {
+                complete.store(false, Ordering::Relaxed);
+                skipped.fetch_add(1, Ordering::Relaxed);
+                let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
+                if r.is_none() {
+                    *r = Some(cancelled_measurement_reason(&dir));
+                }
+                return;
+            }
             if current_depth > max_depth {
                 complete.store(false, Ordering::Relaxed);
                 skipped.fetch_add(1, Ordering::Relaxed);
@@ -460,6 +505,7 @@ impl SizeCalculator {
                                     skipped,
                                     reason,
                                     environment,
+                                    cancellation,
                                 );
                             } else {
                                 complete.store(false, Ordering::Relaxed);
@@ -523,7 +569,16 @@ impl SizeCalculator {
         current_depth: usize,
         max_depth: usize,
         environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
     ) -> PathMeasurement {
+        if cancellation.is_cancelled() {
+            return PathMeasurement::incomplete(
+                FileSize::default(),
+                0,
+                cancelled_measurement_reason(dir),
+            )
+            .with_skipped_entries(1);
+        }
         if current_depth > max_depth {
             return PathMeasurement::incomplete(
                 FileSize::default(),
@@ -557,6 +612,16 @@ impl SizeCalculator {
         };
 
         for entry in entries {
+            // The entry loop is the innermost shared point of both walks, so a
+            // cancelled scan stops here rather than after the tree is finished.
+            if cancellation.is_cancelled() {
+                complete = false;
+                skipped_entries += 1;
+                if incomplete_reason.is_none() {
+                    incomplete_reason = Some(cancelled_measurement_reason(dir));
+                }
+                break;
+            }
             let ent = match entry {
                 Ok(e) => e,
                 Err(err) => {
@@ -662,6 +727,7 @@ impl SizeCalculator {
                             current_depth + 1,
                             max_depth,
                             environment,
+                            cancellation,
                         );
                         total_logical += sub.size.logical;
                         total_allocated += sub.size.allocated.unwrap_or(sub.size.logical);
@@ -701,10 +767,64 @@ impl SizeCalculator {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::NeverCancelled;
+
     use super::{measurement_for_metadata_error, SizeCalculator};
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
     use rayon::ThreadPoolBuilder;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
+
+    /// A probe that cancels once it has been consulted `after` times.
+    struct CancelAfter {
+        calls: std::sync::atomic::AtomicUsize,
+        after: usize,
+    }
+
+    impl crate::models::CancellationProbe for CancelAfter {
+        fn is_cancelled(&self) -> bool {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= self.after
+        }
+    }
+
+    #[test]
+    fn a_cancelled_scan_stops_the_walk_and_reports_an_incomplete_measurement() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("cache");
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("first.bin"), vec![1u8; 100]).unwrap();
+        std::fs::write(root.join("nested/second.bin"), vec![2u8; 200]).unwrap();
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+
+        // The same tree measures completely when nothing cancels, which is what
+        // makes the cancelled result below attributable to the probe.
+        let complete = SizeCalculator::measure_path_full(&root, &[], &environment);
+        assert!(complete.complete);
+        assert_eq!(complete.size.logical, 300);
+
+        // The walk stops at the next entry boundary and keeps what it observed.
+        let cancelled = SizeCalculator::measure_path_full_with_cancellation(
+            &root,
+            &[],
+            &environment,
+            &CancelAfter {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                after: 1,
+            },
+        );
+        assert!(!cancelled.complete, "a cancelled walk is never complete");
+        assert_eq!(
+            cancelled.skipped_entries, 1,
+            "the interrupted entry is accounted for, not dropped"
+        );
+        let reason = cancelled
+            .incomplete_reason
+            .as_deref()
+            .expect("a cancelled measurement explains itself");
+        assert!(
+            reason.contains("Scan cancelled"),
+            "unexpected reason: {reason}"
+        );
+    }
 
     #[test]
     fn metadata_errors_are_not_mistaken_for_missing_zero_byte_paths() {
@@ -757,6 +877,7 @@ mod tests {
             &exclusions,
             Some(&pool),
             &environment,
+            &NeverCancelled,
         );
 
         assert_eq!(parallel, sequential);
@@ -921,13 +1042,13 @@ mod tests {
         let simulated = |redirect: bool| {
             let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_roots(
                 std::sync::Arc::new(
-                    crate::platform::paths::SimulatedPaths::new()
+                    zenith_platform::paths::SimulatedPaths::new()
                         .with_flavor(PathFlavor::current())
                         .with_home(&home),
                 ),
             );
             if redirect {
-                environment.with_known_folder(crate::platform::KnownFolder::Downloads, &redirected)
+                environment.with_known_folder(zenith_platform::KnownFolder::Downloads, &redirected)
             } else {
                 environment
             }

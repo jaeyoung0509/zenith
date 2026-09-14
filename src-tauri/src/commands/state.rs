@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     /// Platform facts the backend may depend on. Tests inject a simulated
     /// environment here instead of reading the host's.
-    pub environment: Arc<crate::platform::PlatformEnvironment>,
+    pub environment: Arc<zenith_platform::PlatformEnvironment>,
     /// Container host observed at startup, so no adapter reads the process
     /// environment on its own.
     pub container_host: crate::docker::adapter::ContainerHost,
@@ -39,7 +39,13 @@ pub struct AppState {
     pub ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     pub ai_control_refresh_lock: Arc<Mutex<()>>,
     pub ai_control_runtime: Arc<crate::ai_control_center::runtime::AiControlRuntime>,
-    pub platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider>,
+    pub platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider>,
+    /// The OS Trash adapter the reviewed-storage workflows move through.
+    ///
+    /// It is a field rather than a constructor called at the move site, so the
+    /// reviewed workflows can run against a recording backend in a test and the
+    /// production path is the same code.
+    pub trash_backend: Arc<dyn zenith_platform::TrashBackend>,
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
@@ -56,7 +62,7 @@ impl AppState {
     /// commands' dependencies (the environment self-check, the metrics handles,
     /// the shared caches) without a Tauri app handle.
     pub fn new(
-        environment: Arc<crate::platform::PlatformEnvironment>,
+        environment: Arc<zenith_platform::PlatformEnvironment>,
         container_host: crate::docker::adapter::ContainerHost,
     ) -> Self {
         // The catalog is loaded against the same description every other
@@ -73,7 +79,7 @@ impl AppState {
     /// seam exists so a test can assert that a catalog which failed to load
     /// refuses a scan instead of reporting an empty, healthy-looking one.
     pub fn with_catalog(
-        environment: Arc<crate::platform::PlatformEnvironment>,
+        environment: Arc<zenith_platform::PlatformEnvironment>,
         container_host: crate::docker::adapter::ContainerHost,
         registry: SignatureRegistry,
         registry_load_error: Option<String>,
@@ -118,9 +124,14 @@ impl AppState {
                 awake_manager.clone(),
                 settings.clone(),
             ));
-        let platform_capabilities: Arc<dyn crate::platform::PlatformCapabilitiesProvider> =
-            Arc::new(crate::platform::NativePlatformCapabilities::new(
+        let trash_backend: Arc<dyn zenith_platform::TrashBackend> =
+            Arc::new(zenith_platform::NativeTrashBackend);
+        let platform_capabilities: Arc<dyn zenith_platform::PlatformCapabilitiesProvider> =
+            Arc::new(zenith_platform::NativePlatformCapabilities::new(
                 environment.clone(),
+                // The container answer is asked exactly once, where the CLI
+                // resolution lives, and the capability snapshot reports it.
+                Arc::new(crate::docker::container_cli_detected),
             ));
 
         let docker_status_cache = Arc::new(Mutex::new(None));
@@ -128,7 +139,9 @@ impl AppState {
             registry.clone(),
             environment.clone(),
         ));
-        let plan_store = Arc::new(crate::services::PlanStore::new());
+        let plan_store = Arc::new(crate::services::PlanStore::new(
+            crate::services::PlanLifecycle::cleanup(),
+        ));
         let scan_store = Arc::new(crate::services::ScanStore::new());
         let cleanup_service = Arc::new(crate::services::CleanupService::new(
             scan_service.clone(),
@@ -166,6 +179,7 @@ impl AppState {
             ai_control_refresh_lock,
             ai_control_runtime,
             platform_capabilities,
+            trash_backend,
             runtime_metrics,
             execution_budgets,
             docker_status_cache,

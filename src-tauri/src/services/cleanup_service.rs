@@ -13,9 +13,9 @@ use crate::models::{
     ScanRequest, ScanResult, ZenithSettings,
 };
 use crate::operation_gate::StorageOperationGate;
-use crate::platform::PlatformEnvironment;
 use crate::safety::SafetyPlanner;
 use crate::signatures::SignatureRegistry;
+use zenith_platform::PlatformEnvironment;
 
 fn unix_timestamp() -> u64 {
     SystemTime::now()
@@ -69,7 +69,7 @@ enum CleanupIntent {
 /// centrally so command handlers remain thin IPC adapters.
 pub struct CleanupService {
     scan_service: Arc<ScanService>,
-    plan_store: Arc<PlanStore>,
+    plan_store: Arc<PlanStore<DeletePlan>>,
     scan_store: Arc<ScanStore>,
     operation_gate: StorageOperationGate,
     budgets: Arc<ExecutionBudgets>,
@@ -83,7 +83,7 @@ impl CleanupService {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         scan_service: Arc<ScanService>,
-        plan_store: Arc<PlanStore>,
+        plan_store: Arc<PlanStore<DeletePlan>>,
         scan_store: Arc<ScanStore>,
         operation_gate: StorageOperationGate,
         budgets: Arc<ExecutionBudgets>,
@@ -328,9 +328,9 @@ mod tests {
     use super::*;
     use crate::models::{
         Category, CategoryResult, FileSize, ObservationQuality, PlatformCapabilities, RiskTier,
-        ScanItem,
+        ScanItem, Signature,
     };
-    use crate::platform::path_algebra::PathFlavor;
+    use zenith_platform::path_algebra::PathFlavor;
 
     struct TestCapabilitiesProvider(PlatformCapabilities);
 
@@ -404,7 +404,7 @@ mod tests {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
         let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
-        let plan_store = Arc::new(PlanStore::new());
+        let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
         let budgets = Arc::new(ExecutionBudgets::new());
@@ -438,11 +438,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_consumed_plan_cannot_be_replayed_through_the_service() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache = fixture.path().join("fixture-cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("payload.bin"), vec![7u8; 512]).unwrap();
+
+        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let mut registry = SignatureRegistry::new();
+        registry.register(Signature {
+            id: "test_sig".to_string(),
+            name: "Fixture cache".to_string(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteDirectory,
+            paths: vec![cache.to_string_lossy().to_string()],
+            description: "test-only signature".to_string(),
+            min_age_days: None,
+            include_prefixes: Vec::new(),
+            exclude_prefixes: Vec::new(),
+            intensive_only: false,
+            platforms: Vec::new(),
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+            exclusions: Vec::new(),
+        });
+        let registry = Arc::new(registry);
+
+        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
+        let scan_store = Arc::new(ScanStore::new());
+        let service = CleanupService::new(
+            scan_service,
+            plan_store,
+            scan_store.clone(),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            env,
+            registry,
+            Arc::new(Mutex::new(None)),
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        );
+
+        let mut item = ScanItem::mock(
+            "item1",
+            "test_sig",
+            "Fixture cache",
+            Category::System,
+            RiskTier::Safe,
+            cache.to_string_lossy().to_string(),
+            FileSize::new(512, Some(512)),
+            1,
+        );
+        item.disposition = item.derive_disposition();
+        scan_store.set(make_test_scan(vec![item]));
+
+        let preview = service
+            .create_delete_plan("scan_123".to_string(), vec!["item1".to_string()])
+            .await
+            .expect("a reviewed item creates a plan");
+        let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
+
+        let first = service.execute_clean(preview.id, progress.clone()).await;
+        assert!(
+            first.is_ok(),
+            "the first execution of a plan runs: {:?}",
+            first.err()
+        );
+        assert!(!cache.exists(), "the plan's target was deleted");
+
+        // One-shot means the same plan ID cannot authorize a second mutation,
+        // through this service or any other caller.
+        let replay = service.execute_clean(preview.id, progress).await;
+        let error = replay.expect_err("a consumed plan must be refused");
+        assert!(
+            error.contains("not found or already used"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
     async fn quick_clean_safe_handles_empty_candidates_gracefully() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
         let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
-        let plan_store = Arc::new(PlanStore::new());
+        let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
         let budgets = Arc::new(ExecutionBudgets::new());

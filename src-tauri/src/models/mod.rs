@@ -28,7 +28,6 @@ pub mod metrics;
 pub mod settings;
 pub mod signature;
 
-pub use crate::platform::PlatformCapabilitiesProvider;
 pub use agent_activity::*;
 pub use ai_control_center::*;
 pub use ai_usage::*;
@@ -41,6 +40,7 @@ pub use local_model::*;
 pub use metrics::*;
 pub use settings::*;
 pub use signature::*;
+pub use zenith_platform::PlatformCapabilitiesProvider;
 
 // ---------------------------------------------------------------------------
 // Zenith domain semantics, re-exported from `zenith_core`.
@@ -59,7 +59,10 @@ pub use zenith_core::application::dto::storage::{
     TrashPlanPreview, TrashResult,
 };
 pub use zenith_core::domain::category::Category;
-pub use zenith_core::domain::cleanup::{CleanStrategy, DeletePlan, DeleteTarget};
+pub use zenith_core::domain::cleanup::{
+    CleanStrategy, CleanupOperation, ContainerCleanup, DeletePlan, DeleteTarget, FilesystemCleanup,
+    FilesystemMutation, ProviderCleanup,
+};
 pub use zenith_core::domain::error::{ZenithError, ZenithResult};
 pub use zenith_core::domain::identity::{
     CleanupIdentity, FileIdentity, ModifiedStamp, ReviewedFileIdentity,

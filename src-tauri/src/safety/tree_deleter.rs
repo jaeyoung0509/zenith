@@ -1,4 +1,3 @@
-use crate::platform::{PathFlavor, PlatformEnvironment};
 #[cfg(windows)]
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
@@ -8,6 +7,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::Path;
+use zenith_platform::{PathFlavor, PlatformEnvironment};
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -142,7 +142,7 @@ impl WindowsDeleteHandle {
             FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
         };
 
-        let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
+        let wide = zenith_platform::NativePlatformPaths::to_verbatim_wide(path);
 
         let handle = retry_on_sharing_violation(|| {
             let h = unsafe {
@@ -1230,8 +1230,8 @@ impl SafeTreeDeleter {
     }
 
     fn validate_verified_scope(path: &Path, verified_root: &Path) -> Result<(), String> {
-        let normalized_path = Blacklist::normalize_path(path);
-        let normalized_root = Blacklist::normalize_path(verified_root);
+        let normalized_path = zenith_platform::path_algebra::normalize_lexical(path);
+        let normalized_root = zenith_platform::path_algebra::normalize_lexical(verified_root);
         if normalized_path != normalized_root && !normalized_path.starts_with(&normalized_root) {
             return Err(format!(
                 "Path escaped the verified cleanup target: {}",
@@ -1288,7 +1288,7 @@ impl SafeTreeDeleter {
     /// drift from the path algebra the rest of the tree uses and the Windows
     /// semantics are covered on every runner.
     fn paths_equal(left: &Path, right: &Path, flavor: PathFlavor) -> bool {
-        crate::platform::path_algebra::equal(
+        zenith_platform::path_algebra::equal(
             &left.to_string_lossy(),
             &right.to_string_lossy(),
             flavor,
@@ -1296,7 +1296,7 @@ impl SafeTreeDeleter {
     }
 
     fn path_starts_with(path: &Path, base: &Path, flavor: PathFlavor) -> bool {
-        crate::platform::path_algebra::contains(
+        zenith_platform::path_algebra::contains(
             &base.to_string_lossy(),
             &path.to_string_lossy(),
             flavor,
@@ -1319,8 +1319,8 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 mod tests {
     use super::*;
     use crate::models::ZenithError;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     /// Deletion tests exercise argument threading, not path resolution: no
     /// exclusion in these tests needs the environment to expand.
@@ -1430,7 +1430,7 @@ mod tests {
             SymlinkGuard::is_symlink_strict(&missing),
             Err(ZenithError::Missing(_))
         ));
-        let environment = crate::platform::PlatformEnvironment::native();
+        let environment = zenith_platform::PlatformEnvironment::native();
         assert!(matches!(
             SymlinkGuard::validate_canonical_blacklist_strict(&missing, &environment),
             Err(ZenithError::Missing(_))

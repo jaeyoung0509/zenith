@@ -53,13 +53,21 @@ their state cannot be trusted.
 ## Platform capability contract
 
 Platform-specific behavior is selected behind Rust service boundaries instead
-of being spread through route components. `src-tauri/src/platform` owns the
-runtime platform contract and `PlatformCapabilitiesProvider` exposes a typed,
-read-only snapshot through `get_platform_capabilities`. The frontend loads the
-snapshot independently in each WebView and uses it to hide or disable actions
-that are unavailable on the current platform. A `read_only` capability may
-continue to expose inspection metrics, but mutating controls require an
-`available` capability.
+of being spread through route components. `crates/zenith-platform` owns the
+runtime platform contract — native probing, path resolution, process control,
+system actions, atomic file replacement, and the Trash adapter — and its
+`PlatformCapabilitiesProvider` exposes a typed, read-only snapshot through
+`get_platform_capabilities`. The frontend loads the snapshot independently in
+each WebView and uses it to hide or disable actions that are unavailable on the
+current platform. A `read_only` capability may continue to expose inspection
+metrics, but mutating controls require an `available` capability.
+
+The crate depends on `zenith-core` and never on `zenith-desktop` or Tauri, so
+the same native probing serves a scan, an application service, or a future CLI.
+An answer that comes from another layer arrives as a probe instead of a call:
+the container-CLI question is asked where tool resolution lives and injected
+into the capability provider, so the snapshot cannot disagree with the adapter
+that drives the CLI.
 
 Both macOS and Windows x64 implement the capability contract across all thirteen
 core features. Platform-specific actions, including workspace selection, use
@@ -73,12 +81,13 @@ maps picker cancellation to `None` just like the macOS adapter.
 
 ## Crate boundary
 
-Zenith is a Cargo workspace with two members:
+Zenith is a Cargo workspace with three members:
 
 ```text
-Cargo.toml          workspace manifest: version, edition, MSRV, release profile
-crates/zenith-core  product semantics, with no desktop framework in the graph
-src-tauri           zenith-desktop: the Tauri adapter and the `Zenith` binary
+Cargo.toml             workspace manifest: version, edition, MSRV, release profile
+crates/zenith-core     product semantics, with no desktop framework in the graph
+crates/zenith-platform native macOS/Windows integration behind narrow ports
+src-tauri              zenith-desktop: the Tauri adapter and the `Zenith` binary
 ```
 
 Every file in `zenith-core` answers one question the same way: *would this
@@ -87,6 +96,24 @@ cleanup safety, storage policy, platform capability description, and the DTOs
 the interface is allowed to see all say yes. Webview IPC, tray and window
 lifecycle, capability grants, and desktop composition all say no, so they stay
 in `zenith-desktop`.
+
+`zenith-platform` answers the same question for the other kind of coupling.
+Reading a Windows registry value, resolving a known folder, terminating a
+process tree, revealing a path in Finder, replacing a file atomically, or moving
+a reviewed file to the Trash is native work that a CLI would still need, so it
+lives there behind ports — `PlatformCapabilitiesProvider`,
+`PlatformPathsProvider`, `SystemActionProvider`, the process-control functions,
+and `TrashBackend`. The crate depends on `zenith-core` and never on
+`zenith-desktop`, so a native call cannot start depending on a window. Its
+dependency direction is enforced by `scripts/check_core_boundaries.cjs` together
+with the rest of the boundary rules below.
+
+Windows behavior keeps the shape the rest of the tree uses: rules that can be
+written as pure functions over an explicit `PathFlavor` are, so a macOS runner
+asserts the same Windows rule a Windows runner does, and the crate's own test
+suite runs on every host. OS entry points that cannot be written that way stay
+`#[cfg]`-gated inside the module that owns them rather than in a second
+module-per-OS tree that only one runner compiles.
 
 Inside the domain crate the split is by responsibility, not by screen:
 
@@ -144,11 +171,29 @@ Neither is stubbed.
 - `src-tauri/src/commands`: narrow generic IPC boundary. `mod.rs` only composes
   domain exports; `ai.rs`, `cleanup.rs`, and `system.rs` own handlers, while
   `state.rs` and `support.rs` own shared state and helpers.
-- `src-tauri/src/platform`: platform capability contract and native provider
-  composition seams.
-- `src-tauri/src/scanner`: signature-driven discovery and size measurement.
-- `src-tauri/src/safety`: planning, blacklist checks, and guarded tree deletion.
-- `src-tauri/src/cleaner`: execution of verified generic filesystem plans.
+- `crates/zenith-platform`: the native platform layer. `description.rs` holds
+  the injectable `PlatformEnvironment` description, `environment.rs` probes the
+  running machine, `paths.rs` resolves user roots and known folders,
+  `path_algebra.rs` owns the flavor-parameterized path rules, `process.rs` and
+  `subprocess.rs` own process termination and bounded child execution,
+  `system_actions.rs` opens and reveals paths, `file_ops.rs` replaces files
+  atomically, `capabilities.rs` composes the capability snapshot, and `trash.rs`
+  is the only place the `trash` crate is named.
+- `src-tauri/src/scanner`: signature-driven discovery and size measurement. The
+  traversal owns symlink policy, depth bounds, error classification,
+  measurement completeness, and cancellation; progress and cancellation arrive
+  as `zenith-core` contracts, never as framework types.
+- `src-tauri/src/safety`: planning, blacklist checks, validated authority
+  (`ValidatedTarget`, `ValidatedModelTarget`, `FilesystemDeleteAuthority`), and
+  guarded tree deletion. The authority types have no public constructor outside
+  the safety layer.
+- `src-tauri/src/services`: the application services. `CleanupService` owns the
+  cleanup lifecycle (gate, budgets, plan store, scan store, scan invalidation)
+  for Main Clean and Quick Clean alike, `ScanService` runs a framework-free
+  scan, and `PlanStore` bounds both cleanup and reviewed Trash plans.
+- `src-tauri/src/cleaner`: execution of verified plans. Each target is
+  classified into `CleanupOperation` first, so only a filesystem operation can
+  reach the validated deletion primitive.
 - `src-tauri/src/large_files`: bounded traversal of approved user-content roots,
   streamed progress, file classification, and filesystem identity capture.
 - `src-tauri/src/applications`: installed-app inventory plus constrained related
@@ -159,7 +204,8 @@ Neither is stubbed.
   ecosystem-marker discovery, bounded candidate-tree measurement, progress and
   cancellation events, and private artifact inventory records.
 - `src-tauri/src/trash_manager`: separate one-shot Trash planning and execution
-  for user-reviewed files and apps.
+  for user-reviewed files and apps. It owns `ApprovedTrashTarget`, the only
+  value the Trash port accepts, and each scope's evidence requirements.
 - `src-tauri/src/docker` and `src-tauri/src/models_inventory`: domain adapters
   for resources that must not be treated as arbitrary files.
 - `src-tauri/src/metrics` and `src-tauri/src/power`: platform system integration.
@@ -214,7 +260,33 @@ registered signatures -- mode-aware filtering
 `DeletePlan`, paths, strategies, and filesystem identities are Rust-private.
 The frontend can request a plan only for item IDs in the current backend scan.
 Plans expire after five minutes and are removed before execution, so they cannot
-be replayed.
+be replayed. `CleanupService` owns that lifecycle end to end; the IPC layer
+submits a scan ID, selected item IDs, and an opaque plan ID and nothing else.
+
+Execution classifies each target into the operation it authorizes before
+anything mutates:
+
+```text
+DeleteTarget.strategy
+        |
+        v
+  CleanupOperation::of
+   /        |         \
+Filesystem Container  Provider
+   |          |          |
+   |          |          +-- the tool prunes its own cache with fixed
+   |          |              arguments; the planned location is only a
+   |          |              staleness assertion
+   |          +------------- the container runtime prunes what it owns;
+   |                        a `docker://` pseudo path carries no authority
+   +------------------------ revalidate, then delete through the safety
+                            layer's validated authority
+```
+
+Only the `Filesystem` operation names a path as mutation authority, and it is
+the only one whose strategy can reach `SafeTreeDeleter`. A `Manual` target
+classifies to no operation at all and is refused rather than falling back to a
+filesystem mutation.
 
 Generic cleanup supports only signature-scoped `Safe` and explicitly selected
 `Rebuild` targets. `Manual` resources are rejected and must use a domain adapter.
@@ -333,6 +405,16 @@ Moving to Trash does not mean disk space has already been reclaimed; the UI
 reports the amount moved and describes it as potentially reclaimable after the
 Trash is emptied.
 
+The Trash adapter is a port. `zenith_platform::TrashBackend` is the only place
+the `trash` crate is named, `AppState` holds the adapter so the production path
+and a test use the same code, and the port accepts a `ReviewedTrashEntry` —
+a type only the reviewed-storage layer mints, immediately after scope, identity,
+symlink, and evidence checks pass — rather than a bare path. Reviewed Trash
+plans live in the same bounded, expiring, one-shot store as cleanup plans, so
+TTL, capacity, and replay refusal are one implementation instead of two. Nothing
+in this workflow feeds Quick Clean: its candidates come only from a completed
+`ScanResult`.
+
 Developer Artifact Review is a third dedicated storage workflow. `Scan this
 computer` registers the canonical current-user home as a backend-owned scope, while
 the native folder picker registers narrower user-owned workspaces. Both return
@@ -379,6 +461,35 @@ WebViews from starting overlapping mutations or duplicate scans against shared
 state. Large-file traversal, app inventory/inspection, and Trash execution use
 the same storage-operation serialization. Blocking filesystem, process, CLI,
 and synchronous HTTP work runs outside the async command thread.
+
+Ownership of that serialization is deliberate. `CleanupService` owns the
+operation gate, the execution budgets, the plan store, and the scan store for
+the cleanup lifecycle: its `start_scan`, `create_delete_plan`, `execute_clean`,
+and `quick_clean_safe` methods acquire the gate themselves, so no command
+handler decides when a mutation may start. `StorageOperationGate` and
+`ExecutionBudgets` are `Clone` over one `Arc`, so every other workflow
+(large-file traversal, app inventory, Trash execution, Docker prune, process
+termination) shares the same lock and the same permits rather than holding a
+second, independent one. The gate is not re-acquired by lower-level helpers:
+`CleanExecutor`, `SafeTreeDeleter`, and the provider adapters mutate only after
+their caller has taken a write permit.
+
+One-shot plans — delete plans and reviewed Trash plans — live in the same
+bounded store. It owns TTL expiration, bounded capacity with oldest-first
+eviction, stale-plan rejection, and removal on consumption, so a workflow
+cannot drift by editing a map beside its commands. A plan is removed when it is
+taken, whether the execution then succeeds or fails, so a plan ID authorizes at
+most one mutation.
+
+A scan reports progress through a `ScanProgressSink` and answers cancellation
+through a `CancellationProbe`, both of which live in `zenith-core`; the Tauri
+`Channel` is only the outermost adapter. Cancellation is checked at category
+boundaries, before each signature, and inside the traversal — at each directory
+boundary and entry of a measured tree. A cancelled walk stops at the next
+boundary, keeps what it already observed, and reports an incomplete
+measurement, so the retained bytes are a lower bound and the item is never
+auto-selected. The execution-time tree-age re-check is not cancellable: it must
+observe the whole tree before a deletion is allowed.
 
 The quick window is persistent but inactive while hidden:
 

@@ -168,7 +168,7 @@ pub fn has_corrupted_backup(config_dir: &Path) -> bool {
 pub fn save(config_dir: &Path, settings: &ZenithSettings) -> Result<(), String> {
     let path = settings_path(config_dir);
     let contents = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
-    crate::platform::file_ops::atomic_write(&path, &contents).map_err(|error| error.to_string())
+    zenith_platform::file_ops::atomic_write(&path, &contents).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

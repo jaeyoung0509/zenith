@@ -48,7 +48,7 @@ pub fn atomic_write(destination: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Replaces `destination` with `temporary` in one step.
-pub(crate) fn atomic_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+pub fn atomic_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         windows_replace(temporary, destination)
@@ -71,8 +71,8 @@ fn windows_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> 
         return fs::rename(temporary, destination);
     }
 
-    let temporary_wide = crate::platform::NativePlatformPaths::to_verbatim_wide(temporary);
-    let destination_wide = crate::platform::NativePlatformPaths::to_verbatim_wide(destination);
+    let temporary_wide = crate::NativePlatformPaths::to_verbatim_wide(temporary);
+    let destination_wide = crate::NativePlatformPaths::to_verbatim_wide(destination);
 
     // ReplaceFileW preserves the destination's attributes and ACLs and never
     // removes it before the replacement is ready.

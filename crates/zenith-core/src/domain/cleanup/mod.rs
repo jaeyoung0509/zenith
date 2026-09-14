@@ -6,8 +6,12 @@
 //! [`crate::application::dto::cleanup`], which carry item IDs and byte totals
 //! and nothing a caller could replay into a mutation.
 
+pub mod operation;
 pub mod plan;
 pub mod strategy;
 
+pub use operation::{
+    CleanupOperation, ContainerCleanup, FilesystemCleanup, FilesystemMutation, ProviderCleanup,
+};
 pub use plan::{DeletePlan, DeleteTarget};
 pub use strategy::CleanStrategy;

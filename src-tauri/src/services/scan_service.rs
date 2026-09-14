@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::models::{CancellationProbe, ScanProgressSink, ScanRequest, ScanResult};
-use crate::platform::PlatformEnvironment;
 use crate::scanner::ScanEngine;
 use crate::signatures::SignatureRegistry;
+use zenith_platform::PlatformEnvironment;
 
 /// Application service responsible for running framework-independent system cleanup scans.
 ///

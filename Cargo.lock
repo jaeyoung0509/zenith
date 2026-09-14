@@ -5952,7 +5952,15 @@ dependencies = [
 name = "zenith-platform"
 version = "0.3.27"
 dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "trash",
+ "uuid",
+ "windows-sys 0.61.2",
+ "zenith-core",
 ]
 
 [[package]]

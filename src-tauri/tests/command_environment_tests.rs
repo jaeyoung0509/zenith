@@ -14,9 +14,9 @@ use zenith_lib::commands::AppState;
 use zenith_lib::diagnostics::doctor;
 use zenith_lib::docker::adapter::ContainerHost;
 use zenith_lib::models::PlatformKind;
-use zenith_lib::platform::path_algebra::PathFlavor;
-use zenith_lib::platform::paths::SimulatedPaths;
-use zenith_lib::platform::{KnownFolder, PlatformEnvironment};
+use zenith_platform::path_algebra::PathFlavor;
+use zenith_platform::paths::SimulatedPaths;
+use zenith_platform::{KnownFolder, PlatformEnvironment};
 
 /// A stated Windows workstation: the profile, the temporary directory, and the
 /// install roots are all on `D:`, so nothing here can be confused with the

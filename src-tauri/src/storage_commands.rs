@@ -11,6 +11,7 @@ use crate::models::{
     DeveloperWorkspace, InstalledAppInventory, LargeFileScanEvent, LargeFileScanRequest,
     LargeFileScanResult, TrashPlanPreview, TrashResult,
 };
+use crate::services::{PlanLifecycle, PlanStore};
 use crate::trash_manager::{TrashExecutor, TrashPlan, TrashPlanner};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +22,6 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
-const PLAN_TTL_SECS: u64 = 5 * 60;
 const CANCELLATION_TTL_SECS: u64 = 15 * 60;
 const MAX_ACTIVE_CANCELLATIONS: usize = 64;
 
@@ -31,7 +31,6 @@ struct CancellationEntry {
     created_at: u64,
 }
 
-#[derive(Default)]
 pub struct StorageWorkflowState {
     pub large_file_inventory: Mutex<Option<LargeFileInventory>>,
     large_file_cancel: Mutex<HashMap<String, CancellationEntry>>,
@@ -39,8 +38,24 @@ pub struct StorageWorkflowState {
     developer_artifact_cancel: Mutex<HashMap<String, CancellationEntry>>,
     pub app_inventory: Mutex<Option<AppInventory>>,
     pub app_inspection: Mutex<Option<AppInspectionRecord>>,
-    pub trash_plans: Mutex<HashMap<uuid::Uuid, TrashPlan>>,
+    /// Reviewed Trash plans, bounded and expiring exactly like cleanup plans.
+    pub trash_plans: PlanStore<TrashPlan>,
     pub workspaces: Mutex<HashMap<String, DeveloperWorkspaceRecord>>,
+}
+
+impl Default for StorageWorkflowState {
+    fn default() -> Self {
+        Self {
+            large_file_inventory: Mutex::new(None),
+            large_file_cancel: Mutex::new(HashMap::new()),
+            developer_artifact_inventory: Mutex::new(None),
+            developer_artifact_cancel: Mutex::new(HashMap::new()),
+            app_inventory: Mutex::new(None),
+            app_inspection: Mutex::new(None),
+            trash_plans: PlanStore::new(PlanLifecycle::trash()),
+            workspaces: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 impl StorageWorkflowState {
@@ -65,23 +80,17 @@ impl StorageWorkflowState {
         sizes
     }
 
-    pub fn store_plan(&self, plan: TrashPlan) {
-        let now = unix_timestamp();
-        let mut plans = self
-            .trash_plans
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        plans.retain(|_, plan| is_fresh_at(plan.created_at, PLAN_TTL_SECS, now));
-        if plans.len() >= 64 {
-            if let Some(oldest) = plans
-                .iter()
-                .min_by_key(|(_, plan)| plan.created_at)
-                .map(|(id, _)| *id)
-            {
-                plans.remove(&oldest);
-            }
-        }
-        plans.insert(plan.id, plan);
+    /// Stores a reviewed Trash plan under the shared bounded lifecycle.
+    ///
+    /// The store owns TTL, capacity, and eviction, so this workflow cannot
+    /// drift from the cleanup plan lifecycle by editing a map directly.
+    pub fn store_plan(&self, plan: TrashPlan) -> Result<(), String> {
+        self.trash_plans.insert(plan, unix_timestamp())
+    }
+
+    /// Consumes a reviewed Trash plan exactly once, refusing an expired one.
+    pub fn take_plan(&self, plan_id: uuid::Uuid) -> Result<TrashPlan, String> {
+        self.trash_plans.take_valid(plan_id, unix_timestamp())
     }
 
     fn register_large_file_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
@@ -381,7 +390,7 @@ pub fn prepare_developer_artifact_cleanup(
         .ok_or_else(|| "Developer artifact inventory expired. Scan again.".to_string())?;
     let plan = TrashPlanner::from_developer_artifacts(&inventory, &selected_item_ids)?;
     let preview = plan.preview();
-    state.storage_state.store_plan(plan);
+    state.storage_state.store_plan(plan)?;
     Ok(preview)
 }
 
@@ -435,8 +444,8 @@ pub async fn reveal_large_file(item_id: String, state: State<'_, AppState>) -> R
     }
 
     tauri::async_runtime::spawn_blocking(move || {
-        use crate::platform::SystemActionProvider;
-        crate::platform::NativeSystemActions::new().reveal_path(&path)
+        use zenith_platform::SystemActionProvider;
+        zenith_platform::NativeSystemActions::new().reveal_path(&path)
     })
     .await
     .map_err(|error| join_failure("File manager worker panicked", error))?
@@ -468,7 +477,7 @@ pub fn prepare_large_file_trash(
         .ok_or_else(|| "Large-file inventory expired. Scan again.".to_string())?;
     let plan = TrashPlanner::from_large_files(&inventory, &selected_item_ids)?;
     let preview = plan.preview();
-    state.storage_state.store_plan(plan);
+    state.storage_state.store_plan(plan)?;
     Ok(preview)
 }
 
@@ -596,7 +605,7 @@ pub fn prepare_app_uninstall(
     let plan =
         TrashPlanner::from_app_inspection(&state.environment, &inspection, &selected_related_ids)?;
     let preview = plan.preview();
-    state.storage_state.store_plan(plan);
+    state.storage_state.store_plan(plan)?;
     Ok(preview)
 }
 
@@ -609,18 +618,15 @@ pub async fn execute_trash_plan(
     let operation_gate = state.storage_operation_gate.clone();
     let storage_state = state.storage_state.clone();
     let environment = state.environment.clone();
+    let trash_backend = state.trash_backend.clone();
     tauri::async_runtime::spawn_blocking(move || {
         operation_gate.run_write(|| {
-            let plan = storage_state
-                .trash_plans
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&plan_id)
-                .ok_or_else(|| "Trash plan not found or already used".to_string())?;
-            if plan.is_expired() {
-                return Err("Trash plan expired. Review the items again.".to_string());
-            }
-            Ok(TrashExecutor::execute(&environment, plan))
+            let plan = storage_state.take_plan(plan_id)?;
+            Ok(TrashExecutor::execute_with_backend(
+                &environment,
+                plan,
+                trash_backend.as_ref(),
+            ))
         })
     })
     .await
@@ -636,10 +642,7 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        is_fresh_at, StorageWorkflowState, INVENTORY_TTL_SECS, MAX_ACTIVE_CANCELLATIONS,
-        PLAN_TTL_SECS,
-    };
+    use super::{is_fresh_at, StorageWorkflowState, INVENTORY_TTL_SECS, MAX_ACTIVE_CANCELLATIONS};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
@@ -662,10 +665,14 @@ mod tests {
             INVENTORY_TTL_SECS,
             now
         ));
+    }
 
-        assert!(is_fresh_at(now - (PLAN_TTL_SECS - 1), PLAN_TTL_SECS, now));
-        assert!(!is_fresh_at(now - PLAN_TTL_SECS, PLAN_TTL_SECS, now));
-        assert!(!is_fresh_at(now - (PLAN_TTL_SECS + 1), PLAN_TTL_SECS, now));
+    #[test]
+    fn the_reviewed_trash_plan_store_advertises_the_shared_five_minute_window() {
+        // The TTL is the store's, so a workflow cannot drift from the cleanup
+        // plan lifecycle by editing a map and a constant beside its commands.
+        let storage = StorageWorkflowState::new();
+        assert_eq!(storage.trash_plans.ttl_seconds(), 300);
     }
 
     #[test]

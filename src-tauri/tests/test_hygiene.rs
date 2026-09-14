@@ -438,20 +438,33 @@ fn allowlist_entries(contents: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Every Rust source root this guard reads, relative to the desktop package.
+///
+/// The workspace splits product code across crates, and a rule that only
+/// covered the desktop package would stop applying the day a module moved into
+/// `zenith-platform` or `zenith-core` — the guard would report a clean tree
+/// while no longer looking at the code.
+const SOURCE_ROOTS: [&str; 4] = [
+    "src",
+    "tests",
+    "../crates/zenith-platform/src",
+    "../crates/zenith-core/src",
+];
+
 #[test]
 fn no_test_skips_or_unfailable_assertions_are_added() {
     let mut violations = Vec::new();
     let mut scanned = 0usize;
 
-    for file in source_files(Path::new("src")).into_iter().chain(
-        source_files(Path::new("tests"))
-            .into_iter()
-            // This guard's own source contains the patterns it looks for.
-            .filter(|path| {
-                path.file_name()
-                    .is_some_and(|name| name != "test_hygiene.rs")
-            }),
-    ) {
+    for file in SOURCE_ROOTS
+        .iter()
+        .flat_map(|root| source_files(Path::new(root)))
+        // This guard's own source contains the patterns it looks for.
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name != "test_hygiene.rs")
+        })
+    {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
         };

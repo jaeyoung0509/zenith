@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::models::{
     CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy, DeleteTarget, ZenithError,
 };
-use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
+use zenith_platform::PlatformEnvironment;
 
 /// An authorized cleanup target that has passed execution-time safety revalidation.
 ///
@@ -109,7 +109,7 @@ impl SafetyValidator {
                     success: false,
                     bytes_reclaimed: 0,
                     failure_reason: Some(CleanFailureReason::PermissionDenied),
-                    error_message: Some(crate::platform::environment::describe_access_refusal(
+                    error_message: Some(zenith_platform::environment::describe_access_refusal(
                         environment,
                         path,
                         &error_str,
@@ -214,12 +214,16 @@ impl SafetyValidator {
         // 3b. Stale Temp Directory TOCTOU: re-verify freshness invariant if target has min_age_days
         if let Some(days) = target.min_age_days {
             if path.is_dir() {
+                // The execution-time age re-check is not part of a
+                // cancellable scan: it must observe the whole tree before a
+                // deletion is allowed, so it runs to completion.
                 let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
                     environment,
                     path,
                     &target.exclusions,
                     0,
                     32,
+                    &crate::models::NeverCancelled,
                 );
                 if !stats.complete {
                     if let Err(error) = std::fs::symlink_metadata(path) {

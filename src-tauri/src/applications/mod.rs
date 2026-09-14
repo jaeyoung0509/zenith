@@ -5,7 +5,6 @@ use crate::models::{
     AppRelatedConfidence, AppRelatedItem, AppRelatedKind, AppUninstallInspection, InstalledApp,
     ObservationQuality, ReviewedFileIdentity,
 };
-use crate::platform::description::PlatformEnvironment;
 use crate::safety::Blacklist;
 #[cfg(not(target_os = "windows"))]
 use plist::Value;
@@ -16,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(not(target_os = "windows"))]
 use sysinfo::{ProcessesToUpdate, System};
 use uuid::Uuid;
+use zenith_platform::description::PlatformEnvironment;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -278,11 +278,11 @@ impl ApplicationScanner {
                     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
                     #[cfg(target_os = "windows")]
                     let norm_canonical =
-                        crate::platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
+                        zenith_platform::NativePlatformPaths::normalize_verbatim_path(&canonical);
                     let is_running = running_paths.iter().any(|exe| {
                         #[cfg(target_os = "windows")]
                         {
-                            crate::platform::NativePlatformPaths::windows_path_starts_with(
+                            zenith_platform::NativePlatformPaths::windows_path_starts_with(
                                 exe,
                                 &norm_canonical,
                             )
@@ -858,12 +858,12 @@ fn unix_timestamp() -> u64 {
 mod tests {
     use super::*;
     use crate::models::AppInstallSource;
-    use crate::platform::path_algebra::PathFlavor;
-    #[cfg(not(target_os = "windows"))]
-    use crate::platform::paths::SimulatedPaths;
     use std::io::Write;
     #[cfg(not(target_os = "windows"))]
     use std::sync::Arc;
+    use zenith_platform::path_algebra::PathFlavor;
+    #[cfg(not(target_os = "windows"))]
+    use zenith_platform::paths::SimulatedPaths;
 
     #[cfg(not(target_os = "windows"))]
     #[derive(Default)]

@@ -1,12 +1,12 @@
 use crate::models::{DiagnosticsSnapshot, ZenithSettings};
-use crate::platform::path_algebra::PathFlavor as PlatformFlavor;
-use crate::platform::PlatformEnvironment;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
+use zenith_platform::path_algebra::PathFlavor as PlatformFlavor;
+use zenith_platform::PlatformEnvironment;
 
 pub mod doctor;
 
@@ -28,7 +28,7 @@ pub fn log_dir(environment: &PlatformEnvironment) -> PathBuf {
         // `expand_placeholder` does, so the Windows branch yields Windows-shaped
         // paths on any runner instead of the host's separator.
         let join = |root: &Path, relative: &str| {
-            PathBuf::from(crate::platform::path_algebra::normalize(
+            PathBuf::from(zenith_platform::path_algebra::normalize(
                 &root.join(relative).to_string_lossy(),
                 PlatformFlavor::Windows,
             ))
@@ -108,7 +108,7 @@ fn record_log_failure(reason: impl Into<String>) {
 /// the one place a user cannot be told about a refusal otherwise.
 fn record_log_failure_in(dir: &Path, reason: impl Into<String>) {
     let reason = reason.into();
-    record_log_failure(crate::platform::environment::describe_access_refusal(
+    record_log_failure(zenith_platform::environment::describe_access_refusal(
         &PlatformEnvironment::native(),
         dir,
         &reason,
@@ -298,7 +298,8 @@ fn show_native_error_dialog(title: &str, detail: &str) {
         );
         let mut cmd = std::process::Command::new("osascript");
         cmd.args(["-e", &script]);
-        let _ = crate::tooling::run_with_timeout(cmd, std::time::Duration::from_secs(30));
+        let _ =
+            zenith_platform::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(30));
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -551,7 +552,7 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
         settings.awake_rules.iter().filter(|r| r.enabled).count()
     ));
 
-    let environment = crate::platform::environment::current();
+    let environment = zenith_platform::environment::current();
     features.extend(environment.diagnostics_lines());
     let os_version = environment.os_version_label();
 
@@ -577,16 +578,16 @@ pub fn open_logs_folder() -> Result<(), String> {
     let dir = log_dir(&PlatformEnvironment::native());
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create log directory: {e}"))?;
 
-    use crate::platform::SystemActionProvider;
-    crate::platform::NativeSystemActions::new().open_folder(&dir)
+    use zenith_platform::SystemActionProvider;
+    zenith_platform::NativeSystemActions::new().open_folder(&dir)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::paths::SimulatedPaths;
     use std::sync::Arc;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
 
     /// Builds the `"key": "value"` JSON pair at runtime, so the fixture source
     /// carries no complete credential assignment for the safety scanner.

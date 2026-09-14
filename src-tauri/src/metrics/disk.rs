@@ -1,6 +1,6 @@
 use crate::models::{DiskMetrics, DiskVolume, ZenithError};
-use crate::platform::description::PlatformEnvironment;
 use sysinfo::Disks;
+use zenith_platform::description::PlatformEnvironment;
 
 /// The primary mount point of the described platform.
 ///
@@ -173,11 +173,11 @@ fn percent(total: u64, used: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::description::VolumeIdentity;
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::paths::SimulatedPaths;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use zenith_platform::description::VolumeIdentity;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
 
     #[test]
     fn system_drive_is_not_assumed_to_be_c_or_the_first_disk() {

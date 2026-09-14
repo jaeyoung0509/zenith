@@ -71,13 +71,15 @@ impl ApplicationPicker {
         plutil_cmd
             .args(["-extract", "CFBundleExecutable", "raw", "-o", "-"])
             .arg(&info_plist);
-        let executable_pattern =
-            crate::tooling::run_with_timeout(plutil_cmd, std::time::Duration::from_secs(3))
-                .ok()
-                .filter(|output| output.status.success())
-                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| name.clone());
+        let executable_pattern = zenith_platform::subprocess::run_with_timeout(
+            plutil_cmd,
+            std::time::Duration::from_secs(3),
+        )
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| name.clone());
 
         Ok(SelectedApplication {
             name,

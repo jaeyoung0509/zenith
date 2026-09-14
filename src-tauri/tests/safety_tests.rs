@@ -8,9 +8,6 @@ use zenith_lib::models::{
     CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, DeleteTarget, FileSize,
     ObservationQuality, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
 };
-use zenith_lib::platform::path_algebra::PathFlavor;
-use zenith_lib::platform::paths::SimulatedPaths;
-use zenith_lib::platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
 use zenith_lib::safety::{
     Blacklist, RevalidationOutcome, SafeTreeDeleter, SafetyPlanner, SafetyValidator, SymlinkGuard,
@@ -18,6 +15,9 @@ use zenith_lib::safety::{
 };
 use zenith_lib::scanner::SizeCalculator;
 use zenith_lib::signatures::SignatureRegistry;
+use zenith_platform::path_algebra::PathFlavor;
+use zenith_platform::paths::SimulatedPaths;
+use zenith_platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 
 /// The Windows environment every Windows blacklist assertion is computed
 /// against. The classifier's input is derived from the same value the runtime

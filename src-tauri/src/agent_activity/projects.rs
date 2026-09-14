@@ -1,13 +1,13 @@
 use crate::models::ProjectIdentity;
-use crate::platform::path_algebra::{self, PathFlavor};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use zenith_platform::path_algebra::{self, PathFlavor};
 
 pub fn resolve_project(
     cwd: &Path,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Option<(PathBuf, ProjectIdentity)> {
     let canonical_cwd = cwd.canonicalize().ok()?;
     if !canonical_cwd.is_dir() {
@@ -110,7 +110,9 @@ fn check_git_dirty(root: &Path) -> bool {
         .args(["status", "--porcelain=v1", "-z"])
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("LC_ALL", "C");
-    if let Ok(output) = crate::tooling::run_with_timeout(cmd, Duration::from_millis(800)) {
+    if let Ok(output) =
+        zenith_platform::subprocess::run_with_timeout(cmd, Duration::from_millis(800))
+    {
         if output.status.success() {
             return !output.stdout.is_empty();
         }
@@ -183,7 +185,7 @@ pub fn candidate_project_roots(
     agent_cwds: &[PathBuf],
     dev_listeners: &[crate::models::DevelopmentListener],
     registered_workspaces: &[PathBuf],
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Vec<PathBuf> {
     let mut candidates = HashSet::new();
     for cwd in agent_cwds {
@@ -222,8 +224,8 @@ mod tests {
     use super::*;
 
     /// The host machine these project fixtures live on.
-    fn test_environment() -> crate::platform::PlatformEnvironment {
-        crate::platform::PlatformEnvironment::native()
+    fn test_environment() -> zenith_platform::PlatformEnvironment {
+        zenith_platform::PlatformEnvironment::native()
     }
 
     #[test]
@@ -256,7 +258,7 @@ mod tests {
 
     #[test]
     fn location_hint_masks_absolute_locations_in_both_flavors() {
-        use crate::platform::path_algebra::PathFlavor::{Posix, Windows};
+        use zenith_platform::path_algebra::PathFlavor::{Posix, Windows};
 
         // Components only: no drive letter, no UNC server, no leading separator.
         assert_eq!(

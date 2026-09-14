@@ -1,10 +1,10 @@
 use crate::models::{Category, PlatformKind, RiskTier, Signature, ZenithError};
-use crate::platform::path_algebra::{contains, is_absolute, normalize, PathFlavor};
-use crate::platform::PlatformEnvironment;
 use crate::safety::Blacklist;
 use crate::signatures::SignatureLoader;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use zenith_platform::path_algebra::{contains, is_absolute, normalize, PathFlavor};
+use zenith_platform::PlatformEnvironment;
 
 const EMBEDDED_AI_TOML: &str = include_str!("../../../signatures/ai.toml");
 const EMBEDDED_DEV_TOML: &str = include_str!("../../../signatures/developer.toml");
@@ -321,7 +321,7 @@ fn audit_signature(
                     ));
                 }
                 if signature.min_age_days.is_none() {
-                    if let Some(root) = crate::platform::path_algebra::protected_root(
+                    if let Some(root) = zenith_platform::path_algebra::protected_root(
                         &path.to_string_lossy(),
                         flavor,
                     ) {
@@ -461,8 +461,8 @@ fn common_scope(paths: &[PathBuf], flavor: PathFlavor) -> Option<String> {
             .iter()
             .zip(parts.components.iter())
             .take_while(|(left, right)| {
-                crate::platform::path_algebra::fold(left, flavor)
-                    == crate::platform::path_algebra::fold(right, flavor)
+                zenith_platform::path_algebra::fold(left, flavor)
+                    == zenith_platform::path_algebra::fold(right, flavor)
             })
             .count();
         scope.components.truncate(shared);
@@ -540,11 +540,11 @@ fn path_parts(path: &str, flavor: PathFlavor) -> PathParts {
 mod tests {
     use super::{ManifestLintFinding, SignatureRegistry};
     use crate::models::{Category, PlatformKind, RiskTier, Signature};
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::paths::SimulatedPaths;
-    use crate::platform::{KnownFolder, PlatformEnvironment};
     use std::path::PathBuf;
     use std::sync::Arc;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
+    use zenith_platform::{KnownFolder, PlatformEnvironment};
 
     /// A POSIX environment with stated roots, so the catalog lint below is
     /// checked against paths that exist on any runner.

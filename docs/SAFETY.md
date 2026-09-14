@@ -32,6 +32,15 @@ A generic target is executable only when all of the following hold:
 6. Its filesystem identity still matches immediately before deletion.
 7. Every traversed entry passes blacklist and signature-exclusion checks.
 
+Before any of that runs, the executor classifies the target into the operation
+it authorizes (`CleanupOperation::of`). Only the filesystem operation names a
+path as mutation authority and only it can reach the tree deleter; a container
+prune asks the runtime to prune what the runtime owns, and a provider prune asks
+the tool to invalidate its own cache with fixed arguments, using the planned
+location only to detect that the cache moved. A `Manual` resource classifies to
+no operation and is refused, so there is no strategy-shaped fallback into a
+filesystem mutation.
+
 The tree deleter walks bottom-up without following symlinks. It unlinks a
 symlink itself, preserves blacklisted or excluded descendants, and removes a
 directory only after it is empty. Generic cleanup does not call
@@ -285,9 +294,14 @@ Large Files and App Uninstaller move reviewed targets to the platform's native
 Trash or Recycle Bin through the dedicated Trash adapter. They do not call the
 generic tree deleter, `rm`, or `remove_dir_all`.
 
-Trash plans expire after five minutes and are removed from the backend plan map
-before execution, making them one-shot. Every target is revalidated immediately
-before its individual Trash operation. Partial failures are reported per item.
+Trash plans and cleanup plans share one bounded, expiring, one-shot store:
+both expire after five minutes, both are capped at 64 entries with oldest-first
+eviction, and both are removed the moment they are taken — whether the run then
+succeeds or fails — so an ID authorizes at most one mutation. Every target is
+revalidated immediately before its individual Trash operation, and the port
+accepts only the `ApprovedTrashTarget` that validation produces, so a move
+cannot be requested with a path that skipped the checks. Partial failures are
+reported per item.
 
 Moving an item to Trash does not guarantee that disk space has already been
 freed. Product copy must say “Moved to Trash” and may describe the moved amount

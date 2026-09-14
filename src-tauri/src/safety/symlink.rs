@@ -1,7 +1,7 @@
 use crate::models::{CanonicalPath, PathViolation, ZenithError};
-use crate::platform::path_algebra;
 use std::fs;
 use std::path::{Path, PathBuf};
+use zenith_platform::path_algebra;
 
 pub struct SymlinkGuard;
 
@@ -42,15 +42,15 @@ fn relative_components(
 /// The drive or UNC root a Windows path descends from, or the path itself when
 /// it has none.
 fn windows_root(text: &str) -> String {
-    let flavor = crate::platform::path_algebra::PathFlavor::Windows;
-    let canonical = crate::platform::path_algebra::canonical_separators(
-        &crate::platform::path_algebra::strip_verbatim(text, flavor),
+    let flavor = zenith_platform::path_algebra::PathFlavor::Windows;
+    let canonical = zenith_platform::path_algebra::canonical_separators(
+        &zenith_platform::path_algebra::strip_verbatim(text, flavor),
         flavor,
     );
-    let trimmed = crate::platform::path_algebra::trim_trailing_separators(&canonical, flavor);
+    let trimmed = zenith_platform::path_algebra::trim_trailing_separators(&canonical, flavor);
     let mut candidate = trimmed.as_str();
     loop {
-        if crate::platform::path_algebra::is_root(candidate, flavor) {
+        if zenith_platform::path_algebra::is_root(candidate, flavor) {
             // `path_algebra::is_root` intentionally treats both `C:` and
             // `C:\` as root spellings, but only the latter is absolute.
             // This anchor is fed back through `is_absolute`, so keep the
@@ -132,7 +132,7 @@ impl SymlinkGuard {
     /// of collapsing to the POSIX `/`.
     pub fn resolve_trusted_anchor(
         target: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> PathBuf {
         let flavor = environment.flavor();
         let text = target.to_string_lossy();
@@ -171,7 +171,7 @@ impl SymlinkGuard {
     pub fn validate_components_between(
         target: &Path,
         base: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         Self::validate_components_between_with(target, base, environment, &NativeSymlinkInspector)
     }
@@ -179,7 +179,7 @@ impl SymlinkGuard {
     pub fn validate_components_between_with(
         target: &Path,
         base: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
         inspector: &impl SymlinkInspector,
     ) -> Result<(), ZenithError> {
         let flavor = environment.flavor();
@@ -296,7 +296,7 @@ impl SymlinkGuard {
     pub fn validate_no_symlink_ancestors(
         target: &Path,
         trusted_root: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         Self::validate_no_symlink_ancestors_with(
             target,
@@ -309,7 +309,7 @@ impl SymlinkGuard {
     pub fn validate_no_symlink_ancestors_with(
         target: &Path,
         trusted_root: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
         inspector: &impl SymlinkInspector,
     ) -> Result<(), ZenithError> {
         let anchor = Self::resolve_trusted_anchor(trusted_root, environment);
@@ -328,14 +328,14 @@ impl SymlinkGuard {
     /// Validates that target has no symlink ancestors from its system anchor (home/temp/root)
     pub fn validate_anchored_path(
         target: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         Self::validate_anchored_path_with(target, environment, &NativeSymlinkInspector)
     }
 
     pub fn validate_anchored_path_with(
         target: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
         inspector: &impl SymlinkInspector,
     ) -> Result<(), ZenithError> {
         let anchor = Self::resolve_trusted_anchor(target, environment);
@@ -345,7 +345,7 @@ impl SymlinkGuard {
     /// Verifies that the path itself is safe. If it is a symlink, ensures its target does not point to a blacklisted destination.
     pub fn validate_symlink_target(
         path: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         if Self::is_symlink(path) {
             // Read link destination
@@ -371,7 +371,7 @@ impl SymlinkGuard {
     /// called.
     pub fn validate_canonical_blacklist(
         path: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         if let Ok(canonical) = CanonicalPath::resolve(path) {
             crate::safety::Blacklist::validate_with(canonical.as_path(), environment)?;
@@ -383,7 +383,7 @@ impl SymlinkGuard {
     /// affected mutation instead of being treated as safe.
     pub fn validate_canonical_blacklist_strict(
         path: &Path,
-        environment: &crate::platform::PlatformEnvironment,
+        environment: &zenith_platform::PlatformEnvironment,
     ) -> Result<(), ZenithError> {
         let canonical = CanonicalPath::resolve(path).map_err(|violation| {
             // A path that no longer resolves is already absent; every other
@@ -456,7 +456,7 @@ fn classify_name_surrogate_reparse_point(path: &Path) -> std::io::Result<bool> {
         FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
 
-    let wide = crate::platform::NativePlatformPaths::to_verbatim_wide(path);
+    let wide = zenith_platform::NativePlatformPaths::to_verbatim_wide(path);
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
@@ -503,7 +503,7 @@ mod tests {
     /// and case folding.
     #[test]
     fn component_validation_judges_windows_shaped_paths_with_the_stated_flavor() {
-        use crate::platform::path_algebra::PathFlavor;
+        use zenith_platform::path_algebra::PathFlavor;
 
         // Containment is component-wise and folds case on Windows.
         assert_eq!(
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn windows_drive_and_unc_anchors_remain_absolute() {
-        use crate::platform::path_algebra::PathFlavor;
+        use zenith_platform::path_algebra::PathFlavor;
 
         for (target, expected) in [
             (r"D:\dev\zenith", "D:\\"),
@@ -568,7 +568,7 @@ mod tests {
         assert!(SymlinkGuard::validate_components_between(
             &path,
             dir.path(),
-            &crate::platform::PlatformEnvironment::native(),
+            &zenith_platform::PlatformEnvironment::native(),
         )
         .is_err());
     }
@@ -593,7 +593,7 @@ mod tests {
 
         // Read-side helpers report "no link to follow" for a missing path.
         assert!(!SymlinkGuard::is_symlink(&missing));
-        let environment = crate::platform::PlatformEnvironment::native();
+        let environment = zenith_platform::PlatformEnvironment::native();
         assert!(SymlinkGuard::validate_symlink_target(&missing, &environment).is_ok());
 
         // Mutation-side helpers never mistake a missing path for a
@@ -672,12 +672,12 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir_all(&other).unwrap();
         let canonical_profile = profile.canonicalize().unwrap();
-        let plain_workspace = crate::safety::Blacklist::normalize_path(&workspace);
+        let plain_workspace = zenith_platform::path_algebra::normalize_lexical(&workspace);
         SymlinkGuard::validate_components_between(
             &plain_workspace,
             &canonical_profile,
-            &crate::platform::PlatformEnvironment::simulated(
-                crate::platform::path_algebra::PathFlavor::Windows,
+            &zenith_platform::PlatformEnvironment::simulated(
+                zenith_platform::path_algebra::PathFlavor::Windows,
             ),
         )
         .unwrap_or_else(|error| {
@@ -686,13 +686,13 @@ mod tests {
         assert!(SymlinkGuard::validate_components_between(
             &other,
             &canonical_profile,
-            &crate::platform::PlatformEnvironment::simulated(
-                crate::platform::path_algebra::PathFlavor::Windows,
+            &zenith_platform::PlatformEnvironment::simulated(
+                zenith_platform::path_algebra::PathFlavor::Windows,
             ),
         )
         .is_err());
-        let environment = crate::platform::PlatformEnvironment::simulated(
-            crate::platform::path_algebra::PathFlavor::Windows,
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::Windows,
         )
         .with_home(profile.clone())
         // The fixture lives in the temporary directory, which is the root the
@@ -723,8 +723,8 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success());
-        let environment = crate::platform::PlatformEnvironment::simulated(
-            crate::platform::path_algebra::PathFlavor::Windows,
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::Windows,
         )
         .with_home(profile.clone());
         assert!(SymlinkGuard::validate_components_between(
@@ -765,8 +765,8 @@ mod tests {
 
     #[test]
     fn symlink_guard_verifies_windows_shaped_links_on_any_runner_via_seam() {
-        let environment = crate::platform::PlatformEnvironment::simulated(
-            crate::platform::path_algebra::PathFlavor::Windows,
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::Windows,
         );
         let base = Path::new(r"C:\Users\Tester\AppData\Local\Temp");
         let target = Path::new(r"C:\Users\Tester\AppData\Local\Temp\npm_cache\payload.bin");
@@ -797,8 +797,8 @@ mod tests {
     #[test]
     fn symlink_guard_fails_closed_when_component_metadata_inspection_fails_with_permission_denied()
     {
-        let environment = crate::platform::PlatformEnvironment::simulated(
-            crate::platform::path_algebra::PathFlavor::Windows,
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::Windows,
         );
         let base = Path::new(r"C:\Users\Tester\AppData\Local\Temp");
         let target = Path::new(r"C:\Users\Tester\AppData\Local\Temp\npm_cache\payload.bin");
@@ -819,8 +819,8 @@ mod tests {
 
     #[test]
     fn windows_8_3_alias_fallback_resolves_and_validates_on_any_runner_via_seam() {
-        let environment = crate::platform::PlatformEnvironment::simulated(
-            crate::platform::path_algebra::PathFlavor::Windows,
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::Windows,
         );
         // Base is 8.3 alias RUNNER~1
         let base_alias = Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp");
@@ -866,8 +866,8 @@ mod tests {
 
     #[test]
     fn windows_8_3_alias_canonicalization_failure_preserves_permission_denied() {
-        let environment = crate::platform::PlatformEnvironment::simulated(
-            crate::platform::path_algebra::PathFlavor::Windows,
+        let environment = zenith_platform::PlatformEnvironment::simulated(
+            zenith_platform::path_algebra::PathFlavor::Windows,
         );
         let base_alias = Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp");
         let target = Path::new(r"C:\Users\runneradmin\AppData\Local\Temp\cache\item.bin");

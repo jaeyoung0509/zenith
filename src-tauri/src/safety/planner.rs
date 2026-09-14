@@ -2,13 +2,13 @@ use crate::models::{
     CleanStrategy, DeletePlan, DeleteTarget, RiskSummary, RiskTier, ScanItem, ScanResult,
     ZenithError,
 };
-use crate::platform::PlatformEnvironment;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
 use crate::signatures::SignatureRegistry;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
+use zenith_platform::PlatformEnvironment;
 
 pub struct SafetyPlanner;
 

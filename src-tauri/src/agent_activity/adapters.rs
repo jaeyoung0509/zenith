@@ -94,7 +94,7 @@ pub fn command_markers(adapter_id: &str) -> &'static [&'static str] {
 
 pub fn adapter_for_executable(
     path: &Path,
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Option<&'static AgentToolAdapter> {
     adapter_for_executable_in_roots(
         path,
@@ -106,7 +106,7 @@ pub fn adapter_for_executable(
 pub fn adapter_for_process(
     executable: &Path,
     cmd: &[String],
-    environment: &crate::platform::PlatformEnvironment,
+    environment: &zenith_platform::PlatformEnvironment,
 ) -> Option<&'static AgentToolAdapter> {
     if let Some(adapter) = adapter_for_executable(executable, environment) {
         return Some(adapter);
@@ -283,8 +283,8 @@ fn is_install_descendant(relative: &str) -> bool {
 fn windows_install_roots() -> Vec<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        use crate::platform::PlatformPathsProvider;
-        let paths = crate::platform::NativePlatformPaths::new();
+        use zenith_platform::PlatformPathsProvider;
+        let paths = zenith_platform::NativePlatformPaths::new();
         paths
             .application_roots()
             .into_iter()
@@ -484,8 +484,8 @@ mod tests {
 
     /// The machine these adapter rules are asserted against: the host, because
     /// the fixtures below are the host's own install locations.
-    fn test_environment() -> crate::platform::PlatformEnvironment {
-        crate::platform::PlatformEnvironment::native()
+    fn test_environment() -> zenith_platform::PlatformEnvironment {
+        zenith_platform::PlatformEnvironment::native()
     }
 
     #[cfg(unix)]

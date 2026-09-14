@@ -5,31 +5,33 @@ use std::sync::Arc;
 use super::{
     PlatformCapabilitiesProvider, PlatformEnvironment, RuntimeEnvironment, SecurityPolicyState,
 };
-use crate::models::{PlatformCapabilities, PlatformFeatureCapability, PlatformFeatureStatus};
+use zenith_core::domain::platform::{
+    PlatformCapabilities, PlatformFeatureCapability, PlatformFeatureStatus,
+};
 
-#[derive(Debug, Clone)]
+/// Whether a Docker-compatible CLI is installed in the stated environment.
+///
+/// Tool resolution — PATH plus the version-manager and package-manager install
+/// roots — belongs to the tooling layer rather than to platform probing, so the
+/// answer arrives as a probe instead of this crate reaching for it. Capability
+/// reporting and the container adapter therefore answer the same question from
+/// the same source, and a test can state the answer without a host.
+pub type ContainerCliProbe = Arc<dyn Fn(&PlatformEnvironment) -> bool + Send + Sync>;
+
 pub struct NativePlatformCapabilities {
     environment: Arc<PlatformEnvironment>,
+    container_cli: ContainerCliProbe,
 }
 
 impl NativePlatformCapabilities {
     /// The provider is built at the composition boundary, which owns the
-    /// environment description; nothing here reads the process environment.
-    pub fn new(environment: Arc<PlatformEnvironment>) -> Self {
-        Self { environment }
-    }
-
-    /// Builds the capability snapshot from the runtime environment probe so a
-    /// feature that this machine cannot perform reports why, distinctly from a
-    /// feature Zenith has not implemented.
-    pub fn runtime_capabilities(
-        environment: &RuntimeEnvironment,
-        platform: &PlatformEnvironment,
-    ) -> PlatformCapabilities {
-        Self::runtime_capabilities_with_container_cli(
+    /// environment description and the container CLI probe; nothing here reads
+    /// the process environment.
+    pub fn new(environment: Arc<PlatformEnvironment>, container_cli: ContainerCliProbe) -> Self {
+        Self {
             environment,
-            crate::docker::container_cli_detected(platform),
-        )
+            container_cli,
+        }
     }
 
     /// The runtime snapshot, with the container CLI outcome stated explicitly.
@@ -40,7 +42,7 @@ impl NativePlatformCapabilities {
     /// on any host. A feature the platform does not implement at all keeps its
     /// stronger "unsupported" reason instead of being reported as merely
     /// read-only or as missing a CLI.
-    pub fn runtime_capabilities_with_container_cli(
+    pub fn runtime_capabilities(
         environment: &RuntimeEnvironment,
         container_cli_detected: bool,
     ) -> PlatformCapabilities {
@@ -73,7 +75,10 @@ impl NativePlatformCapabilities {
 
 impl PlatformCapabilitiesProvider for NativePlatformCapabilities {
     fn capabilities(&self) -> PlatformCapabilities {
-        Self::runtime_capabilities(crate::platform::environment::current(), &self.environment)
+        Self::runtime_capabilities(
+            crate::environment::current(),
+            (self.container_cli)(&self.environment),
+        )
     }
 }
 
@@ -82,28 +87,26 @@ mod tests {
     use std::sync::Arc;
 
     use super::NativePlatformCapabilities;
-    use crate::models::{
+    use crate::path_algebra::PathFlavor;
+    use crate::{PlatformEnvironment, RuntimeEnvironment, SecurityPolicyState};
+    use zenith_core::domain::platform::{
         CapabilityAccess, PlatformCapabilities, PlatformFeature, PlatformFeatureStatus,
     };
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::{PlatformEnvironment, RuntimeEnvironment, SecurityPolicyState};
 
     fn simulated_platform() -> PlatformEnvironment {
         PlatformEnvironment::simulated(PathFlavor::current())
     }
 
     #[test]
-    fn the_provider_takes_container_support_from_its_stated_environment() {
-        use crate::platform::PlatformCapabilitiesProvider;
+    fn the_provider_reports_container_support_from_the_injected_probe() {
+        use crate::PlatformCapabilitiesProvider;
 
-        // A machine with no container CLI must not advertise container
-        // cleanup, and the reason must say what is missing.
-        let without = NativePlatformCapabilities::new(Arc::new(
-            simulated_platform()
-                .with_missing_tool("docker")
-                .with_missing_tool("podman"),
-        ))
-        .capabilities();
+        // The probe is the single source of the container answer: a machine
+        // that states no container CLI must not advertise container cleanup,
+        // and the reason must say what is missing.
+        let environment = Arc::new(simulated_platform());
+        let without = NativePlatformCapabilities::new(environment.clone(), Arc::new(|_| false))
+            .capabilities();
         assert_eq!(without.docker.status, PlatformFeatureStatus::Unavailable);
         assert!(
             without
@@ -115,16 +118,11 @@ mod tests {
             without.docker.reason
         );
 
-        // Stating an installed CLI enables it: the adapter has something to run.
-        let with = NativePlatformCapabilities::new(Arc::new(
-            simulated_platform()
-                .with_tool("docker", "/usr/local/bin/docker")
-                .with_missing_tool("podman"),
-        ))
-        .capabilities();
+        // A probe that finds a CLI enables it: the adapter has something to run.
+        let with = NativePlatformCapabilities::new(environment, Arc::new(|_| true)).capabilities();
         assert!(
             with.docker.is_available(),
-            "a stated docker CLI must enable container cleanup"
+            "a detected container CLI must enable container cleanup"
         );
         assert!(with.docker.reason.is_none());
     }
@@ -132,12 +130,8 @@ mod tests {
     #[test]
     fn a_feature_without_an_implementing_adapter_is_unavailable_and_keeps_its_reason() {
         let environment = RuntimeEnvironment::probe(None);
-        let base =
-            NativePlatformCapabilities::runtime_capabilities_with_container_cli(&environment, true);
-        let without_cli = NativePlatformCapabilities::runtime_capabilities_with_container_cli(
-            &environment,
-            false,
-        );
+        let base = NativePlatformCapabilities::runtime_capabilities(&environment, true);
+        let without_cli = NativePlatformCapabilities::runtime_capabilities(&environment, false);
 
         // Unimplemented Windows features are a property of the snapshot itself,
         // not of this machine's probe.
@@ -179,9 +173,8 @@ mod tests {
         environment.controlled_folder_access = SecurityPolicyState::Enabled;
         environment.application_control_policy = SecurityPolicyState::Enabled;
 
-        let restricted =
-            NativePlatformCapabilities::runtime_capabilities_with_container_cli(&environment, true);
-        let baseline = NativePlatformCapabilities::runtime_capabilities_with_container_cli(
+        let restricted = NativePlatformCapabilities::runtime_capabilities(&environment, true);
+        let baseline = NativePlatformCapabilities::runtime_capabilities(
             &RuntimeEnvironment::probe(None),
             true,
         );

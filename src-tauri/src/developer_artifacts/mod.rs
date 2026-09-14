@@ -5,8 +5,6 @@ use crate::models::{
     DeveloperArtifactUninspectedReason, DeveloperEcosystem, DeveloperWorkspace,
     ReviewedFileIdentity,
 };
-use crate::platform::description::PlatformEnvironment;
-use crate::platform::path_algebra;
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -16,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use zenith_platform::description::PlatformEnvironment;
+use zenith_platform::path_algebra;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -578,7 +578,7 @@ fn store_workspace(
         workspace: DeveloperWorkspace {
             id: id.clone(),
             name,
-            display_path: Blacklist::normalize_path(&canonical)
+            display_path: zenith_platform::path_algebra::normalize_lexical(&canonical)
                 .to_string_lossy()
                 .into_owned(),
         },
@@ -1783,8 +1783,8 @@ fn unix_timestamp() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::description::KnownFolder;
     use std::fs;
+    use zenith_platform::description::KnownFolder;
 
     /// A simulated environment whose profile is the stated directory.
     fn environment_with_home(home: &Path) -> PlatformEnvironment {
@@ -2456,7 +2456,7 @@ mod tests {
         assert!(!record.workspace.display_path.starts_with(r"\\?\"));
         assert_eq!(
             PathBuf::from(&record.workspace.display_path),
-            Blacklist::normalize_path(&record.path)
+            zenith_platform::path_algebra::normalize_lexical(&record.path)
         );
     }
 

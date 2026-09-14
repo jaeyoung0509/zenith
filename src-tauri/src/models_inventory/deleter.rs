@@ -1,10 +1,10 @@
 use crate::models::{LocalModelItem, ModelSource, ZenithError};
 use crate::models_inventory::LocalModelScanner;
-use crate::platform::PlatformEnvironment;
 use crate::safety::{SafeTreeDeleter, TreeDeleteReport};
 use crate::signatures::SignatureLoader;
 use crate::tooling;
 use std::path::PathBuf;
+use zenith_platform::PlatformEnvironment;
 
 pub struct LocalModelManager;
 
@@ -53,16 +53,16 @@ impl LocalModelManager {
 
         let mut cmd = tooling::command("ollama");
         cmd.args(Self::ollama_delete_args(model));
-        let output = tooling::run_with_timeout(cmd, std::time::Duration::from_secs(15)).map_err(
-            |error| {
-                let err_str = error.to_string();
-                if err_str.contains("No such file") || err_str.contains("not found") {
-                    ZenithError::ToolUnavailable("ollama".into())
-                } else {
-                    ZenithError::ExternalCommandFailed(err_str)
-                }
-            },
-        )?;
+        let output =
+            zenith_platform::subprocess::run_with_timeout(cmd, std::time::Duration::from_secs(15))
+                .map_err(|error| {
+                    let err_str = error.to_string();
+                    if err_str.contains("No such file") || err_str.contains("not found") {
+                        ZenithError::ToolUnavailable("ollama".into())
+                    } else {
+                        ZenithError::ExternalCommandFailed(err_str)
+                    }
+                })?;
         if !output.status.success() {
             let err_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
             crate::diagnostics::log_error("models", &err_str);
@@ -123,9 +123,9 @@ impl LocalModelManager {
 mod tests {
     use super::LocalModelManager;
     use crate::models::{LocalModelItem, ModelSource, ZenithError};
-    use crate::platform::path_algebra::PathFlavor;
-    use crate::platform::PlatformEnvironment;
     use crate::safety::TreeDeleteReport;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::PlatformEnvironment;
 
     fn model(id: &str, name: &str, path: &str) -> LocalModelItem {
         LocalModelItem {
@@ -172,7 +172,7 @@ mod tests {
         let outside = dir.path().join("Documents");
         std::fs::create_dir_all(&outside).unwrap();
 
-        let env = crate::platform::PlatformEnvironment::native();
+        let env = zenith_platform::PlatformEnvironment::native();
         assert!(crate::safety::ValidatedModelTarget::validate(&model, &root, &env).is_ok());
         assert!(crate::safety::ValidatedModelTarget::validate(&outside, &root, &env).is_err());
         assert!(crate::safety::ValidatedModelTarget::validate(&root, &root, &env).is_err());

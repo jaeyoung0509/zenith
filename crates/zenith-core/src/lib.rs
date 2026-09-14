@@ -18,7 +18,7 @@
 //! ```text
 //! zenith-core
 //!     ↑
-//!     ├──────── zenith-platform   (next architecture issue)
+//!     ├──────── zenith-platform   (native macOS/Windows, behind ports)
 //!     │
 //! zenith-desktop / src-tauri
 //! ```

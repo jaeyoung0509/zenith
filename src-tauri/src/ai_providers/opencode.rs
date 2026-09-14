@@ -26,21 +26,22 @@ impl ProviderAdapter for OpenCodeAdapter {
 
         let mut auth_cmd = tooling::command("opencode");
         auth_cmd.args(["auth", "list"]);
-        let auth = match tooling::run_with_timeout(auth_cmd, Duration::from_secs(4)) {
-            Ok(output) => output,
-            Err(error) => {
-                let error_str = error.to_string();
-                if error_str.contains("No such file") || error_str.contains("not found") {
-                    return Err(ProviderError::CliNotInstalled(
-                        "OpenCode CLI was not detected in PATH or known tool locations.".into(),
-                    ));
-                } else {
-                    return Err(ProviderError::CliFailed(format!(
-                        "Could not inspect OpenCode: {error}"
-                    )));
+        let auth =
+            match zenith_platform::subprocess::run_with_timeout(auth_cmd, Duration::from_secs(4)) {
+                Ok(output) => output,
+                Err(error) => {
+                    let error_str = error.to_string();
+                    if error_str.contains("No such file") || error_str.contains("not found") {
+                        return Err(ProviderError::CliNotInstalled(
+                            "OpenCode CLI was not detected in PATH or known tool locations.".into(),
+                        ));
+                    } else {
+                        return Err(ProviderError::CliFailed(format!(
+                            "Could not inspect OpenCode: {error}"
+                        )));
+                    }
                 }
-            }
-        };
+            };
         provider.installed = true;
         let auth_output = strip_ansi(&String::from_utf8_lossy(&auth.stdout));
         let oauth_count = auth_output
@@ -57,7 +58,9 @@ impl ProviderAdapter for OpenCodeAdapter {
 
         let mut stats_cmd = tooling::command("opencode");
         stats_cmd.args(["stats", "--days", "7"]);
-        if let Ok(output) = tooling::run_with_timeout(stats_cmd, Duration::from_secs(4)) {
+        if let Ok(output) =
+            zenith_platform::subprocess::run_with_timeout(stats_cmd, Duration::from_secs(4))
+        {
             let stats = strip_ansi(&String::from_utf8_lossy(&output.stdout));
             provider.summary.local_sessions = parse_stat_u64(&stats, "Sessions");
             provider.summary.local_cost_usd = parse_stat_f64(&stats, "Total Cost");

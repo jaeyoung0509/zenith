@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 ///
 /// The mask follows the described profile: a stated machine's own home is what
 /// gets shortened, so a test or the doctor never masks with the host's.
-pub fn display_path(path: &Path, environment: &crate::platform::PlatformEnvironment) -> String {
+pub fn display_path(path: &Path, environment: &zenith_platform::PlatformEnvironment) -> String {
     display_path_with_home(path, environment.user_home().as_deref())
 }
 
@@ -21,8 +21,8 @@ pub fn display_path(path: &Path, environment: &crate::platform::PlatformEnvironm
 /// Comparison is done on normalized text so Windows-style separators mask
 /// correctly on every host.
 pub fn display_path_with_home(path: &Path, home: Option<&Path>) -> String {
-    let path = crate::platform::NativePlatformPaths::normalize_verbatim_path(path);
-    let home = home.map(crate::platform::NativePlatformPaths::normalize_verbatim_path);
+    let path = zenith_platform::NativePlatformPaths::normalize_verbatim_path(path);
+    let home = home.map(zenith_platform::NativePlatformPaths::normalize_verbatim_path);
     let home = home.as_deref();
     let normalized = normalize_separators(&path.to_string_lossy());
     let trimmed_path = normalized.trim_end_matches('/');
@@ -57,7 +57,7 @@ pub fn normalize_separators(value: &str) -> String {
 /// Log lines describe the process that wrote them, so the native profile is the
 /// one whose home is shortened here.
 pub fn mask_paths_in_text(text: &str) -> String {
-    let home = crate::platform::PlatformEnvironment::native().user_home();
+    let home = zenith_platform::PlatformEnvironment::native().user_home();
     mask_paths_with_home(text, home.as_deref())
 }
 
