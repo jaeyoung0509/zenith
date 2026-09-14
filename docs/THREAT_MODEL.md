@@ -62,6 +62,48 @@ local inspection surface. Cleanup trust boundaries live in
   dependency graph. A domain rule therefore cannot silently start reading a
   window, a `Channel`, or a capability file.
 
+## Workspace-supplied repository content
+
+Zenith inspects the projects an AI agent is observed working in. Those
+directories are chosen by the work, not nominated by the user: a project root
+comes from an observed agent process working directory, so the repositories
+Zenith reads are the directories the user happens to work in.
+
+- **`git` is invoked with repository-supplied program configuration
+  neutralized.** Git reads a repository's own `.git/config` whenever it operates
+  on that repository, and `core.fsmonitor`, `core.pager`, `core.hooksPath`,
+  `diff.external`, `core.sshCommand`, and the `filter.*` clean/smudge pair each
+  name a program Git then runs; `core.fsmonitor` is consulted by `git status`
+  specifically. One constructor (`tooling::git_command`) builds every
+  invocation, overriding those keys on the command line (where Git gives them
+  precedence), pinning the attribute source to the empty tree (`attr.tree`) so a
+  repository `.gitattributes` file cannot select a filter driver, pinning the
+  attributes file, and skipping the system configuration
+  (`GIT_CONFIG_NOSYSTEM`). The invocation is allowed to report repository state
+  for the project it was pointed at — status, `HEAD`, name-status, and file
+  content it already limits to 256 KiB per diff — and to run no other program.
+  `src-tauri/tests/git_boundary_tests.rs` asserts both halves: no other call site
+  constructs a Git command, and a repository that names programs in those keys
+  reaches none of them.
+- **The residual is version-bound.** `attr.tree` exists from Git 2.43; an older
+  Git ignores the key and can therefore still reach a filter driver named by the
+  repository's `.gitattributes`. This is the one part of the neutralization that
+  relies on the toolchain rather than on an argument Zenith passes, and it is
+  recorded here rather than assumed.
+- **A `.git` pointer is bounded and contained.** `.git` may be a *file* naming
+  the git directory that holds the repository, which is how a linked worktree
+  and a submodule record it. The pointer file and the `HEAD` it resolves to are
+  read under a 4 KiB cap after a stat; a target inside the project is validated
+  by `SymlinkGuard`; a target outside it is accepted only in the two shapes Git
+  itself writes (`worktrees/<name>` and `modules/<path>` beside a real git
+  directory holding a `HEAD`); and any other target — including a symlinked
+  `.git` that leaves the project — is refused and recorded in the diagnostics
+  log rather than silently reported as "not a repository".
+- **Repository-derived strings are bounded before they cross IPC.** A branch
+  name longer than 255 bytes is reported as no branch rather than truncated into
+  a name Git never created, and a detached `HEAD` whose content is not an object
+  id is reported as no state rather than echoed to the interface.
+
 ## Platform ceilings recorded, not fixed
 
 - **macOS Keychain ACL is bound to a code-signing identity.** For an unsigned
