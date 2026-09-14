@@ -5940,10 +5940,22 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 1.1.5+spec-1.1.0",
- "trash",
  "url",
  "uuid",
  "walkdir",
+ "windows-sys 0.61.2",
+ "zenith-core",
+ "zenith-platform",
+]
+
+[[package]]
+name = "zenith-platform"
+version = "0.3.27"
+dependencies = [
+ "libc",
+ "security-framework",
+ "tempfile",
+ "trash",
  "windows-sys 0.61.2",
  "zenith-core",
 ]

@@ -33,6 +33,7 @@ pub mod process_protection;
 pub mod runtime_metrics;
 pub mod safety;
 pub mod scanner;
+pub mod services;
 pub mod settings_store;
 pub mod signatures;
 pub mod storage_commands;

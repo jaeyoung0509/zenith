@@ -46,6 +46,10 @@ pub struct AppState {
     pub runtime_metrics: Arc<RuntimeMetrics>,
     pub execution_budgets: Arc<ExecutionBudgets>,
     pub docker_status_cache: Arc<Mutex<Option<(crate::models::DockerStatus, std::time::Instant)>>>,
+    pub scan_service: Arc<crate::services::ScanService>,
+    pub plan_store: Arc<crate::services::PlanStore>,
+    pub scan_store: Arc<crate::services::ScanStore>,
+    pub cleanup_service: Arc<crate::services::CleanupService>,
 }
 
 impl AppState {
@@ -127,6 +131,25 @@ impl AppState {
                 environment.clone(),
             ));
 
+        let docker_status_cache = Arc::new(Mutex::new(None));
+        let scan_service = Arc::new(crate::services::ScanService::new(
+            registry.clone(),
+            environment.clone(),
+        ));
+        let plan_store = Arc::new(crate::services::PlanStore::new());
+        let scan_store = Arc::new(crate::services::ScanStore::new());
+        let cleanup_service = Arc::new(crate::services::CleanupService::new(
+            scan_service.clone(),
+            plan_store.clone(),
+            scan_store.clone(),
+            storage_operation_gate.clone(),
+            execution_budgets.clone(),
+            environment.clone(),
+            registry.clone(),
+            docker_status_cache.clone(),
+            platform_capabilities.clone(),
+        ));
+
         Self {
             environment,
             container_host,
@@ -155,7 +178,11 @@ impl AppState {
             platform_capabilities,
             runtime_metrics,
             execution_budgets,
-            docker_status_cache: Arc::new(Mutex::new(None)),
+            docker_status_cache,
+            scan_service,
+            plan_store,
+            scan_store,
+            cleanup_service,
         }
     }
 

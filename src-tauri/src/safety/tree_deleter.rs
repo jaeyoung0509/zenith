@@ -424,6 +424,24 @@ impl SafeTreeDeleter {
         report
     }
 
+    /// Mutates the filesystem only for a pre-validated target that has passed
+    /// all safety revalidation checks.
+    pub fn delete_contents_validated(
+        target: &super::ValidatedTarget,
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
+        Self::delete_contents(target.path(), target.exclusions(), environment)
+    }
+
+    /// Mutates the filesystem only for a pre-validated target that has passed
+    /// all safety revalidation checks.
+    pub fn delete_path_validated(
+        target: &super::ValidatedTarget,
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
+        Self::delete_path(target.path(), target.exclusions(), environment)
+    }
+
     /// Deletes directory children using the already-verified parent directory
     /// descriptor. The final unlink for every child goes through `unlinkat`
     /// on that descriptor, so replacing or redirecting any parent component

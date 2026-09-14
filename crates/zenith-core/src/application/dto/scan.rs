@@ -31,3 +31,36 @@ pub enum ScanEvent {
         result: ScanResult,
     },
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScanRequest {
+    pub categories: Option<Vec<Category>>,
+    pub excluded_signatures: Vec<String>,
+    pub intensive_cleanup: bool,
+}
+
+pub trait ScanProgressSink: Send + Sync {
+    fn emit(&self, event: ScanEvent);
+}
+
+impl<F> ScanProgressSink for F
+where
+    F: Fn(ScanEvent) + Send + Sync,
+{
+    fn emit(&self, event: ScanEvent) {
+        self(event);
+    }
+}
+
+pub trait CancellationProbe: Send + Sync {
+    fn is_cancelled(&self) -> bool;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NeverCancelled;
+
+impl CancellationProbe for NeverCancelled {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}

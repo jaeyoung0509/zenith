@@ -28,6 +28,7 @@ pub mod metrics;
 pub mod settings;
 pub mod signature;
 
+pub use crate::platform::PlatformCapabilitiesProvider;
 pub use agent_activity::*;
 pub use ai_control_center::*;
 pub use ai_usage::*;
@@ -46,10 +47,12 @@ pub use signature::*;
 // ---------------------------------------------------------------------------
 
 pub use zenith_core::application::dto::cleanup::{
-    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, PlanPreview,
-    PlanTargetPreview,
+    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanupProgressSink,
+    PlanPreview, PlanTargetPreview,
 };
-pub use zenith_core::application::dto::scan::ScanEvent;
+pub use zenith_core::application::dto::scan::{
+    CancellationProbe, NeverCancelled, ScanEvent, ScanProgressSink, ScanRequest,
+};
 pub use zenith_core::application::dto::storage::{
     AppRelatedItem, AppUninstallInspection, InstalledApp, InstalledAppInventory, LargeFileItem,
     LargeFileScanEvent, LargeFileScanRequest, LargeFileScanResult, TrashItemResult,

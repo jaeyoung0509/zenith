@@ -48,6 +48,7 @@ pub(super) fn user_home(
 /// and metric caches) where recovering the partially written value or overwriting it
 /// is safe and prevents an isolated panic from wedging the app. Persistent settings
 /// and destructive authority must use [`lock_or_state_error`] instead.
+#[allow(dead_code)]
 pub(crate) fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()

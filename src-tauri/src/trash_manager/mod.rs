@@ -240,9 +240,15 @@ pub struct TrashExecutor;
 
 impl TrashExecutor {
     pub fn execute(environment: &PlatformEnvironment, plan: TrashPlan) -> TrashResult {
-        Self::execute_with(environment, plan, |path| {
-            trash::delete(path).map_err(|error| format!("Could not move to Trash: {error}"))
-        })
+        Self::execute_with_backend(environment, plan, &zenith_platform::NativeTrashBackend)
+    }
+
+    pub fn execute_with_backend(
+        environment: &PlatformEnvironment,
+        plan: TrashPlan,
+        backend: &dyn zenith_platform::TrashBackend,
+    ) -> TrashResult {
+        Self::execute_with(environment, plan, |path| backend.move_to_trash(path))
     }
 
     fn execute_with<F>(
@@ -1360,5 +1366,42 @@ mod tests {
         let res2 = TrashExecutor::execute_with(&environment, lower_target_plan, |_| Ok(()));
         assert!(res2.size_is_lower_bound);
         assert_eq!(res2.moved_count, 1);
+    }
+
+    #[test]
+    fn trash_executor_can_use_mock_trash_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("profile");
+        let documents = home.join("Documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let file = documents.join("video.mov");
+        std::fs::write(&file, b"video data").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(&home)
+            .with_known_folder(KnownFolder::Documents, documents.clone());
+
+        let plan = TrashPlan {
+            id: Uuid::new_v4(),
+            created_at: unix_timestamp(),
+            inventory_id: "test".to_string(),
+            targets: vec![TrashTarget {
+                item_id: "target1".to_string(),
+                path: file.clone(),
+                identity: identity_from_path(&file).unwrap(),
+                logical_size: 10,
+                allocated_size: 10,
+                size_is_lower_bound: false,
+                scope: TrashScope::LargeFile {
+                    approved_parent: documents,
+                },
+            }],
+        };
+
+        let mock_backend = zenith_platform::MockTrashBackend::new();
+        let result = TrashExecutor::execute_with_backend(&environment, plan, &mock_backend);
+        assert_eq!(result.moved_count, 1);
+        assert_eq!(result.failed_count, 0);
+        assert_eq!(mock_backend.moved(), vec![file]);
     }
 }
