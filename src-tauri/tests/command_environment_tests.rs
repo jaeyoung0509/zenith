@@ -1,6 +1,6 @@
 //! The commands' dependencies must be built from the injected environment.
 //!
-//! `run_environment_self_check` answers from `AppState.environment`, so the
+//! `run_environment_self_check` answers from `DesktopState.environment`, so the
 //! state a test builds from a stated machine has to answer for that machine
 //! instead of for the runner. This file exercises the same construction and the
 //! same doctor entry point the command uses, without a Tauri app handle.
@@ -10,7 +10,7 @@ use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets};
 use tauri::webview::InvokeRequest;
 use tauri::WebviewWindowBuilder;
-use zenith_lib::commands::AppState;
+use zenith_lib::composition::{desktop_state, desktop_state_with_catalog};
 use zenith_lib::diagnostics::doctor;
 use zenith_lib::docker::adapter::ContainerHost;
 use zenith_lib::models::PlatformKind;
@@ -40,7 +40,7 @@ fn stated_windows_machine() -> PlatformEnvironment {
 #[test]
 fn environment_self_check_uses_the_injected_environment() {
     let environment = Arc::new(stated_windows_machine());
-    let state = AppState::new(environment, ContainerHost::unstated());
+    let state = desktop_state(environment, ContainerHost::unstated());
 
     let report = doctor::self_check(&state.environment);
 
@@ -79,7 +79,7 @@ fn environment_self_check_uses_the_injected_environment() {
 #[test]
 fn app_state_builds_every_shared_handle_from_the_stated_environment() {
     let environment = Arc::new(stated_windows_machine());
-    let state = AppState::new(environment.clone(), ContainerHost::unstated());
+    let state = desktop_state(environment.clone(), ContainerHost::unstated());
 
     // The catalog was loaded against the stated machine, so its signatures
     // resolve through the stated profile rather than the host's.
@@ -106,7 +106,7 @@ fn app_state_builds_every_shared_handle_from_the_stated_environment() {
 #[test]
 fn the_self_check_command_answers_from_the_injected_environment() {
     let environment = Arc::new(stated_windows_machine());
-    let state = AppState::new(environment, ContainerHost::unstated());
+    let state = desktop_state(environment, ContainerHost::unstated());
 
     let app = mock_builder()
         .invoke_handler(tauri::generate_handler![
@@ -157,7 +157,7 @@ fn a_failed_catalog_refuses_the_scan_instead_of_reporting_an_empty_one() {
     use zenith_lib::signatures::SignatureRegistry;
 
     let failure = "Signature catalog could not be loaded: stated catalog defect";
-    let state = AppState::with_catalog(
+    let state = desktop_state_with_catalog(
         Arc::new(stated_windows_machine()),
         ContainerHost::unstated(),
         SignatureRegistry::new(),
@@ -175,7 +175,7 @@ fn a_failed_catalog_refuses_the_scan_instead_of_reporting_an_empty_one() {
     );
 
     // A catalog that loaded has nothing to refuse.
-    let healthy = AppState::new(
+    let healthy = desktop_state(
         Arc::new(stated_windows_machine()),
         ContainerHost::unstated(),
     );

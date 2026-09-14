@@ -45,6 +45,22 @@ local inspection surface. Cleanup trust boundaries live in
   `.../basename`; the diagnostics clipboard export cannot carry the home
   directory or user name. Storage and cleanup views that exist to show a
   location are explicit, documented exceptions.
+- **An allowed command is not an authorization.** Tauri capabilities decide
+  which window may call a command; the application service decides what that
+  call may do, from backend state the interface cannot supply. No command
+  accepts a path, a cleanup strategy, a filesystem identity, or an arbitrary
+  PID, so a compromised renderer with every capability granted still reaches
+  only the opaque IDs and inventories the backend already produced, under the
+  same plan TTL, one-shot, scope, identity, and TOCTOU checks the dashboard
+  runs. `CleanupService`, `StorageService`, and `SystemService` apply their
+  capability and operation gates themselves, and the capability split is
+  asserted against a reviewed allowlist (`capability_contract_tests.rs`) rather
+  than trusted to review.
+- **The desktop framework stays outside the trusted logic.** `zenith-core` and
+  `zenith-platform` cannot depend on `tauri*` or on `zenith-desktop` at any
+  depth, which `scripts/check_core_boundaries.cjs` refuses from the resolved
+  dependency graph. A domain rule therefore cannot silently start reading a
+  window, a `Channel`, or a capability file.
 
 ## Platform ceilings recorded, not fixed
 

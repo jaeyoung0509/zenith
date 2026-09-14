@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 use zenith_platform::PlatformEnvironment;
 
 use super::plan_store::{PlanLifecycle, PlanStore};
+use super::progress::{DeveloperArtifactScanSink, LargeFileScanSink};
 use crate::applications::{AppInspectionRecord, AppInventory, ApplicationScanner};
 use crate::developer_artifacts::{
     result_from_inventory, DeveloperArtifactInventory, DeveloperArtifactScanner,
@@ -157,14 +158,11 @@ impl StorageService {
     ///
     /// The worker acquires the storage read gate and a storage-read budget
     /// permit itself, so the caller never decides when the scan may run.
-    pub async fn scan_large_files<F>(
+    pub async fn scan_large_files(
         &self,
         request: LargeFileScanRequest,
-        progress: F,
-    ) -> Result<LargeFileScanResult, String>
-    where
-        F: Fn(LargeFileScanEvent) + Send + 'static,
-    {
+        progress: Arc<dyn LargeFileScanSink>,
+    ) -> Result<LargeFileScanResult, String> {
         self.platform_capabilities
             .capabilities()
             .require(PlatformFeature::LargeFiles, CapabilityAccess::Inspect)
@@ -194,7 +192,7 @@ impl StorageService {
                         if let LargeFileScanEvent::Finished { result } = &event {
                             emitted_result = Some(result.clone());
                         }
-                        progress(event);
+                        progress.emit(event);
                     });
                 if let Some(scan_id) = active_scan_id.as_deref() {
                     worker_state.remove_large_file_cancel(scan_id);
@@ -346,14 +344,11 @@ impl StorageService {
     }
 
     /// Scans the registered workspaces for generated developer artifacts.
-    pub async fn scan_developer_artifacts<F>(
+    pub async fn scan_developer_artifacts(
         &self,
         workspace_ids: &[String],
-        progress: F,
-    ) -> Result<DeveloperArtifactScanResult, String>
-    where
-        F: Fn(DeveloperArtifactScanEvent) + Send + 'static,
-    {
+        progress: Arc<dyn DeveloperArtifactScanSink>,
+    ) -> Result<DeveloperArtifactScanResult, String> {
         self.platform_capabilities
             .capabilities()
             .require(
@@ -409,7 +404,7 @@ impl StorageService {
                         if let DeveloperArtifactScanEvent::Finished { result } = &event {
                             emitted_result = Some(result.clone());
                         }
-                        progress(event);
+                        progress.emit(event);
                     },
                 );
                 if let Some(scan_id) = active_scan_id.as_deref() {

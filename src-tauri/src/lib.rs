@@ -4,14 +4,17 @@ pub mod ai_providers;
 pub mod ai_snapshots;
 pub mod ai_usage;
 pub mod applications;
+pub mod blocking;
 pub mod cache_providers;
 pub mod cleaner;
 pub mod collection;
 pub mod commands;
+pub mod composition;
 pub mod dev_ports;
 pub mod developer_artifacts;
 pub mod diagnostics;
 pub mod docker;
+pub mod events;
 pub mod execution_budget;
 pub mod hash;
 // The wire rule for a `u64` that crosses IPC is a property of the contract,
@@ -39,7 +42,7 @@ pub mod storage_commands;
 pub mod tooling;
 pub mod trash_manager;
 
-use commands::AppState;
+use commands::DesktopState;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::image::Image;
@@ -325,9 +328,9 @@ pub fn run() {
     // adapter never reads the process environment itself.
     let container_host =
         crate::docker::adapter::ContainerHost::from_value(std::env::var("DOCKER_HOST").ok());
-    let app_state = AppState::new(environment, container_host);
-    let awake_manager = app_state.awake_manager.clone();
-    let ai_control_runtime = app_state.ai_control_runtime.clone();
+    let app_state = composition::desktop_state(environment, container_host);
+    let awake_manager = app_state.system.awake_manager();
+    let ai_control_runtime = app_state.ai.runtime();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -374,24 +377,13 @@ pub fn run() {
             };
             if let Some(config_dir) = config_dir {
                 let loaded = settings_store::load(&config_dir);
-                app.state::<AppState>()
-                    .awake_manager
-                    .set_rules(loaded.awake_rules.clone());
-                app.state::<AppState>()
-                    .awake_manager
-                    .set_control_center_awake_policy(
-                        loaded.ai_control.autopilot.keep_awake_for_verified_sessions,
-                        loaded.ai_control.autopilot.keep_awake_ac_only,
-                    );
-                *app.state::<AppState>()
-                    .settings
-                    .lock()
-                    .expect("settings poisoned") = loaded;
-                app.state::<AppState>()
-                    .ai_control_state
-                    .lock()
-                    .expect("ai control poisoned")
-                    .audit = crate::ai_control_center::audit::AuditStore::load(&config_dir);
+                let state = app.state::<DesktopState>();
+                state.system.apply_startup_policy(&loaded);
+                // The settings file is authoritative at startup: the snapshot
+                // is replaced only after the file was read, and the audit store
+                // this service owns is restored from the same directory.
+                let _ = state.settings.replace(loaded);
+                state.ai.restore_audit(&config_dir);
             }
             let open_dashboard =
                 MenuItem::with_id(app, "open_dashboard", "Open Zenith", true, None::<&str>)?;
@@ -445,11 +437,15 @@ pub fn run() {
                 watcher_ref.evaluate();
             });
 
-            let bg_app = app.handle().clone();
+            // The background tick delivers native advisories; the transport
+            // adapter is built here so the runtime never names the plugin.
+            let bg_notifications = crate::events::notifications::TauriNotifications::new(
+                app.handle().clone(),
+            );
             let bg_runtime = ai_control_runtime.clone();
             std::thread::spawn(move || loop {
                 if bg_runtime.are_advisories_enabled() {
-                    bg_runtime.tick(Some(&bg_app));
+                    bg_runtime.tick(Some(&bg_notifications));
                     bg_runtime.wait_next_tick(std::time::Duration::from_secs(5));
                 } else {
                     bg_runtime.wait_next_tick(std::time::Duration::from_secs(60));

@@ -1,12 +1,13 @@
-use crate::ai_control_center::{notifications, resources};
+use crate::ai_control_center::resources;
 use crate::ai_snapshots::fetch_activity_registry;
 use crate::collection::SingleFlight;
 use crate::models::Recommendation;
 use crate::runtime_metrics::RuntimeMetrics;
+use crate::services::desktop_notifications::DesktopNotifications;
+use crate::services::SettingsAuthority;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
-use tauri::AppHandle;
 
 fn unix_timestamp() -> u64 {
     SystemTime::now()
@@ -28,7 +29,7 @@ pub struct AiControlRuntime {
     runtime_metrics: Arc<RuntimeMetrics>,
     ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
     awake_manager: Arc<crate::power::KeepAwakeManager>,
-    settings: Arc<Mutex<crate::models::ZenithSettings>>,
+    settings: Arc<SettingsAuthority>,
     wake_signal: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -46,7 +47,7 @@ impl AiControlRuntime {
         runtime_metrics: Arc<RuntimeMetrics>,
         ai_control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
         awake_manager: Arc<crate::power::KeepAwakeManager>,
-        settings: Arc<Mutex<crate::models::ZenithSettings>>,
+        settings: Arc<SettingsAuthority>,
     ) -> Self {
         Self {
             memory_sampler,
@@ -73,8 +74,8 @@ impl AiControlRuntime {
     pub fn are_advisories_enabled(&self) -> bool {
         let preferences = self
             .settings
-            .lock()
-            .map(|s| s.ai_control.clone())
+            .snapshot()
+            .map(|settings| settings.ai_control)
             .unwrap_or_default();
         background_advisories_enabled(&preferences.autopilot)
     }
@@ -94,14 +95,13 @@ impl AiControlRuntime {
     /// Evaluates local background signals: active agent activity, dev ports, memory pressure,
     /// power source transitions, and autopilot advisory notifications.
     /// Does NOT perform external provider calls, full filesystem scans, or Git queries.
-    pub fn tick(&self, app_handle: Option<&AppHandle>) -> Vec<Recommendation> {
+    pub fn tick(&self, notifications: Option<&dyn DesktopNotifications>) -> Vec<Recommendation> {
         let now = unix_timestamp();
-        let preferences = {
-            self.settings
-                .lock()
-                .map(|s| s.ai_control.clone())
-                .unwrap_or_default()
-        };
+        let preferences = self
+            .settings
+            .snapshot()
+            .map(|settings| settings.ai_control)
+            .unwrap_or_default();
 
         // Passive observations are built on explicit main-window refreshes. When every
         // native advisory is disabled there is no background policy work to perform, so
@@ -120,7 +120,7 @@ impl AiControlRuntime {
         // executor callback.
         let inactivity_threshold_secs = self
             .settings
-            .lock()
+            .snapshot()
             .map(|settings| {
                 u64::from(settings.agent_notifications.inactivity_threshold_minutes) * 60
             })
@@ -183,8 +183,8 @@ impl AiControlRuntime {
         );
 
         if !new_items.is_empty() {
-            if let Some(app) = app_handle {
-                let _ = notifications::emit_advisories(app, &new_items);
+            if let Some(notifications) = notifications {
+                let _ = notifications.emit_recommendations(&new_items);
             }
             control.recommendations.extend(new_items.clone());
             control
@@ -224,7 +224,9 @@ mod tests {
                 crate::ai_control_center::state::AiControlCenterState::default(),
             )),
             Arc::new(crate::power::KeepAwakeManager::new()),
-            Arc::new(Mutex::new(crate::models::ZenithSettings::default())),
+            Arc::new(SettingsAuthority::new(
+                crate::models::ZenithSettings::default(),
+            )),
         ))
     }
 

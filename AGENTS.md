@@ -35,9 +35,11 @@ safety conventions below when changing Zenith.
   `zenith-platform` is its own change, not a boundary cleanup.
 - `zenith-core` must not depend on `tauri`, `tauri-build`, `tauri-plugin-*`,
   `windows-sys`, `security-framework`, or `rfd`, directly or transitively, and
-  `zenith-platform` must never reach `tauri`. `scripts/check_core_boundaries.cjs`
-  enforces both boundaries from `cargo metadata`; run `just check-architecture`
-  after adding or moving a dependency.
+  `zenith-platform` must never reach `tauri`. Neither crate may depend on
+  `zenith-desktop`: dependencies point into the domain, never back out of it.
+  `scripts/check_core_boundaries.cjs` enforces these boundaries from
+  `cargo metadata`; run `just check-architecture` after adding or moving a
+  dependency.
 - Ask of every Rust file: would this still make sense if Zenith had a CLI
   instead of a Tauri window? Domain semantics say yes and belong in
   `zenith-core`; native OS probing and OS API calls say yes and belong in
@@ -58,8 +60,11 @@ safety conventions below when changing Zenith.
 - Keep `src-tauri/src/commands/mod.rs` as composition only. Add handlers to the
   closest domain module (`ai.rs`, `cleanup.rs`, or `system.rs`); dedicated
   storage workflows remain in `storage_commands.rs` as thin adapters over
-  `services::StorageService`. Shared command state and helpers belong in
-  `state.rs` and `support.rs`, not in the composition root.
+  `services::StorageService`. `DesktopState` belongs in `state.rs`; the
+  composition root (`src-tauri/src/composition`) builds it, `blocking.rs` owns
+  worker execution and panic reporting, and `events/` owns every Tauri
+  transport adapter. A command decodes IPC, calls one application service, and
+  maps the typed result.
 - Application services own the invariants their workflows depend on: the
   operation gate, the execution budgets, plan/inventory lifetimes, and the
   Trash executor. A command adapts transport (a `Channel`, an opaque ID) and
@@ -120,8 +125,9 @@ safety conventions below when changing Zenith.
 
 - Platform facts have one source: `zenith_platform::PlatformEnvironment` (built in
   `crates/zenith-platform`). It is built
-  once at the composition root, passed through `AppState`, and handed to
-  scanning, cleanup, metrics, container, and storage code as an argument.
+  once at the composition root (`src-tauri/src/composition`), handed to the
+  application services through `DesktopState`, and passed to scanning, cleanup,
+  metrics, container, and storage code as an argument.
   Modules must not read `std::env` for paths, drives, or tool locations, and
   must not construct `PlatformEnvironment::native()` themselves.
 - Windows path semantics live in `zenith_platform::path_algebra` as pure functions

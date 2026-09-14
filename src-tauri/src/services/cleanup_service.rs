@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
 use uuid::Uuid;
 
@@ -9,11 +9,12 @@ use crate::cleaner::CleanExecutor;
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
     CleanEvent, CleanResult, CleanStrategy, CleanupEligibility, CleanupProgressSink, DeletePlan,
-    DockerStatus, ObservationQuality, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature,
+    ObservationQuality, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature,
     ScanProgressSink, ScanRequest, ScanResult, ZenithSettings,
 };
 use crate::operation_gate::StorageOperationGate;
 use crate::safety::SafetyPlanner;
+use crate::services::system_service::DockerStatusCache;
 use crate::signatures::SignatureRegistry;
 use zenith_platform::PlatformEnvironment;
 
@@ -79,7 +80,7 @@ pub struct CleanupService {
     budgets: Arc<ExecutionBudgets>,
     environment: Arc<PlatformEnvironment>,
     registry: Arc<SignatureRegistry>,
-    docker_status_cache: Arc<Mutex<Option<(DockerStatus, std::time::Instant)>>>,
+    docker_status_cache: Arc<DockerStatusCache>,
     platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
 }
 
@@ -93,7 +94,7 @@ impl CleanupService {
         budgets: Arc<ExecutionBudgets>,
         environment: Arc<PlatformEnvironment>,
         registry: Arc<SignatureRegistry>,
-        docker_status_cache: Arc<Mutex<Option<(DockerStatus, std::time::Instant)>>>,
+        docker_status_cache: Arc<DockerStatusCache>,
         platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
     ) -> Self {
         Self {
@@ -319,15 +320,14 @@ impl CleanupService {
                     }
                 };
 
-                // Clear docker cache if any DockerPrune target exists
+                // A Docker prune may have changed the runtime's state, so the
+                // shared observation is dropped rather than reported stale.
                 if plan
                     .targets
                     .iter()
                     .any(|t| t.strategy == CleanStrategy::DockerPrune)
                 {
-                    if let Ok(mut cache) = docker_status_cache.lock() {
-                        *cache = None;
-                    }
+                    docker_status_cache.invalidate();
                 }
 
                 Ok(CleanExecutor::execute(
@@ -438,7 +438,7 @@ mod tests {
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
         let budgets = Arc::new(ExecutionBudgets::new());
-        let docker_cache = Arc::new(Mutex::new(None));
+        let docker_cache = Arc::new(DockerStatusCache::new());
         let capabilities = Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current()));
 
         let service = CleanupService::new(
@@ -509,7 +509,7 @@ mod tests {
             Arc::new(ExecutionBudgets::new()),
             env,
             registry,
-            Arc::new(Mutex::new(None)),
+            Arc::new(DockerStatusCache::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -592,7 +592,7 @@ mod tests {
             Arc::new(ExecutionBudgets::new()),
             env,
             registry,
-            Arc::new(Mutex::new(None)),
+            Arc::new(DockerStatusCache::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -639,7 +639,7 @@ mod tests {
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
         let budgets = Arc::new(ExecutionBudgets::new());
-        let docker_cache = Arc::new(Mutex::new(None));
+        let docker_cache = Arc::new(DockerStatusCache::new());
         let capabilities = Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current()));
 
         let service = CleanupService::new(

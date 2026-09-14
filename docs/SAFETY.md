@@ -3,6 +3,25 @@
 Zenith deletes developer caches, so a correct UI is not considered a security
 boundary. Every destructive decision is reconstructed and validated in Rust.
 
+## Where authorization lives
+
+Authorization is a property of the Rust application services, not of the IPC
+surface. Tauri capabilities decide which window may call a command, and the
+application service decides what that call is allowed to do; both answer
+different questions, and neither substitutes for the other. A command that a
+window is allowed to call still receives only opaque IDs, is still checked
+against the backend's current scan or inventory, and still runs under the plan
+TTL and one-shot rules below. `CleanupService`, `StorageService`, and
+`SystemService` apply their capability gates and operation gates themselves, so
+a capability file edited to be too generous cannot widen what a call may
+achieve, and a capability file edited to be too narrow cannot make a service
+skip a check.
+
+Commands perform no filesystem mutation and store no workflow state. The
+current scan, the plan store, the reviewed inventories, and the Trash executor
+belong to the service that protects their invariant, and `DesktopState` exposes
+services rather than those internals.
+
 ## Trust boundaries
 
 The frontend may provide:
@@ -293,6 +312,17 @@ and requires a fresh inspection rather than weakening the fail-closed check.
 Large Files and App Uninstaller move reviewed targets to the platform's native
 Trash or Recycle Bin through the dedicated Trash adapter. They do not call the
 generic tree deleter, `rm`, or `remove_dir_all`.
+
+A cleanup `DeletePlan` is not a reviewed Trash plan. `DeletePlan` authorizes
+removing signature-scoped caches inside the scan that produced it, and its
+identity check is `CleanupIdentity`. A reviewed Trash plan authorizes moving a
+user-selected file or app to the Trash, and its evidence is
+`ReviewedFileIdentity` plus the reviewed scope that produced the target. They
+are separate types with separate evidence requirements (and separate plan
+kinds in one store), so a reviewed target can never satisfy a cleanup check and
+a cleanup plan can never reach the Trash port. The trust models stay separate
+because the user's consent is different in each: one is "clean this cache",
+the other is "move this file I chose".
 
 Trash plans and cleanup plans share one bounded, expiring, one-shot store:
 both expire after five minutes, both are capped at 64 entries with oldest-first

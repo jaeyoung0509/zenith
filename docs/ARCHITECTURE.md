@@ -19,12 +19,19 @@ macOS menu bar / Windows system tray
                     |
                     | typed Tauri IPC (specta bindings, async spawn_blocking)
                     v
-              Rust application core (AppState)
+        commands/ (Tauri adapters: decode, authorize, one use case, DTO)
+                    |
+                    v
+        DesktopState (bounded services + platform facts)
         +-----------+-----------+-------------+
         |           |           |             |
-     scanner      safety      adapters      metrics/power
-        |        planner +     Docker,       memory, disk,
-   signatures    plan store    models, AI    Keep Awake
+     cleanup      storage       ai          system
+   CleanupService StorageService AiService  SystemService
+        |           |           |             |
+     scanner +    reviewed     provider     metrics/power
+     safety +     storage      usage +      memory, disk,
+     plan store   workflows    activity +   Keep Awake,
+                               AI control   dev ports
         |
         +-- dedicated storage management (StorageWorkflowState)
             large-file inventory, app inventory,
@@ -44,11 +51,46 @@ macOS menu bar / Windows system tray
 ```
 
 The windows have separate frontend runtimes and stores. Shared authority and
-coordination therefore live in Rust `AppState`, backend-owned workflow states, or
-Rust process state rather than in a browser singleton. Lifecycle-owned storage
-state uses poison recovery for bounded inventories, plans, workspace
-registrations, and cancellation handles. Other domain locks fail closed when
-their state cannot be trusted.
+coordination therefore live in the Rust application services — `CleanupService`,
+`StorageService`, `AiService`, and `SystemService`, built by the composition
+root — rather than in a browser singleton. Lifecycle-owned storage state uses
+poison recovery for bounded inventories, plans, workspace registrations, and
+cancellation handles; the settings authority and destructive authority fail
+closed when their state cannot be trusted.
+
+### Tauri is an adapter, not the application core
+
+`src-tauri/src/composition` is the only layer that names every concrete
+implementation: the environment the backend is described by, the catalog a scan
+uses, the native adapters behind the ports, and the shared handles two services
+deliberately hold together. `DesktopState` declares what a command may reach —
+platform facts, the settings authority, and the four bounded services — and no
+scan, inventory, plan store, or workflow mutex is part of it.
+
+A Tauri command does five things and nothing else: it decodes IPC input,
+resolves what only the desktop shell can resolve (a window boundary, an app
+config directory), constructs the Tauri-specific adapter for that call
+(`crate::events`: a `Channel` sink, a notification port), calls one application
+use case, and maps the typed result back to an IPC DTO. It never locks a cache,
+applies a plan TTL, selects cleanup candidates, calls the safety planner or the
+clean executor, or mutates the filesystem.
+
+Services emit domain events and state what happened; `crate::events` is the only
+module that knows the transport is a Tauri `Channel` or the notification plugin.
+`src-tauri/src/blocking` is the same seam for work that must leave the command
+executor: commands and services both hand blocking work to it, so a worker that
+died reports what it died with through one redacting sink.
+
+Ask three questions of new code:
+
+```text
+Does it depend on Tauri, a WebView, the tray, or window lifecycle?
+    yes -> src-tauri (adapter); commands stay thin, transport lives in events/
+Does it implement a native OS capability?
+    yes -> crates/zenith-platform, behind a port
+Does it express Zenith product semantics or a use case?
+    yes -> crates/zenith-core, or an application service in src-tauri/src/services
+```
 
 ## Platform capability contract
 
@@ -152,16 +194,17 @@ The boundary is enforced rather than documented.
 `cargo metadata` and fails when `zenith-core` declares `tauri`, `tauri-build`,
 `tauri-plugin-*`, `windows-sys`, `security-framework`, or `rfd` as any kind of
 dependency, or reaches a `tauri*`, `windows*`, `security-framework*`, or `rfd`
-crate over normal and build edges at any depth. `just check-architecture` runs
-that check together with `cargo check -p zenith-core`; CI runs it on macOS and
-Windows.
+crate over normal and build edges at any depth. Both `zenith-core` and
+`zenith-platform` additionally refuse `zenith-desktop`: dependencies point into
+the domain, never back out of it, so an edge up to the crate that owns the
+window inverts the layering and is deleted rather than moved.
+`just check-architecture` runs that check together with `cargo check` of both
+crates; CI runs it on macOS and Windows.
 
-Two parts of the target layout are deliberately not here yet. `ports/` is
-absent because no type in this crate names a capability it has to be given: the
-first port arrives with the `zenith-platform` crate, which is the next step in
-the migration. `ValidatedDeletePath` and the rest of the execution authority are
-absent because they belong to the safety/service migration that follows it.
-Neither is stubbed.
+The execution authority that used to be missing now lives where it is used:
+`src-tauri/src/safety` owns the validated authority values, and the ports the
+platform layer implements are declared in `crates/zenith-platform` itself,
+because no other crate has to name them.
 
 ## Repository map
 
@@ -176,9 +219,17 @@ Neither is stubbed.
   semantics above by name and adds the DTOs only the desktop adapter produces
   (AI usage, metrics, Docker, keep-awake, ports, agent activity, developer
   artifacts, diagnostics, settings), so command modules keep one import root.
-- `src-tauri/src/commands`: narrow generic IPC boundary. `mod.rs` only composes
-  domain exports; `ai.rs`, `cleanup.rs`, and `system.rs` own handlers, while
-  `state.rs` and `support.rs` own shared state and helpers.
+- `src-tauri/src/commands`: the Tauri IPC boundary. `mod.rs` only composes
+  domain exports; `ai.rs`, `cleanup.rs`, and `system.rs` own handlers, and
+  `state.rs` declares `DesktopState` — the bounded services and platform facts a
+  handler may reach. No handler locks a cache, stores a plan, or mutates a file.
+- `src-tauri/src/composition`: the composition root. It builds the environment,
+  the catalog, the shared handles, and the four services, and it is the only
+  place that binds a port to a concrete native or Tauri adapter.
+- `src-tauri/src/events`: Tauri transport adapters. Scan, cleanup,
+  reviewed-storage, and provider progress become `Channel` sinks here, and the
+  desktop-notification port is implemented here, so a service can be exercised
+  without a Tauri runtime.
 - `crates/zenith-platform`: the native platform layer. `description.rs` holds
   the injectable `PlatformEnvironment` description, `environment.rs` probes the
   running machine, `paths.rs` resolves user roots and known folders,
@@ -200,9 +251,14 @@ Neither is stubbed.
   for Main Clean and Quick Clean alike, `StorageService` owns the
   reviewed-storage lifecycle (gate, budgets, ephemeral inventories,
   cancellation registries, reviewed workspaces, plan store, Trash executor) for
-  Large Files, Developer Artifact Review, and App Uninstaller, `ScanService`
-  runs a framework-free scan, and `PlanStore` bounds both cleanup and reviewed
-  Trash plans under one lifecycle.
+  Large Files, Developer Artifact Review, and App Uninstaller, `AiService` owns
+  provider credentials, the usage and agent-activity caches with their
+  single-flight and generation contracts, the Control Center state, and the
+  background runtime, `SystemService` owns memory and disk observations, Docker
+  status and pruning, local-model inventory and deletion, Keep Awake,
+  development-port leases, diagnostics, and the settings authority's
+  persistence path, `ScanService` runs a framework-free scan, and `PlanStore`
+  bounds both cleanup and reviewed Trash plans under one lifecycle.
 - `src-tauri/src/cleaner`: execution of verified plans. Each target is
   classified into `CleanupOperation` first, so only a filesystem operation can
   reach the validated deletion primitive.
@@ -419,8 +475,8 @@ reports the amount moved and describes it as potentially reclaimable after the
 Trash is emptied.
 
 The Trash adapter is a port. `zenith_platform::TrashBackend` is the only place
-the `trash` crate is named, `AppState` holds the adapter so the production path
-and a test use the same code, and the port accepts a `ReviewedTrashEntry` —
+the `trash` crate is named, the composition root hands the adapter to
+`StorageService` so the production path and a test use the same code, and the port accepts a `ReviewedTrashEntry` —
 a type only the reviewed-storage layer mints, immediately after scope, identity,
 symlink, and evidence checks pass — rather than a bare path. Reviewed Trash
 plans live in the same bounded, expiring, one-shot store as cleanup plans, so
@@ -605,13 +661,30 @@ marked as unavailable until a native autostart integration is implemented.
 
 Tauri capabilities are split by window:
 
-- `capabilities/quick.json` grants read-oriented commands plus backend-owned
-  safe plan creation/execution.
+- `capabilities/quick.json` grants read-oriented commands plus the
+  backend-owned safe cleanup intent (`quick_clean_safe`, which selects the
+  backend's own Safe-tier candidates and cannot be pointed at a target).
 - `capabilities/main.json` additionally grants model deletion, Docker pruning,
   process termination, settings writes, power controls, Large Files inspection,
   app inspection, dedicated Trash-plan execution, and development-listener
   inspection/release. Development-port permissions are intentionally absent
-  from the quick panel.
+  from the quick panel, and the reviewed set is asserted by the contract test
+  below.
+
+`src-tauri/tests/capability_contract_tests.rs` holds the split to a contract
+rather than a convention: every grant must name a permission the build
+generates, every registered command must be granted to the main window, and the
+quick window must equal a reviewed read-mostly allowlist that contains no
+mutating command. A grant the panel does not need fails the suite until it is
+written into that allowlist, which is where the review happens.
+
+Capability files are an IPC boundary, not the authorization model. They decide
+which window may call a command; the application services still enforce the
+trusted inventory, scan freshness, opaque IDs, plan TTLs, one-shot execution,
+signature scope, captured identity, and TOCTOU checks on every call, exactly as
+they do for the dashboard. A compromised renderer that can call an allowed
+command cannot convert it into arbitrary filesystem authority, because no
+command accepts a path, a strategy, or an identity from the interface.
 
 The global Tauri JavaScript object is disabled and a Content Security Policy is
 applied in development and production. Adding a command requires all three:
