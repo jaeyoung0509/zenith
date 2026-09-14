@@ -379,10 +379,15 @@ pub fn run() {
                 let loaded = settings_store::load(&config_dir);
                 let state = app.state::<DesktopState>();
                 state.system.apply_startup_policy(&loaded);
-                // The settings file is authoritative at startup: the snapshot
-                // is replaced only after the file was read, and the audit store
-                // this service owns is restored from the same directory.
-                let _ = state.settings.replace(loaded);
+                // The settings file is authoritative at startup; a snapshot
+                // that cannot be published says so instead of quietly leaving
+                // the user's preferences unapplied.
+                if let Err(error) = state.settings.replace(loaded) {
+                    crate::diagnostics::log_error(
+                        "startup",
+                        &format!("Stored settings were not applied: {error}"),
+                    );
+                }
                 state.ai.restore_audit(&config_dir);
             }
             let open_dashboard =
