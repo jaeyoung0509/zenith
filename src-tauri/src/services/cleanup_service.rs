@@ -219,7 +219,11 @@ impl CleanupService {
             .await
     }
 
-    /// Executes Quick Clean for safe auto-cleanable candidates derived directly from fresh scan.
+    /// Executes Quick Clean for the Safe subset of a complete, current scan.
+    ///
+    /// The scan is required to be `Fresh`: this path deletes without a per-item
+    /// review, so a scan that may have missed items cannot authorize it. A
+    /// user-reviewed selection is the path that accepts a partial scan.
     pub async fn quick_clean_safe(
         &self,
         settings: &ZenithSettings,
