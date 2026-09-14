@@ -1,9 +1,9 @@
 pub mod cleanup_service;
-pub mod plan_store;
-pub mod scan_service;
-pub mod scan_store;
+mod plan_store;
+mod scan_service;
+mod scan_store;
 
-pub use cleanup_service::{select_quick_clean_safe_candidates, CleanupIntent, CleanupService};
-pub use plan_store::PlanStore;
-pub use scan_service::ScanService;
-pub use scan_store::ScanStore;
+pub use cleanup_service::{select_quick_clean_safe_candidates, CleanupService};
+pub(crate) use plan_store::PlanStore;
+pub(crate) use scan_service::ScanService;
+pub(crate) use scan_store::ScanStore;

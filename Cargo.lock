@@ -5952,9 +5952,7 @@ dependencies = [
 name = "zenith-platform"
 version = "0.3.27"
 dependencies = [
- "tempfile",
  "trash",
- "zenith-core",
 ]
 
 [[package]]

@@ -22,14 +22,6 @@ impl ScanService {
         }
     }
 
-    pub fn registry(&self) -> &Arc<SignatureRegistry> {
-        &self.registry
-    }
-
-    pub fn environment(&self) -> &Arc<PlatformEnvironment> {
-        &self.environment
-    }
-
     /// Executes a scan synchronously using the provided request, progress sink, and cancellation probe.
     pub fn scan(
         &self,

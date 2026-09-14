@@ -14,9 +14,4 @@ name = "zenith_platform"
 path = "src/lib.rs"
 
 [dependencies]
-zenith-core = { path = "../zenith-core" }
 trash = "5.2"
-
-
-[dev-dependencies]
-tempfile = "3.13"

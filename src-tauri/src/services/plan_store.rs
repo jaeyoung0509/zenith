@@ -81,20 +81,10 @@ impl PlanStore {
         Ok(plan)
     }
 
-    /// Removes all expired plans.
-    pub fn purge_expired(&self, now: u64) {
-        if let Ok(mut plans) = self.plans.lock() {
-            plans.retain(|_, stored| now.saturating_sub(stored.created_at) < self.ttl_seconds);
-        }
-    }
-
     /// Returns the number of currently retained plans (including any not-yet-purged expired ones).
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.plans.lock().map(|p| p.len()).unwrap_or(0)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 

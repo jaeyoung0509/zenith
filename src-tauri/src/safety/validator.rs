@@ -118,6 +118,29 @@ impl SafetyValidator {
             }
         }
 
+        // Every present filesystem target must carry the identity captured by
+        // the planner. Absence is handled above, while provider-backed
+        // strategies never reach a filesystem mutation primitive.
+        if matches!(
+            target.strategy,
+            CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
+        ) && target.identity.is_none()
+        {
+            return RevalidationOutcome::Failed(CleanItemResult {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                path: path.to_string_lossy().to_string(),
+                status: CleanStatus::Failed,
+                success: false,
+                bytes_reclaimed: 0,
+                failure_reason: Some(CleanFailureReason::ChangedSinceScan),
+                error_message: Some(format!(
+                    "Filesystem identity is missing for {}; refusing to mutate",
+                    path.display()
+                )),
+            });
+        }
+
         // 1. Blacklist check (lexical & canonical, fail closed on mutation)
         if let Err(e) = Blacklist::validate_with(path, environment) {
             return RevalidationOutcome::Failed(CleanItemResult {
@@ -303,47 +326,43 @@ impl ValidatedModelTarget {
 /// Ensures raw paths cannot be deleted without first obtaining an authority token
 /// through a domain safety gate (`ValidatedTarget` for general cleanup,
 /// `ValidatedModelTarget` for model inventory cleanup).
-pub enum FilesystemDeleteAuthority<'a> {
+pub struct FilesystemDeleteAuthority<'a> {
+    inner: AuthorityKind<'a>,
+}
+
+enum AuthorityKind<'a> {
     Cleanup(&'a ValidatedTarget),
     ModelInventory(&'a ValidatedModelTarget),
-    #[doc(hidden)]
-    TestDirect {
-        path: &'a Path,
-        exclusions: &'a [String],
-    },
 }
 
 impl<'a> FilesystemDeleteAuthority<'a> {
-    #[doc(hidden)]
-    pub fn test_direct(path: &'a Path, exclusions: &'a [String]) -> Self {
-        Self::TestDirect { path, exclusions }
-    }
-
-    pub fn path(&self) -> &Path {
-        match self {
-            Self::Cleanup(target) => target.path(),
-            Self::ModelInventory(model) => model.path(),
-            Self::TestDirect { path, .. } => path,
+    pub(crate) fn path(&self) -> &Path {
+        match self.inner {
+            AuthorityKind::Cleanup(target) => target.path(),
+            AuthorityKind::ModelInventory(model) => model.path(),
         }
     }
 
-    pub fn exclusions(&self) -> &[String] {
-        match self {
-            Self::Cleanup(target) => target.exclusions(),
-            Self::ModelInventory(_) => &[],
-            Self::TestDirect { exclusions, .. } => exclusions,
+    pub(crate) fn exclusions(&self) -> &[String] {
+        match self.inner {
+            AuthorityKind::Cleanup(target) => target.exclusions(),
+            AuthorityKind::ModelInventory(_) => &[],
         }
     }
 }
 
 impl<'a> From<&'a ValidatedTarget> for FilesystemDeleteAuthority<'a> {
     fn from(target: &'a ValidatedTarget) -> Self {
-        Self::Cleanup(target)
+        Self {
+            inner: AuthorityKind::Cleanup(target),
+        }
     }
 }
 
 impl<'a> From<&'a ValidatedModelTarget> for FilesystemDeleteAuthority<'a> {
     fn from(target: &'a ValidatedModelTarget) -> Self {
-        Self::ModelInventory(target)
+        Self {
+            inner: AuthorityKind::ModelInventory(target),
+        }
     }
 }

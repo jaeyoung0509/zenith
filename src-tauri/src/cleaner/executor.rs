@@ -453,7 +453,7 @@ mod tests {
                 strategy: CleanStrategy::DeleteContents,
                 expected_bytes: 4096,
                 risk: crate::models::RiskTier::Safe,
-                identity: None,
+                identity: ToctouGuard::capture(&cache_root),
                 exclusions: vec![],
                 min_age_days: None,
             }],

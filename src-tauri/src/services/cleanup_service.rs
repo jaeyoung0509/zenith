@@ -58,7 +58,7 @@ pub fn select_quick_clean_safe_candidates(
 /// Main Clean and Quick Clean are intents routed through the same
 /// unified security, validation, invalidation, and execution pipeline.
 #[derive(Debug)]
-pub enum CleanupIntent {
+enum CleanupIntent {
     ReviewedSelection { plan_id: Uuid },
     QuickSafe,
 }
@@ -81,7 +81,7 @@ pub struct CleanupService {
 
 impl CleanupService {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         scan_service: Arc<ScanService>,
         plan_store: Arc<PlanStore>,
         scan_store: Arc<ScanStore>,
@@ -103,18 +103,6 @@ impl CleanupService {
             docker_status_cache,
             platform_capabilities,
         }
-    }
-
-    pub fn plan_store(&self) -> &Arc<PlanStore> {
-        &self.plan_store
-    }
-
-    pub fn scan_store(&self) -> &Arc<ScanStore> {
-        &self.scan_store
-    }
-
-    pub fn scan_service(&self) -> &Arc<ScanService> {
-        &self.scan_service
     }
 
     /// Runs a full cleanup scan under the storage operation gate and execution budgets.
@@ -147,7 +135,7 @@ impl CleanupService {
         let scan_store = self.scan_store.clone();
         let operation_gate = self.operation_gate.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
+        let result = tauri::async_runtime::spawn_blocking(move || {
             operation_gate.run_read(|| {
                 let result =
                     scan_service.scan(&request, progress.as_ref(), &crate::models::NeverCancelled);
@@ -185,7 +173,7 @@ impl CleanupService {
         let registry = self.registry.clone();
         let environment = self.environment.clone();
 
-        tokio::task::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             let scan = scan_store
                 .get()
                 .filter(|s| s.scan_id == scan_id)
@@ -259,7 +247,7 @@ impl CleanupService {
         let registry = self.registry.clone();
         let docker_status_cache = self.docker_status_cache.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<CleanResult, String> {
+        tauri::async_runtime::spawn_blocking(move || -> Result<CleanResult, String> {
             operation_gate.run_write(|| {
                 let now = unix_timestamp();
 

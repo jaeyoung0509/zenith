@@ -18,12 +18,6 @@ impl ScanStore {
         }
     }
 
-    pub fn with_scan(scan: ScanResult) -> Self {
-        Self {
-            last_scan: Mutex::new(Some(scan)),
-        }
-    }
-
     /// Returns a clone of the latest scan result if one is present.
     pub fn get(&self) -> Option<ScanResult> {
         self.last_scan
@@ -42,7 +36,8 @@ impl ScanStore {
     }
 
     /// Invalidates the stored scan, e.g. after a destructive cleanup run.
-    pub fn invalidate(&self) {
+    #[cfg(test)]
+    fn invalidate(&self) {
         let mut guard = self
             .last_scan
             .lock()
