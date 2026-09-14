@@ -564,6 +564,7 @@ impl AiService {
                     crate::ai_control_center::git::GitBaselineStore::collect_summaries(
                         &git_baselines,
                         &activity.project_roots,
+                        &environment,
                         now,
                     );
                 // Short final merge: no subprocess, disk I/O, or channel sends
@@ -961,6 +962,7 @@ impl AiService {
             .ok_or_else(|| "Project identity is stale or unavailable".to_string())?;
         let retention = self.settings.snapshot()?.ai_control.audit_retention_days;
         let control_state = self.control_state.clone();
+        let environment = self.environment.clone();
         let project_id = project_id.to_string();
         let config_dir = config_dir.to_path_buf();
         crate::blocking::run_blocking(
@@ -974,15 +976,27 @@ impl AiService {
                     .baseline_snapshot(&project_id)
                     .ok_or_else(|| "Git baseline is stale or unavailable".to_string())?;
                 let now = unix_timestamp();
-                let (baseline_head, paths) =
+                let context =
                     crate::ai_control_center::git::GitBaselineStore::diff_context_with_baseline(
-                        &baseline, &root, now,
-                    );
-                let diff = crate::ai_control_center::git::explicit_diff(
+                        &baseline,
+                        &root,
+                        &environment,
+                        now,
+                    )?;
+                let mut diff = crate::ai_control_center::git::explicit_diff(
                     &root,
-                    baseline_head.as_deref(),
-                    &paths,
+                    &environment,
+                    context.baseline_head.as_deref(),
+                    &context.paths,
                 )?;
+                // A diff that could not show everything says so, the same way a
+                // truncated diff does, instead of looking complete.
+                if let Some(caveat) = &context.caveat {
+                    if !diff.is_empty() && !diff.ends_with('\n') {
+                        diff.push('\n');
+                    }
+                    diff.push_str(&format!("\n[Zenith note: {caveat}]"));
+                }
                 let audit_store = {
                     let mut control = control_state
                         .lock()

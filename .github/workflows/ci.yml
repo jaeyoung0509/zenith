@@ -199,6 +199,38 @@ jobs:
       - name: Verify the declared rust-version builds this tree
         run: just check-msrv
 
+  msrv-windows:
+    name: Minimum Supported Rust Version (Windows target)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain (the declared rust-version)
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          toolchain: 1.95.0-x86_64-pc-windows-msvc
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # Every Windows dependency is target-gated and the `#[cfg(windows)]`
+      # bodies are where the largest platform work landed, so a macOS runner
+      # resolves none of it. Part of the declared floor exists for Windows
+      # (CVE-2024-24576 batch-file argument escaping), so it is verified here
+      # too, against the same target set the lint gate uses.
+      - name: Verify the declared rust-version builds this tree on Windows
+        run: just check-msrv
+
   supply-chain:
     name: Supply Chain Audit
     runs-on: ubuntu-latest

@@ -62,6 +62,80 @@ local inspection surface. Cleanup trust boundaries live in
   dependency graph. A domain rule therefore cannot silently start reading a
   window, a `Channel`, or a capability file.
 
+## Workspace-supplied repository content
+
+Zenith inspects the projects an AI agent is observed working in. Those
+directories are chosen by the work, not nominated by the user: a project root
+comes from an observed agent process working directory, so the repositories
+Zenith reads are the directories the user happens to work in. Zenith reads state
+there; it does not execute or rewrite the configuration it finds.
+
+- **One constructor builds every invocation and neutralizes fixed-name program
+  hooks.** Git reads a repository's own `.git/config` whenever it
+  operates on that repository, and several documented keys name a program Git
+  then runs:
+  `core.fsmonitor` is consulted by `git status` specifically, and `core.pager`,
+  `core.hooksPath`, `diff.external`, and `core.sshCommand` are the same class.
+  Those keys have fixed names, so `git::git_command` replaces each of them on
+  the command line, where Git gives them precedence over any configuration file.
+  Content diffs also pass `--no-ext-diff` and `--no-textconv`, which Git gates
+  separately from configuration, and a content diff that omits `--no-ext-diff`
+  fails closed rather than running the repository's program. The allowed
+  behavior of an invocation is: report state for the project it was pointed at
+  (status, `HEAD`, name-status, and file content already limited to 256 KiB per
+  diff), plus the configuration listing that decides whether a driver definition
+  is present, which reads configuration and runs nothing.
+- **A driver definition is refused rather than neutralized.**
+  `filter.<driver>.*`, `diff.<driver>.*`, and `merge.<driver>.*` name programs
+  too, but the driver name is whatever the repository writes, so no command line
+  can name the key in advance. `$GIT_DIR/info/attributes` is the same problem
+  from the other side: it outranks every other attribute source and no
+  command-line configuration replaces it. A repository carrying a non-empty
+  `info/attributes`, or one whose own configuration defines a driver program —
+  read through Git's own parser with includes expanded, so a file an `include`
+  directive pulls in cannot hide it — therefore has its git-derived state
+  refused: the status and diff invocations are never made, the reason is
+  recorded in the diagnostics log, and the Control Center carries it as the
+  summary's status message. The refusal pass is repeated immediately before
+  every command is built, so an earlier `GitInspection` does not silently stay
+  valid after the repository adds a driver definition or `info/attributes`.
+  One value is
+  weaker than that: `ProjectIdentity::is_dirty` is a boolean, so a refused or
+  failed read shows as "no observed changes" in the project list while only the
+  log carries the reason.
+- **Nothing else is neutralized, because a checkout has to read the way the
+  user's own shell reads it.** The machine's Git configuration, the user's own
+  configuration, and the repository's attribute files are all honored. Removing
+  them made Zenith's answer differ from `git status` in the user's terminal:
+  with the attribute source pinned to the empty tree, a clean `text eol=crlf`
+  checkout read as modified, and with `GIT_CONFIG_NOSYSTEM` set, a Windows
+  checkout whose `core.autocrlf` came from the system configuration did too.
+  `tests/git_boundary_tests.rs` holds that parity against the user's own git for
+  both kinds of line-ending configuration, in a checkout and in a linked
+  worktree. The residual is stated rather than hidden: a repository may *select*
+  a driver program that the user's own configuration defines — git-lfs installed
+  machine-wide is the ordinary case — which is the same program the user's own
+  `git status` runs in that directory. A same-user process can also race any
+  filesystem preflight by replacing repository metadata after the last check;
+  this boundary reduces that window but is not process isolation.
+- **A `.git` pointer must be tied to this checkout, not merely shaped like one.**
+  `.git` may be a *file* naming the git directory that holds the repository,
+  which is how a linked worktree and a submodule record it. The pointer file, the
+  `HEAD` it resolves to, and the metadata used to validate the relation are read
+  under a 4 KiB cap enforced on the open handle, so growth between a check and
+  the read cannot exceed it. A target inside the project is validated by
+  `SymlinkGuard`; a target outside it is accepted only through Git's own
+  backlink — a linked worktree records `gitdir` naming this project's `.git`, a
+  submodule records `core.worktree` naming this project — and anything else is
+  refused and recorded rather than reported as "not a repository". A link at
+  `.git`, including a Windows directory junction, is resolved and judged instead
+  of followed.
+- **Repository-derived strings are bounded before they cross IPC.** A branch
+  name longer than Zenith's own 1 KiB bound is refused rather than truncated into
+  a name Git never created, and a detached `HEAD` whose content is not an object
+  id (40 hex digits, or 64 in a SHA-256 repository) is reported as no state
+  instead of being echoed to the interface.
+
 ## Platform ceilings recorded, not fixed
 
 - **macOS Keychain ACL is bound to a code-signing identity.** For an unsigned

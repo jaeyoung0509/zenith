@@ -188,10 +188,15 @@ check: ensure-dist lint-rust check-architecture
     pnpm check
     pnpm build
 
-# Build with the exact rust-version declared in the workspace manifest
+# Build with the exact rust-version declared in the workspace manifest.
+#
+# `--all-targets` matches the lint gate's target set, so a dev-dependency or a
+# test target cannot pass MSRV and then fail the suite. CI runs this recipe on
+# both a macOS and a Windows runner: the Windows dependencies are target-gated
+# and are not resolved at all on macOS.
 check-msrv: ensure-dist
     node scripts/check_rust_version.cjs
-    cargo check --workspace --locked
+    cargo check --workspace --locked --all-targets
 
 # Fail on locked-dependency vulnerabilities, license drift, and duplicate bans
 supply-chain:

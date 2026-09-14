@@ -197,6 +197,7 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use zenith_platform::PlatformEnvironment;
 
     #[cfg(unix)]
     #[test]
@@ -219,7 +220,6 @@ mod tests {
     fn a_stated_tool_resolution_is_the_authority() {
         use std::path::PathBuf;
         use zenith_platform::path_algebra::PathFlavor;
-        use zenith_platform::PlatformEnvironment;
 
         let stated = if cfg!(windows) {
             PathBuf::from(r"D:\tools\npm.cmd")
@@ -234,7 +234,6 @@ mod tests {
     #[test]
     fn a_stated_missing_tool_is_never_re_discovered_from_the_host() {
         use zenith_platform::path_algebra::PathFlavor;
-        use zenith_platform::PlatformEnvironment;
 
         // The host resolves this tool; the environment states it is absent.
         assert!(
