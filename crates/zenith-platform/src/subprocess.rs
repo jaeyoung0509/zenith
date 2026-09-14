@@ -38,7 +38,13 @@ fn log_subprocess_error(message: &str) {
     }
 }
 
-const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+/// Bytes of `stdout` and of `stderr` one child may hand back.
+///
+/// Capture is capped so a chatty child cannot exhaust memory, and an answer
+/// that reaches the cap may have been cut short: a caller that needs a complete
+/// listing has to compare against this value instead of reading a truncated one
+/// as complete.
+pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 /// Bounded pipe cleanup after the child lifecycle ends (termination + drain).
 const PIPE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 

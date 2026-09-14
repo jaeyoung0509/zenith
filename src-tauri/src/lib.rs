@@ -16,6 +16,7 @@ pub mod diagnostics;
 pub mod docker;
 pub mod events;
 pub mod execution_budget;
+pub mod git;
 pub mod hash;
 // The wire rule for a `u64` that crosses IPC is a property of the contract,
 // not of the desktop adapter, so it is defined in `zenith_core` and re-exported

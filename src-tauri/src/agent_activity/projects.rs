@@ -1,7 +1,5 @@
+use crate::git::{read_capped, CappedRead, GitInspection};
 use crate::models::ProjectIdentity;
-use crate::tooling::{
-    git_directory, git_inspection_refusal, read_capped, CappedRead, GitDirectory,
-};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -22,27 +20,23 @@ pub fn resolve_project(
 
     let root = git_root.unwrap_or_else(|| canonical_cwd.clone());
     let marker = root.join(".git");
-    let repository = git_directory(&root, environment);
-    if let GitDirectory::Refused(reason) = &repository {
-        // A refused pointer is not the same state as a directory that is not a
-        // repository, so it is recorded where the user can see it rather than
-        // being reported as "no repository". The message can name a path, which
-        // the log sanitizer masks.
-        crate::diagnostics::log_error("project_identity", reason);
+    // One inspection answers both questions the identity needs — whether this is
+    // a repository, and whether an invocation may run — so the dirty check does
+    // not repeat the filesystem and configuration work.
+    let inspection = GitInspection::open(&root, environment);
+    if let Some(refusal) = inspection.refusal() {
+        // A repository Zenith will not read is not the same state as a directory
+        // that is not a repository, so it is recorded where the user can see it
+        // rather than being reported as "no repository". The message can name a
+        // path, which the log sanitizer masks.
+        crate::diagnostics::log_error("project_identity", &refusal.message());
     }
-    let is_repository = matches!(repository, GitDirectory::Resolved { .. });
+    let is_repository = inspection.is_repository();
     let is_worktree = is_repository && marker.is_file();
-    // A repository whose attribute sources cannot be neutralized is still
-    // identified, but no `git` invocation is made in it: the branch is a bounded
-    // file read, and the dirty state stays unread.
-    let inspection_refusal = if is_repository {
-        git_inspection_refusal(&root)
-    } else {
-        None
-    };
-    if let Some(reason) = &inspection_refusal {
-        crate::diagnostics::log_error("project_identity", reason);
-    }
+    // A repository whose own configuration names a program is still identified,
+    // but no `git` invocation is made in it: the branch is a bounded file read,
+    // and the dirty state stays unread.
+    let inspection_refusal = inspection.refusal();
 
     let display_name = root.file_name()?.to_string_lossy().to_string();
     let location_hint =
@@ -56,18 +50,17 @@ pub fn resolve_project(
     } else {
         None
     };
-    let repository_id = match &repository {
-        GitDirectory::Resolved { identity, .. } => Some(opaque_id("repository", identity)),
-        _ => None,
-    };
+    let repository_id = inspection
+        .identity()
+        .map(|identity| opaque_id("repository", identity));
 
-    let (branch, is_detached) = match &repository {
-        GitDirectory::Resolved { git_dir, .. } => read_head_status(git_dir),
-        _ => (None, false),
+    let (branch, is_detached) = match inspection.git_dir() {
+        Some(git_dir) => read_head_status(git_dir),
+        None => (None, false),
     };
 
     let is_dirty = if is_repository && inspection_refusal.is_none() {
-        check_git_dirty(&root)
+        check_git_dirty(&inspection)
     } else {
         false
     };
@@ -124,21 +117,38 @@ fn find_git_root(start: &Path, home: Option<&Path>) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn check_git_dirty(root: &Path) -> bool {
-    let Ok(mut cmd) = crate::tooling::git_command(root) else {
+fn check_git_dirty(inspection: &GitInspection) -> bool {
+    let Ok(mut cmd) = inspection.command() else {
         // The refusal itself is reported where the project identity is resolved;
         // here the state is simply not read.
         return false;
     };
     cmd.args(["status", "--porcelain=v1", "-z"]);
-    if let Ok(output) =
-        zenith_platform::subprocess::run_with_timeout(cmd, Duration::from_millis(800))
-    {
-        if output.status.success() {
-            return !output.stdout.is_empty();
+    match zenith_platform::subprocess::run_with_timeout(cmd, Duration::from_millis(800)) {
+        Ok(output) if output.status.success() => !output.stdout.is_empty(),
+        // A failure is not "no changes": `is_dirty` is a boolean, so the reason
+        // is recorded here instead of being dropped.
+        Ok(output) => {
+            crate::diagnostics::log_error(
+                "project_identity",
+                &format!(
+                    "git status exited with {} in this project",
+                    match output.status.code() {
+                        Some(code) => code.to_string(),
+                        None => "a signal".to_string(),
+                    }
+                ),
+            );
+            false
+        }
+        Err(error) => {
+            crate::diagnostics::log_error(
+                "project_identity",
+                &format!("git status could not be run in this project: {error}"),
+            );
+            false
         }
     }
-    false
 }
 
 /// Longest branch name or detached label returned across IPC. Git bounds the
@@ -211,7 +221,8 @@ pub fn opaque_id(namespace: &str, value: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tooling::MAX_GIT_METADATA_BYTES;
+    use crate::git::metadata::MAX_GIT_METADATA_BYTES;
+    use crate::git::{git_directory, GitDirectory};
 
     /// The host machine these project fixtures live on.
     fn test_environment() -> zenith_platform::PlatformEnvironment {
