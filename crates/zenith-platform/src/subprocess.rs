@@ -571,6 +571,12 @@ pub async fn run_with_timeout_async(
 
 #[cfg(test)]
 mod tests {
+    // The fixture file the Windows job-object tests read back through the
+    // captured pipe; every other test in this module drives process objects
+    // directly, so the import is gated the way its users are.
+    #[cfg(target_os = "windows")]
+    use std::fs;
+
     #[cfg(target_os = "windows")]
     #[test]
     fn background_command_captures_output_without_a_console() {
