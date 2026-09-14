@@ -379,7 +379,12 @@ pub fn run() {
             if let Some(config_dir) = config_dir {
                 let loaded = settings_store::load(&config_dir);
                 let state = app.state::<DesktopState>();
-                state.system.apply_startup_policy(&loaded);
+                if let Err(error) = state.system.apply_startup_policy(&loaded) {
+                    crate::diagnostics::log_error(
+                        "startup",
+                        &format!("Stored Keep Awake rules were not applied: {error}"),
+                    );
+                }
                 // The settings file is authoritative at startup; a snapshot
                 // that cannot be published says so instead of quietly leaving
                 // the user's preferences unapplied.
@@ -502,7 +507,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::remove_agent_integration,
             commands::get_agent_quick_summary,
             commands::post_agent_event,
-            commands::open_in_terminal,
+            commands::open_project_in_terminal,
             commands::get_ai_control_center,
             commands::get_ai_control_quick_summary,
             commands::save_ai_control_preferences,

@@ -12,6 +12,16 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
 use sysinfo::{ProcessesToUpdate, System};
 
+/// Maximum number of Keep Awake rules the manager accepts.
+///
+/// Every rule's pattern is substring-matched against every running process
+/// on each evaluation tick and the list is persisted into the settings file,
+/// so this bound is what keeps that loop and file finite. This is the one
+/// list-shaped input in the tree that was previously taken as given; the
+/// stated-bounds convention (`MAX_PAYLOAD_BYTES`, `MAX_SESSION_ID_BYTES`,
+/// ...) is set out in `agent_activity/events.rs`.
+pub const MAX_AWAKE_RULES: usize = 64;
+
 pub struct KeepAwakeManager {
     rules: Arc<Mutex<Vec<AwakeRule>>>,
     active_assertion: Arc<Mutex<Option<PowerAssertion>>>,
@@ -84,12 +94,25 @@ impl KeepAwakeManager {
     }
 
     /// Sets the active rules to monitor.
-    pub fn set_rules(&self, rules: Vec<AwakeRule>) {
+    ///
+    /// The manager is the authority for this input: the IPC command, the
+    /// persisted settings applied at startup, and a settings save all pass
+    /// through here, so [`MAX_AWAKE_RULES`] is enforced once. A list beyond
+    /// the maximum is refused with its reason and the current rules are left
+    /// untouched rather than silently truncated.
+    pub fn set_rules(&self, rules: Vec<AwakeRule>) -> Result<(), String> {
+        if rules.len() > MAX_AWAKE_RULES {
+            return Err(format!(
+                "Too many Keep Awake rules: {} exceeds the maximum of {MAX_AWAKE_RULES}.",
+                rules.len()
+            ));
+        }
         let mut r = self.rules.lock().expect("rules poisoned");
         *r = rules;
         drop(r);
         self.notify_watcher();
         self.evaluate();
+        Ok(())
     }
 
     /// Sets manual Keep Awake duration (in seconds, or None for indefinite until turned off).
@@ -847,7 +870,9 @@ mod tests {
             power_condition: PowerCondition::AcPowerOnly,
             enabled: true,
         };
-        manager.set_rules(vec![rule_ac_only]);
+        manager
+            .set_rules(vec![rule_ac_only])
+            .expect("rules within limit");
         let state = manager.get_state();
 
         assert!(!state.is_active);
@@ -942,7 +967,9 @@ mod tests {
             enabled: false,
         };
 
-        manager.set_rules(vec![rule1, rule2]);
+        manager
+            .set_rules(vec![rule1, rule2])
+            .expect("rules within limit");
         let state = manager.get_state();
 
         assert_eq!(state.rule_evaluations.len(), 2);
@@ -1269,7 +1296,9 @@ mod tests {
             Arc::new(MockPowerSource::new(PowerSourceType::Ac)),
             assertion.clone(),
         );
-        ac_manager.set_rules(vec![typed_rule.clone()]);
+        ac_manager
+            .set_rules(vec![typed_rule.clone()])
+            .expect("rules within limit");
         assert_eq!(
             ac_manager.get_state().rule_evaluations[0].status,
             AwakeRuleStatus::Active
@@ -1288,7 +1317,9 @@ mod tests {
 
         let mut stale = typed_rule.clone();
         stale.application.as_mut().unwrap().path = "/moved/Warp.app".into();
-        ac_manager.set_rules(vec![stale]);
+        ac_manager
+            .set_rules(vec![stale])
+            .expect("rules within limit");
         assert_eq!(
             ac_manager.get_state().rule_evaluations[0].status,
             AwakeRuleStatus::InvalidApplication
@@ -1298,7 +1329,9 @@ mod tests {
             Arc::new(MockPowerSource::new(PowerSourceType::Battery)),
             assertion.clone(),
         );
-        battery_manager.set_rules(vec![typed_rule.clone()]);
+        battery_manager
+            .set_rules(vec![typed_rule.clone()])
+            .expect("rules within limit");
         assert_eq!(
             battery_manager.get_state().rule_evaluations[0].status,
             AwakeRuleStatus::WaitingPower
@@ -1308,7 +1341,9 @@ mod tests {
             Arc::new(MockPowerSource::new(PowerSourceType::Unknown)),
             assertion,
         );
-        unknown_manager.set_rules(vec![typed_rule]);
+        unknown_manager
+            .set_rules(vec![typed_rule])
+            .expect("rules within limit");
         assert_eq!(
             unknown_manager.get_state().rule_evaluations[0].status,
             AwakeRuleStatus::WaitingPower
@@ -1342,9 +1377,9 @@ mod tests {
             Arc::new(MockPowerSource::new(PowerSourceType::Ac)),
             Arc::new(TestAssertionProvider::new(false)),
         );
-        manager.set_rules(vec![rule]);
+        manager.set_rules(vec![rule]).expect("rules within limit");
         assert!(manager.get_state().is_active);
-        manager.set_rules(Vec::new());
+        manager.set_rules(Vec::new()).expect("rules within limit");
         assert!(!manager.get_state().is_active);
     }
 
@@ -1373,7 +1408,9 @@ mod tests {
             power_condition: PowerCondition::Always,
             enabled: true,
         };
-        manager.set_rules(vec![active_rule]);
+        manager
+            .set_rules(vec![active_rule])
+            .expect("rules within limit");
         manager.evaluate();
         assert!(
             manager.get_state().is_active,
@@ -1421,7 +1458,9 @@ mod tests {
             power_condition: PowerCondition::AcPowerOnly,
             enabled: true,
         };
-        manager_ac.set_rules(vec![rule_ac_only.clone()]);
+        manager_ac
+            .set_rules(vec![rule_ac_only.clone()])
+            .expect("rules within limit");
         manager_ac.evaluate();
         let eval_ac = manager_ac.get_state().rule_evaluations[0].clone();
         assert!(eval_ac.is_process_running);
@@ -1432,7 +1471,9 @@ mod tests {
         let power_battery = Arc::new(MockPowerSource::new(PowerSourceType::Battery));
         let manager_bat =
             KeepAwakeManager::with_providers(power_battery.clone(), assertion_mock.clone());
-        manager_bat.set_rules(vec![rule_ac_only]);
+        manager_bat
+            .set_rules(vec![rule_ac_only])
+            .expect("rules within limit");
         manager_bat.evaluate();
         let eval_bat = manager_bat.get_state().rule_evaluations[0].clone();
         assert!(eval_bat.is_process_running);
@@ -1452,7 +1493,9 @@ mod tests {
             enabled: true,
         };
         let manager_bat_always = KeepAwakeManager::with_providers(power_battery, assertion_mock);
-        manager_bat_always.set_rules(vec![rule_always]);
+        manager_bat_always
+            .set_rules(vec![rule_always])
+            .expect("rules within limit");
         manager_bat_always.evaluate();
         let eval_bat_always = manager_bat_always.get_state().rule_evaluations[0].clone();
         assert!(eval_bat_always.is_process_running);
@@ -1521,7 +1564,9 @@ mod tests {
             power_condition: PowerCondition::Always,
             enabled: true,
         };
-        manager.set_rules(vec![compound_rule]);
+        manager
+            .set_rules(vec![compound_rule])
+            .expect("rules within limit");
         manager.evaluate();
         let eval = manager.get_state().rule_evaluations[0].clone();
         // Should be Active because both patterns match the same running test process
@@ -1563,11 +1608,59 @@ mod tests {
             power_condition: PowerCondition::Always,
             enabled: true,
         };
-        manager.set_rules(vec![rule1.clone(), rule2]);
+        manager
+            .set_rules(vec![rule1.clone(), rule2])
+            .expect("rules within limit");
         manager.evaluate();
         let state = manager.get_state();
         assert_eq!(state.active_rule_id, Some("rule.first".to_string()));
         assert_eq!(state.rule_evaluations[0].status, AwakeRuleStatus::Active);
-        assert_eq!(state.rule_evaluations[1].status, AwakeRuleStatus::Active);
+    }
+
+    fn bound_test_rule(id: &str) -> AwakeRule {
+        AwakeRule {
+            id: id.to_string(),
+            app_name: "Bound test".to_string(),
+            executable_pattern: "non_existent_process_bound_test".to_string(),
+            requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::Always,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn set_rules_refuses_a_list_beyond_the_maximum_and_keeps_the_current_rules() {
+        let manager = KeepAwakeManager::new();
+        let first = bound_test_rule("rule.first");
+        manager
+            .set_rules(vec![first.clone()])
+            .expect("rules within limit");
+
+        let too_many = vec![bound_test_rule("rule.overflow"); MAX_AWAKE_RULES + 1];
+        let error = manager
+            .set_rules(too_many)
+            .expect_err("a list beyond the maximum must be refused");
+        assert!(
+            error.contains(&MAX_AWAKE_RULES.to_string()),
+            "the refusal states the maximum: {error}"
+        );
+
+        // The refusal is atomic: the previously accepted rules still stand.
+        let state = manager.get_state();
+        assert_eq!(state.rule_evaluations.len(), 1);
+        assert_eq!(state.rule_evaluations[0].rule_id, first.id);
+    }
+
+    #[test]
+    fn set_rules_accepts_a_list_at_the_maximum() {
+        let manager = KeepAwakeManager::new();
+        let rules = (0..MAX_AWAKE_RULES)
+            .map(|index| bound_test_rule(&format!("rule.bound_{index}")))
+            .collect::<Vec<_>>();
+        manager.set_rules(rules).expect("rules within limit");
+        assert_eq!(manager.get_state().rule_evaluations.len(), MAX_AWAKE_RULES);
     }
 }

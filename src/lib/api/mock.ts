@@ -439,8 +439,8 @@ export const mockApi = {
     // Mock event receipt
   },
 
-  async openInTerminal(_path: string): Promise<void> {
-    // Mock open in terminal
+  async openProjectInTerminal(_projectId: string): Promise<void> {
+    // Mock open project in terminal
   },
 
   async getAiUsage(

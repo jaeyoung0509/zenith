@@ -36,6 +36,38 @@ impl NativeSystemActions {
     }
 }
 
+/// Assembles the Windows Explorer `/select` command-line argument.
+///
+/// # The invariant this helper owns
+///
+/// `raw_arg` bypasses Rust's argument quoting, so the quotes around the path
+/// are the only quoting the command line has. They hold because a Windows
+/// path cannot contain `"`, and because `explorer.exe` is spawned directly
+/// rather than through a shell, so no metacharacter is re-interpreted. The
+/// `"` check below turns the first half of that invariant into an enforced
+/// rule: a path that carries one would corrupt the quoting, so the argument
+/// is refused instead of forwarded.
+///
+/// The path arrives as UTF-16 code units and is embedded losslessly: an
+/// unpaired surrogate survives the round trip instead of being replaced with
+/// U+FFFD the way `to_string_lossy` would. The encoding and the assembly are
+/// separate so the assembly rule is checked on every platform, not only
+/// where the Windows branch compiles.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn assemble_explorer_select_argument(
+    prefix: &str,
+    path: &[u16],
+    suffix: &str,
+) -> Result<Vec<u16>, String> {
+    if path.contains(&0x0022) {
+        return Err("The path contains a double quote.".to_string());
+    }
+    let mut argument = prefix.encode_utf16().collect::<Vec<_>>();
+    argument.extend_from_slice(path);
+    argument.extend(suffix.encode_utf16());
+    Ok(argument)
+}
+
 impl SystemActionProvider for NativeSystemActions {
     fn reveal_path(&self, path: &Path) -> Result<(), String> {
         if !path.exists() {
@@ -54,6 +86,7 @@ impl SystemActionProvider for NativeSystemActions {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::ffi::OsStringExt;
             use std::os::windows::process::CommandExt;
             let norm_path = crate::NativePlatformPaths::normalize_verbatim_path(path);
             if norm_path.is_dir() {
@@ -63,7 +96,14 @@ impl SystemActionProvider for NativeSystemActions {
                     .map_err(|error| format!("Could not open Explorer: {error}"))?;
             } else {
                 let mut cmd = Command::new("explorer.exe");
-                cmd.raw_arg(format!("/select,\"{}\"", norm_path.to_string_lossy()));
+                // The `/select` argument is quoted by hand because `raw_arg`
+                // bypasses Rust's quoting; `assemble_explorer_select_argument`
+                // owns the invariant that makes that sound and passes the path
+                // through losslessly.
+                let path_wide = norm_path.as_os_str().encode_wide().collect::<Vec<_>>();
+                let argument = assemble_explorer_select_argument(r#"/select,""#, &path_wide, "\"")
+                    .map_err(|error| format!("Could not open Explorer: {error}"))?;
+                cmd.raw_arg(std::ffi::OsString::from_wide(&argument));
                 cmd.spawn()
                     .map_err(|error| format!("Could not open Explorer: {error}"))?;
             }
@@ -258,5 +298,32 @@ mod tests {
         assert!(actions.reveal_path(missing).is_err());
         assert!(actions.open_folder(missing).is_err());
         assert!(actions.open_terminal(missing).is_err());
+    }
+
+    #[test]
+    fn explorer_select_argument_quotes_the_path_between_two_double_quotes() {
+        // A path with spaces and non-ASCII must survive the hand-built quoting.
+        let path = "C:\\My Projects\\café".encode_utf16().collect::<Vec<_>>();
+        let argument = assemble_explorer_select_argument(r#"/select,""#, &path, "\"").unwrap();
+        let argument = String::from_utf16(&argument).unwrap();
+        assert_eq!(argument, r#"/select,"C:\My Projects\café""#);
+    }
+
+    #[test]
+    fn explorer_select_argument_refuses_a_double_quote_in_the_path() {
+        // Windows paths cannot contain `"`, so this can only happen when a
+        // path was constructed outside the filesystem; corrupting the quoting
+        // would hand Explorer an argument nobody verified.
+        let path = "C:\\with\"quote".encode_utf16().collect::<Vec<_>>();
+        assert!(assemble_explorer_select_argument(r#"/select,""#, &path, "\"").is_err());
+    }
+
+    #[test]
+    fn explorer_select_argument_preserves_an_unpaired_surrogate() {
+        // A path `to_string_lossy` cannot represent (U+FFFD replacement) must
+        // reach the argument unchanged instead of silently naming another path.
+        let path = [0x0051, 0xD800];
+        let argument = assemble_explorer_select_argument(r#"/select,""#, &path, "\"").unwrap();
+        assert_eq!(&argument[9..11], &[0x0051, 0xD800]);
     }
 }

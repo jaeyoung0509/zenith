@@ -86,8 +86,8 @@ export function tauriPostAgentEvent(event: IngestedAgentEvent): Promise<void> {
   return api.postAgentEvent(event);
 }
 
-export function tauriOpenInTerminal(path: string): Promise<void> {
-  return api.openInTerminal(path);
+export function tauriOpenProjectInTerminal(projectId: string): Promise<void> {
+  return api.openProjectInTerminal(projectId);
 }
 
 export function tauriGetAiUsage(

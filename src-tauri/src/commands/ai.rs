@@ -63,6 +63,15 @@ pub async fn get_project_context(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn open_project_in_terminal(
+    project_id: String,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    state.ai.open_project_in_terminal(&project_id).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn request_stop_agent_session(
     session_id: String,
     lease_id: String,

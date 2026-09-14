@@ -118,7 +118,7 @@ const MUTATING_PERMISSIONS: [&str; 28] = [
     "allow-prune-docker-target",
     "allow-quick-clean-safe",
     "allow-register-developer-home-workspace",
-    "allow-open-in-terminal",
+    "allow-open-project-in-terminal",
     "allow-post-agent-event",
     "allow-release-development-listener",
     "allow-remove-agent-integration",

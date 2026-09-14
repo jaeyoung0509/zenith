@@ -12,7 +12,7 @@ fn main() {
         "remove_agent_integration",
         "get_agent_quick_summary",
         "post_agent_event",
-        "open_in_terminal",
+        "open_project_in_terminal",
         "get_ai_control_center",
         "get_ai_control_quick_summary",
         "save_ai_control_preferences",

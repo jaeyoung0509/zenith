@@ -19,7 +19,7 @@
     "allow-remove-agent-integration",
     "allow-get-agent-quick-summary",
     "allow-post-agent-event",
-    "allow-open-in-terminal",
+    "allow-open-project-in-terminal",
     "allow-get-ai-control-center",
     "allow-get-ai-control-quick-summary",
     "allow-save-ai-control-preferences",

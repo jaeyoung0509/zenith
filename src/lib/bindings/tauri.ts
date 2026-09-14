@@ -18,7 +18,7 @@ export const commands = {
 	sessions: AgentQuickSessionRow_Serialize[],
 } | null, string>(__TAURI_INVOKE("get_agent_quick_summary")),
 	postAgentEvent: (event: IngestedAgentEvent_Deserialize) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
-	openInTerminal: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_in_terminal", { path })),
+	openProjectInTerminal: (projectId: string) => typedError<null, string>(__TAURI_INVOKE("open_project_in_terminal", { projectId })),
 	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
 	getAiControlQuickSummary: () => __TAURI_INVOKE<{
 	observed_at: number,

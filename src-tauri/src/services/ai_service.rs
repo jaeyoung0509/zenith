@@ -235,6 +235,38 @@ impl AiService {
         .await
     }
 
+    /// Opens a terminal at the root of the named project.
+    ///
+    /// The interface names a project by the opaque snapshot id it received
+    /// from [`Self::project_context`]; the canonical root is resolved from the
+    /// same backend-owned activity registry that produced that id, so the
+    /// webview never hands the native layer an arbitrary directory path. An
+    /// identity that is not part of the current snapshot is refused, which
+    /// also covers a project that left the snapshot in the meantime.
+    pub async fn open_project_in_terminal(&self, project_id: &str) -> Result<(), String> {
+        self.require(PlatformFeature::SystemActions, CapabilityAccess::Mutate)?;
+        let cache = self.activity_cache.clone();
+        let project_id = project_id.to_string();
+        crate::blocking::run_blocking(
+            move || {
+                use zenith_platform::SystemActionProvider;
+                let registry = cache
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let registry = registry.as_ref().ok_or_else(|| {
+                    "No project snapshot is available yet. Refresh and try again.".to_string()
+                })?;
+                let root = registry.project_roots.get(&project_id).ok_or_else(|| {
+                    "Project is not part of the current snapshot. Refresh and try again."
+                        .to_string()
+                })?;
+                zenith_platform::NativeSystemActions::new().open_terminal(root)
+            },
+            "Terminal worker panicked",
+        )
+        .await
+    }
+
     /// Consumes a stop lease and terminates the exact observed process group.
     ///
     /// The lease was minted against a fresh snapshot; consuming it here is what
@@ -1216,5 +1248,61 @@ mod tests {
         for error in [inspect, setup, removal] {
             assert!(error.contains("AiIntegrations"), "{error}");
         }
+    }
+
+    #[test]
+    fn opening_a_project_terminal_requires_the_system_actions_capability() {
+        let service = service_with_capabilities(crate::models::PlatformCapabilities::unsupported(
+            crate::models::PlatformKind::Linux,
+        ));
+        let error = tauri::async_runtime::block_on(service.open_project_in_terminal("project.x"))
+            .expect_err("opening a project terminal requires System Actions");
+        assert!(error.contains("SystemActions"), "{error}");
+    }
+
+    #[test]
+    fn opening_a_project_terminal_resolves_only_snapshot_known_projects() {
+        let granted_service =
+            service_with_capabilities(crate::models::PlatformCapabilities::macos());
+
+        // No snapshot at all: the project cannot be resolved.
+        let error = tauri::async_runtime::block_on(
+            granted_service.open_project_in_terminal("project.unknown"),
+        )
+        .expect_err("a project is only resolvable from a snapshot");
+        assert!(error.contains("snapshot"), "{error}");
+
+        // A snapshot that does not contain the named project: refuse instead
+        // of falling back to any path.
+        let known_id = "project.known".to_string();
+        let mut registry_guard = granted_service
+            .activity_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *registry_guard = Some(crate::agent_activity::AgentActivityRegistry {
+            snapshot: crate::models::AgentActivitySnapshot {
+                observed_at: 0,
+                quality: crate::models::SnapshotQuality::Fresh,
+                projects: Vec::new(),
+                unassigned_sessions: Vec::new(),
+                adapters: Vec::new(),
+                partial_errors: Vec::new(),
+            },
+            project_roots: std::iter::once((
+                known_id.clone(),
+                std::env::temp_dir().join("zenith_project_terminal_test"),
+            ))
+            .collect(),
+        });
+        drop(registry_guard);
+
+        let unknown = tauri::async_runtime::block_on(
+            granted_service.open_project_in_terminal("project.missing"),
+        )
+        .expect_err("an unobserved project must not resolve to a path");
+        assert!(
+            unknown.contains("not part of the current snapshot"),
+            "{unknown}"
+        );
     }
 }

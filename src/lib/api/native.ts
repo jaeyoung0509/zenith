@@ -84,8 +84,8 @@ export const nativeApi = {
     await unwrap(commands.postAgentEvent(event as any));
   },
 
-  async openInTerminal(path: string): Promise<void> {
-    await unwrap(commands.openInTerminal(path));
+  async openProjectInTerminal(projectId: string): Promise<void> {
+    await unwrap(commands.openProjectInTerminal(projectId));
   },
 
   async getAiUsage(

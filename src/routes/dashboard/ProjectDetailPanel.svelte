@@ -116,8 +116,8 @@
     void runReveal(() => tauriShowInFileManager(path), (message) => (revealError = message));
   }
 
-  function handleOpenInTerminal(path: string) {
-    void agentActivityStore.openInTerminal(path);
+  function handleOpenInTerminal() {
+    void agentActivityStore.openProjectInTerminal(project.identity.id);
   }
 </script>
 
@@ -148,7 +148,7 @@
       <Button
         variant="outline"
         size="sm"
-        onclick={() => handleOpenInTerminal(project.identity.display_path)}
+        onclick={() => handleOpenInTerminal()}
         title="Open repository folder in Terminal"
       >
         <Terminal size={13} />

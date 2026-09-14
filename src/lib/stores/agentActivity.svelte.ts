@@ -10,7 +10,7 @@ import {
   tauriGetAgentIntegrations,
   tauriSetupAgentIntegration,
   tauriRemoveAgentIntegration,
-  tauriOpenInTerminal,
+  tauriOpenProjectInTerminal,
 } from '../utils/tauri';
 
 export class AgentActivityStore {
@@ -160,8 +160,8 @@ export class AgentActivityStore {
     await this.refresh(true);
   }
 
-  async openInTerminal(path: string): Promise<void> {
-    await tauriOpenInTerminal(path);
+  async openProjectInTerminal(projectId: string): Promise<void> {
+    await tauriOpenProjectInTerminal(projectId);
   }
 }
 

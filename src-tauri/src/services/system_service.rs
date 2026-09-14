@@ -314,9 +314,12 @@ impl SystemService {
     /// Applies the persisted Keep Awake policy at startup.
     ///
     /// The settings file is the only source for the policy, so restoring it is
-    /// part of loading settings rather than a separate decision.
-    pub fn apply_startup_policy(&self, settings: &ZenithSettings) {
-        self.awake.set_rules(settings.awake_rules.clone());
+    /// part of loading settings rather than a separate decision. The rule
+    /// bound is enforced by the manager itself; a stored list beyond it is
+    /// reported here so the desktop shell can log that the stored rules were
+    /// not applied.
+    pub fn apply_startup_policy(&self, settings: &ZenithSettings) -> Result<(), String> {
+        self.awake.set_rules(settings.awake_rules.clone())?;
         self.awake.set_control_center_awake_policy(
             settings
                 .ai_control
@@ -324,6 +327,7 @@ impl SystemService {
                 .keep_awake_for_verified_sessions,
             settings.ai_control.autopilot.keep_awake_ac_only,
         );
+        Ok(())
     }
 
     pub fn awake_state(&self) -> AwakeState {
@@ -334,10 +338,7 @@ impl SystemService {
         self.require(PlatformFeature::KeepAwake, CapabilityAccess::Mutate)?;
         let awake = self.awake.clone();
         crate::blocking::run_blocking(
-            move || {
-                awake.set_rules(rules);
-                Ok(())
-            },
+            move || awake.set_rules(rules),
             "Keep Awake rule worker panicked",
         )
         .await
@@ -418,7 +419,9 @@ impl SystemService {
                         previous.ai_control = ai_control;
                         change
                     })?;
-                awake.set_rules(published.awake_rules);
+                // A stored list beyond the manager's maximum refuses the
+                // save rather than silently truncating the user's rules.
+                awake.set_rules(published.awake_rules)?;
                 Ok(change)
             },
             "Settings save worker panicked",
@@ -439,21 +442,6 @@ impl SystemService {
                 zenith_platform::NativeSystemActions::new().reveal_path(&path_buf)
             },
             "File manager worker panicked",
-        )
-        .await
-    }
-
-    pub async fn open_terminal(&self, path: &str) -> Result<(), String> {
-        self.require(PlatformFeature::SystemActions, CapabilityAccess::Mutate)?;
-        let environment = self.environment.clone();
-        let path = path.to_string();
-        crate::blocking::run_blocking(
-            move || {
-                use zenith_platform::SystemActionProvider;
-                let path_buf = expand_display_path(&path, &environment)?;
-                zenith_platform::NativeSystemActions::new().open_terminal(&path_buf)
-            },
-            "Terminal worker panicked",
         )
         .await
     }
@@ -667,9 +655,9 @@ mod tests {
             "every Keep Awake mutation must fail at the same service gate: {keep_awake_errors:?}"
         );
 
-        let terminal_error = tauri::async_runtime::block_on(service.open_terminal("/tmp"))
-            .expect_err("opening a terminal requires System Actions");
-        assert!(terminal_error.contains("SystemActions"), "{terminal_error}");
+        // The project-scoped terminal opener moved to the AI surfaces, where
+        // the observed project state lives; its capability gate is covered by
+        // ai_service's tests.
     }
 
     fn settings_with_notifications_enabled() -> ZenithSettings {
