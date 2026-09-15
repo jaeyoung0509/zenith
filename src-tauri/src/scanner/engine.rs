@@ -2,14 +2,26 @@ use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
-    Category, CategoryResult, ObservationQuality, RiskTier, ScanEvent, ScanItem, ScanResult,
+    Category, CategoryResult, CleanupUnitIdentity, EligibilitySummary, ObservationQuality,
+    PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult,
 };
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
+use std::collections::HashSet;
 use std::time::SystemTime;
 use uuid::Uuid;
+use zenith_platform::path_algebra::PathFlavor;
 use zenith_platform::PlatformEnvironment;
+
+/// Whether the scanned filesystem folds case, so unit identity is decided by
+/// the same rule the filesystem uses.
+fn path_identity(environment: &PlatformEnvironment) -> PathIdentity {
+    match environment.flavor() {
+        PathFlavor::Windows => PathIdentity::CaseInsensitive,
+        PathFlavor::Posix => PathIdentity::CaseSensitive,
+    }
+}
 
 pub struct ScanEngine;
 
@@ -37,7 +49,6 @@ fn aggregate_quality(
 ///
 /// `total_bytes` is the observed footprint, including blocked/advisory rows;
 /// `cleanable_bytes` and the Safe/Rebuild buckets include only eligible bytes.
-#[derive(Default)]
 struct CategoryAccumulator {
     items: Vec<ScanItem>,
     total_bytes: u64,
@@ -45,14 +56,48 @@ struct CategoryAccumulator {
     safe_bytes: u64,
     rebuild_bytes: u64,
     manual_bytes: u64,
+    eligibility: EligibilitySummary,
+    identity: PathIdentity,
+    suppressed_duplicate_count: u64,
+    suppressed_duplicate_bytes: u64,
+}
+
+impl Default for CategoryAccumulator {
+    fn default() -> Self {
+        Self::new(PathIdentity::CaseSensitive)
+    }
 }
 
 impl CategoryAccumulator {
+    fn new(identity: PathIdentity) -> Self {
+        Self {
+            items: Vec::new(),
+            total_bytes: 0,
+            cleanable_bytes: 0,
+            safe_bytes: 0,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+            eligibility: EligibilitySummary::default(),
+            identity,
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
+        }
+    }
+
     /// Accounts one scanned item, or drops it when it is not worth retaining.
     ///
     /// Returns the retained item so the caller can stream it to the frontend.
-    fn push(&mut self, mut item: ScanItem) -> Option<&ScanItem> {
-        item.disposition = item.derive_disposition();
+    ///
+    /// Two discovery rules can name the same location, and a scan that counted
+    /// it twice would report a total no user could reconcile with their disk.
+    /// The first unit wins — signatures are visited most-specific-first — and
+    /// the duplicate's bytes are recorded as suppressed rather than dropped.
+    fn push(
+        &mut self,
+        item: ScanItem,
+        seen_units: &mut HashSet<CleanupUnitIdentity>,
+    ) -> Option<&ScanItem> {
+        let item = item.with_derived_disposition();
         let bytes = item.cleanable_bytes();
         let observed = item.observed_bytes();
         // An item that is absent, or a complete observation of an empty path,
@@ -62,8 +107,23 @@ impl CategoryAccumulator {
             return None;
         }
 
+        let unit = item.unit_identity(self.identity);
+        if !seen_units.insert(unit) {
+            self.suppressed_duplicate_count += 1;
+            self.suppressed_duplicate_bytes += observed;
+            crate::diagnostics::log_error(
+                "scanner",
+                &format!(
+                    "Suppressed duplicate discovery of {} (already counted by another signature)",
+                    item.path
+                ),
+            );
+            return None;
+        }
+
         self.total_bytes += observed;
         self.cleanable_bytes += bytes;
+        self.eligibility.add(&item);
         if item.disposition.eligibility.is_cleanable() {
             match item.risk {
                 RiskTier::Safe => self.safe_bytes += bytes,
@@ -131,6 +191,9 @@ impl CategoryAccumulator {
             quality,
             skipped_entry_count,
             incomplete_item_count,
+            eligibility: self.eligibility,
+            suppressed_duplicate_count: self.suppressed_duplicate_count,
+            suppressed_duplicate_bytes: self.suppressed_duplicate_bytes,
         }
     }
 }
@@ -179,6 +242,12 @@ impl ScanEngine {
         let mut skipped_entry_count = 0u64;
         let mut incomplete_item_count = 0u64;
         let mut was_cancelled = false;
+        let mut eligibility = EligibilitySummary::default();
+        let mut suppressed_duplicate_count = 0u64;
+        let mut suppressed_duplicate_bytes = 0u64;
+        // One identity set for the whole scan: a unit two signatures both found
+        // is counted once, whichever category it was found under.
+        let mut seen_units: HashSet<CleanupUnitIdentity> = HashSet::new();
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
         let directory_pool = shared_scan_pool();
@@ -191,9 +260,12 @@ impl ScanEngine {
 
             on_event(ScanEvent::CategoryStarted { category });
 
-            let mut accumulator = CategoryAccumulator::default();
+            let mut accumulator = CategoryAccumulator::new(path_identity(environment));
 
             // 1. Scan filesystem signatures for this category
+            // Discovery and eligibility are decided separately: the registry
+            // returns what this scope looks at, and the gate below states what
+            // the scope permits for each unit that is found.
             let signatures = registry.by_category_for_mode(category, intensive_cleanup);
             for sig in signatures {
                 if cancellation.is_cancelled() {
@@ -203,14 +275,16 @@ impl ScanEngine {
                 if excluded_signatures.iter().any(|id| id == &sig.id) {
                     continue;
                 }
+                let gate = sig.eligibility_gate(intensive_cleanup);
                 let items = DirectoryScanner::scan_signature_with_pool(
                     sig,
                     directory_pool,
                     environment,
                     cancellation,
+                    gate,
                 );
                 for item in items {
-                    if let Some(retained) = accumulator.push(item) {
+                    if let Some(retained) = accumulator.push(item, &mut seen_units) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -225,7 +299,7 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) = accumulator.push(item) {
+                    if let Some(retained) = accumulator.push(item, &mut seen_units) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -243,7 +317,7 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) = accumulator.push(item) {
+                    if let Some(retained) = accumulator.push(item, &mut seen_units) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -262,6 +336,9 @@ impl ScanEngine {
             manual_bytes += category_result.manual_bytes;
             skipped_entry_count += category_result.skipped_entry_count;
             incomplete_item_count += category_result.incomplete_item_count;
+            eligibility.merge(&category_result.eligibility);
+            suppressed_duplicate_count += category_result.suppressed_duplicate_count;
+            suppressed_duplicate_bytes += category_result.suppressed_duplicate_bytes;
 
             if !was_cancelled {
                 on_event(ScanEvent::CategoryFinished {
@@ -316,6 +393,9 @@ impl ScanEngine {
             incomplete_reasons,
             skipped_entry_count,
             incomplete_item_count,
+            eligibility,
+            suppressed_duplicate_count,
+            suppressed_duplicate_bytes,
         };
 
         on_event(ScanEvent::Finished {
@@ -370,6 +450,11 @@ mod tests {
             exclude_prefixes: vec![],
             intensive_only: false,
             platforms: vec![],
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
             provider: String::new(),
             management_mode: Default::default(),
             artifact_kind: Default::default(),
@@ -388,6 +473,161 @@ mod tests {
         std::fs::write(root.join("keep/payload.bin"), vec![2u8; 2_048]).unwrap();
         std::fs::write(root.join(".git/objects"), vec![3u8; 1_024]).unwrap();
         std::fs::write(root.join("Tool.app/Contents/payload"), vec![4u8; 512]).unwrap();
+    }
+
+    /// Two signatures that name the same location are one unit: the bytes are
+    /// counted once, and the suppressed duplicate is reported rather than
+    /// dropped silently.
+    #[test]
+    fn overlapping_signatures_count_one_unit_and_report_the_suppression() {
+        let fixture = tempfile::tempdir().unwrap();
+        let shared = fixture.path().join("shared-cache");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("data.bin"), vec![1u8; 8_192]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.overlap.specific",
+            "Specific cache",
+            Category::Developer,
+            &shared,
+            vec![],
+            None,
+        ));
+        registry.register(signature(
+            "test.overlap.broad",
+            "Broad cache",
+            Category::Developer,
+            &shared,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        let developer = result
+            .categories
+            .iter()
+            .find(|category| category.category == Category::Developer)
+            .expect("the developer category is scanned");
+        assert_eq!(
+            developer.items.len(),
+            1,
+            "one location is one unit however many signatures name it"
+        );
+        assert_eq!(developer.total_bytes, 8_192);
+        assert_eq!(developer.suppressed_duplicate_count, 1);
+        assert_eq!(developer.suppressed_duplicate_bytes, 8_192);
+        assert_eq!(result.suppressed_duplicate_count, 1);
+        assert_eq!(result.suppressed_duplicate_bytes, 8_192);
+    }
+
+    /// The breakdown explains the total: every observed byte lands in exactly
+    /// one eligibility bucket, and only the cleanable states carry cleanable
+    /// bytes.
+    #[test]
+    fn the_scan_reports_an_eligibility_breakdown_that_sums_to_the_total() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cleanable = fixture.path().join("cleanable-cache");
+        let blocked = fixture.path().join("blocked-cache");
+        std::fs::create_dir_all(&cleanable).unwrap();
+        std::fs::create_dir_all(&blocked).unwrap();
+        std::fs::write(cleanable.join("data.bin"), vec![1u8; 4_096]).unwrap();
+        std::fs::write(blocked.join("session.sqlite"), vec![2u8; 2_048]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.breakdown.cleanable",
+            "Cleanable cache",
+            Category::Developer,
+            &cleanable,
+            vec![],
+            None,
+        ));
+        registry.register(signature(
+            "test.breakdown.blocked",
+            "Structured state",
+            Category::Developer,
+            &blocked.join("session.sqlite"),
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        let developer = result
+            .categories
+            .iter()
+            .find(|category| category.category == Category::Developer)
+            .expect("the developer category is scanned");
+
+        let bucket_total: u64 = developer
+            .eligibility
+            .buckets
+            .iter()
+            .map(|bucket| bucket.observed_bytes)
+            .sum();
+        assert_eq!(bucket_total, developer.total_bytes);
+
+        let auto = crate::models::CleanupEligibility::AutoCleanable;
+        let blocked_state = crate::models::CleanupEligibility::Blocked;
+        // The buckets carry exactly what the items reported: an allocated size
+        // is a filesystem fact, so the assertion is against the items rather
+        // than against a literal the block size could change.
+        let cleanable_item = developer
+            .items
+            .iter()
+            .find(|item| item.disposition.eligibility == auto)
+            .expect("the cleanable cache is auto-cleanable");
+        let blocked_item = developer
+            .items
+            .iter()
+            .find(|item| item.disposition.eligibility == blocked_state)
+            .expect("the structured file is blocked");
+        assert_eq!(
+            developer.eligibility_observed_bytes(auto),
+            cleanable_item.observed_bytes()
+        );
+        assert_eq!(
+            developer.eligibility_observed_bytes(blocked_state),
+            blocked_item.observed_bytes()
+        );
+        assert_eq!(
+            blocked_item.structured_state,
+            Some(crate::models::StructuredStateKind::Database)
+        );
+        assert_eq!(cleanable_item.structured_state, None);
+        assert_eq!(
+            developer.eligibility.cleanable_bytes(blocked_state),
+            0,
+            "a blocked state never reports cleanable bytes"
+        );
+        assert_eq!(developer.eligibility_items(auto), 1);
+        assert_eq!(developer.eligibility_items(blocked_state), 1);
+        assert_eq!(
+            result.eligibility_observed_bytes(auto),
+            cleanable_item.observed_bytes()
+        );
+        assert_eq!(
+            result.eligibility_observed_bytes(blocked_state),
+            blocked_item.observed_bytes()
+        );
     }
 
     /// The scan reports how much of each tree it could not measure, so a total

@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.31"
+version = "0.3.32"
 authors = ["Zenith Team"]
 edition = "2021"
 license = "MIT"

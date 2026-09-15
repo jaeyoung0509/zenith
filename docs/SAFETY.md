@@ -46,10 +46,17 @@ A generic target is executable only when all of the following hold:
 1. It belongs to the backend's current scan.
 2. Its signature exists in the embedded registry.
 3. Its resolved path remains inside the signature scope.
-4. It is not a `Manual` target.
-5. The plan is unexpired and has not been used before.
-6. Its filesystem identity still matches immediately before deletion.
-7. Every traversed entry passes blacklist and signature-exclusion checks.
+4. It names the cleanup unit that authorized it, and that path is the one the
+   plan deletes.
+5. The unit granularity and the ownership it reports are the ones the signature
+   declares.
+6. It is not a `Manual` target.
+7. The plan is unexpired, has not been used before, and authorizes a mutation.
+8. Its filesystem identity, entry kind, and modification record still match
+   immediately before deletion.
+9. It is not structured state, and it is not reached through a link, junction,
+   reparse point, or mount boundary.
+10. Every traversed entry passes blacklist and signature-exclusion checks.
 
 Before any of that runs, the executor classifies the target into the operation
 it authorizes (`CleanupOperation::of`). Only the filesystem operation names a
@@ -88,22 +95,87 @@ directory target whose modification timestamp changed after scanning aborts
 with `ChangedSinceScan`. The narrowly documented exception is stale-temp
 signatures with `min_age_days`, where the executor re-measures the full tree
 newest-mtime immediately before deletion instead of relying on the single
-directory mtime captured at plan time.
+directory mtime captured at plan time. Both the scan and the execution boundary
+evaluate that rule through one function (`AgeObservation::evaluate`), so an
+item's verdict and the guard's verdict cannot drift apart.
 
-## Absent targets
+A target that changed in any of those ways is reported as `skipped`, not as a
+failure: the run refused to delete an object the plan did not authorize, which
+is the safe outcome, and the reason names what changed.
+
+## Structured state
+
+An age rule answers "has anything in here changed recently?". That is the right
+question for a cache and the wrong one for a database, a lock file, a
+credential store, a configuration file, an application bundle, or an executable.
+
+`classify_structured_state` is the shared, name-shaped rule that draws the line.
+It is pure — the caller supplies the entry kind and the executable bit, because
+those come from metadata rather than from a name — and case-insensitive,
+because Windows folds case by definition and a case-insensitive APFS volume can
+spell the same name either way.
+
+Three boundaries enforce it:
+
+- the scanner records the classification on the item, so a discovered candidate
+  is reported as `blocked` with the reason rather than becoming cleanable;
+- the planner refuses a target whose root is structured state, so a plan never
+  offers one; and
+- the execution guard re-classifies immediately before mutating, so a path that
+  became structured state after the scan is skipped instead of deleted.
+
+Structured content *inside* a declared cache or log namespace is covered by
+that namespace's contract: the unit is the application's regenerable cache
+directory, and `delete_directory` removes it whole. What the classifier
+prevents is a *discovery* rule — an age threshold, an enumerated child — from
+manufacturing a target out of state that only its owner may invalidate. A
+provider that legitimately owns a disposable database must go through its own
+adapter with its own lifecycle, which is what `CleanupOperation::Provider`
+exists for.
+
+## Absent targets and skipped results
 
 A target that no longer exists when cleanup reaches it is already in the desired
 state. The executor probes the target's own metadata before the canonical,
 symlink, and identity guards — `exists()` is never used as that probe, because it
-collapses a permission refusal into a silent success — and reports absence as a
-successful no-op that reclaimed nothing. The same rule applies to a nested entry
-that disappears mid-walk: it is skipped, not recorded as a deletion failure.
+collapses a permission refusal into a silent success — and reports absence as
+`skipped` with `NotFound` and nothing reclaimed. The same rule applies to a
+nested entry that disappears mid-walk: it is skipped, not recorded as a
+deletion failure.
 
-Absence is a distinct signal (`ZenithError::Missing`), not a variant of
-"changed since scan". Every other failure keeps failing closed: an identity,
-mtime, size, symlink, ownership, or permission failure still aborts the target
-that reports it, and cleanup events still report per-target results instead of
-converting a partial failure into a success.
+A replayed plan therefore cannot delete anything: every target whose object is
+gone or changed is skipped with a reason, and the replacement that now occupies
+the path is left alone. Absence is a distinct signal
+(`ZenithError::Missing`), not a variant of "changed since scan".
+
+Every other failure keeps failing closed: an identity, mtime, size, symlink,
+ownership, or permission failure still aborts the target that reports it, and
+cleanup events still report per-target results instead of converting a partial
+failure into a success.
+
+## Result statuses
+
+Per-target results answer "what happened to this object", not "did the call
+return":
+
+| status | meaning |
+| --- | --- |
+| `success` | the target's postcondition holds because this run removed it |
+| `partial` | some of the target was removed |
+| `skipped` | nothing was removed and nothing was wrong: the object was already gone, or is no longer the one the plan authorized |
+| `failed` | the object was still the right one and Zenith could not remove it |
+
+`success` is true for `success` and `partial` only. A skipped target removed
+nothing, so it is never reported as cleaned; the reason
+(`changed_since_scan`, `not_found`, `safety_boundary`, `structured_store`,
+`blacklisted`) says which rule answered. Failure reasons distinguish
+`permission_denied`, `in_use`, and `external_command_failed` from the skip
+reasons, because those are the ones a user can act on.
+
+Each result keeps two byte populations apart: `estimated_bytes` is what the scan
+measured and the plan was built from, and `bytes_reclaimed` is what this run
+measured after mutating. A skipped or failed target never reports an estimate as
+reclaimed.
 
 ## Platform coverage
 
@@ -135,7 +207,10 @@ by the planner even if a frontend attempts to select one.
 
 Intensive cleanup broadens discovery without weakening deletion authority. It
 is disabled by default, persisted as a validated setting, and only enables
-registered signatures marked `intensive_only`.
+registered signatures marked `intensive_only`. A signature that opts into
+always-on discovery (`discovery = "always"`) is inventoried in either mode:
+the scope then decides eligibility, not visibility, and a unit it finds in
+standard mode is reported as `policy_gated` and is never selectable.
 
 Broad user cache and log signatures are constrained as follows:
 
@@ -146,8 +221,9 @@ Broad user cache and log signatures are constrained as follows:
   casing alone;
 - a cache namespace whose owner publishes its own download, validation, and
   invalidation command is excluded rather than treated as a generic cache; and
-- the newest timestamp anywhere in the candidate tree must exceed the declared
-  minimum inactivity age;
+- the newest timestamp anywhere in the candidate tree is compared against the
+  declared minimum inactivity age: an older candidate may be cleaned, and a
+  newer one is reported as `recent` with the bytes it holds;
 - incomplete traversal, permission failure, or recursion depth cutoff excludes
   the candidate;
 - the planner accepts only a direct child of the resolved signature root; and

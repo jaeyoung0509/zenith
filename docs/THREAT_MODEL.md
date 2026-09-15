@@ -51,8 +51,8 @@ local inspection surface. Cleanup trust boundaries live in
   accepts a path, a cleanup strategy, a filesystem identity, or an arbitrary
   PID, so a compromised renderer with every capability granted still reaches
   only the opaque IDs and inventories the backend already produced, under the
-  same plan TTL, one-shot, scope, identity, and TOCTOU checks the dashboard
-  runs. `CleanupService`, `StorageService`, and `SystemService` apply their
+  same plan TTL, one-shot, scope, unit, ownership, entry-kind, structured-state,
+  identity, and TOCTOU checks the dashboard runs. `CleanupService`, `StorageService`, and `SystemService` apply their
   capability and operation gates themselves, and the capability split is
   asserted against a reviewed allowlist (`capability_contract_tests.rs`) rather
   than trusted to review.

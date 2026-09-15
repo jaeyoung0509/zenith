@@ -5,7 +5,7 @@
 //! ID, target item IDs, and byte totals — never a path, a strategy, or a
 //! captured filesystem identity.
 
-use crate::domain::cleanup::DeletePlan;
+use crate::domain::cleanup::{CleanupMode, DeletePlan};
 use crate::domain::{RiskSummary, RiskTier};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -31,6 +31,10 @@ pub struct PlanPreview {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub expires_at: u64,
+    /// What executing this plan would do, stated rather than implied: a
+    /// preview is a projection, and the mode is the difference between "the
+    /// bytes are gone" and "the bytes are in the Trash".
+    pub mode: CleanupMode,
 }
 
 impl DeletePlan {
@@ -55,6 +59,7 @@ impl DeletePlan {
             expected_reclaim_bytes: self.expected_reclaim_bytes,
             risk: self.risk.clone(),
             expires_at: self.created_at.saturating_add(ttl_secs),
+            mode: self.mode,
         }
     }
 }
@@ -67,6 +72,13 @@ pub enum CleanFailureReason {
     NotFound,
     InUse,
     Blacklisted,
+    /// The target matched structured state (a database, its companions, a
+    /// lock, a credential, configuration, a bundle, or an executable) that
+    /// generic cleanup never removes.
+    StructuredStore,
+    /// The target is now a link, a reparse point, a junction, or a mount
+    /// boundary: traversal and deletion stop there.
+    SafetyBoundary,
     ExternalCommandFailed,
     Unknown,
 }
@@ -95,6 +107,18 @@ impl CleanFailureReason {
                     target_name
                 )
             }
+            CleanFailureReason::StructuredStore => {
+                format!(
+                    "{} holds application state rather than regenerable cache data, so generic cleanup leaves it alone.",
+                    target_name
+                )
+            }
+            CleanFailureReason::SafetyBoundary => {
+                format!(
+                    "{} changed into a link, a mount point, or another indirection. Zenith refuses to delete through it.",
+                    target_name
+                )
+            }
             CleanFailureReason::ExternalCommandFailed => {
                 format!(
                     "Failed to execute external clean helper for {}.",
@@ -111,11 +135,18 @@ impl CleanFailureReason {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanStatus {
+    /// The target's postcondition holds because this run removed it.
     Success,
+    /// The target was not removed, and nothing about it was wrong: it was
+    /// already gone (a replayed plan, or a target another process removed),
+    /// or executing the plan would have deleted a different object.
+    Skipped,
+    /// Some of the target was removed.
     Partial,
+    #[default]
     Failed,
 }
 
@@ -126,6 +157,12 @@ pub struct CleanItemResult {
     pub path: String,
     pub status: CleanStatus,
     pub success: bool,
+    /// What the scan measured for this target. It is an expectation the plan
+    /// was built from, never a measurement of what a run removed.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub estimated_bytes: u64,
+    /// What this run actually reclaimed, measured after the mutation.
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub bytes_reclaimed: u64,
@@ -158,6 +195,11 @@ pub struct CleanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub failed_count: u64,
+    /// Targets that were not removed because there was nothing to remove:
+    /// they were already absent, or the plan was replayed.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub skipped_count: u64,
     pub items: Vec<CleanItemResult>,
     pub actual_disk_free_delta: Option<i64>,
 }
@@ -181,6 +223,7 @@ pub enum CleanEvent {
     ItemFinished {
         item_id: String,
         name: String,
+        status: CleanStatus,
         success: bool,
         #[serde(with = "crate::ipc_numeric::u64")]
         #[specta(type = u64)]

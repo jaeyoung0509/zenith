@@ -150,7 +150,7 @@ describe('cleanup freshness and recovery', () => {
     const store = await loaded();
     vi.mocked(tauriCreatePlan).mockImplementation(async () => {
       vi.setSystemTime(1300_000);
-      return { id: 'plan', targets: [], expected_reclaim_bytes: 10, expires_at: 1600, risk: {
+      return { id: 'plan', targets: [], expected_reclaim_bytes: 10, expires_at: 1600, mode: 'permanent_delete', risk: {
         safe_count: 1, rebuild_count: 0, manual_count: 0, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0,
       } };
     });

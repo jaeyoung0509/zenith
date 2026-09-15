@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::models::{
-    CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy, DeleteTarget,
+    classify_structured_state, CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy,
+    DeleteTarget, EntryKind, PathFacts, StructuredStateKind,
 };
 use crate::models_inventory::ValidatedModelTarget;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
@@ -11,9 +12,11 @@ use zenith_platform::PlatformEnvironment;
 ///
 /// This type has no public constructor outside the safety module. It cannot be
 /// fabricated from an arbitrary frontend path string. A mutation primitive that
-/// requires `&ValidatedTarget` guarantees that lexical blacklist, canonical
-/// blacklist, symlink integrity, and TOCTOU identity checks all succeeded immediately
-/// before execution.
+/// requires `&ValidatedTarget` guarantees that the unit still contains the
+/// path, the lexical and canonical blacklist checks pass, symlink and reparse
+/// boundaries hold, the captured identity and entry kind still match, the
+/// target is not structured state, and any age constraint is still satisfied —
+/// all immediately before execution.
 #[derive(Debug, Clone)]
 pub struct ValidatedTarget {
     item_id: String,
@@ -62,62 +65,183 @@ impl ValidatedTarget {
 }
 
 /// The outcome of revalidating a planned cleanup target immediately before mutation.
+///
+/// `Skipped` and `Failed` are different answers: a skip means the target is no
+/// longer the object the plan authorized (or is gone), and the safe response
+/// was to leave whatever is there alone; a failure means the object was still
+/// the right one and Zenith could not remove it.
 #[derive(Debug)]
 pub enum RevalidationOutcome {
     Validated(ValidatedTarget),
-    AlreadyAbsent(CleanItemResult),
+    Skipped(CleanItemResult),
     Failed(CleanItemResult),
+}
+
+/// Builds the per-item result the execution guard reports for one target.
+///
+/// Every result carries the plan-time estimate and the run's own measurement
+/// as separate fields, so a caller cannot read an expectation as a measurement.
+fn outcome(
+    target: &DeleteTarget,
+    status: CleanStatus,
+    reason: Option<CleanFailureReason>,
+    message: Option<String>,
+) -> CleanItemResult {
+    CleanItemResult {
+        item_id: target.item_id.clone(),
+        name: target.name.clone(),
+        path: target.path.to_string_lossy().to_string(),
+        status,
+        success: matches!(status, CleanStatus::Success | CleanStatus::Partial),
+        estimated_bytes: target.expected_bytes,
+        bytes_reclaimed: 0,
+        failure_reason: reason,
+        error_message: message,
+    }
+}
+
+fn skipped(
+    target: &DeleteTarget,
+    reason: CleanFailureReason,
+    message: impl Into<String>,
+) -> RevalidationOutcome {
+    RevalidationOutcome::Skipped(outcome(
+        target,
+        CleanStatus::Skipped,
+        Some(reason),
+        Some(message.into()),
+    ))
+}
+
+fn failed(
+    target: &DeleteTarget,
+    reason: CleanFailureReason,
+    message: impl Into<String>,
+) -> RevalidationOutcome {
+    RevalidationOutcome::Failed(outcome(
+        target,
+        CleanStatus::Failed,
+        Some(reason),
+        Some(message.into()),
+    ))
+}
+
+/// The entry kind the filesystem states right now.
+fn entry_kind_of(metadata: &std::fs::Metadata) -> EntryKind {
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
+        EntryKind::Directory
+    } else if file_type.is_file() {
+        EntryKind::File
+    } else {
+        EntryKind::Other
+    }
+}
+
+/// Whether the platform marked this entry executable.
+#[cfg(unix)]
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Whether `path` sits on a different device than its parent, which makes it a
+/// mount boundary rather than a cache directory.
+///
+/// A cache namespace is created by the application that owns it, so a device
+/// change between a path and its parent means something else was mounted there.
+/// Deleting "through" it would remove another volume's contents.
+#[cfg(unix)]
+fn crosses_mount_boundary(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let (Some(own), Some(parent)) = (
+        std::fs::metadata(path).ok(),
+        path.parent()
+            .and_then(|parent| std::fs::metadata(parent).ok()),
+    ) else {
+        // An unreadable parent is not evidence of a boundary; the presence and
+        // blacklist checks already decided what to do about unreadable paths.
+        return false;
+    };
+    own.dev() != parent.dev()
+}
+
+#[cfg(not(unix))]
+fn crosses_mount_boundary(_path: &Path) -> bool {
+    // Windows reports mount points and junctions as reparse points, which the
+    // symlink boundary check refuses before this one can matter.
+    false
 }
 
 pub struct SafetyValidator;
 
 impl SafetyValidator {
-    fn already_absent(target: &DeleteTarget) -> CleanItemResult {
-        CleanItemResult {
-            item_id: target.item_id.clone(),
-            name: target.name.clone(),
-            path: target.path.to_string_lossy().to_string(),
-            status: CleanStatus::Success,
-            success: true,
-            bytes_reclaimed: 0,
-            failure_reason: None,
-            error_message: None,
-        }
-    }
-
     /// Revalidates a planned delete target against all runtime invariants:
-    /// presence, lexical & canonical blacklist, symlink safety, TOCTOU identity,
-    /// and intensive cleanup age constraints.
+    /// unit containment, presence, lexical and canonical blacklist, symlink and
+    /// reparse boundaries, mount boundaries, TOCTOU identity, entry kind,
+    /// structured-state protection, strategy compatibility, and intensive
+    /// cleanup age constraints.
     pub fn revalidate(
         target: &DeleteTarget,
         environment: &PlatformEnvironment,
     ) -> RevalidationOutcome {
         let path = &target.path;
 
-        // 0. Presence probe. A path that no longer exists is already absent.
-        match std::fs::symlink_metadata(path) {
-            Ok(_) => {}
+        // 0. The plan states which unit authorized this path. A target that
+        //    cannot name it, or names a path other than the one it deletes, is
+        //    not a target this guard can reason about.
+        if !target.unit.is_declared() {
+            return failed(
+                target,
+                CleanFailureReason::Unknown,
+                format!(
+                    "Target {} does not name the cleanup unit that authorized it; refusing to mutate",
+                    path.display()
+                ),
+            );
+        }
+        let unit_path = Path::new(&target.unit.path);
+        if unit_path != path || !path.starts_with(Path::new(&target.unit.root)) {
+            return failed(
+                target,
+                CleanFailureReason::ChangedSinceScan,
+                format!(
+                    "Target {} is outside the cleanup unit that authorized it ({}); refusing to mutate",
+                    path.display(),
+                    target.unit.path
+                ),
+            );
+        }
+
+        // 1. Presence probe. A path that no longer exists is already absent.
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return RevalidationOutcome::AlreadyAbsent(Self::already_absent(target));
+                return skipped(
+                    target,
+                    CleanFailureReason::NotFound,
+                    format!("{} was already absent before cleanup", path.display()),
+                );
             }
             Err(error) => {
                 let error_str = error.to_string();
-                return RevalidationOutcome::Failed(CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::PermissionDenied),
-                    error_message: Some(zenith_platform::environment::describe_access_refusal(
+                return failed(
+                    target,
+                    CleanFailureReason::PermissionDenied,
+                    zenith_platform::environment::describe_access_refusal(
                         environment,
                         path,
                         &error_str,
-                    )),
-                });
+                    ),
+                );
             }
-        }
+        };
 
         // Every present filesystem target must carry the identity captured by
         // the planner. Absence is handled above, while provider-backed
@@ -127,94 +251,134 @@ impl SafetyValidator {
             CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
         ) && target.identity.is_none()
         {
-            return RevalidationOutcome::Failed(CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                error_message: Some(format!(
+            return failed(
+                target,
+                CleanFailureReason::ChangedSinceScan,
+                format!(
                     "Filesystem identity is missing for {}; refusing to mutate",
                     path.display()
-                )),
-            });
+                ),
+            );
         }
 
-        // 1. Blacklist check (lexical & canonical, fail closed on mutation)
+        // 2. Blacklist check (lexical & canonical, fail closed on mutation)
         if let Err(e) = Blacklist::validate_with(path, environment) {
-            return RevalidationOutcome::Failed(CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::Blacklisted),
-                error_message: Some(e.to_string()),
-            });
+            return skipped(target, CleanFailureReason::Blacklisted, e.to_string());
         }
         if let Err(e) = SymlinkGuard::validate_canonical_blacklist_strict(path, environment) {
             if crate::safety::is_already_absent(&e) {
-                return RevalidationOutcome::AlreadyAbsent(Self::already_absent(target));
+                return skipped(
+                    target,
+                    CleanFailureReason::NotFound,
+                    format!("{} was already absent before cleanup", path.display()),
+                );
             }
-            return RevalidationOutcome::Failed(CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::Blacklisted),
-                error_message: Some(e.to_string()),
-            });
+            return skipped(target, CleanFailureReason::Blacklisted, e.to_string());
         }
 
-        // 1b. Symlink metadata must be readable; failure fails closed.
-        if let Err(e) = SymlinkGuard::is_symlink_strict(path) {
-            if crate::safety::is_already_absent(&e) {
-                return RevalidationOutcome::AlreadyAbsent(Self::already_absent(target));
+        // 3. Symlink, junction, mount point, or unknown reparse point: a
+        //    deletion boundary, never a path to follow.
+        match SymlinkGuard::is_symlink_strict(path) {
+            Ok(false) => {}
+            Ok(true) => {
+                return skipped(
+                    target,
+                    CleanFailureReason::SafetyBoundary,
+                    format!(
+                        "{} is a link, junction, or mount point; cleanup does not delete through it",
+                        path.display()
+                    ),
+                );
             }
-            return RevalidationOutcome::Failed(CleanItemResult {
-                item_id: target.item_id.clone(),
-                name: target.name.clone(),
-                path: path.to_string_lossy().to_string(),
-                status: CleanStatus::Failed,
-                success: false,
-                bytes_reclaimed: 0,
-                failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                error_message: Some(e.to_string()),
-            });
+            Err(e) if crate::safety::is_already_absent(&e) => {
+                return skipped(
+                    target,
+                    CleanFailureReason::NotFound,
+                    format!("{} was already absent before cleanup", path.display()),
+                );
+            }
+            Err(e) => {
+                return failed(target, CleanFailureReason::ChangedSinceScan, e.to_string());
+            }
         }
 
-        // 2. Check path existence.
-        if !path.exists() && !SymlinkGuard::is_symlink(path) {
-            return RevalidationOutcome::AlreadyAbsent(Self::already_absent(target));
+        if crosses_mount_boundary(path) {
+            return skipped(
+                target,
+                CleanFailureReason::SafetyBoundary,
+                format!(
+                    "{} sits on a different volume than its parent; cleanup does not cross a mount boundary",
+                    path.display()
+                ),
+            );
         }
 
-        // 3. TOCTOU identity verification
+        // 4. TOCTOU identity verification
         if let Some(expected_identity) = &target.identity {
             if let Err(e) = ToctouGuard::verify(path, expected_identity) {
                 if crate::safety::is_already_absent(&e) {
-                    return RevalidationOutcome::AlreadyAbsent(Self::already_absent(target));
+                    return skipped(
+                        target,
+                        CleanFailureReason::NotFound,
+                        format!("{} was already absent before cleanup", path.display()),
+                    );
                 }
-                return RevalidationOutcome::Failed(CleanItemResult {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    path: path.to_string_lossy().to_string(),
-                    status: CleanStatus::Failed,
-                    success: false,
-                    bytes_reclaimed: 0,
-                    failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                    error_message: Some(e.to_string()),
-                });
+                return skipped(target, CleanFailureReason::ChangedSinceScan, e.to_string());
             }
         }
 
-        // 3b. Stale Temp Directory TOCTOU: re-verify freshness invariant if target has min_age_days
+        // 5. The entry kind the scan approved must still hold: a directory that
+        //    became a file (or the reverse) is no longer the approved object.
+        let current_kind = entry_kind_of(&metadata);
+        if current_kind != target.target_kind {
+            return skipped(
+                target,
+                CleanFailureReason::ChangedSinceScan,
+                format!(
+                    "{} was a {:?} when it was scanned and is a {:?} now; refusing to mutate",
+                    path.display(),
+                    target.target_kind,
+                    current_kind
+                ),
+            );
+        }
+
+        // 6. Structured state is never generic cleanup's to remove, even when a
+        //    discovery rule produced the target.
+        let target_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let facts = PathFacts::new(&target_name, current_kind).executable(is_executable(&metadata));
+        if let Some(kind) = classify_structured_state(facts) {
+            return skipped(
+                target,
+                CleanFailureReason::StructuredStore,
+                format!(
+                    "{} is {}; generic cleanup does not remove structured state",
+                    path.display(),
+                    kind.display_name()
+                ),
+            );
+        }
+
+        // 7. The strategy must still fit the object it would act on.
+        if target.strategy == CleanStrategy::DeleteContents && current_kind != EntryKind::Directory
+        {
+            return skipped(
+                target,
+                CleanFailureReason::ChangedSinceScan,
+                format!(
+                    "{} is no longer a directory, so there are no contents to remove",
+                    path.display()
+                ),
+            );
+        }
+
+        // 8. Stale temp directory TOCTOU: re-verify the freshness invariant
+        //    against the same age rule the scan applied.
         if let Some(days) = target.min_age_days {
-            if path.is_dir() {
+            if current_kind == EntryKind::Directory {
                 // The execution-time age re-check is not part of a
                 // cancellable scan: it must observe the whole tree before a
                 // deletion is allowed, so it runs to completion.
@@ -229,58 +393,40 @@ impl SafetyValidator {
                 if !stats.complete {
                     if let Err(error) = std::fs::symlink_metadata(path) {
                         if error.kind() == std::io::ErrorKind::NotFound {
-                            return RevalidationOutcome::AlreadyAbsent(Self::already_absent(
+                            return skipped(
                                 target,
-                            ));
+                                CleanFailureReason::NotFound,
+                                format!("{} was already absent before cleanup", path.display()),
+                            );
                         }
                     }
-                    return RevalidationOutcome::Failed(CleanItemResult {
-                        item_id: target.item_id.clone(),
-                        name: target.name.clone(),
-                        path: path.to_string_lossy().to_string(),
-                        status: CleanStatus::Failed,
-                        success: false,
-                        bytes_reclaimed: 0,
-                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                        error_message: Some(
-                            "Directory structure could not be fully verified; aborted to protect active files"
-                                .to_string(),
-                        ),
-                    });
+                    return skipped(
+                        target,
+                        CleanFailureReason::ChangedSinceScan,
+                        "Directory structure could not be fully verified; aborted to protect active files",
+                    );
                 }
-                let Some(newest) = stats.newest_mtime else {
-                    return RevalidationOutcome::Failed(CleanItemResult {
-                        item_id: target.item_id.clone(),
-                        name: target.name.clone(),
-                        path: path.to_string_lossy().to_string(),
-                        status: CleanStatus::Failed,
-                        success: false,
-                        bytes_reclaimed: 0,
-                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                        error_message: Some(
-                            "Directory modification timestamp unavailable; aborted to protect active files"
-                                .to_string(),
-                        ),
-                    });
-                };
-                let minimum_age = std::time::Duration::from_secs(days as u64 * 86_400);
-                if std::time::SystemTime::now()
-                    .duration_since(newest)
+                let newest = stats.newest_mtime.and_then(|modified| {
+                    modified
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .ok()
+                        .map(|elapsed| elapsed.as_secs())
+                });
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
-                    < minimum_age
-                {
-                    return RevalidationOutcome::Failed(CleanItemResult {
-                        item_id: target.item_id.clone(),
-                        name: target.name.clone(),
-                        path: path.to_string_lossy().to_string(),
-                        status: CleanStatus::Failed,
-                        success: false,
-                        bytes_reclaimed: 0,
-                        failure_reason: Some(CleanFailureReason::ChangedSinceScan),
-                        error_message: Some(format!(
+                    .as_secs();
+                // One age rule for the scan and the execution boundary: the
+                // same evaluation that produced the item's verdict.
+                let age = crate::models::AgeObservation::evaluate(days, newest, now);
+                if !age.satisfied {
+                    return skipped(
+                        target,
+                        CleanFailureReason::ChangedSinceScan,
+                        format!(
                             "Directory contains files modified within the last {days} days; aborted cleanup to protect active processes"
-                        )),
-                    });
+                        ),
+                    );
                 }
             }
         }
@@ -337,4 +483,28 @@ impl<'a> From<&'a ValidatedModelTarget> for FilesystemDeleteAuthority<'a> {
             inner: AuthorityKind::ModelInventory(target),
         }
     }
+}
+
+/// The structured-state verdict for a path, for callers that must refuse a
+/// target before a plan is built.
+///
+/// The planner uses this so a plan never contains a target the execution guard
+/// would refuse: planning and execution must agree, and the cheaper place to
+/// say no is before the user is offered a confirmation.
+pub fn structured_state_at(path: &Path) -> Option<(StructuredStateKind, EntryKind)> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    let entry_kind = entry_kind_of(&metadata);
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let facts = PathFacts::new(&name, entry_kind).executable(is_executable(&metadata));
+    classify_structured_state(facts).map(|kind| (kind, entry_kind))
+}
+
+/// The entry kind of a path, as the plan records it.
+pub fn entry_kind_at(path: &Path) -> Option<EntryKind> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| entry_kind_of(&metadata))
 }

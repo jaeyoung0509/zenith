@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
-  import { isAdvisory, isBlocked, isCleanable } from '../utils/cleanup';
+  import { isAdvisory, isBlocked, isCleanable, isPolicyGated, isRecent } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import { platformContextStore } from '../stores/platformContext.svelte';
   import { canReveal, revealUnavailableReason, runReveal } from '../utils/reveal';
@@ -95,6 +95,14 @@
         {:else if item.disposition?.eligibility === 'advisory'}
           <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={blockedReason}>
             Advisory
+          </span>
+        {:else if isRecent(item)}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.disposition?.reason ?? blockedReason}>
+            Recently used
+          </span>
+        {:else if isPolicyGated(item)}
+          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.disposition?.reason ?? blockedReason}>
+            Outside scope
           </span>
         {:else if item.quality === 'partial'}
           <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.incomplete_reason ?? 'Partial scan'}>

@@ -30,7 +30,9 @@ pub mod scan;
 pub mod storage;
 
 pub use category::Category;
-pub use cleanup::{CleanStrategy, DeletePlan, DeleteTarget};
+pub use cleanup::{
+    CleanStrategy, CleanupMode, DeletePlan, DeleteTarget, EntryKind, StructuredStateKind,
+};
 pub use error::{ZenithError, ZenithResult};
 pub use identity::{CleanupIdentity, FileIdentity, ModifiedStamp, ReviewedFileIdentity};
 pub use observation::{is_within_window, ObservationQuality};
@@ -42,9 +44,11 @@ pub use platform::{
 };
 pub use risk::{RiskSummary, RiskTier};
 pub use scan::{
-    derive_cleanup_disposition, is_safety_blocked_reason, CacheArtifactKind, CacheManagementMode,
-    CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult, CleanupDisposition,
-    CleanupEligibility, FileSize, ScanItem, ScanResult,
+    derive_cleanup_disposition, is_safety_blocked_reason, AgeObservation, CacheArtifactKind,
+    CacheManagementMode, CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult,
+    CleanupDisposition, CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitKind,
+    DispositionFacts, EligibilityBucket, EligibilityGate, EligibilitySummary, FileSize,
+    OwnershipConfidence, ScanItem, ScanResult,
 };
 pub use storage::{
     AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,

@@ -60,8 +60,9 @@ pub use zenith_core::application::dto::storage::{
 };
 pub use zenith_core::domain::category::Category;
 pub use zenith_core::domain::cleanup::{
-    CleanStrategy, CleanupOperation, ContainerCleanup, DeletePlan, DeleteTarget, FilesystemCleanup,
-    FilesystemMutation, ProviderCleanup,
+    classify_structured_state, CleanStrategy, CleanupMode, CleanupOperation, ContainerCleanup,
+    DeletePlan, DeleteTarget, EntryKind, FilesystemCleanup, FilesystemMutation, PathFacts,
+    ProviderCleanup, RunningProcessPolicy, StructuredStateKind,
 };
 pub use zenith_core::domain::error::{ZenithError, ZenithResult};
 pub use zenith_core::domain::identity::{
@@ -76,9 +77,11 @@ pub use zenith_core::domain::platform::{
 };
 pub use zenith_core::domain::risk::{RiskSummary, RiskTier};
 pub use zenith_core::domain::scan::{
-    derive_cleanup_disposition, is_safety_blocked_reason, CacheArtifactKind, CacheManagementMode,
-    CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult, CleanupDisposition,
-    CleanupEligibility, FileSize, ScanItem, ScanResult,
+    derive_cleanup_disposition, is_safety_blocked_reason, AgeObservation, CacheArtifactKind,
+    CacheManagementMode, CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult,
+    CleanupDisposition, CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitIdentity,
+    CleanupUnitKind, DispositionFacts, EligibilityBucket, EligibilityGate, EligibilitySummary,
+    FileSize, OwnershipConfidence, PathIdentity, ScanItem, ScanResult,
 };
 pub use zenith_core::domain::storage::{
     AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,

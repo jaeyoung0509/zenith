@@ -195,20 +195,39 @@ impl SignatureRegistry {
             .collect()
     }
 
-    /// Lists signatures available for the selected scan scope.
+    /// Lists the signatures a scan discovers for a category and scope.
+    ///
+    /// Discovery and eligibility are separate: this returns what the scan
+    /// looks at, and [`Signature::eligibility_gate`] states what the current
+    /// scope permits for each of them. A signature whose scope is off is not
+    /// discovered at all; a signature that opted into always-on discovery is
+    /// returned in either mode, and the walker records the gate on every unit
+    /// it finds.
+    ///
+    /// The order is deterministic — most specific first, then by id — because
+    /// two signatures can describe the same location, and which one wins must
+    /// not depend on the hash order of a map.
     pub fn by_category_for_mode(
         &self,
         category: Category,
         intensive_cleanup: bool,
     ) -> Vec<&Signature> {
-        self.signatures
+        let mut discovered: Vec<&Signature> = self
+            .signatures
             .values()
             .filter(|signature| {
                 signature.category == category
                     && signature.supports_current_platform()
-                    && (intensive_cleanup || !signature.intensive_only)
+                    && signature.discovery_allows(intensive_cleanup)
             })
-            .collect()
+            .collect();
+        discovered.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        discovered
     }
 
     /// Lists signatures by risk tier.
@@ -539,7 +558,10 @@ fn path_parts(path: &str, flavor: PathFlavor) -> PathParts {
 #[cfg(test)]
 mod tests {
     use super::{ManifestLintFinding, SignatureRegistry};
-    use crate::models::{Category, PlatformKind, RiskTier, Signature};
+    use crate::models::{
+        Category, CleanStrategy, CleanupUnitKind, DiscoveryScope, EligibilityGate, PlatformKind,
+        RiskTier, Signature,
+    };
     use std::path::PathBuf;
     use std::sync::Arc;
     use zenith_platform::path_algebra::PathFlavor;
@@ -683,6 +705,11 @@ mod tests {
             exclude_prefixes: vec![],
             intensive_only: false,
             platforms,
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
             provider: String::new(),
             management_mode: Default::default(),
             artifact_kind: Default::default(),
@@ -695,6 +722,197 @@ mod tests {
         let mut registry = SignatureRegistry::new();
         registry.register(signature);
         SignatureRegistry::audit_signature_platforms(&registry, &stated_environment())
+    }
+
+    /// Every shipped entry satisfies the catalog schema, and the granularity it
+    /// implies matches the strategy it declares. A manifest that contradicts
+    /// itself fails the load instead of reaching a scan.
+    #[test]
+    fn the_embedded_catalog_satisfies_the_catalog_schema() {
+        let registry = SignatureRegistry::load_embedded_catalog()
+            .expect("the embedded catalog loads and validates");
+        assert!(!registry.all().is_empty(), "the catalog is not empty");
+
+        for signature in registry.all() {
+            signature
+                .validate()
+                .unwrap_or_else(|error| panic!("{} does not validate: {error}", signature.id));
+            let kind = signature.unit_kind();
+            match signature.strategy {
+                CleanStrategy::DockerPrune => assert_eq!(
+                    kind,
+                    CleanupUnitKind::ContainerResource,
+                    "{} prunes a runtime-owned resource",
+                    signature.id
+                ),
+                CleanStrategy::ExternalCommand => assert_eq!(
+                    kind,
+                    CleanupUnitKind::ProviderAction,
+                    "{} is performed by its provider",
+                    signature.id
+                ),
+                CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory => {
+                    assert!(
+                        kind.is_filesystem(),
+                        "{} deletes a host path and must own a filesystem unit",
+                        signature.id
+                    );
+                    if signature.min_age_days.is_some() {
+                        assert_eq!(
+                            kind,
+                            CleanupUnitKind::ChildNamespace,
+                            "{} ages enumerated children",
+                            signature.id
+                        );
+                    }
+                }
+                CleanStrategy::Manual => {}
+            }
+        }
+    }
+
+    /// The schema rules refuse a catalog entry that contradicts itself.
+    #[test]
+    fn a_contradictory_signature_is_refused() {
+        let base = |id: &str| Signature {
+            id: id.to_string(),
+            name: id.to_string(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteDirectory,
+            paths: vec!["/tmp/example".to_string()],
+            exclusions: vec![],
+            description: String::new(),
+            min_age_days: None,
+            include_prefixes: vec![],
+            exclude_prefixes: vec![],
+            intensive_only: false,
+            platforms: vec![],
+            discovery: DiscoveryScope::ModeGated,
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        };
+
+        // An enumerated or named unit without an age policy would delete state
+        // that is still in use.
+        let mut child_without_age = base("test.invalid.child");
+        child_without_age.unit = Some(CleanupUnitKind::ChildNamespace);
+        assert!(child_without_age.validate().is_err());
+
+        let mut named_without_age = base("test.invalid.named");
+        named_without_age.unit = Some(CleanupUnitKind::NamedSubtree);
+        assert!(named_without_age.validate().is_err());
+
+        // An age policy ages children, so a signature that declares the fixed
+        // path itself as its unit contradicts it.
+        let mut fixed_with_age = base("test.invalid.fixed");
+        fixed_with_age.min_age_days = Some(7);
+        fixed_with_age.unit = Some(CleanupUnitKind::FixedPath);
+        assert!(fixed_with_age.validate().is_err());
+
+        // Stating nothing derives the unit from the age policy instead.
+        let mut derived = base("test.valid.derived");
+        derived.min_age_days = Some(7);
+        assert!(derived.validate().is_ok());
+        assert_eq!(derived.unit_kind(), CleanupUnitKind::ChildNamespace);
+
+        // A path-owning strategy cannot be paired with a unit that owns none.
+        let mut provider_paths = base("test.invalid.provider");
+        provider_paths.strategy = CleanStrategy::ExternalCommand;
+        provider_paths.unit = Some(CleanupUnitKind::ProviderAction);
+        provider_paths.paths = vec!["/tmp/example".to_string()];
+        assert!(provider_paths.validate().is_err());
+
+        // A process guard names an executable, never a path.
+        let mut path_guard = base("test.invalid.guard");
+        path_guard.fail_if_running = vec!["/usr/bin/cargo".to_string()];
+        assert!(path_guard.validate().is_err());
+
+        let mut empty_guard = base("test.invalid.empty-guard");
+        empty_guard.fail_if_running = vec!["   ".to_string()];
+        assert!(empty_guard.validate().is_err());
+
+        // The same facts without the contradiction are accepted.
+        let mut child = base("test.valid.child");
+        child.min_age_days = Some(7);
+        assert!(child.validate().is_ok());
+        assert_eq!(child.unit_kind(), CleanupUnitKind::ChildNamespace);
+
+        let mut provider = base("test.valid.provider");
+        provider.strategy = CleanStrategy::ExternalCommand;
+        provider.paths = vec![];
+        provider.provider = "example".to_string();
+        assert!(provider.validate().is_ok());
+        assert_eq!(provider.unit_kind(), CleanupUnitKind::ProviderAction);
+        assert!(provider.ownership().is_known());
+    }
+
+    /// Discovery and eligibility are separate decisions, and the registry order
+    /// is deterministic: two signatures that describe the same location must
+    /// not depend on a map's iteration order.
+    #[test]
+    fn discovery_and_eligibility_are_decided_separately_and_in_order() {
+        let mut registry = SignatureRegistry::new();
+        let mut broad = test_signature(
+            "test.scope.broad",
+            vec!["/tmp/cache"],
+            vec![PlatformKind::Macos, PlatformKind::Windows],
+        );
+        broad.intensive_only = true;
+        broad.priority = 1;
+        let mut specific = test_signature(
+            "test.scope.specific",
+            vec!["/tmp/cache"],
+            vec![PlatformKind::Macos, PlatformKind::Windows],
+        );
+        specific.intensive_only = true;
+        specific.priority = 9;
+        let mut always = test_signature(
+            "test.scope.always",
+            vec!["/tmp/cache"],
+            vec![PlatformKind::Macos, PlatformKind::Windows],
+        );
+        always.intensive_only = true;
+        always.discovery = DiscoveryScope::Always;
+        let always_gate = always.eligibility_gate(false);
+        registry.register(broad);
+        registry.register(specific);
+        registry.register(always);
+
+        let standard = registry.by_category_for_mode(Category::System, false);
+        let ids: Vec<&str> = standard.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["test.scope.always"],
+            "a mode-gated signature is not discovered, an always-on one is"
+        );
+        assert_eq!(
+            always_gate,
+            EligibilityGate::IntensiveCleanupDisabled,
+            "the discovered unit reports the gate that kept it out of scope"
+        );
+
+        let intensive = registry.by_category_for_mode(Category::System, true);
+        let ids: Vec<&str> = intensive.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "test.scope.specific",
+                "test.scope.broad",
+                "test.scope.always"
+            ],
+            "most specific first, then by id"
+        );
+        for signature in &intensive {
+            assert_eq!(signature.eligibility_gate(true), EligibilityGate::Open);
+        }
     }
 
     #[test]

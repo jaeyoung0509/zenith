@@ -1,8 +1,8 @@
 use crate::models::{
-    CleanStrategy, DeletePlan, DeleteTarget, RiskSummary, RiskTier, ScanItem, ScanResult,
-    ZenithError,
+    CleanStrategy, CleanupMode, DeletePlan, DeleteTarget, RiskSummary, RiskTier, ScanItem,
+    ScanResult, ZenithError,
 };
-use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
+use crate::safety::{entry_kind_at, structured_state_at, Blacklist, SymlinkGuard, ToctouGuard};
 use crate::signatures::SignatureRegistry;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -99,6 +99,22 @@ impl SafetyPlanner {
                 )));
             }
 
+            // A plan authorizes a unit, not a path string: an item that cannot
+            // name the unit that produced it, or names a different path than
+            // the one it deletes, is not plannable.
+            if !item.unit.is_declared() {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' does not name the cleanup unit that authorized it; scan again",
+                    item.name
+                )));
+            }
+            if item.unit.path != item.path {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' names a cleanup unit that does not match its path; scan again",
+                    item.name
+                )));
+            }
+
             // 1. Verify signature exists in registry
             let signature = registry
                 .get(&item.signature_id)
@@ -106,6 +122,26 @@ impl SafetyPlanner {
 
             if signature.strategy == CleanStrategy::Manual {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
+            }
+
+            // The unit granularity the item claims must be the granularity the
+            // signature declares, so a discovery rule cannot widen what a
+            // signature authorizes.
+            if item.unit.kind != signature.unit_kind() {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' claims a cleanup unit the signature does not declare; scan again",
+                    item.name
+                )));
+            }
+
+            // The ownership the item reports must be the ownership the catalog
+            // states: a message built from the plan must not describe a
+            // location by a claim the catalog never made.
+            if item.ownership != signature.ownership() {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' reports ownership the catalog does not state; scan again",
+                    item.name
+                )));
             }
 
             // 2. Resolve target path and strategy
@@ -150,6 +186,28 @@ impl SafetyPlanner {
                 if path.exists() || SymlinkGuard::is_symlink(&path) {
                     identity = ToctouGuard::capture(&path);
                 }
+
+                // 6. Structured state is not generic cleanup's to remove. The
+                //    execution guard refuses it too; refusing here keeps a plan
+                //    from offering a target that could never be cleaned.
+                if let Some((kind, _)) = structured_state_at(&path) {
+                    return Err(ZenithError::InvalidPlan(format!(
+                        "`{}` is {} and can only be handled by a dedicated provider, not by generic cleanup",
+                        item.name,
+                        kind.display_name()
+                    )));
+                }
+
+                // 7. The entry kind the scan observed must still hold, so a
+                //    plan states the kind of object it intends to delete.
+                if let Some(current_kind) = entry_kind_at(&path) {
+                    if current_kind != item.entry_kind {
+                        return Err(ZenithError::InvalidPlan(format!(
+                            "`{}` changed kind since the scan; scan again before cleaning",
+                            item.name
+                        )));
+                    }
+                }
             }
 
             let bytes = item.cleanable_bytes();
@@ -167,6 +225,10 @@ impl SafetyPlanner {
                 identity,
                 exclusions: signature.exclusions.clone(),
                 min_age_days: signature.min_age_days,
+                unit: item.unit.clone(),
+                target_kind: item.entry_kind,
+                owner: item.ownership.clone(),
+                process_guard: signature.process_guard(),
             });
         }
 
@@ -188,6 +250,7 @@ impl SafetyPlanner {
             expected_reclaim_bytes,
             risk: risk_summary,
             created_at: now,
+            mode: CleanupMode::PermanentDelete,
         })
     }
 }
@@ -212,19 +275,27 @@ mod tests {
             file_count: 1,
             description: String::new(),
             cache_metadata: Default::default(),
+            disposition: crate::models::derive_cleanup_disposition(
+                crate::models::DispositionFacts::new(
+                    RiskTier::Manual,
+                    ObservationQuality::Fresh,
+                    &Default::default(),
+                    &size,
+                    None,
+                ),
+            ),
+            unit: crate::models::CleanupUnit::fixed_path("/untrusted/data.img.raw"),
+            ownership: Default::default(),
+            age: None,
+            structured_state: None,
+            entry_kind: crate::models::EntryKind::File,
+            gate: Default::default(),
             is_selected: true,
             last_modified: None,
             exists: true,
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
             skipped_entry_count: 0,
-            disposition: crate::models::derive_cleanup_disposition(
-                RiskTier::Manual,
-                ObservationQuality::Fresh,
-                &Default::default(),
-                &size,
-                None,
-            ),
         };
 
         let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());
