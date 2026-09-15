@@ -4,6 +4,7 @@ import { render } from 'svelte/server';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
 import QuickUsageGauges from '../lib/components/QuickUsageGauges.svelte';
 import {
+  handleQuickPanelFocusChanged,
   isAcceleratorPressed,
   isQuickPanelDismissShortcut,
   moveOrdered,
@@ -306,5 +307,19 @@ describe('quick panel AI provider projection', () => {
     expect(rendered.body).not.toContain('Usage limit windows');
     expect(rendered.body).toContain('shrink-0 whitespace-nowrap');
     expect(rendered.body).toContain('tabular-nums');
+  });
+
+  it('handles focus loss behaviorally by deactivating without hiding the window', () => {
+    const activate = vi.fn();
+    const deactivate = vi.fn();
+
+    // Focus lost: deactivates without calling window hide or activation
+    handleQuickPanelFocusChanged(false, { activate, deactivate });
+    expect(deactivate).toHaveBeenCalledTimes(1);
+    expect(activate).not.toHaveBeenCalled();
+
+    // Focus gained: activates
+    handleQuickPanelFocusChanged(true, { activate, deactivate });
+    expect(activate).toHaveBeenCalledTimes(1);
   });
 });
