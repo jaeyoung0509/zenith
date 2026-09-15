@@ -392,6 +392,11 @@ impl SystemService {
         notifications: &dyn DesktopNotifications,
     ) -> Result<(), String> {
         let next = settings.sanitize();
+        // The rule bound is checked before anything persists: a save that
+        // would leave the file and the shared authority holding a list the
+        // runtime refuses is a split brain, so validation happens while the
+        // only thing that can refuse is still the save itself.
+        KeepAwakeManager::validate_rules(&next.awake_rules)?;
         self.settings_reaction.before_save(&next, notifications)?;
 
         let config_dir = config_dir.to_path_buf();
@@ -419,8 +424,8 @@ impl SystemService {
                         previous.ai_control = ai_control;
                         change
                     })?;
-                // A stored list beyond the manager's maximum refuses the
-                // save rather than silently truncating the user's rules.
+                // The published list was already validated before the write,
+                // so this application step cannot refuse it anymore.
                 awake.set_rules(published.awake_rules)?;
                 Ok(change)
             },
@@ -660,6 +665,20 @@ mod tests {
         // ai_service's tests.
     }
 
+    fn bound_rule(id: &str) -> crate::models::AwakeRule {
+        crate::models::AwakeRule {
+            id: id.to_string(),
+            app_name: "Bound test".to_string(),
+            executable_pattern: "non_existent_bound_test_process".to_string(),
+            requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
+            behavior: crate::models::AwakeBehavior::PreventSystemSleep,
+            power_condition: crate::models::PowerCondition::Always,
+            enabled: true,
+        }
+    }
+
     fn settings_with_notifications_enabled() -> ZenithSettings {
         ZenithSettings {
             agent_notifications: crate::models::AgentNotificationPreferences {
@@ -705,6 +724,63 @@ mod tests {
             reaction.calls.lock().unwrap().as_slice(),
             ["before_save"],
             "a refused save must not report completion"
+        );
+    }
+
+    /// A save whose rule list the runtime refuses must leave everything on
+    /// the previous snapshot: the persisted file, the shared authority, and
+    /// the rules the Keep Awake manager is actually evaluating.
+    #[test]
+    fn a_save_with_too_many_rules_persists_nothing() {
+        let config_dir = tempfile::tempdir().expect("temp config dir");
+        let service = service_with_reaction(Arc::new(RecordingReaction::default()));
+
+        let baseline = bound_rule("rule.baseline");
+        let mut accepted = service.settings().expect("authority is healthy");
+        accepted.awake_rules = vec![baseline.clone()];
+        tauri::async_runtime::block_on(service.save_settings(
+            config_dir.path(),
+            accepted,
+            &TestNotifications { grant: true },
+        ))
+        .expect("the baseline save succeeds");
+        assert_eq!(
+            crate::settings_store::load(config_dir.path())
+                .awake_rules
+                .len(),
+            1,
+            "the baseline is on disk before the oversized attempt"
+        );
+
+        let mut oversized = service.settings().expect("authority is healthy");
+        oversized.awake_rules = (0..crate::power::MAX_AWAKE_RULES + 1)
+            .map(|index| bound_rule(&format!("rule.overflow_{index}")))
+            .collect();
+        let refused = tauri::async_runtime::block_on(service.save_settings(
+            config_dir.path(),
+            oversized,
+            &TestNotifications { grant: true },
+        ));
+        assert!(refused.is_err(), "the oversized list must refuse the save");
+
+        // Nothing moved: the file, the shared authority, and the running rules.
+        assert_eq!(
+            crate::settings_store::load(config_dir.path()).awake_rules,
+            vec![baseline.clone()],
+            "the persisted file keeps the baseline"
+        );
+        assert_eq!(
+            service
+                .settings()
+                .expect("authority is healthy")
+                .awake_rules,
+            vec![baseline.clone()],
+            "the shared authority keeps the baseline"
+        );
+        assert_eq!(
+            service.awake_state().rule_evaluations.len(),
+            1,
+            "the running manager keeps the baseline"
         );
     }
 

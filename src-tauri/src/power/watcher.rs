@@ -120,6 +120,22 @@ impl KeepAwakeManager {
         }
     }
 
+    /// Validates a rule list before the manager accepts it.
+    ///
+    /// Kept separate from `set_rules` so a caller that is about to persist
+    /// the same list (a settings save) can refuse it *before* the file and
+    /// the shared authority change, instead of persisting first and finding
+    /// the runtime refuse the persisted value.
+    pub fn validate_rules(rules: &[AwakeRule]) -> Result<(), String> {
+        if rules.len() > MAX_AWAKE_RULES {
+            return Err(format!(
+                "Too many Keep Awake rules: {} exceeds the maximum of {MAX_AWAKE_RULES}.",
+                rules.len()
+            ));
+        }
+        Ok(())
+    }
+
     /// Sets the active rules to monitor.
     ///
     /// The manager is the authority for this input: the IPC command, the
@@ -128,12 +144,7 @@ impl KeepAwakeManager {
     /// the maximum is refused with its reason and the current rules are left
     /// untouched rather than silently truncated.
     pub fn set_rules(&self, rules: Vec<AwakeRule>) -> Result<(), String> {
-        if rules.len() > MAX_AWAKE_RULES {
-            return Err(format!(
-                "Too many Keep Awake rules: {} exceeds the maximum of {MAX_AWAKE_RULES}.",
-                rules.len()
-            ));
-        }
+        Self::validate_rules(&rules)?;
         let mut r = self
             .rules
             .lock()
@@ -1708,6 +1719,7 @@ mod tests {
         let state = manager.get_state();
         assert_eq!(state.active_rule_id, Some("rule.first".to_string()));
         assert_eq!(state.rule_evaluations[0].status, AwakeRuleStatus::Active);
+        assert_eq!(state.rule_evaluations[1].status, AwakeRuleStatus::Active);
     }
 
     fn bound_test_rule(id: &str) -> AwakeRule {

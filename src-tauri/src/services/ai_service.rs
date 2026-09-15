@@ -250,17 +250,29 @@ impl AiService {
         crate::blocking::run_blocking(
             move || {
                 use zenith_platform::SystemActionProvider;
-                let registry = cache
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let registry = registry.as_ref().ok_or_else(|| {
-                    "No project snapshot is available yet. Refresh and try again.".to_string()
-                })?;
-                let root = registry.project_roots.get(&project_id).ok_or_else(|| {
-                    "Project is not part of the current snapshot. Refresh and try again."
-                        .to_string()
-                })?;
-                zenith_platform::NativeSystemActions::new().open_terminal(root)
+                // The shared registry lock resolves the id only; the OS
+                // process spawn happens outside it so no snapshot refresh
+                // waits on a spawned terminal (the same direction #136 set
+                // for slow work under shared locks).
+                let root = {
+                    let registry = cache
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    registry
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "No project snapshot is available yet. Refresh and try again."
+                                .to_string()
+                        })?
+                        .project_roots
+                        .get(&project_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            "Project is not part of the current snapshot. Refresh and try again."
+                                .to_string()
+                        })?
+                };
+                zenith_platform::NativeSystemActions::new().open_terminal(&root)
             },
             "Terminal worker panicked",
         )

@@ -202,28 +202,39 @@ impl AiControlRuntime {
         // is recovered like the other loop locks so one panic cannot stop the
         // tick for the rest of the process (a silent skip would be the same
         // dead-worker failure this runtime exists to prevent).
-        let mut control = self
-            .ai_control_state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let new_items = control.policy.evaluate(
-            &resources,
-            memory.map(|sample| sample.pressure),
-            awake_state.power_source,
-            &preferences.autopilot,
-            now,
-        );
+        // The produced items are stored under the lock and the notification
+        // runs outside it, in that order. `policy.evaluate` consumes the
+        // cooldown for the session the moment it returns an item, so an
+        // external notification call made while the lock is held could panic
+        // and lose a recommendation that a retry can never regenerate — the
+        // cooldown is already spent. External code never runs under the lock
+        // either: it cannot poison the shared state it does not hold.
+        let new_items = {
+            let mut control = self
+                .ai_control_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let new_items = control.policy.evaluate(
+                &resources,
+                memory.map(|sample| sample.pressure),
+                awake_state.power_source,
+                &preferences.autopilot,
+                now,
+            );
+            if !new_items.is_empty() {
+                control.recommendations.extend(new_items.clone());
+                control
+                    .recommendations
+                    .sort_by_key(|item| std::cmp::Reverse(item.created_at));
+                control.recommendations.truncate(64);
+            }
+            new_items
+        };
 
         if !new_items.is_empty() {
             if let Some(notifications) = notifications {
                 let _ = notifications.emit_recommendations(&new_items);
             }
-            control.recommendations.extend(new_items.clone());
-            control
-                .recommendations
-                .sort_by_key(|item| std::cmp::Reverse(item.created_at));
-            control.recommendations.truncate(64);
         }
 
         new_items
@@ -462,7 +473,7 @@ mod tests {
         let control_state = Arc::new(Mutex::new(
             crate::ai_control_center::state::AiControlCenterState::default(),
         ));
-        let runtime = battery_advisory_runtime(activity, control_state);
+        let runtime = battery_advisory_runtime(activity, control_state.clone());
 
         assert_eq!(
             runtime.tick_health().status,
@@ -477,6 +488,17 @@ mod tests {
             degraded.status,
             crate::runtime_health::BackgroundLoopStatus::Degraded
         );
+        // The panicked delivery must not lose the recommendation: it was
+        // stored before the notification ran, and the cooldown is already
+        // consumed, so no later tick can regenerate it.
+        let state = control_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            !state.recommendations.is_empty(),
+            "the recommendation must survive the panicked notification"
+        );
+        drop(state);
         let reason = degraded
             .reason
             .expect("the failure is surfaced with a reason");

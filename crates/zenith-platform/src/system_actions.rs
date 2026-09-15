@@ -86,7 +86,7 @@ impl SystemActionProvider for NativeSystemActions {
 
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::ffi::OsStringExt;
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
             use std::os::windows::process::CommandExt;
             let norm_path = crate::NativePlatformPaths::normalize_verbatim_path(path);
             if norm_path.is_dir() {

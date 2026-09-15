@@ -309,7 +309,9 @@ fn test_keep_awake_power_conditions_and_ac_awareness() {
         enabled: true,
     };
 
-    manager.set_rules(vec![rule_ac, rule_always]);
+    manager
+        .set_rules(vec![rule_ac, rule_always])
+        .expect("rules within limit");
     let state = manager.get_state();
 
     assert_eq!(state.rule_evaluations.len(), 2);

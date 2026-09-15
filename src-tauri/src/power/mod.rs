@@ -8,4 +8,4 @@ mod windows_request;
 pub use app_picker::ApplicationPicker;
 pub use assertion::{NativeAssertionProvider, PowerAssertion, PowerAssertionProvider};
 pub use source::{MockPowerSource, PowerSourceProvider, SystemPowerSource};
-pub use watcher::KeepAwakeManager;
+pub use watcher::{KeepAwakeManager, MAX_AWAKE_RULES};
