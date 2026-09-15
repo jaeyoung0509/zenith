@@ -13,6 +13,12 @@ application's tray click handler even when `show_menu_on_left_click(false)` is s
   only while the menu is being presented (`show_menu` or right-click click handler),
   and detaching it immediately afterwards.
 
+## Windows Dependency Pin
+In `patches/tray-icon/Cargo.toml`, the Windows target dependency is pinned to
+`windows-sys = "0.61"` (instead of the upstream range `>=0.60, <=0.61`) so
+Cargo resolves `windows-sys 0.61.2`, avoiding unwanted dependency drift in
+`Cargo.lock` against the rest of the workspace.
+
 ## How to Remove
 Once Tauri / tray-icon releases a new version containing this fix:
 1. Update `tray-icon` (or `tauri`) in `Cargo.lock` / `Cargo.toml`.
