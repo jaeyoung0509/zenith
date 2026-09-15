@@ -10,6 +10,7 @@
   import { usageStore } from '../../lib/stores/usage.svelte';
   import { formatBytes, formatTimeAgo, formatTimeUntil, formatResetDate } from '../../lib/utils/format';
   import {
+    handleQuickPanelFocusChanged,
     isAcceleratorPressed,
     isQuickPanelDismissShortcut,
     platformAccelerator,
@@ -180,11 +181,10 @@
       void import('@tauri-apps/api/webviewWindow').then(async ({ getCurrentWebviewWindow }) => {
         const currentWindow = getCurrentWebviewWindow();
         unlistenFocus = await currentWindow.onFocusChanged(({ payload: focused }) => {
-          if (focused) {
-            void activatePanel();
-          } else {
-            deactivatePanel();
-          }
+          handleQuickPanelFocusChanged(focused, {
+            activate: activatePanel,
+            deactivate: deactivatePanel,
+          });
         });
         if (!disposed && await currentWindow.isVisible()) void activatePanel();
       });

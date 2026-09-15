@@ -62,7 +62,7 @@ use zenith_platform::path_algebra::PathFlavor;
 ///
 /// Windows delivers the focus loss before the tray mouse-up, so a naive
 /// `is_visible()` read on mouse-up re-shows the panel the user just dismissed.
-const TRAY_TOGGLE_SUPPRESSION: Duration = Duration::from_millis(400);
+const TRAILING_TRAY_RELEASE_TTL: Duration = Duration::from_millis(600);
 
 /// Adapts a window's declarative configuration to the platform that draws it.
 ///
@@ -100,29 +100,48 @@ pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindo
     WebviewWindowBuilder::from_config(app, &config)?.build()
 }
 
-/// Tracks when the quick panel was last hidden so a tray click that arrives
-/// immediately after a dismissal is not mistaken for a request to open it.
+/// Tracks a pending trailing tray release so a tray click that dismisses the
+/// quick panel does not immediately reopen it on mouse-up.
 #[derive(Default)]
 struct QuickPanelVisibility {
-    hidden_at: Mutex<Option<Instant>>,
+    pending_tray_mouse_up: Mutex<Option<Instant>>,
 }
 
 impl QuickPanelVisibility {
-    fn mark_hidden(&self) {
-        let mut hidden_at = self.hidden_at.lock().unwrap_or_else(|p| p.into_inner());
-        *hidden_at = Some(Instant::now());
-    }
-
-    fn mark_shown(&self) {
-        let mut hidden_at = self.hidden_at.lock().unwrap_or_else(|p| p.into_inner());
-        *hidden_at = None;
-    }
-
-    fn hidden_ago(&self) -> Option<Duration> {
-        self.hidden_at
+    fn arm_pending_tray_mouse_up(&self) {
+        let mut pending = self
+            .pending_tray_mouse_up
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .map(|hidden_at| hidden_at.elapsed())
+            .unwrap_or_else(|p| p.into_inner());
+        *pending = Some(Instant::now());
+    }
+
+    fn clear_pending_tray_mouse_up(&self) {
+        let mut pending = self
+            .pending_tray_mouse_up
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *pending = None;
+    }
+
+    /// Consumes the pending trailing release if one was recorded within the TTL.
+    fn take_pending_tray_mouse_up(&self, ttl: Duration) -> bool {
+        let mut pending = self
+            .pending_tray_mouse_up
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        match pending.take() {
+            Some(at) => at.elapsed() < ttl,
+            None => false,
+        }
+    }
+
+    fn on_tray_mouse_down(&self, visible: bool) {
+        if visible {
+            self.arm_pending_tray_mouse_up();
+        } else {
+            self.clear_pending_tray_mouse_up();
+        }
     }
 }
 
@@ -134,30 +153,19 @@ enum TrayToggle {
     Suppress,
 }
 
-fn tray_toggle_action(
-    visible: bool,
-    hidden_ago: Option<Duration>,
-    suppression: Duration,
-) -> TrayToggle {
+fn tray_toggle_action(visible: bool, has_pending_mouse_up: bool) -> TrayToggle {
     if visible {
-        return TrayToggle::Hide;
-    }
-    match hidden_ago {
-        Some(ago) if ago < suppression => TrayToggle::Suppress,
-        _ => TrayToggle::Show,
+        TrayToggle::Hide
+    } else if has_pending_mouse_up {
+        TrayToggle::Suppress
+    } else {
+        TrayToggle::Show
     }
 }
 
 fn hide_quick_panel(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("quick") {
-        // Only a visible-to-hidden transition is a dismissal. Recording a
-        // marker while the panel is already hidden would let the suppression
-        // window swallow the user's next, genuine request to open it.
-        let was_visible = window.is_visible().unwrap_or(false);
         let _ = window.hide();
-        if was_visible {
-            app.state::<QuickPanelVisibility>().mark_hidden();
-        }
     }
 }
 
@@ -188,16 +196,14 @@ fn toggle_quick_panel(app: &AppHandle, tray_rect: Option<Rect>) {
     };
     let visibility = app.state::<QuickPanelVisibility>();
     let visible = window.is_visible().unwrap_or(false);
+    let has_pending_mouse_up = visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL);
 
-    match tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION) {
+    match tray_toggle_action(visible, has_pending_mouse_up) {
         TrayToggle::Hide => {
             let _ = window.hide();
-            visibility.mark_hidden();
+            visibility.clear_pending_tray_mouse_up();
         }
-        TrayToggle::Suppress => {
-            // Clear the marker so the next click opens the panel.
-            visibility.mark_shown();
-        }
+        TrayToggle::Suppress => {}
         TrayToggle::Show => {
             if let Err(error) = show_quick_panel_tracked(app, &window, tray_rect) {
                 crate::diagnostics::report_startup_failure(
@@ -308,15 +314,15 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::R
     Ok(())
 }
 
-/// Shows the quick panel and records that it is open, which clears the
-/// dismissal marker a stale tray click would otherwise consume.
+/// Shows the quick panel and clears any pending trailing release.
 fn show_quick_panel_tracked(
     app: &AppHandle,
     window: &WebviewWindow,
     tray_rect: Option<Rect>,
 ) -> tauri::Result<()> {
     show_quick_panel(window, tray_rect)?;
-    app.state::<QuickPanelVisibility>().mark_shown();
+    app.state::<QuickPanelVisibility>()
+        .clear_pending_tray_mouse_up();
     Ok(())
 }
 
@@ -434,11 +440,27 @@ pub fn run() {
                     if let TrayIconEvent::Click {
                         rect,
                         button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
+                        button_state,
                         ..
                     } = event
                     {
-                        toggle_quick_panel(tray.app_handle(), Some(rect));
+                        let app = tray.app_handle();
+                        match button_state {
+                            MouseButtonState::Down => {
+                                let is_visible = app
+                                    .get_webview_window("quick")
+                                    .and_then(|w| w.is_visible().ok())
+                                    .unwrap_or(false);
+                                let visibility = app.state::<QuickPanelVisibility>();
+                                visibility.on_tray_mouse_down(is_visible);
+                                if is_visible {
+                                    hide_quick_panel(app);
+                                }
+                            }
+                            MouseButtonState::Up => {
+                                toggle_quick_panel(app, Some(rect));
+                            }
+                        }
                     }
                 })
                 .build(app)?;
@@ -574,7 +596,7 @@ mod tests {
     use super::tray_toggle_action;
     use super::QuickPanelVisibility;
     use super::TrayToggle;
-    use super::TRAY_TOGGLE_SUPPRESSION;
+    use super::TRAILING_TRAY_RELEASE_TTL;
     use std::time::Duration;
     use tauri::utils::config::WindowConfig;
     use tauri::utils::TitleBarStyle;
@@ -679,59 +701,30 @@ mod tests {
     }
 
     #[test]
-    fn a_click_after_a_dismissal_does_not_reopen_the_panel() {
-        let suppression = Duration::from_millis(400);
+    fn tray_toggle_action_distinguishes_open_close_and_suppression() {
+        // A closed panel with no pending tray mouse-up opens immediately.
+        assert_eq!(tray_toggle_action(false, false), TrayToggle::Show);
 
-        // Blur dismissal already ran: the click belongs to that dismissal.
-        assert_eq!(
-            tray_toggle_action(false, Some(Duration::from_millis(20)), suppression),
-            TrayToggle::Suppress
-        );
-        // A click after the suppression window is a genuine open request.
-        assert_eq!(
-            tray_toggle_action(false, Some(Duration::from_millis(900)), suppression),
-            TrayToggle::Show
-        );
-        // Nothing was hidden recently, so the click opens the panel.
-        assert_eq!(
-            tray_toggle_action(false, None, suppression),
-            TrayToggle::Show
-        );
-        // A visible panel always hides, however recently it appeared.
-        for hidden_ago in [None, Some(Duration::from_millis(1))] {
-            assert_eq!(
-                tray_toggle_action(true, hidden_ago, suppression),
-                TrayToggle::Hide
-            );
-        }
+        // A closed panel with a pending trailing mouse-up from a tray dismissal suppresses the click.
+        assert_eq!(tray_toggle_action(false, true), TrayToggle::Suppress);
+
+        // A visible panel always hides regardless of pending state.
+        assert_eq!(tray_toggle_action(true, false), TrayToggle::Hide);
+        assert_eq!(tray_toggle_action(true, true), TrayToggle::Hide);
     }
 
     #[test]
     fn a_consumed_click_clears_the_dismissal_marker() {
         let visibility = QuickPanelVisibility::default();
-        assert!(visibility.hidden_ago().is_none());
+        assert!(!visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL));
 
-        visibility.mark_hidden();
-        let hidden_ago = visibility.hidden_ago().expect("just hidden");
-        assert!(hidden_ago < Duration::from_secs(5));
-        assert_eq!(
-            tray_toggle_action(false, Some(hidden_ago), TRAY_TOGGLE_SUPPRESSION),
-            TrayToggle::Suppress
-        );
+        // Arm on mouse-down while visible.
+        visibility.on_tray_mouse_down(true);
+        assert!(visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL));
 
-        // The suppressed click clears the marker so the next click opens.
-        visibility.mark_shown();
-        assert!(visibility.hidden_ago().is_none());
-        assert_eq!(
-            tray_toggle_action(false, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION),
-            TrayToggle::Show
-        );
-
-        visibility.mark_hidden();
-        assert_eq!(
-            tray_toggle_action(true, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION),
-            TrayToggle::Hide
-        );
+        // Consuming it once clears it, so the next query returns false.
+        assert!(!visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL));
+        assert_eq!(tray_toggle_action(false, false), TrayToggle::Show);
     }
 
     #[test]
@@ -739,51 +732,65 @@ mod tests {
         let visibility = QuickPanelVisibility::default();
         let mut visible = false;
 
-        // 1. hidden -> tray click -> shown
+        // 1. hidden -> tray click (down + up) -> shown
         assert!(!visible);
-        let action = tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION);
+        visibility.on_tray_mouse_down(visible);
+        let pending = visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL);
+        let action = tray_toggle_action(visible, pending);
         assert_eq!(action, TrayToggle::Show);
         visible = true;
-        visibility.mark_shown();
-        assert!(visibility.hidden_ago().is_none());
 
-        // 2. shown -> focus loss -> hidden
+        // 2. shown -> user clicks tray icon: mouse-down dismisses and arms suppression
         assert!(visible);
-        visible = false;
-        visibility.mark_hidden();
-        let hidden_ago = visibility.hidden_ago().expect("just hidden on focus loss");
-        assert!(hidden_ago < TRAY_TOGGLE_SUPPRESSION);
+        visibility.on_tray_mouse_down(visible);
+        visible = false; // mouse-down hid the panel
 
-        // 3. dismissal followed by the corresponding trailing click event -> suppressed once
-        let trailing_action =
-            tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION);
+        // 3. trailing mouse-up from the same tray click arrives -> suppressed
+        let pending = visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL);
+        assert!(pending);
+        let trailing_action = tray_toggle_action(visible, pending);
         assert_eq!(trailing_action, TrayToggle::Suppress);
-        visibility.mark_shown();
         assert!(!visible);
-        assert!(visibility.hidden_ago().is_none());
 
-        // 4. next genuine tray click -> shown
-        let genuine_action =
-            tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION);
+        // 4. next genuine tray click (down + up) -> shown immediately
+        visibility.on_tray_mouse_down(visible);
+        let pending = visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL);
+        assert!(!pending);
+        let genuine_action = tray_toggle_action(visible, pending);
         assert_eq!(genuine_action, TrayToggle::Show);
         visible = true;
-        visibility.mark_shown();
         assert!(visible);
     }
 
     #[test]
-    fn quick_panel_dismissal_outside_tray_reopens_on_subsequent_click() {
+    fn quick_panel_dismissal_outside_tray_reopens_immediately_on_subsequent_click() {
         let visibility = QuickPanelVisibility::default();
-        visibility.mark_shown();
 
-        // Focus loss on outside click dismisses the panel
+        // Panel was open, then an outside click caused focus loss and dismissed
+        // the panel directly without any tray mouse-down event.
         let visible = false;
-        visibility.mark_hidden();
+        // Notice: on_tray_mouse_down is NOT called.
 
-        // When the user clicks the tray icon after the suppression window:
-        let expired_ago = TRAY_TOGGLE_SUPPRESSION + Duration::from_millis(50);
-        let action = tray_toggle_action(visible, Some(expired_ago), TRAY_TOGGLE_SUPPRESSION);
+        // Immediate subsequent tray click (even 0ms later) must open the panel without suppression:
+        visibility.on_tray_mouse_down(visible);
+        let pending = visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL);
+        assert!(!pending);
+        let action = tray_toggle_action(visible, pending);
         assert_eq!(action, TrayToggle::Show);
+    }
+
+    #[test]
+    fn abandoned_tray_press_expires_after_ttl() {
+        let visibility = QuickPanelVisibility::default();
+        visibility.on_tray_mouse_down(true);
+
+        // If mouse-up is delayed beyond the TTL (e.g. user dragged away), it expires.
+        assert!(!visibility.take_pending_tray_mouse_up(Duration::from_millis(0)));
+
+        // And a subsequent click when hidden opens normally:
+        visibility.on_tray_mouse_down(false);
+        assert!(!visibility.take_pending_tray_mouse_up(TRAILING_TRAY_RELEASE_TTL));
+        assert_eq!(tray_toggle_action(false, false), TrayToggle::Show);
     }
 
     #[test]

@@ -65,6 +65,21 @@ export function isAcceleratorPressed(
 ): boolean {
   return accelerator === 'ctrl' ? event.ctrlKey : event.metaKey;
 }
+export interface QuickPanelFocusActions {
+  activate: () => void | Promise<void>;
+  deactivate: () => void;
+}
+
+export function handleQuickPanelFocusChanged(
+  focused: boolean,
+  actions: QuickPanelFocusActions
+): void {
+  if (focused) {
+    void actions.activate();
+  } else {
+    actions.deactivate();
+  }
+}
 
 const KNOWN_PROVIDER_NAMES: Record<string, string> = {
   codex: 'Codex',
