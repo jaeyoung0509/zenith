@@ -335,6 +335,16 @@ intensive_only = true
 description = "Third-party cache trees inactive for at least seven days."
 ```
 
+A signature can also state what its deletion would disturb. `fail_if_running`
+names the executables whose running state refuses the cleanup (a compiler or
+runtime holding its own cache open). `owner` names who the catalog expects to
+own the location, and defaults to `provider` when it is omitted. `discovery`
+defaults to `mode_gated`; a signature that declares `always` is inventoried in
+either scope, and the scope then decides only eligibility — the units it finds
+in standard mode are reported as discovered and not cleanable. `priority`
+decides which of two signatures that describe the same location wins, so a scan
+is deterministic rather than dependent on map order.
+
 See [`AGENTS.md`](AGENTS.md) for implementation constraints and
 [`DESIGN.md`](DESIGN.md) for the interface contract.
 

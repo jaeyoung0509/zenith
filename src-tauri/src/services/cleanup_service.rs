@@ -310,6 +310,7 @@ impl CleanupService {
                                     total_failed_bytes: 0,
                                     partial_count: 0,
                                     failed_count: 0,
+                                    skipped_count: 0,
                                     items: vec![],
                                     actual_disk_free_delta: Some(0),
                                 });
@@ -329,6 +330,16 @@ impl CleanupService {
                             plan
                         }
                     };
+
+                    // Only a plan that authorizes a mutation may reach the
+                    // executor. A projection the user reviewed and a deletion
+                    // are different claims, and the plan states which one it is.
+                    if !plan.mode.is_mutating() {
+                        return Err(format!(
+                            "This plan is {} and cannot be executed",
+                            plan.mode.display_name()
+                        ));
+                    }
 
                     // A Docker prune may have changed the runtime's state, so the
                     // shared observation is dropped rather than reported stale.
@@ -420,12 +431,18 @@ mod tests {
                 quality,
                 skipped_entry_count: 0,
                 incomplete_item_count: 0,
+                eligibility: Default::default(),
+                suppressed_duplicate_count: 0,
+                suppressed_duplicate_bytes: 0,
                 items,
             }],
             incomplete_reasons: Vec::new(),
             quality,
             skipped_entry_count: 0,
             incomplete_item_count: 0,
+            eligibility: Default::default(),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
         }
     }
 
@@ -500,6 +517,11 @@ mod tests {
             exclude_prefixes: Vec::new(),
             intensive_only: false,
             platforms: Vec::new(),
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
             provider: String::new(),
             management_mode: Default::default(),
             artifact_kind: Default::default(),
@@ -583,6 +605,11 @@ mod tests {
             exclude_prefixes: Vec::new(),
             intensive_only: false,
             platforms: Vec::new(),
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
             provider: String::new(),
             management_mode: Default::default(),
             artifact_kind: Default::default(),

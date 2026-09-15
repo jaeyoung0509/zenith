@@ -4,7 +4,7 @@
   import { formatBytes } from '../utils/format';
   import { cleanOutcome } from '../utils/cleanResult';
   import Button from './Button.svelte';
-  import { CheckCircle2, AlertTriangle, X, AlertCircle } from '@lucide/svelte';
+  import { CheckCircle2, AlertTriangle, X, AlertCircle, CircleMinus } from '@lucide/svelte';
   import { restoreFocus } from '../utils/focus';
 
   interface Props {
@@ -19,11 +19,14 @@
   let dialog: HTMLDialogElement;
 
   let outcome = $derived(cleanOutcome(result));
+  // A skipped target was not removed and did not fail, so it belongs to
+  // neither the failure list nor the cleaned list.
+  let skippedItems = $derived(result.items.filter((i) => i.status === 'skipped'));
   let failedItems = $derived(
-    result.items.filter((i) => !i.success || i.status === 'failed')
+    result.items.filter((i) => i.status !== 'skipped' && (!i.success || i.status === 'failed'))
   );
   let partialItems = $derived(
-    result.items.filter((i) => i.success && i.status === 'partial')
+    result.items.filter((i) => i.status !== 'skipped' && i.success && i.status === 'partial')
   );
   let fullSuccessItems = $derived(
     result.items.filter((i) => i.success && i.status === 'success' && !i.error_message)
@@ -32,6 +35,14 @@
   // reports its verdict instead of re-deriving one from the item list.
   let partialCount = $derived(result.partial_count ?? partialItems.length);
   let failedCount = $derived(result.failed_count ?? failedItems.length);
+  let skippedCount = $derived(result.skipped_count ?? skippedItems.length);
+  // One string, so the summary line reads as a single sentence rather than
+  // three fragments stitched by conditional markup.
+  let targetCounts = $derived(
+    skippedCount > 0
+      ? `${partialCount} target(s) partially cleaned, ${failedCount} failed, ${skippedCount} skipped`
+      : `${partialCount} target(s) partially cleaned, ${failedCount} failed`
+  );
 
   onMount(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -156,9 +167,9 @@
           </span>
         {/if}
       </div>
-      {#if partialCount > 0 || failedCount > 0}
+      {#if partialCount > 0 || failedCount > 0 || skippedCount > 0}
         <div class="mt-1 text-meta font-mono text-muted-foreground">
-          {partialCount} target(s) partially cleaned, {failedCount} failed
+          {targetCounts}
         </div>
       {/if}
     </div>
@@ -176,6 +187,26 @@
               <div class="font-medium text-foreground">{item.name}</div>
               <div class="text-meta text-muted-foreground mt-0.5">
                 {item.error_message || 'Could not clean item'}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Skipped Items: not removed, and nothing failed -->
+    {#if skippedItems.length > 0}
+      <div class="space-y-1.5">
+        <div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <CircleMinus size={14} />
+          <span>{skippedCount} item(s) skipped</span>
+        </div>
+        <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
+          {#each skippedItems as item}
+            <div class="p-2 rounded bg-secondary/50 border border-border/60 text-xs">
+              <div class="font-medium text-foreground">{item.name}</div>
+              <div class="text-meta text-muted-foreground mt-0.5">
+                {item.error_message || 'Nothing was removed for this target'}
               </div>
             </div>
           {/each}

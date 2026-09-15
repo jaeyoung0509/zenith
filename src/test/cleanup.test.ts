@@ -261,7 +261,7 @@ describe('presentation predicates and selection', () => {
 });
 
 describe('cleanOutcome', () => {
-  const item = (status: 'success' | 'partial' | 'failed', success: boolean, error_message: string | null = null) => ({
+  const item = (status: 'success' | 'partial' | 'failed' | 'skipped', success: boolean, error_message: string | null = null) => ({
     item_id: status,
     name: status,
     path: `/tmp/${status}`,
@@ -284,6 +284,20 @@ describe('cleanOutcome', () => {
   it('reports complete cleanup only when every item succeeds cleanly', () => {
     expect(cleanOutcome({ items: [item('success', true), item('success', true)] })).toBe('success');
     expect(cleanOutcome({ items: [] })).toBe('failed');
+  });
+
+  it('treats a skipped target as neither a failure nor a success', () => {
+    const skipped = item('skipped', false, 'Target was already gone');
+    // Nothing was reclaimed, so a run that skipped every target is partial:
+    // nothing went wrong, but calling it a clean success would claim a cleanup
+    // that never happened.
+    expect(
+      cleanOutcome({ items: [skipped], partial_count: 0, failed_count: 0, skipped_count: 1 })
+    ).toBe('partial');
+    // The legacy fallback infers failures from `!success`, which a skip
+    // satisfies: one failed target beside a skip is still a partial run, not a
+    // total failure.
+    expect(cleanOutcome({ items: [skipped, item('failed', false)] })).toBe('partial');
   });
 
   it('prefers the backend counts over inspecting the item list', () => {

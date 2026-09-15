@@ -5,8 +5,10 @@ use tempfile::tempdir;
 use zenith_lib::cleaner::CleanExecutor;
 use zenith_lib::models::{
     derive_cleanup_disposition, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category,
-    CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, DeleteTarget, FileSize,
-    ObservationQuality, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
+    CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, CleanupMode,
+    CleanupOwnership, CleanupUnit, CleanupUnitKind, DeletePlan, DeleteTarget, DispositionFacts,
+    EligibilityGate, EntryKind, FileSize, ObservationQuality, RiskTier, RunningProcessPolicy,
+    ScanItem, ScanResult, Signature, ZenithError,
 };
 use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
 use zenith_lib::safety::{
@@ -69,11 +71,15 @@ fn validated_filesystem_target(
         identity: ToctouGuard::capture(path),
         exclusions: exclusions.to_vec(),
         min_age_days: None,
+        unit: CleanupUnit::fixed_path(path.to_string_lossy().to_string()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
     };
 
     match SafetyValidator::revalidate(&target, environment) {
         RevalidationOutcome::Validated(validated) => validated,
-        RevalidationOutcome::AlreadyAbsent(result) | RevalidationOutcome::Failed(result) => {
+        RevalidationOutcome::Skipped(result) | RevalidationOutcome::Failed(result) => {
             panic!("test target did not pass the production validator: {result:?}")
         }
     }
@@ -95,6 +101,10 @@ fn present_filesystem_target_without_identity_fails_closed() {
         identity: None,
         exclusions: vec![],
         min_age_days: None,
+        unit: CleanupUnit::fixed_path(target_path.to_string_lossy().to_string()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
     };
 
     match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
@@ -450,7 +460,7 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
     let forged_path = dir.path().join("codex-forged");
     fs::create_dir(&forged_path).unwrap();
 
-    let forged_item = ScanItem::mock(
+    let mut forged_item = ScanItem::mock(
         "system.developer_temp.0.codex-forged",
         "system.developer_temp",
         "Forged temp item",
@@ -459,6 +469,12 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
         forged_path.to_string_lossy().into_owned(),
         FileSize::new(1024, Some(1024)),
         1,
+    );
+    // The unit is spelled the way the signature declares it, so the refusal
+    // comes from the scope check rather than from a malformed item.
+    forged_item.unit = CleanupUnit::child_namespace(
+        dir.path().to_string_lossy().into_owned(),
+        forged_path.to_string_lossy().into_owned(),
     );
 
     let result = SafetyPlanner::create_plan(&[forged_item], &registry);
@@ -499,6 +515,11 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         exclude_prefixes: vec![],
         intensive_only: false,
         platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
         provider: String::new(),
         management_mode: Default::default(),
         artifact_kind: Default::default(),
@@ -686,6 +707,9 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             quality: ObservationQuality::Fresh,
             skipped_entry_count: 0,
             incomplete_item_count: 0,
+            eligibility: Default::default(),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -696,6 +720,9 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         incomplete_reasons: vec![],
         skipped_entry_count: 0,
         incomplete_item_count: 0,
+        eligibility: Default::default(),
+        suppressed_duplicate_count: 0,
+        suppressed_duplicate_bytes: 0,
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -741,6 +768,11 @@ fn manual_strategy_never_enters_generic_cleaner() {
         exclude_prefixes: vec![],
         intensive_only: false,
         platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
         provider: String::new(),
         management_mode: Default::default(),
         artifact_kind: Default::default(),
@@ -784,6 +816,17 @@ fn npm_cache_selection_plans_provider_cleanup_without_deleting_fixture() {
         FileSize::new(7, Some(7)),
         1,
     );
+    // The provider owns the cache: the location is a staleness assertion, not a
+    // path generic cleanup may delete.
+    item.unit = CleanupUnit::new(
+        zenith_lib::models::CleanupUnitKind::ProviderAction,
+        cache.to_string_lossy().into_owned(),
+        cache.to_string_lossy().into_owned(),
+    );
+    item.ownership = registry
+        .get("dev.npm.cache")
+        .expect("the npm entry is in the catalog")
+        .ownership();
     item.is_selected = true;
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     assert_eq!(plan.targets.len(), 1);
@@ -802,6 +845,11 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
     fs::write(&payload, b"provider owned").unwrap();
     let mut registry = SignatureRegistry::new();
     registry.register(Signature {
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
         id: "test.unknown-provider".into(),
         name: "Unknown provider".into(),
         category: Category::Developer,
@@ -831,6 +879,15 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         FileSize::new(14, Some(14)),
         1,
     );
+    item.unit = CleanupUnit::new(
+        zenith_lib::models::CleanupUnitKind::ProviderAction,
+        cache_root.to_string_lossy().into_owned(),
+        cache_root.to_string_lossy().into_owned(),
+    );
+    item.ownership = registry
+        .get("test.unknown-provider")
+        .expect("the fixture signature is registered")
+        .ownership();
     item.is_selected = true;
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
     let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
@@ -991,6 +1048,13 @@ fn test_docker_prune_target_can_create_plan() {
         1,
     );
 
+    let mut docker_item = docker_item;
+    docker_item.unit = CleanupUnit::new(
+        zenith_lib::models::CleanupUnitKind::ContainerResource,
+        "docker://buildkit/cache".to_string(),
+        "docker://buildkit/cache".to_string(),
+    );
+
     let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
         .expect("DockerPrune target must successfully create a plan");
     assert_eq!(plan.targets.len(), 1);
@@ -1022,6 +1086,11 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         exclude_prefixes: vec![],
         intensive_only: false,
         platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
         provider: String::new(),
         management_mode: Default::default(),
         artifact_kind: Default::default(),
@@ -1029,7 +1098,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         reclaimable_is_lower_bound: false,
     });
 
-    let scan_item = ScanItem::mock(
+    let mut scan_item = ScanItem::mock(
         "test.stale_temp.0.active_tool_cache",
         "test.stale_temp",
         "active_tool_cache",
@@ -1039,12 +1108,20 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         FileSize::new(1024, Some(1024)),
         1,
     );
+    scan_item.unit = CleanupUnit::child_namespace(
+        dir.path().to_string_lossy().into_owned(),
+        temp_child.to_string_lossy().into_owned(),
+    );
 
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets[0].min_age_days, Some(3));
 
     let clean_res = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
     assert_eq!(clean_res.items.len(), 1);
+    assert_eq!(
+        clean_res.items[0].status,
+        zenith_lib::models::CleanStatus::Skipped
+    );
     assert!(!clean_res.items[0].success);
     assert_eq!(
         clean_res.items[0].failure_reason,
@@ -1182,6 +1259,9 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     ),
                 ],
                 incomplete_item_count: 0,
+                eligibility: Default::default(),
+                suppressed_duplicate_count: 0,
+                suppressed_duplicate_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1204,6 +1284,9 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     8,
                 )],
                 incomplete_item_count: 0,
+                eligibility: Default::default(),
+                suppressed_duplicate_count: 0,
+                suppressed_duplicate_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1226,12 +1309,18 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                     1,
                 )],
                 incomplete_item_count: 0,
+                eligibility: Default::default(),
+                suppressed_duplicate_count: 0,
+                suppressed_duplicate_bytes: 0,
                 skipped_entry_count: 0,
             },
         ],
         quality: ObservationQuality::Fresh,
         incomplete_reasons: vec![],
         incomplete_item_count: 0,
+        eligibility: Default::default(),
+        suppressed_duplicate_count: 0,
+        suppressed_duplicate_bytes: 0,
         skipped_entry_count: 0,
     };
 
@@ -1308,13 +1397,13 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         ..Default::default()
     };
     let partial_reason = Some("Permission denied in subtree".to_string());
-    let partial_disposition = derive_cleanup_disposition(
+    let partial_disposition = derive_cleanup_disposition(DispositionFacts::new(
         RiskTier::Safe,
         ObservationQuality::Partial,
         &partial_metadata,
         &partial_size,
         partial_reason.as_deref(),
-    );
+    ));
     let partial_item = ScanItem {
         id: "dev.partial.item".to_string(),
         signature_id: "dev.signature".to_string(),
@@ -1326,6 +1415,12 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         file_count: 5,
         description: "Partial cache".to_string(),
         cache_metadata: partial_metadata,
+        unit: CleanupUnit::fixed_path("/tmp/partial-cache".to_string()),
+        ownership: CleanupOwnership::unknown(),
+        age: None,
+        structured_state: None,
+        entry_kind: EntryKind::Directory,
+        gate: EligibilityGate::Open,
         is_selected: partial_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
@@ -1341,13 +1436,13 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         ..Default::default()
     };
     let unavailable_reason = Some("Failed to access directory".to_string());
-    let unavailable_disposition = derive_cleanup_disposition(
+    let unavailable_disposition = derive_cleanup_disposition(DispositionFacts::new(
         RiskTier::Safe,
         ObservationQuality::Unavailable,
         &unavailable_metadata,
         &unavailable_size,
         unavailable_reason.as_deref(),
-    );
+    ));
     let unavailable_item = ScanItem {
         id: "sys.unavailable.item".to_string(),
         signature_id: "sys.signature".to_string(),
@@ -1359,6 +1454,12 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         file_count: 0,
         description: "Inaccessible".to_string(),
         cache_metadata: unavailable_metadata,
+        unit: CleanupUnit::fixed_path("/tmp/unavailable-logs".to_string()),
+        ownership: CleanupOwnership::unknown(),
+        age: None,
+        structured_state: None,
+        entry_kind: EntryKind::Directory,
+        gate: EligibilityGate::Open,
         is_selected: unavailable_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
@@ -1403,11 +1504,17 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
             items: vec![partial_item.clone(), unavailable_item.clone()],
             skipped_entry_count: 0,
             incomplete_item_count: 0,
+            eligibility: Default::default(),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Permission denied in subtree".to_string()],
         skipped_entry_count: 0,
         incomplete_item_count: 0,
+        eligibility: Default::default(),
+        suppressed_duplicate_count: 0,
+        suppressed_duplicate_bytes: 0,
     };
 
     let settings = ZenithSettings::default();
@@ -1570,8 +1677,9 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             management_mode: tc.management,
             ..Default::default()
         };
-        let disposition =
-            derive_cleanup_disposition(tc.risk, tc.quality, &metadata, &size, tc.reason);
+        let disposition = derive_cleanup_disposition(DispositionFacts::new(
+            tc.risk, tc.quality, &metadata, &size, tc.reason,
+        ));
         assert_eq!(
             disposition.eligibility, tc.expected_eligibility,
             "failed eligibility for {:?}/{:?}/{:?}",
@@ -1594,6 +1702,12 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             file_count: 1,
             description: "test".into(),
             cache_metadata: metadata,
+            unit: CleanupUnit::fixed_path("/tmp/test".to_string()),
+            ownership: CleanupOwnership::unknown(),
+            age: None,
+            structured_state: None,
+            entry_kind: EntryKind::Directory,
+            gate: EligibilityGate::Open,
             is_selected: disposition.eligibility == CleanupEligibility::AutoCleanable,
             last_modified: None,
             exists: true,
@@ -1615,6 +1729,555 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
     }
 }
 
+/// One plan, executed twice: the second run finds every target already gone and
+/// skips it rather than deleting whatever occupies the path by then.
+#[test]
+fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
+    let fixture = tempdir().expect("fixture");
+    let cache = fixture.path().join("replay-cache");
+    fs::create_dir(&cache).unwrap();
+    let payload = cache.join("payload.bin");
+    fs::write(&payload, b"first generation").unwrap();
+    let parent = fixture.path().join("parent");
+    fs::create_dir(&parent).unwrap();
+
+    let mut registry = SignatureRegistry::new();
+    registry.register(Signature {
+        id: "test.replay".into(),
+        name: "Replay cache".into(),
+        category: Category::Developer,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteContents,
+        paths: vec![cache.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "replay fixture".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
+        platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
+    });
+
+    let mut item = ScanItem::mock(
+        "test.replay",
+        "test.replay",
+        "Replay cache",
+        Category::Developer,
+        RiskTier::Safe,
+        cache.to_string_lossy().into_owned(),
+        FileSize::new(1024, Some(1024)),
+        1,
+    );
+    item.is_selected = true;
+    item.entry_kind = EntryKind::Directory;
+    item.unit = CleanupUnit::fixed_path(cache.to_string_lossy().into_owned());
+
+    let plan = SafetyPlanner::create_plan(std::slice::from_ref(&item), &registry)
+        .expect("the first plan is authorized");
+    let first = CleanExecutor::execute(plan.clone(), &PlatformEnvironment::native(), |_| {});
+    assert_eq!(
+        first.items[0].status,
+        zenith_lib::models::CleanStatus::Success
+    );
+    assert!(!payload.exists());
+
+    // Something else now sits where the plan's target used to be.
+    fs::write(&payload, b"second generation").unwrap();
+
+    let second = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+    assert_eq!(
+        second.items[0].status,
+        zenith_lib::models::CleanStatus::Skipped
+    );
+    assert!(!second.items[0].success);
+    assert_eq!(second.total_reclaimed_bytes, 0);
+    assert_eq!(second.failed_count, 0);
+    assert!(
+        payload.exists(),
+        "a replayed plan never deletes a replacement object"
+    );
+}
+
+/// A target whose path is no longer inside the unit that authorized it is
+/// refused before any mutation.
+#[test]
+fn a_target_outside_its_authorizing_unit_is_refused() {
+    let fixture = tempdir().expect("fixture");
+    let unit_root = fixture.path().join("unit-root");
+    let outside = fixture.path().join("elsewhere");
+    fs::create_dir(&unit_root).unwrap();
+    fs::create_dir(&outside).unwrap();
+
+    let mut target = DeleteTarget {
+        item_id: "test.outside".into(),
+        signature_id: "test.signature".into(),
+        name: "Outside target".into(),
+        path: outside.clone(),
+        strategy: CleanStrategy::DeleteContents,
+        expected_bytes: 0,
+        risk: RiskTier::Safe,
+        identity: ToctouGuard::capture(&outside),
+        exclusions: vec![],
+        min_age_days: None,
+        unit: CleanupUnit::fixed_path(unit_root.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+    target.identity = ToctouGuard::capture(&outside);
+
+    match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Failed(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::ChangedSinceScan)
+            );
+            assert!(result
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("cleanup unit")));
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(outside.exists());
+}
+
+/// A path whose name already identifies structured state never reaches a
+/// filesystem mutation, however it was discovered.
+#[test]
+fn structured_state_is_refused_by_the_execution_guard() {
+    let fixture = tempdir().expect("fixture");
+    for (name, expected) in [
+        ("session.sqlite", "database file"),
+        ("session.sqlite-wal", "database companion file"),
+        ("app.lock", "lock or pid file"),
+        ("auth.json", "credential or key material"),
+    ] {
+        let path = fixture.path().join(name);
+        fs::write(&path, b"state").unwrap();
+
+        let target = DeleteTarget {
+            item_id: format!("test.structured.{name}"),
+            signature_id: "test.signature".into(),
+            name: name.to_string(),
+            path: path.clone(),
+            strategy: CleanStrategy::DeleteDirectory,
+            expected_bytes: 5,
+            risk: RiskTier::Safe,
+            identity: ToctouGuard::capture(&path),
+            exclusions: vec![],
+            min_age_days: None,
+            unit: CleanupUnit::fixed_path(path.to_string_lossy().into_owned()),
+            target_kind: EntryKind::File,
+            owner: CleanupOwnership::unknown(),
+            process_guard: RunningProcessPolicy::none(),
+        };
+
+        match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
+            RevalidationOutcome::Skipped(result) => {
+                assert_eq!(
+                    result.failure_reason,
+                    Some(CleanFailureReason::StructuredStore)
+                );
+                assert!(
+                    result
+                        .error_message
+                        .as_deref()
+                        .is_some_and(|message| message.contains(expected)),
+                    "{name} must name its structured kind"
+                );
+            }
+            other => panic!("expected {name} to be refused, got {other:?}"),
+        }
+        assert!(path.exists(), "{name} must be left in place");
+    }
+}
+
+/// A plan cannot be built from a candidate an age rule matched but that holds
+/// structured state: the refusal happens before the user is offered a
+/// confirmation.
+#[test]
+fn the_planner_refuses_a_structured_target() {
+    let fixture = tempdir().expect("fixture");
+    let database = fixture.path().join("app-cache.db");
+    fs::write(&database, b"state").unwrap();
+
+    let mut registry = SignatureRegistry::new();
+    registry.register(Signature {
+        id: "test.aged-structured".into(),
+        name: "Aged namespace".into(),
+        category: Category::System,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteDirectory,
+        paths: vec![fixture.path().to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "aged namespace fixture".into(),
+        min_age_days: Some(7),
+        include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
+        platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
+    });
+
+    let mut item = ScanItem::mock(
+        "test.aged-structured.0.app-cache.db",
+        "test.aged-structured",
+        "app-cache.db",
+        Category::System,
+        RiskTier::Safe,
+        database.to_string_lossy().into_owned(),
+        FileSize::new(5, Some(4096)),
+        1,
+    );
+    item.is_selected = true;
+    item.entry_kind = EntryKind::File;
+    item.unit = CleanupUnit::child_namespace(
+        fixture.path().to_string_lossy().into_owned(),
+        database.to_string_lossy().into_owned(),
+    );
+
+    let error = SafetyPlanner::create_plan(&[item], &registry)
+        .expect_err("structured state is never plannable");
+    assert!(
+        matches!(&error, ZenithError::InvalidPlan(message) if message.contains("database")),
+        "the refusal names the classification: {error}"
+    );
+    assert!(database.exists());
+}
+
+/// A plan states what it authorizes, and execution refuses anything else: a
+/// projection the user reviewed is not a permission to delete.
+#[test]
+fn a_non_mutating_plan_is_refused_by_the_executor() {
+    let fixture = tempdir().expect("fixture");
+    let cache = fixture.path().join("preview-cache");
+    fs::create_dir(&cache).unwrap();
+    fs::write(cache.join("payload.bin"), b"kept").unwrap();
+
+    let plan = DeletePlan {
+        id: uuid::Uuid::new_v4(),
+        scan_id: "scan-preview".into(),
+        targets: vec![DeleteTarget {
+            item_id: "preview-target".into(),
+            signature_id: "test.preview".into(),
+            name: "Preview cache".into(),
+            path: cache.clone(),
+            strategy: CleanStrategy::DeleteContents,
+            expected_bytes: 4,
+            risk: RiskTier::Safe,
+            identity: ToctouGuard::capture(&cache),
+            exclusions: vec![],
+            min_age_days: None,
+            unit: CleanupUnit::fixed_path(cache.to_string_lossy().into_owned()),
+            target_kind: EntryKind::Directory,
+            owner: CleanupOwnership::unknown(),
+            process_guard: RunningProcessPolicy::none(),
+        }],
+        expected_reclaim_bytes: 4,
+        risk: zenith_lib::models::RiskSummary::default(),
+        created_at: 0,
+        mode: CleanupMode::Preview,
+    };
+
+    let preview = plan.preview(60);
+    assert_eq!(preview.mode, CleanupMode::Preview);
+    assert!(!CleanupMode::Preview.is_mutating());
+    assert!(CleanupMode::PermanentDelete.is_mutating());
+    // The projection cannot carry a path or a strategy.
+    let serialized = serde_json::to_value(&preview).expect("the preview is a contract");
+    let text = serialized.to_string();
+    assert!(!text.contains(&cache.to_string_lossy().into_owned()));
+    assert!(!text.contains("strategy"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("cached-blob.bin");
+    let outside = fixture.path().join("outside.bin");
+    fs::write(&target, b"original").unwrap();
+    fs::write(&outside, b"precious").unwrap();
+
+    let target_identity = ToctouGuard::capture(&target);
+    fs::remove_file(&target).unwrap();
+    symlink(&outside, &target).unwrap();
+
+    let plan_target = DeleteTarget {
+        item_id: "race-file".into(),
+        signature_id: "test.signature".into(),
+        name: "Cached blob".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteDirectory,
+        expected_bytes: 8,
+        risk: RiskTier::Safe,
+        identity: target_identity,
+        exclusions: vec![],
+        min_age_days: None,
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::File,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Skipped(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::SafetyBoundary)
+            );
+        }
+        other => panic!("expected the replaced file to be refused, got {other:?}"),
+    }
+    assert!(outside.exists(), "the link target must be untouched");
+    assert!(target.symlink_metadata().is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("cache-namespace");
+    let outside = fixture.path().join("outside-dir");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("payload.bin"), b"precious").unwrap();
+
+    let identity = ToctouGuard::capture(&target);
+    fs::remove_dir(&target).unwrap();
+    symlink(&outside, &target).unwrap();
+
+    let plan_target = DeleteTarget {
+        item_id: "race-directory".into(),
+        signature_id: "test.signature".into(),
+        name: "Cache namespace".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteDirectory,
+        expected_bytes: 0,
+        risk: RiskTier::Safe,
+        identity,
+        exclusions: vec![],
+        min_age_days: None,
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Skipped(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::SafetyBoundary)
+            );
+        }
+        other => panic!("expected the replaced directory to be refused, got {other:?}"),
+    }
+    assert!(
+        outside.join("payload.bin").exists(),
+        "nothing behind the link is deleted"
+    );
+}
+
+/// A target that changed kind is no longer the object the plan authorized.
+#[test]
+fn a_target_that_changed_kind_between_scan_and_clean_is_skipped() {
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("cache-entry");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("payload.bin"), b"contents").unwrap();
+
+    let identity = ToctouGuard::capture(&target);
+    fs::remove_dir_all(&target).unwrap();
+    fs::write(&target, b"now a file").unwrap();
+
+    let plan_target = DeleteTarget {
+        item_id: "kind-change".into(),
+        signature_id: "test.signature".into(),
+        name: "Cache entry".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteContents,
+        expected_bytes: 8,
+        risk: RiskTier::Safe,
+        identity,
+        exclusions: vec![],
+        min_age_days: None,
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Skipped(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::ChangedSinceScan)
+            );
+        }
+        other => panic!("expected the changed kind to be refused, got {other:?}"),
+    }
+    assert!(target.exists());
+}
+
+/// A scan result that carries the given items, taken now, so a test plans
+/// through the same entry point production uses.
+fn scan_with(items: Vec<ScanItem>) -> ScanResult {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the test clock is after the epoch")
+        .as_secs();
+    ScanResult {
+        scan_id: "scan".into(),
+        valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
+        started_at: now,
+        finished_at: now,
+        categories: vec![CategoryResult {
+            category: Category::Developer,
+            display_name: "Developer".into(),
+            items,
+            total_bytes: 0,
+            cleanable_bytes: 0,
+            safe_bytes: 0,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+            quality: ObservationQuality::Fresh,
+            skipped_entry_count: 0,
+            incomplete_item_count: 0,
+            eligibility: Default::default(),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
+        }],
+        total_bytes: 0,
+        cleanable_bytes: 0,
+        safe_bytes: 0,
+        rebuild_bytes: 0,
+        manual_bytes: 0,
+        quality: ObservationQuality::Fresh,
+        incomplete_reasons: vec![],
+        skipped_entry_count: 0,
+        incomplete_item_count: 0,
+        eligibility: Default::default(),
+        suppressed_duplicate_count: 0,
+        suppressed_duplicate_bytes: 0,
+    }
+}
+
+/// The plan carries the scan-time expectations the guard re-asserts, including
+/// the owner and the process policy the catalog declared.
+#[test]
+fn a_plan_carries_the_scan_time_expectations() {
+    let fixture = tempdir().expect("fixture");
+    // The catalog's cargo signature resolves `~/.cargo/registry/cache`, so the
+    // fixture states a profile whose home is the temporary directory.
+    let cache = fixture.path().join(".cargo/registry/cache");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("payload.bin"), b"crate").unwrap();
+
+    let environment =
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(fixture.path())
+                .with_temp_dir(fixture.path()),
+        ));
+    let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+    let signature = registry
+        .get("dev.cargo.registry.cache")
+        .expect("the cargo cache entry is in the catalog");
+    let expected_guard = signature.process_guard();
+    assert!(!expected_guard.is_empty(), "the catalog declares a guard");
+    let expected_owner = signature.ownership();
+
+    let mut item = ScanItem::mock(
+        "dev.cargo.registry.cache",
+        "dev.cargo.registry.cache",
+        "Cargo Registry Cache",
+        Category::Developer,
+        RiskTier::Rebuild,
+        cache.to_string_lossy().into_owned(),
+        FileSize::new(1024, Some(4096)),
+        1,
+    );
+    item.is_selected = true;
+    item.entry_kind = EntryKind::Directory;
+    item.unit = CleanupUnit::fixed_path(cache.to_string_lossy().into_owned());
+    // The scan records the ownership the catalog declares; the planner refuses
+    // an item that reports anything else.
+    item.ownership = expected_owner.clone();
+
+    let scan = scan_with(vec![item.clone()]);
+    let plan = SafetyPlanner::create_plan_from_scan(
+        &scan,
+        "scan",
+        &[item.id.clone()],
+        &registry,
+        &environment,
+    )
+    .expect("the catalog signature authorizes the fixture path");
+    assert_eq!(plan.mode, CleanupMode::PermanentDelete);
+    let target = &plan.targets[0];
+    assert_eq!(target.target_kind, EntryKind::Directory);
+    assert_eq!(target.unit.kind, CleanupUnitKind::FixedPath);
+    assert_eq!(target.unit.path, cache.to_string_lossy());
+    assert_eq!(target.owner.owner, expected_owner.owner);
+    assert_eq!(
+        target.process_guard.executables(),
+        expected_guard.executables()
+    );
+}
+
+/// What a plan states about its target is validated, not assumed: an item that
+/// cannot name its unit never becomes a target.
+#[test]
+fn an_item_that_cannot_name_its_unit_is_refused_at_planning() {
+    let fixture = tempdir().expect("fixture");
+    let cache = fixture.path().join("unnamed-unit");
+    fs::create_dir(&cache).unwrap();
+
+    let registry = SignatureRegistry::load_embedded().expect("catalog");
+    let mut item = ScanItem::mock(
+        "system.intensive.user_app_caches.0.unnamed",
+        "system.intensive.user_app_caches",
+        "Unnamed",
+        Category::System,
+        RiskTier::Safe,
+        cache.to_string_lossy().into_owned(),
+        FileSize::new(1024, Some(1024)),
+        1,
+    );
+    item.is_selected = true;
+    item.unit = CleanupUnit::default();
+
+    let error = SafetyPlanner::create_plan(&[item], &registry)
+        .expect_err("an undeclared unit is not plannable");
+    assert!(matches!(error, ZenithError::InvalidPlan(_)));
+}
+
 #[test]
 fn test_nested_protected_app_bundle_fails_closed() {
     use zenith_lib::commands::select_quick_clean_safe_candidates;
@@ -1626,13 +2289,13 @@ fn test_nested_protected_app_bundle_fails_closed() {
             .to_string(),
     );
     let metadata = CacheMetadata::default();
-    let disposition = derive_cleanup_disposition(
+    let disposition = derive_cleanup_disposition(DispositionFacts::new(
         RiskTier::Safe,
         ObservationQuality::Partial,
         &metadata,
         &size,
         reason.as_deref(),
-    );
+    ));
 
     assert_eq!(disposition.eligibility, CleanupEligibility::Blocked);
     assert_eq!(disposition.cleanable_bytes, None);
@@ -1653,6 +2316,12 @@ fn test_nested_protected_app_bundle_fails_closed() {
         file_count: 10,
         description: "test".into(),
         cache_metadata: metadata,
+        unit: CleanupUnit::fixed_path("/tmp/cache".to_string()),
+        ownership: CleanupOwnership::unknown(),
+        age: None,
+        structured_state: None,
+        entry_kind: EntryKind::Directory,
+        gate: EligibilityGate::Open,
         is_selected: false,
         last_modified: None,
         exists: true,
@@ -1689,11 +2358,17 @@ fn test_nested_protected_app_bundle_fails_closed() {
             items: vec![item.clone()],
             skipped_entry_count: 0,
             incomplete_item_count: 1,
+            eligibility: Default::default(),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Protected system or application bundle detected".into()],
         skipped_entry_count: 0,
         incomplete_item_count: 1,
+        eligibility: Default::default(),
+        suppressed_duplicate_count: 0,
+        suppressed_duplicate_bytes: 0,
     };
 
     let settings = ZenithSettings::default();

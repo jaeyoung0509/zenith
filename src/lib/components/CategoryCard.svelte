@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { CategoryResult } from '../models/types';
+  import type { CategoryResult, CleanupEligibility } from '../models/types';
   import { formatBytes } from '../utils/format';
   import { cleanableBytes, isCleanable, presentedItems } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
@@ -53,6 +53,38 @@
       selectedBytes !== categoryResult.total_bytes &&
       selectedBytes !== categoryResult.safe_bytes
   );
+
+  // A scan can report bytes it will not remove: the age policy is not
+  // satisfied yet, or an opt-in scope is off. The card names those states and
+  // their amounts so a detected total is never left unexplained.
+  const notCleanableStates: { eligibility: CleanupEligibility; label: string; explanation: string }[] = [
+    {
+      eligibility: 'recent',
+      label: 'Recently used',
+      explanation: 'Discovered, but not old enough for the age policy: counted, not cleanable yet.',
+    },
+    {
+      eligibility: 'policy_gated',
+      label: 'Outside the current scope',
+      explanation: 'Discovered, but the current settings do not clean it: an opt-in scope is off.',
+    },
+  ];
+
+  let notCleanable = $derived.by(() => {
+    const buckets = categoryResult.eligibility?.buckets ?? [];
+    return notCleanableStates
+      .map((state) => ({
+        ...state,
+        bytes: buckets.reduce(
+          (sum, bucket) =>
+            bucket.eligibility === state.eligibility
+              ? sum + Math.max(0, bucket.observed_bytes - bucket.cleanable_bytes)
+              : sum,
+          0
+        ),
+      }))
+      .filter((state) => state.bytes > 0);
+  });
 
   function handleToggleCheckbox(checked: boolean) {
     if (cleanableItems.length === 0) return;
@@ -135,6 +167,14 @@
               • {categoryResult.skipped_entry_count} entries skipped
             </span>
           {/if}
+          {#each notCleanable as state (state.eligibility)}
+            <span
+              class="shrink-0 whitespace-nowrap text-meta text-muted-foreground font-mono"
+              title={state.explanation}
+            >
+              • {state.label}: {formatBytes(state.bytes)}
+            </span>
+          {/each}
           {#if (categoryResult.incomplete_item_count ?? 0) > 0}
             <span
               class="shrink-0 whitespace-nowrap text-meta text-muted-foreground font-mono"

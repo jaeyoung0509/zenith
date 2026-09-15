@@ -1,6 +1,7 @@
 use crate::models::{
     derive_cleanup_disposition, AbsolutePath, CacheArtifactKind, CacheManagementMode,
     CacheMetadata, CacheSizeSemantics, CanonicalPath, Category, CleanupEligibility,
+    CleanupOwnership, CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind,
     ObservationQuality, RiskTier, ScanItem,
 };
 use crate::safety::{Blacklist, SymlinkGuard};
@@ -178,32 +179,45 @@ impl CacheProviderRegistry {
             size_semantics,
             last_used_confidence: Default::default(),
         };
-        let disposition = derive_cleanup_disposition(
+        let disposition = derive_cleanup_disposition(DispositionFacts::new(
             RiskTier::Rebuild,
             quality,
             &cache_metadata,
             &measurement.size,
             measurement.incomplete_reason.as_deref(),
-        );
+        ));
         let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
+        let path_text = path.to_string_lossy().into_owned();
         Ok(Some(ScanItem {
             id: signature_id.to_string(),
             signature_id: signature_id.to_string(),
             name: provider.display_name().to_string(),
             category: Category::Developer,
             risk: RiskTier::Rebuild,
-            path: path.to_string_lossy().into_owned(),
+            path: path_text.clone(),
             size: measurement.size,
             file_count: measurement.file_count,
             description: "Inspected and pruned by the owning package manager.".to_string(),
             cache_metadata,
+            disposition,
+            // The provider owns both the discovery and the invalidation; the
+            // location travels with the item as a staleness assertion only.
+            unit: CleanupUnit::new(
+                CleanupUnitKind::ProviderAction,
+                path_text.clone(),
+                path_text,
+            ),
+            ownership: CleanupOwnership::declared(provider.executable().to_string()),
+            age: None,
+            structured_state: None,
+            entry_kind: EntryKind::Directory,
+            gate: EligibilityGate::Open,
             is_selected,
             last_modified,
             exists: true,
             quality,
             incomplete_reason: measurement.incomplete_reason,
             skipped_entry_count: measurement.skipped_entries,
-            disposition,
         }))
     }
 
@@ -247,31 +261,6 @@ impl CacheProviderRegistry {
         let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment);
         Ok(crate::scanner::size::reclaimed_between(&before, &after))
     }
-}
-
-pub fn mutation_blocked_by_active_runtime(signature_id: &str) -> bool {
-    let protected: &[&str] = match signature_id {
-        "ai.torchinductor.temp" => &["python", "python3", "python.exe", "vllm", "sglang"],
-        "ai.llamacpp.opencl.windows" | "ai.llamacpp.opencl.macos" => &[
-            "llama-cli",
-            "llama-server",
-            "llama-cli.exe",
-            "llama-server.exe",
-        ],
-        id if id.starts_with("dev.cargo.") => &["cargo", "cargo.exe", "rustc", "rustc.exe"],
-        "dev.rustup.downloads" => &["rustup", "rustup.exe"],
-        id if id.starts_with("dev.go.") => &["go", "go.exe"],
-        id if id.starts_with("dev.xcode.") => &["xcodebuild"],
-        _ => return false,
-    };
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::All, true);
-    system.processes().values().any(|process| {
-        let name = process.name().to_string_lossy();
-        protected
-            .iter()
-            .any(|expected| name.eq_ignore_ascii_case(expected))
-    })
 }
 
 fn run_provider(

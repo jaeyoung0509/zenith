@@ -157,6 +157,10 @@ mod tests {
             identity: None,
             exclusions: Vec::new(),
             min_age_days: None,
+            unit: crate::domain::scan::CleanupUnit::fixed_path("/Users/tester/.cache/example"),
+            target_kind: crate::domain::cleanup::EntryKind::Directory,
+            owner: crate::domain::scan::CleanupOwnership::unknown(),
+            process_guard: crate::domain::cleanup::RunningProcessPolicy::none(),
         }
     }
 

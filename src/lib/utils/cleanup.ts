@@ -43,6 +43,16 @@ export function isAdvisory(item: ScanItem): boolean {
   return item.disposition?.eligibility === 'advisory';
 }
 
+/** Whether the item was discovered but the age policy does not authorize it yet. */
+export function isRecent(item: ScanItem): boolean {
+  return item.disposition?.eligibility === 'recent';
+}
+
+/** Whether the item was discovered but the current settings refuse to clean it. */
+export function isPolicyGated(item: ScanItem): boolean {
+  return item.disposition?.eligibility === 'policy_gated';
+}
+
 /** Bytes this item would actually reclaim; zero when it cannot be cleaned. */
 export function cleanableBytes(item: ScanItem): number {
   const eligibility = item.disposition?.eligibility;
@@ -57,6 +67,8 @@ export interface CategorySummary {
   selected_count: number;
   blocked_count: number;
   advisory_count: number;
+  recent_count: number;
+  policy_gated_count: number;
   observed_bytes: number;
   cleanable_bytes: number;
   selected_bytes: number;
@@ -80,6 +92,8 @@ export function summarizeCategory(
   let selected_count = 0;
   let blocked_count = 0;
   let advisory_count = 0;
+  let recent_count = 0;
+  let policy_gated_count = 0;
   let observed_bytes = 0;
   let cleanable_bytes_sum = 0;
   let selected_bytes = 0;
@@ -96,6 +110,10 @@ export function summarizeCategory(
       blocked_count++;
     } else if (isAdvisory(item)) {
       advisory_count++;
+    } else if (isRecent(item)) {
+      recent_count++;
+    } else if (isPolicyGated(item)) {
+      policy_gated_count++;
     }
 
     if (isCleanable(item)) {
@@ -119,6 +137,8 @@ export function summarizeCategory(
     selected_count,
     blocked_count,
     advisory_count,
+    recent_count,
+    policy_gated_count,
     observed_bytes,
     cleanable_bytes: cleanable_bytes_sum,
     selected_bytes,

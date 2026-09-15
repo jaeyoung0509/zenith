@@ -1,7 +1,8 @@
 use crate::models::{
-    derive_cleanup_disposition, Category, CleanupEligibility, DockerContainerItem, DockerImageItem,
-    DockerOverview, DockerStatus, DockerVolumeItem, FileSize, ObservationQuality, RiskTier,
-    ScanItem, ZenithError,
+    derive_cleanup_disposition, Category, CleanupEligibility, CleanupOwnership, CleanupUnit,
+    CleanupUnitKind, DispositionFacts, DockerContainerItem, DockerImageItem, DockerOverview,
+    DockerStatus, DockerVolumeItem, EligibilityGate, EntryKind, FileSize, ObservationQuality,
+    RiskTier, ScanItem, ZenithError,
 };
 use crate::tooling;
 use zenith_platform::description::{PlatformEnvironment, ToolResolution};
@@ -239,13 +240,13 @@ impl DockerAdapter {
 
         if dangling_count > 0 {
             let size = FileSize::new(dangling_size, Some(dangling_size));
-            let disposition = derive_cleanup_disposition(
+            let disposition = derive_cleanup_disposition(DispositionFacts::new(
                 RiskTier::Safe,
                 ObservationQuality::Fresh,
                 &Default::default(),
                 &size,
                 None,
-            );
+            ));
             let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.dangling_images".to_string(),
@@ -258,13 +259,23 @@ impl DockerAdapter {
                 file_count: dangling_count,
                 description: format!("{dangling_count} untagged intermediate image layers"),
                 cache_metadata: Default::default(),
+                disposition,
+                unit: CleanupUnit::new(
+                    CleanupUnitKind::ContainerResource,
+                    "docker://images/dangling".to_string(),
+                    "docker://images/dangling".to_string(),
+                ),
+                ownership: CleanupOwnership::unknown(),
+                age: None,
+                structured_state: None,
+                entry_kind: EntryKind::Other,
+                gate: EligibilityGate::Open,
                 is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
-                disposition,
             });
         }
 
@@ -273,13 +284,13 @@ impl DockerAdapter {
                 overview.build_cache.reclaimable_bytes,
                 Some(overview.build_cache.reclaimable_bytes),
             );
-            let disposition = derive_cleanup_disposition(
+            let disposition = derive_cleanup_disposition(DispositionFacts::new(
                 RiskTier::Safe,
                 ObservationQuality::Fresh,
                 &Default::default(),
                 &size,
                 None,
-            );
+            ));
             let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.builder".to_string(),
@@ -292,13 +303,23 @@ impl DockerAdapter {
                 file_count: 0,
                 description: "Reusable BuildKit build cache layers".to_string(),
                 cache_metadata: Default::default(),
+                disposition,
+                unit: CleanupUnit::new(
+                    CleanupUnitKind::ContainerResource,
+                    "docker://images/dangling".to_string(),
+                    "docker://images/dangling".to_string(),
+                ),
+                ownership: CleanupOwnership::unknown(),
+                age: None,
+                structured_state: None,
+                entry_kind: EntryKind::Other,
+                gate: EligibilityGate::Open,
                 is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
-                disposition,
             });
         }
 
@@ -308,13 +329,13 @@ impl DockerAdapter {
                 overview.images.reclaimable_bytes,
                 Some(overview.images.reclaimable_bytes),
             );
-            let disposition = derive_cleanup_disposition(
+            let disposition = derive_cleanup_disposition(DispositionFacts::new(
                 RiskTier::Rebuild,
                 ObservationQuality::Fresh,
                 &Default::default(),
                 &size,
                 None,
-            );
+            ));
             let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.unused_images".to_string(),
@@ -328,13 +349,23 @@ impl DockerAdapter {
                 description: "Images not referenced by any running or stopped container"
                     .to_string(),
                 cache_metadata: Default::default(),
+                disposition,
+                unit: CleanupUnit::new(
+                    CleanupUnitKind::ContainerResource,
+                    "docker://images/dangling".to_string(),
+                    "docker://images/dangling".to_string(),
+                ),
+                ownership: CleanupOwnership::unknown(),
+                age: None,
+                structured_state: None,
+                entry_kind: EntryKind::Other,
+                gate: EligibilityGate::Open,
                 is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
-                disposition,
             });
         }
 
@@ -343,13 +374,13 @@ impl DockerAdapter {
                 overview.containers.reclaimable_bytes,
                 Some(overview.containers.reclaimable_bytes),
             );
-            let disposition = derive_cleanup_disposition(
+            let disposition = derive_cleanup_disposition(DispositionFacts::new(
                 RiskTier::Rebuild,
                 ObservationQuality::Fresh,
                 &Default::default(),
                 &size,
                 None,
-            );
+            ));
             let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.stopped_containers".to_string(),
@@ -362,13 +393,23 @@ impl DockerAdapter {
                 file_count: 0,
                 description: "Exited containers holding read-write layer state".to_string(),
                 cache_metadata: Default::default(),
+                disposition,
+                unit: CleanupUnit::new(
+                    CleanupUnitKind::ContainerResource,
+                    "docker://images/dangling".to_string(),
+                    "docker://images/dangling".to_string(),
+                ),
+                ownership: CleanupOwnership::unknown(),
+                age: None,
+                structured_state: None,
+                entry_kind: EntryKind::Other,
+                gate: EligibilityGate::Open,
                 is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
-                disposition,
             });
         }
 
@@ -377,13 +418,13 @@ impl DockerAdapter {
                 overview.volumes.reclaimable_bytes,
                 Some(overview.volumes.reclaimable_bytes),
             );
-            let disposition = derive_cleanup_disposition(
+            let disposition = derive_cleanup_disposition(DispositionFacts::new(
                 RiskTier::Manual,
                 ObservationQuality::Fresh,
                 &Default::default(),
                 &size,
                 None,
-            );
+            ));
             let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
             items.push(ScanItem {
                 id: "container.docker.unused_volumes".to_string(),
@@ -396,13 +437,23 @@ impl DockerAdapter {
                 file_count: 0,
                 description: "Anonymous and orphaned persistent storage volumes".to_string(),
                 cache_metadata: Default::default(),
+                disposition,
+                unit: CleanupUnit::new(
+                    CleanupUnitKind::ContainerResource,
+                    "docker://images/dangling".to_string(),
+                    "docker://images/dangling".to_string(),
+                ),
+                ownership: CleanupOwnership::unknown(),
+                age: None,
+                structured_state: None,
+                entry_kind: EntryKind::Other,
+                gate: EligibilityGate::Open,
                 is_selected,
                 last_modified: None,
                 exists: true,
                 quality: ObservationQuality::Fresh,
                 incomplete_reason: None,
                 skipped_entry_count: 0,
-                disposition,
             });
         }
 
