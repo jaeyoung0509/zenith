@@ -520,7 +520,7 @@ mod tests {
             "the recovered record still carries the last failure for the interface"
         );
         assert!(
-            !runtime.tick_health().last_completed_at.is_none(),
+            runtime.tick_health().last_completed_at.is_some(),
             "the completed tick is timestamped"
         );
     }

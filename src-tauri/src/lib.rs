@@ -735,6 +735,58 @@ mod tests {
     }
 
     #[test]
+    fn quick_panel_visibility_state_machine_handles_dismissal_and_reopen() {
+        let visibility = QuickPanelVisibility::default();
+        let mut visible = false;
+
+        // 1. hidden -> tray click -> shown
+        assert!(!visible);
+        let action = tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION);
+        assert_eq!(action, TrayToggle::Show);
+        visible = true;
+        visibility.mark_shown();
+        assert!(visibility.hidden_ago().is_none());
+
+        // 2. shown -> focus loss -> hidden
+        assert!(visible);
+        visible = false;
+        visibility.mark_hidden();
+        let hidden_ago = visibility.hidden_ago().expect("just hidden on focus loss");
+        assert!(hidden_ago < TRAY_TOGGLE_SUPPRESSION);
+
+        // 3. dismissal followed by the corresponding trailing click event -> suppressed once
+        let trailing_action =
+            tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION);
+        assert_eq!(trailing_action, TrayToggle::Suppress);
+        visibility.mark_shown();
+        assert!(!visible);
+        assert!(visibility.hidden_ago().is_none());
+
+        // 4. next genuine tray click -> shown
+        let genuine_action =
+            tray_toggle_action(visible, visibility.hidden_ago(), TRAY_TOGGLE_SUPPRESSION);
+        assert_eq!(genuine_action, TrayToggle::Show);
+        visible = true;
+        visibility.mark_shown();
+        assert!(visible);
+    }
+
+    #[test]
+    fn quick_panel_dismissal_outside_tray_reopens_on_subsequent_click() {
+        let visibility = QuickPanelVisibility::default();
+        visibility.mark_shown();
+
+        // Focus loss on outside click dismisses the panel
+        let visible = false;
+        visibility.mark_hidden();
+
+        // When the user clicks the tray icon after the suppression window:
+        let expired_ago = TRAY_TOGGLE_SUPPRESSION + Duration::from_millis(50);
+        let action = tray_toggle_action(visible, Some(expired_ago), TRAY_TOGGLE_SUPPRESSION);
+        assert_eq!(action, TrayToggle::Show);
+    }
+
+    #[test]
     #[ignore = "code generation"]
     fn export_typescript_bindings() {
         let builder = specta_builder();

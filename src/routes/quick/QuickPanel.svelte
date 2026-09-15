@@ -184,7 +184,6 @@
             void activatePanel();
           } else {
             deactivatePanel();
-            void currentWindow.hide();
           }
         });
         if (!disposed && await currentWindow.isVisible()) void activatePanel();

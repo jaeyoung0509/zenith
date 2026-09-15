@@ -307,4 +307,15 @@ describe('quick panel AI provider projection', () => {
     expect(rendered.body).toContain('shrink-0 whitespace-nowrap');
     expect(rendered.body).toContain('tabular-nums');
   });
+
+  it('does not independently hide the window on focus loss, preserving Rust dismissal authority', () => {
+    const source = readFileSync(
+      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
+      'utf8'
+    );
+    const focusChangeMatch = source.match(/unlistenFocus\s*=\s*await currentWindow\.onFocusChanged\([\s\S]*?\n\s*\}\);/);
+    expect(focusChangeMatch).not.toBeNull();
+    expect(focusChangeMatch![0]).not.toContain('currentWindow.hide()');
+    expect(focusChangeMatch![0]).toContain('deactivatePanel()');
+  });
 });

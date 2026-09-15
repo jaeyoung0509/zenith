@@ -4738,8 +4738,6 @@ dependencies = [
 [[package]]
 name = "tray-icon"
 version = "0.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "045979e3f037cd18ad1cb2a419dfda133c5c29c9f3453370079f2255d46c257e"
 dependencies = [
  "crossbeam-channel",
  "dirs",
@@ -4754,7 +4752,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.20",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5905,7 +5903,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-core"
-version = "0.3.30"
+version = "0.3.31"
 dependencies = [
  "serde",
  "serde_json",
@@ -5916,7 +5914,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-desktop"
-version = "0.3.30"
+version = "0.3.31"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -5950,7 +5948,7 @@ dependencies = [
 
 [[package]]
 name = "zenith-platform"
-version = "0.3.30"
+version = "0.3.31"
 dependencies = [
  "libc",
  "serde",
