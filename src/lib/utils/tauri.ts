@@ -6,6 +6,7 @@ import type {
   AiUsageSnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
+  BackgroundLoopHealth,
   AgentActivitySnapshot,
   AppUninstallInspection,
   AwakeBehavior,
@@ -86,8 +87,8 @@ export function tauriPostAgentEvent(event: IngestedAgentEvent): Promise<void> {
   return api.postAgentEvent(event);
 }
 
-export function tauriOpenInTerminal(path: string): Promise<void> {
-  return api.openInTerminal(path);
+export function tauriOpenProjectInTerminal(projectId: string): Promise<void> {
+  return api.openProjectInTerminal(projectId);
 }
 
 export function tauriGetAiUsage(
@@ -103,6 +104,10 @@ export function tauriGetAiProviderDescriptors(): Promise<ProviderDescriptor[]> {
 
 export function tauriGetAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
   return api.getAiControlCenter(force);
+}
+
+export function tauriGetAiRuntimeHealth(): Promise<BackgroundLoopHealth> {
+  return api.getAiRuntimeHealth();
 }
 
 export function tauriGetAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {

@@ -51,7 +51,7 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
 /// surface. Together with [`MUTATING_PERMISSIONS`] this is an exhaustive
 /// partition of the generated command surface, so a new command cannot enter a
 /// capability file before its authority is classified here.
-const READ_ONLY_PERMISSIONS: [&str; 37] = [
+const READ_ONLY_PERMISSIONS: [&str; 38] = [
     "allow-cancel-developer-artifact-scan",
     "allow-cancel-large-file-scan",
     "allow-get-agent-integrations",
@@ -59,6 +59,7 @@ const READ_ONLY_PERMISSIONS: [&str; 37] = [
     "allow-get-ai-control-center",
     "allow-get-ai-control-git-diff",
     "allow-get-ai-control-quick-summary",
+    "allow-get-ai-runtime-health",
     "allow-get-ai-provider-descriptors",
     "allow-get-ai-usage",
     "allow-get-app-version",
@@ -118,7 +119,7 @@ const MUTATING_PERMISSIONS: [&str; 28] = [
     "allow-prune-docker-target",
     "allow-quick-clean-safe",
     "allow-register-developer-home-workspace",
-    "allow-open-in-terminal",
+    "allow-open-project-in-terminal",
     "allow-post-agent-event",
     "allow-release-development-listener",
     "allow-remove-agent-integration",

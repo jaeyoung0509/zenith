@@ -33,6 +33,7 @@ pub mod power;
 pub mod privacy;
 pub mod process_owner;
 pub mod process_protection;
+pub mod runtime_health;
 pub mod runtime_metrics;
 pub mod safety;
 pub mod scanner;
@@ -379,7 +380,12 @@ pub fn run() {
             if let Some(config_dir) = config_dir {
                 let loaded = settings_store::load(&config_dir);
                 let state = app.state::<DesktopState>();
-                state.system.apply_startup_policy(&loaded);
+                if let Err(error) = state.system.apply_startup_policy(&loaded) {
+                    crate::diagnostics::log_error(
+                        "startup",
+                        &format!("Stored Keep Awake rules were not applied: {error}"),
+                    );
+                }
                 // The settings file is authoritative at startup; a snapshot
                 // that cannot be published says so instead of quietly leaving
                 // the user's preferences unapplied.
@@ -439,8 +445,7 @@ pub fn run() {
 
             let watcher_ref = awake_manager.clone();
             std::thread::spawn(move || loop {
-                watcher_ref.wait_for_next_evaluation();
-                watcher_ref.evaluate();
+                watcher_ref.run_evaluation_cycle();
             });
 
             // The background tick delivers native advisories; the transport
@@ -451,7 +456,7 @@ pub fn run() {
             let bg_runtime = ai_control_runtime.clone();
             std::thread::spawn(move || loop {
                 if bg_runtime.are_advisories_enabled() {
-                    bg_runtime.tick(Some(&bg_notifications));
+                    bg_runtime.run_background_tick(Some(&bg_notifications));
                     bg_runtime.wait_next_tick(std::time::Duration::from_secs(5));
                 } else {
                     bg_runtime.wait_next_tick(std::time::Duration::from_secs(60));
@@ -502,8 +507,9 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::remove_agent_integration,
             commands::get_agent_quick_summary,
             commands::post_agent_event,
-            commands::open_in_terminal,
+            commands::open_project_in_terminal,
             commands::get_ai_control_center,
+            commands::get_ai_runtime_health,
             commands::get_ai_control_quick_summary,
             commands::save_ai_control_preferences,
             commands::run_ai_safety_scan,

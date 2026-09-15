@@ -141,6 +141,12 @@ impl AiService {
         self.runtime.clone()
     }
 
+    /// The advisory loop's in-memory health, without rebuilding a Control
+    /// Center snapshot or performing provider/process observation.
+    pub fn control_runtime_health(&self) -> crate::runtime_health::BackgroundLoopHealth {
+        self.runtime.tick_health()
+    }
+
     /// Restores the persisted audit entries at startup.
     ///
     /// The audit store is a persistence concern of this service, so reading it
@@ -231,6 +237,50 @@ impl AiService {
                 Ok(snapshot)
             },
             "Agent activity refresh worker panicked",
+        )
+        .await
+    }
+
+    /// Opens a terminal at the root of the named project.
+    ///
+    /// The interface names a project by the opaque snapshot id it received
+    /// from [`Self::project_context`]; the canonical root is resolved from the
+    /// same backend-owned activity registry that produced that id, so the
+    /// webview never hands the native layer an arbitrary directory path. An
+    /// identity that is not part of the current snapshot is refused, which
+    /// also covers a project that left the snapshot in the meantime.
+    pub async fn open_project_in_terminal(&self, project_id: &str) -> Result<(), String> {
+        self.require(PlatformFeature::SystemActions, CapabilityAccess::Mutate)?;
+        let cache = self.activity_cache.clone();
+        let project_id = project_id.to_string();
+        crate::blocking::run_blocking(
+            move || {
+                use zenith_platform::SystemActionProvider;
+                // The shared registry lock resolves the id only; the OS
+                // process spawn happens outside it so no snapshot refresh
+                // waits on a spawned terminal (the same direction #136 set
+                // for slow work under shared locks).
+                let root = {
+                    let registry = cache
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    registry
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "No project snapshot is available yet. Refresh and try again."
+                                .to_string()
+                        })?
+                        .project_roots
+                        .get(&project_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            "Project is not part of the current snapshot. Refresh and try again."
+                                .to_string()
+                        })?
+                };
+                zenith_platform::NativeSystemActions::new().open_terminal(&root)
+            },
+            "Terminal worker panicked",
         )
         .await
     }
@@ -503,6 +553,7 @@ impl AiService {
         let refresh_lock = self.control_refresh_lock.clone();
         let control = self.control_state.clone();
         let memory_sampler = self.memory_sampler.clone();
+        let runtime = self.runtime.clone();
         let awake = self.awake.clone();
         let dev_store = self.dev_ports.clone();
         let environment = self.environment.clone();
@@ -649,6 +700,7 @@ impl AiService {
                         quick_summary,
                         keep_awake_active: awake.get_state().active_rule_id.as_deref()
                             == Some("ai-control.verified-session"),
+                        runtime_health: runtime.tick_health(),
                         partial_errors,
                     };
                     guard.last_snapshot = Some(snapshot.clone());
@@ -1216,5 +1268,61 @@ mod tests {
         for error in [inspect, setup, removal] {
             assert!(error.contains("AiIntegrations"), "{error}");
         }
+    }
+
+    #[test]
+    fn opening_a_project_terminal_requires_the_system_actions_capability() {
+        let service = service_with_capabilities(crate::models::PlatformCapabilities::unsupported(
+            crate::models::PlatformKind::Linux,
+        ));
+        let error = tauri::async_runtime::block_on(service.open_project_in_terminal("project.x"))
+            .expect_err("opening a project terminal requires System Actions");
+        assert!(error.contains("SystemActions"), "{error}");
+    }
+
+    #[test]
+    fn opening_a_project_terminal_resolves_only_snapshot_known_projects() {
+        let granted_service =
+            service_with_capabilities(crate::models::PlatformCapabilities::macos());
+
+        // No snapshot at all: the project cannot be resolved.
+        let error = tauri::async_runtime::block_on(
+            granted_service.open_project_in_terminal("project.unknown"),
+        )
+        .expect_err("a project is only resolvable from a snapshot");
+        assert!(error.contains("snapshot"), "{error}");
+
+        // A snapshot that does not contain the named project: refuse instead
+        // of falling back to any path.
+        let known_id = "project.known".to_string();
+        let mut registry_guard = granted_service
+            .activity_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *registry_guard = Some(crate::agent_activity::AgentActivityRegistry {
+            snapshot: crate::models::AgentActivitySnapshot {
+                observed_at: 0,
+                quality: crate::models::SnapshotQuality::Fresh,
+                projects: Vec::new(),
+                unassigned_sessions: Vec::new(),
+                adapters: Vec::new(),
+                partial_errors: Vec::new(),
+            },
+            project_roots: std::iter::once((
+                known_id.clone(),
+                std::env::temp_dir().join("zenith_project_terminal_test"),
+            ))
+            .collect(),
+        });
+        drop(registry_guard);
+
+        let unknown = tauri::async_runtime::block_on(
+            granted_service.open_project_in_terminal("project.missing"),
+        )
+        .expect_err("an unobserved project must not resolve to a path");
+        assert!(
+            unknown.contains("not part of the current snapshot"),
+            "{unknown}"
+        );
     }
 }

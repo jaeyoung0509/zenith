@@ -172,12 +172,6 @@ pub async fn show_in_file_manager(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn open_in_terminal(path: String, state: State<'_, DesktopState>) -> Result<(), String> {
-    state.system.open_terminal(&path).await
-}
-
-#[tauri::command]
-#[specta::specta]
 pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
     crate::show_main_window(&app_handle).map_err(|error| error.to_string())?;
     Ok(())

@@ -31,6 +31,9 @@ pub struct AiControlRuntime {
     awake_manager: Arc<crate::power::KeepAwakeManager>,
     settings: Arc<SettingsAuthority>,
     wake_signal: Arc<(Mutex<bool>, Condvar)>,
+    /// Health of the advisory tick loop the desktop shell drives; written by
+    /// the guarded iteration, read by the snapshot builders.
+    tick_health: Arc<Mutex<crate::runtime_health::BackgroundLoopHealth>>,
 }
 
 impl AiControlRuntime {
@@ -61,7 +64,32 @@ impl AiControlRuntime {
             awake_manager,
             settings,
             wake_signal: Arc::new((Mutex::new(false), Condvar::new())),
+            tick_health: Arc::new(Mutex::new(
+                crate::runtime_health::BackgroundLoopHealth::default(),
+            )),
         }
+    }
+
+    /// One guarded iteration of the advisory tick loop the desktop shell
+    /// drives.
+    ///
+    /// A panicked tick is recorded instead of ending the thread: the health
+    /// record degrades with the sanitized failure and the next interval
+    /// retries, exactly like the Keep Awake evaluation loop.
+    pub fn run_background_tick(&self, notifications: Option<&dyn DesktopNotifications>) {
+        crate::runtime_health::run_iteration(
+            "AI Control advisory tick panicked",
+            &self.tick_health,
+            || self.tick(notifications),
+        );
+    }
+
+    /// The advisory tick loop's observable health.
+    pub fn tick_health(&self) -> crate::runtime_health::BackgroundLoopHealth {
+        self.tick_health
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub fn notify_wake(&self) {
@@ -169,28 +197,44 @@ impl AiControlRuntime {
         );
 
         // 3. Evaluate policy
-        let mut control = match self.ai_control_state.lock() {
-            Ok(guard) => guard,
-            Err(_) => return Vec::new(),
+        //
+        // The control state is disposable observation state: a poisoned lock
+        // is recovered like the other loop locks so one panic cannot stop the
+        // tick for the rest of the process (a silent skip would be the same
+        // dead-worker failure this runtime exists to prevent).
+        // The produced items are stored under the lock and the notification
+        // runs outside it, in that order. `policy.evaluate` consumes the
+        // cooldown for the session the moment it returns an item, so an
+        // external notification call made while the lock is held could panic
+        // and lose a recommendation that a retry can never regenerate — the
+        // cooldown is already spent. External code never runs under the lock
+        // either: it cannot poison the shared state it does not hold.
+        let new_items = {
+            let mut control = self
+                .ai_control_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let new_items = control.policy.evaluate(
+                &resources,
+                memory.map(|sample| sample.pressure),
+                awake_state.power_source,
+                &preferences.autopilot,
+                now,
+            );
+            if !new_items.is_empty() {
+                control.recommendations.extend(new_items.clone());
+                control
+                    .recommendations
+                    .sort_by_key(|item| std::cmp::Reverse(item.created_at));
+                control.recommendations.truncate(64);
+            }
+            new_items
         };
-
-        let new_items = control.policy.evaluate(
-            &resources,
-            memory.map(|sample| sample.pressure),
-            awake_state.power_source,
-            &preferences.autopilot,
-            now,
-        );
 
         if !new_items.is_empty() {
             if let Some(notifications) = notifications {
                 let _ = notifications.emit_recommendations(&new_items);
             }
-            control.recommendations.extend(new_items.clone());
-            control
-                .recommendations
-                .sort_by_key(|item| std::cmp::Reverse(item.created_at));
-            control.recommendations.truncate(64);
         }
 
         new_items
@@ -212,6 +256,26 @@ mod tests {
         memory_sampler: Arc<crate::metrics::MemorySampler>,
         agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
     ) -> Arc<AiControlRuntime> {
+        test_runtime_with(
+            memory_sampler,
+            agent_activity_cache,
+            crate::models::ZenithSettings::default(),
+            crate::power::KeepAwakeManager::new(),
+            Arc::new(Mutex::new(
+                crate::ai_control_center::state::AiControlCenterState::default(),
+            )),
+        )
+    }
+
+    /// The same harness with explicit settings and a stated power source, so
+    /// an advisory path can be driven deterministically.
+    fn test_runtime_with(
+        memory_sampler: Arc<crate::metrics::MemorySampler>,
+        agent_activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+        settings: crate::models::ZenithSettings,
+        awake: crate::power::KeepAwakeManager,
+        control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
+    ) -> Arc<AiControlRuntime> {
         Arc::new(AiControlRuntime::new(
             memory_sampler,
             Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default())),
@@ -220,13 +284,9 @@ mod tests {
             Arc::new(SingleFlight::new()),
             Arc::new(AtomicU64::new(1)),
             Arc::new(RuntimeMetrics::new()),
-            Arc::new(Mutex::new(
-                crate::ai_control_center::state::AiControlCenterState::default(),
-            )),
-            Arc::new(crate::power::KeepAwakeManager::new()),
-            Arc::new(SettingsAuthority::new(
-                crate::models::ZenithSettings::default(),
-            )),
+            control_state,
+            Arc::new(awake),
+            Arc::new(SettingsAuthority::new(settings)),
         ))
     }
 
@@ -288,5 +348,217 @@ mod tests {
         runtime.notify_wake();
         done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         handle.join().unwrap();
+    }
+
+    /// A notification sink whose delivery panics, to inject a deterministic
+    /// worker failure into one advisory tick.
+    struct PanickingSink;
+    struct SilentSink;
+
+    impl crate::services::desktop_notifications::DesktopNotifications for PanickingSink {
+        fn request_permission(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn emit_recommendations(
+            &self,
+            _recommendations: &[crate::models::Recommendation],
+        ) -> Vec<String> {
+            panic!("notification sink exploded");
+        }
+
+        fn emit_process_advisories(
+            &self,
+            _snapshot: &crate::models::AgentActivitySnapshot,
+            _preferences: &crate::models::AgentNotificationPreferences,
+            _filter: &mut crate::agent_activity::notifications::NotificationFilter,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    impl crate::services::desktop_notifications::DesktopNotifications for SilentSink {
+        fn request_permission(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn emit_recommendations(
+            &self,
+            _recommendations: &[crate::models::Recommendation],
+        ) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn emit_process_advisories(
+            &self,
+            _snapshot: &crate::models::AgentActivitySnapshot,
+            _preferences: &crate::models::AgentNotificationPreferences,
+            _filter: &mut crate::agent_activity::notifications::NotificationFilter,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// A fresh registry with one attributed session, so the battery advisory
+    /// has something to fire on: the cache stays within its TTL, so the tick
+    /// reuses it instead of collecting.
+    fn seeded_activity_cache(
+        now: u64,
+    ) -> Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>> {
+        let session = crate::models::AgentSession {
+            id: "opaque.session".into(),
+            tool_id: "codex".into(),
+            tool_name: "Codex".into(),
+            status: crate::models::AgentActivityStatus::Active,
+            attention_reason: None,
+            evidence: crate::models::AgentEvidence::ProcessObserved,
+            observed_at: now,
+            started_at: now,
+            elapsed_seconds: 30,
+            cpu_percent: 1.0,
+            memory_bytes: 0,
+            project_id: None,
+            worktree_id: None,
+            detail: "Seeded for the runtime health test.".into(),
+            can_stop: false,
+            stop_lease_id: None,
+        };
+        let registry = crate::agent_activity::AgentActivityRegistry {
+            snapshot: crate::models::AgentActivitySnapshot {
+                observed_at: now,
+                quality: crate::models::SnapshotQuality::Fresh,
+                projects: Vec::new(),
+                unassigned_sessions: vec![session],
+                adapters: Vec::new(),
+                partial_errors: Vec::new(),
+            },
+            project_roots: std::collections::HashMap::new(),
+        };
+        Arc::new(Mutex::new(Some(registry)))
+    }
+
+    fn battery_advisory_runtime(
+        activity_cache: Arc<Mutex<Option<crate::agent_activity::AgentActivityRegistry>>>,
+        control_state: Arc<Mutex<crate::ai_control_center::state::AiControlCenterState>>,
+    ) -> Arc<AiControlRuntime> {
+        let settings = crate::models::ZenithSettings {
+            ai_control: crate::models::AiControlPreferences {
+                autopilot: crate::models::AutopilotPreferences {
+                    notify_on_battery: true,
+                    ..crate::models::AutopilotPreferences::default()
+                },
+                ..crate::models::AiControlPreferences::default()
+            },
+            ..crate::models::ZenithSettings::default()
+        };
+        let awake = crate::power::KeepAwakeManager::with_providers(
+            Arc::new(crate::power::MockPowerSource::new(
+                crate::models::PowerSourceType::Battery,
+            )),
+            Arc::new(crate::power::NativeAssertionProvider::new()),
+        );
+        test_runtime_with(
+            Arc::new(crate::metrics::MemorySampler::new()),
+            activity_cache,
+            settings,
+            awake,
+            control_state,
+        )
+    }
+
+    #[test]
+    fn a_panicked_advisory_tick_is_recorded_and_the_next_interval_recovers() {
+        let now = unix_timestamp();
+        let activity = seeded_activity_cache(now);
+        let control_state = Arc::new(Mutex::new(
+            crate::ai_control_center::state::AiControlCenterState::default(),
+        ));
+        let runtime = battery_advisory_runtime(activity, control_state.clone());
+
+        assert_eq!(
+            runtime.tick_health().status,
+            crate::runtime_health::BackgroundLoopStatus::Healthy
+        );
+
+        // The tick panics while delivering the battery advisory; the failure
+        // becomes observable instead of silently ending the worker.
+        runtime.run_background_tick(Some(&PanickingSink));
+        let degraded = runtime.tick_health();
+        assert_eq!(
+            degraded.status,
+            crate::runtime_health::BackgroundLoopStatus::Degraded
+        );
+        // The panicked delivery must not lose the recommendation: it was
+        // stored before the notification ran, and the cooldown is already
+        // consumed, so no later tick can regenerate it.
+        let state = control_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            !state.recommendations.is_empty(),
+            "the recommendation must survive the panicked notification"
+        );
+        drop(state);
+        let reason = degraded
+            .last_failure_reason
+            .expect("the failure is surfaced with a reason");
+        assert!(
+            reason.contains("notification sink exploded"),
+            "the failure reason carries the panic payload: {reason}"
+        );
+
+        // The next interval retries and the record is current again; the
+        // advisory still reached the loop (it is now stored in state).
+        runtime.run_background_tick(Some(&SilentSink));
+        let recovered = runtime.tick_health();
+        assert_eq!(
+            recovered.status,
+            crate::runtime_health::BackgroundLoopStatus::Healthy
+        );
+        assert!(
+            recovered.last_failure_reason.is_some(),
+            "the recovered record still carries the last failure for the interface"
+        );
+        assert!(
+            !runtime.tick_health().last_completed_at.is_none(),
+            "the completed tick is timestamped"
+        );
+    }
+
+    #[test]
+    fn a_poisoned_control_state_lock_does_not_stop_the_tick() {
+        let now = unix_timestamp();
+        let activity = seeded_activity_cache(now);
+        let control_state = Arc::new(Mutex::new(
+            crate::ai_control_center::state::AiControlCenterState::default(),
+        ));
+        let runtime = battery_advisory_runtime(activity, control_state.clone());
+
+        // Poison the control state the way a panicked holder would.
+        std::thread::scope(|scope| {
+            let holder = control_state.clone();
+            scope
+                .spawn(move || {
+                    let _guard = holder.lock().unwrap();
+                    panic!("the holder dies with the lock");
+                })
+                .join()
+                .unwrap_err();
+        });
+
+        // The tick still completes through the recovered lock: one poisoned
+        // pass cannot stop the worker for the remaining life of the process.
+        runtime.run_background_tick(Some(&SilentSink));
+        assert_eq!(
+            runtime.tick_health().status,
+            crate::runtime_health::BackgroundLoopStatus::Healthy
+        );
+        let state = control_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            !state.recommendations.is_empty(),
+            "the tick's advisory reached the recovered state"
+        );
     }
 }

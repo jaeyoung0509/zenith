@@ -18,8 +18,9 @@ export const commands = {
 	sessions: AgentQuickSessionRow_Serialize[],
 } | null, string>(__TAURI_INVOKE("get_agent_quick_summary")),
 	postAgentEvent: (event: IngestedAgentEvent_Deserialize) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
-	openInTerminal: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_in_terminal", { path })),
+	openProjectInTerminal: (projectId: string) => typedError<null, string>(__TAURI_INVOKE("open_project_in_terminal", { projectId })),
 	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
+	getAiRuntimeHealth: () => __TAURI_INVOKE<BackgroundLoopHealth_Serialize>("get_ai_runtime_health"),
 	getAiControlQuickSummary: () => __TAURI_INVOKE<{
 	observed_at: number,
 	active_sessions: number,
@@ -301,6 +302,12 @@ export type AiControlCenterSnapshot_Deserialize = {
 	audit: AuditEntry_Deserialize[],
 	quick_summary: ControlCenterQuickSummary_Deserialize,
 	keep_awake_active: boolean,
+	/**
+	 *  Health of the background advisory tick that feeds recommendations and
+	 *  resource attributions, so a degraded loop is observable instead of a
+	 *  stale snapshot silently passing as current.
+	 */
+	runtime_health?: BackgroundLoopHealth_Deserialize,
 	partial_errors: string[],
 };
 
@@ -315,6 +322,12 @@ export type AiControlCenterSnapshot_Serialize = {
 	audit: AuditEntry_Serialize[],
 	quick_summary: ControlCenterQuickSummary_Serialize,
 	keep_awake_active: boolean,
+	/**
+	 *  Health of the background advisory tick that feeds recommendations and
+	 *  resource attributions, so a degraded loop is observable instead of a
+	 *  stale snapshot silently passing as current.
+	 */
+	runtime_health: BackgroundLoopHealth_Serialize,
 	partial_errors: string[],
 };
 
@@ -550,6 +563,11 @@ export type AwakeState_Deserialize = {
 	power_source: PowerSourceType,
 	last_error: string | null,
 	rule_evaluations: AwakeRuleEvaluation[],
+	/**
+	 *  Health of the background loop that produces this state, so the
+	 *  interface never presents a stale evaluation as current.
+	 */
+	evaluation_health?: BackgroundLoopHealth_Deserialize,
 };
 
 export type AwakeState_Serialize = {
@@ -563,7 +581,71 @@ export type AwakeState_Serialize = {
 	power_source: PowerSourceType,
 	last_error: string | null,
 	rule_evaluations: AwakeRuleEvaluation[],
+	/**
+	 *  Health of the background loop that produces this state, so the
+	 *  interface never presents a stale evaluation as current.
+	 */
+	evaluation_health: BackgroundLoopHealth_Serialize,
 };
+
+/**
+ *  Observable health of one long-lived background loop.
+ * 
+ *  Timestamps are Unix seconds; `None` means the loop has not reached that
+ *  event yet, which is itself observable (a loop that has never completed
+ *  cannot back a "current" evaluation either).
+ */
+export type BackgroundLoopHealth = BackgroundLoopHealth_Serialize | BackgroundLoopHealth_Deserialize;
+
+/**
+ *  Observable health of one long-lived background loop.
+ * 
+ *  Timestamps are Unix seconds; `None` means the loop has not reached that
+ *  event yet, which is itself observable (a loop that has never completed
+ *  cannot back a "current" evaluation either).
+ */
+export type BackgroundLoopHealth_Deserialize = {
+	status: BackgroundLoopStatus,
+	last_completed_at?: number | null,
+	/**
+	 *  The most recent failed iteration. It survives recovery: a loop that
+	 *  panicked two ticks ago is healthy again, but the record still says a
+	 *  failure happened, because a snapshot-driven interface that never
+	 *  re-reads the record in that window would otherwise never see it.
+	 */
+	last_failed_at?: number | null,
+	last_failure_reason?: string | null,
+};
+
+/**
+ *  Observable health of one long-lived background loop.
+ * 
+ *  Timestamps are Unix seconds; `None` means the loop has not reached that
+ *  event yet, which is itself observable (a loop that has never completed
+ *  cannot back a "current" evaluation either).
+ */
+export type BackgroundLoopHealth_Serialize = {
+	status: BackgroundLoopStatus,
+	last_completed_at: number | null,
+	/**
+	 *  The most recent failed iteration. It survives recovery: a loop that
+	 *  panicked two ticks ago is healthy again, but the record still says a
+	 *  failure happened, because a snapshot-driven interface that never
+	 *  re-reads the record in that window would otherwise never see it.
+	 */
+	last_failed_at: number | null,
+	last_failure_reason: string | null,
+};
+
+/**  Whether a long-lived background loop's last iteration succeeded. */
+export type BackgroundLoopStatus = 
+/**  The loop is running and its stored evaluation is the last completed one. */
+"healthy" | 
+/**
+ *  The last iteration panicked; the loop still runs and retries on the
+ *  next interval, but the stored evaluation is the last *successful* one.
+ */
+"degraded";
 
 export type BudgetPeriod = "weekly" | "monthly";
 

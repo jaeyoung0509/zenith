@@ -279,6 +279,12 @@
           "markdownDescription": "Enables the get_ai_provider_descriptors command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_ai_runtime_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-runtime-health",
+          "markdownDescription": "Enables the get_ai_runtime_health command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_ai_usage command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-ai-usage",
@@ -387,16 +393,16 @@
           "markdownDescription": "Enables the open_dashboard_window command without any pre-configured scope."
         },
         {
-          "description": "Enables the open_in_terminal command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-open-in-terminal",
-          "markdownDescription": "Enables the open_in_terminal command without any pre-configured scope."
-        },
-        {
           "description": "Enables the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-logs-folder",
           "markdownDescription": "Enables the open_logs_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_project_in_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-project-in-terminal",
+          "markdownDescription": "Enables the open_project_in_terminal command without any pre-configured scope."
         },
         {
           "description": "Enables the open_storage_settings command without any pre-configured scope.",
@@ -669,6 +675,12 @@
           "markdownDescription": "Denies the get_ai_provider_descriptors command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_ai_runtime_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-runtime-health",
+          "markdownDescription": "Denies the get_ai_runtime_health command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_ai_usage command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-ai-usage",
@@ -777,16 +789,16 @@
           "markdownDescription": "Denies the open_dashboard_window command without any pre-configured scope."
         },
         {
-          "description": "Denies the open_in_terminal command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-open-in-terminal",
-          "markdownDescription": "Denies the open_in_terminal command without any pre-configured scope."
-        },
-        {
           "description": "Denies the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-logs-folder",
           "markdownDescription": "Denies the open_logs_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_project_in_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-project-in-terminal",
+          "markdownDescription": "Denies the open_project_in_terminal command without any pre-configured scope."
         },
         {
           "description": "Denies the open_storage_settings command without any pre-configured scope.",

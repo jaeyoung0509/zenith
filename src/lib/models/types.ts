@@ -30,6 +30,8 @@ export type {
   AutopilotPreferences,
   BudgetPeriod,
   BudgetStatus,
+  BackgroundLoopHealth_Deserialize,
+  BackgroundLoopHealth_Serialize,
   Category,
   CategoryResult,
   CacheArtifactKind,
@@ -150,6 +152,7 @@ export type {
 import type {
   AiControlPreferences_Serialize,
   AiControlCenterSnapshot_Serialize,
+  BackgroundLoopHealth_Serialize,
   AiProviderUsage_Serialize,
   AiUsageSnapshot_Serialize,
   DashboardRoute_Serialize,
@@ -169,6 +172,7 @@ export type DashboardRoute = DashboardRoute_Serialize;
 export type Recommendation = Recommendation_Serialize;
 export type RecommendationPreview = RecommendationPreview_Serialize;
 export type AiControlCenterSnapshot = AiControlCenterSnapshot_Serialize;
+export type BackgroundLoopHealth = BackgroundLoopHealth_Serialize;
 export type ProviderId = ProviderId_Serialize;
 export type AiProviderUsage = AiProviderUsage_Serialize;
 export type AiUsageSnapshot = AiUsageSnapshot_Serialize;
