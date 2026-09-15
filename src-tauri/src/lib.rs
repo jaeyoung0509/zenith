@@ -33,6 +33,7 @@ pub mod power;
 pub mod privacy;
 pub mod process_owner;
 pub mod process_protection;
+pub mod runtime_health;
 pub mod runtime_metrics;
 pub mod safety;
 pub mod scanner;
@@ -444,8 +445,7 @@ pub fn run() {
 
             let watcher_ref = awake_manager.clone();
             std::thread::spawn(move || loop {
-                watcher_ref.wait_for_next_evaluation();
-                watcher_ref.evaluate();
+                watcher_ref.run_evaluation_cycle();
             });
 
             // The background tick delivers native advisories; the transport
@@ -456,7 +456,7 @@ pub fn run() {
             let bg_runtime = ai_control_runtime.clone();
             std::thread::spawn(move || loop {
                 if bg_runtime.are_advisories_enabled() {
-                    bg_runtime.tick(Some(&bg_notifications));
+                    bg_runtime.run_background_tick(Some(&bg_notifications));
                     bg_runtime.wait_next_tick(std::time::Duration::from_secs(5));
                 } else {
                     bg_runtime.wait_next_tick(std::time::Duration::from_secs(60));

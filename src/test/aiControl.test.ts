@@ -263,6 +263,12 @@ const sampleSnapshot: AiControlCenterSnapshot = {
     quality: 'fresh',
   },
   keep_awake_active: false,
+  runtime_health: {
+    status: 'healthy',
+    last_completed_at: 1700000000,
+    failed_at: null,
+    reason: null,
+  },
   partial_errors: [],
 };
 

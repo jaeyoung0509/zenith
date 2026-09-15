@@ -1,3 +1,24 @@
+//! The Keep Awake domain: rules, manual sessions, power conditions, and the
+//! native sleep assertions they drive.
+//!
+//! # Poison policy
+//!
+//! Every lock here guards disposable observation or derived state — the rule
+//! list is a cache of the persisted settings, the evaluation outputs are
+//! rebuilt by the next idempotent pass, and the assertion bookkeeping is
+//! rewritten whenever the eligibility answer changes. A poisoned lock is
+//! therefore recovered (`unwrap_or_else(|poisoned| poisoned.into_inner())`,
+//! the same deliberate recovery `operation_gate` states and tests), never
+//! aborted on, so one panic cannot turn every later `get_awake_state` into a
+//! failure for the remaining life of the process. Transactional or
+//! authorization state is not held under these locks; where it is held
+//! elsewhere, that site states its own fail-closed reason.
+//!
+//! The background loop is driven through `KeepAwakeManager::
+//! run_evaluation_cycle`, which captures a panicked iteration into
+//! [`crate::runtime_health::BackgroundLoopHealth`] instead of letting it end
+//! the thread silently.
+
 use crate::models::{
     ApplicationIdentity, AwakeAgentId, AwakeBehavior, AwakeRule, AwakeRuleEvaluation,
     AwakeRuleStatus, AwakeState, PowerCondition, PowerSourceType, ZenithError,
@@ -33,6 +54,9 @@ pub struct KeepAwakeManager {
     last_error: Arc<Mutex<Option<String>>>,
     rule_evaluations: Arc<Mutex<Vec<AwakeRuleEvaluation>>>,
     power_source_type: Arc<Mutex<PowerSourceType>>,
+    /// Health of the evaluation loop the desktop shell drives; written by the
+    /// guarded iteration, read by `get_state`.
+    evaluation_health: Arc<Mutex<crate::runtime_health::BackgroundLoopHealth>>,
     power_source: Arc<dyn PowerSourceProvider>,
     assertion_provider: Arc<dyn PowerAssertionProvider>,
     wake_generation: AtomicU64,
@@ -86,6 +110,9 @@ impl KeepAwakeManager {
             last_error: Arc::new(Mutex::new(None)),
             rule_evaluations: Arc::new(Mutex::new(Vec::new())),
             power_source_type: Arc::new(Mutex::new(PowerSourceType::Unknown)),
+            evaluation_health: Arc::new(Mutex::new(
+                crate::runtime_health::BackgroundLoopHealth::default(),
+            )),
             power_source,
             assertion_provider,
             wake_generation: AtomicU64::new(0),
@@ -107,7 +134,10 @@ impl KeepAwakeManager {
                 rules.len()
             ));
         }
-        let mut r = self.rules.lock().expect("rules poisoned");
+        let mut r = self
+            .rules
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *r = rules;
         drop(r);
         self.notify_watcher();
@@ -137,14 +167,20 @@ impl KeepAwakeManager {
             None,
         ) {
             Ok(()) => {
-                let mut manual = self.manual_mode.lock().expect("manual_mode poisoned");
+                let mut manual = self
+                    .manual_mode
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *manual = Some((behavior, expires_at));
                 drop(manual);
                 self.notify_watcher();
                 Ok(())
             }
             Err(err) => {
-                let mut manual = self.manual_mode.lock().expect("manual_mode poisoned");
+                let mut manual = self
+                    .manual_mode
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *manual = None;
                 drop(manual);
                 self.notify_watcher();
@@ -156,7 +192,10 @@ impl KeepAwakeManager {
 
     /// Disables manual Keep Awake mode.
     pub fn disable_manual(&self) {
-        let mut manual = self.manual_mode.lock().expect("manual_mode poisoned");
+        let mut manual = self
+            .manual_mode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *manual = None;
         drop(manual);
 
@@ -173,7 +212,7 @@ impl KeepAwakeManager {
         let mut policy = self
             .control_center_policy
             .lock()
-            .expect("control_center_policy poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         policy.enabled = enabled;
         policy.ac_only = ac_only;
         drop(policy);
@@ -195,7 +234,7 @@ impl KeepAwakeManager {
         *self
             .session_validator
             .lock()
-            .expect("session_validator poisoned") = Some(Arc::new(validator));
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(validator));
     }
 
     /// Gets current Keep Awake state.
@@ -203,36 +242,51 @@ impl KeepAwakeManager {
         let assertion = self
             .active_assertion
             .lock()
-            .expect("active_assertion poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let is_active = assertion.is_some();
         let behavior = assertion.as_ref().map(|a| a.behavior);
         let trigger = self
             .last_trigger_app
             .lock()
-            .expect("last_trigger_app poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         let active_rule_id = self
             .last_active_rule_id
             .lock()
-            .expect("last_active_rule_id poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        let manual = self.manual_mode.lock().expect("manual_mode poisoned");
+        let manual = self
+            .manual_mode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let manual_expires_at = if is_active {
             manual.as_ref().and_then(|(_, exp)| *exp)
         } else {
             None
         };
-        let rules = self.rules.lock().expect("rules poisoned");
+        let rules = self
+            .rules
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let rules_count = rules.iter().filter(|r| r.enabled).count();
         let power_source = *self
             .power_source_type
             .lock()
-            .expect("power_source_type poisoned");
-        let last_error = self.last_error.lock().expect("last_error poisoned").clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_error = self
+            .last_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let rule_evaluations = self
             .rule_evaluations
             .lock()
-            .expect("rule_evaluations poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let evaluation_health = self
+            .evaluation_health
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         AwakeState {
             is_active,
@@ -249,7 +303,29 @@ impl KeepAwakeManager {
             power_source,
             last_error,
             rule_evaluations,
+            evaluation_health,
         }
+    }
+
+    /// One guarded iteration of the evaluation loop the desktop shell drives.
+    ///
+    /// A panicked evaluation is recorded instead of ending the thread: the
+    /// health record degrades with the sanitized failure and the next
+    /// interval retries. The wait comes first so a wake-up that raced this
+    /// call is not lost.
+    pub fn run_evaluation_cycle(&self) {
+        self.wait_for_next_evaluation();
+        self.evaluate_guarded();
+    }
+
+    /// The guarded evaluation step, split from the wait so a test can drive
+    /// exactly one iteration deterministically.
+    pub(crate) fn evaluate_guarded(&self) {
+        crate::runtime_health::run_iteration(
+            "Keep Awake evaluation iteration panicked",
+            &self.evaluation_health,
+            || self.evaluate(),
+        );
     }
 
     /// Evaluates current active processes against rules or manual timers to acquire/release assertions.
@@ -258,7 +334,7 @@ impl KeepAwakeManager {
         *self
             .power_source_type
             .lock()
-            .expect("power_source_type poisoned") = power_source;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = power_source;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -267,7 +343,10 @@ impl KeepAwakeManager {
 
         // 1. Check manual mode expiration
         let manual_snapshot = {
-            let mut manual = self.manual_mode.lock().expect("manual_mode poisoned");
+            let mut manual = self
+                .manual_mode
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             match *manual {
                 Some((_, Some(expires_at))) if now >= expires_at => {
                     *manual = None;
@@ -278,7 +357,11 @@ impl KeepAwakeManager {
         };
 
         // 2. Evaluate rules (single process snapshot pass)
-        let rules = self.rules.lock().expect("rules poisoned").clone();
+        let rules = self
+            .rules
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         let any_enabled = rules.iter().any(|r| r.enabled);
 
         let sys = if any_enabled {
@@ -401,7 +484,7 @@ impl KeepAwakeManager {
         *self
             .rule_evaluations
             .lock()
-            .expect("rule_evaluations poisoned") = evaluations;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = evaluations;
 
         // 3. Manual mode overrides process rules
         if let Some((behavior, _)) = manual_snapshot {
@@ -412,7 +495,10 @@ impl KeepAwakeManager {
                 None,
             ) {
                 let _ = err;
-                let mut manual = self.manual_mode.lock().expect("manual_mode poisoned");
+                let mut manual = self
+                    .manual_mode
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *manual = None;
             }
             return;
@@ -424,13 +510,13 @@ impl KeepAwakeManager {
         let policy = *self
             .control_center_policy
             .lock()
-            .expect("control_center_policy poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if policy.enabled {
             let session_alive = {
                 let validator = self
                     .session_validator
                     .lock()
-                    .expect("session_validator poisoned");
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 validator.as_ref().map(|v| v()).unwrap_or(false)
             };
             let power_ok = !policy.ac_only || power_source.is_ac();
@@ -447,7 +533,7 @@ impl KeepAwakeManager {
                     let rule_id = self
                         .last_active_rule_id
                         .lock()
-                        .expect("last_active_rule_id poisoned");
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     rule_id.as_deref() == Some("ai-control.verified-session")
                 };
                 if is_our_assertion {
@@ -459,7 +545,7 @@ impl KeepAwakeManager {
                 let rule_id = self
                     .last_active_rule_id
                     .lock()
-                    .expect("last_active_rule_id poisoned");
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 rule_id.as_deref() == Some("ai-control.verified-session")
             };
             if is_our_assertion {
@@ -485,21 +571,25 @@ impl KeepAwakeManager {
         let has_work = self
             .manual_mode
             .lock()
-            .expect("manual_mode poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .is_some()
             || self
                 .rules
                 .lock()
-                .expect("rules poisoned")
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .iter()
                 .any(|rule| rule.enabled);
         let has_work = has_work
             || self
                 .control_center_policy
                 .lock()
-                .expect("control_center_policy poisoned")
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .enabled;
-        let guard = self.wake_signal.0.lock().expect("wake_signal poisoned");
+        let guard = self
+            .wake_signal
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if self.wake_generation.load(Ordering::Acquire) != observed {
             return;
         }
@@ -511,14 +601,14 @@ impl KeepAwakeManager {
                     self.wake_generation.load(Ordering::Acquire) == observed
                 });
         } else {
-            drop(
-                self.wake_signal
-                    .1
-                    .wait_while(guard, |_| {
-                        self.wake_generation.load(Ordering::Acquire) == observed
-                    })
-                    .unwrap(),
-            );
+            let guard = self
+                .wake_signal
+                .1
+                .wait_while(guard, |_| {
+                    self.wake_generation.load(Ordering::Acquire) == observed
+                })
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            drop(guard);
         }
     }
 
@@ -537,16 +627,19 @@ impl KeepAwakeManager {
         let mut assertion = self
             .active_assertion
             .lock()
-            .expect("active_assertion poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut last_trig = self
             .last_trigger_app
             .lock()
-            .expect("last_trigger_app poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut last_rule = self
             .last_active_rule_id
             .lock()
-            .expect("last_active_rule_id poisoned");
-        let mut last_err = self.last_error.lock().expect("last_error poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut last_err = self
+            .last_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         if let Some(ref current) = *assertion {
             if current.behavior == behavior {
@@ -580,15 +673,15 @@ impl KeepAwakeManager {
         let mut assertion = self
             .active_assertion
             .lock()
-            .expect("active_assertion poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut last_trig = self
             .last_trigger_app
             .lock()
-            .expect("last_trigger_app poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut last_rule = self
             .last_active_rule_id
             .lock()
-            .expect("last_active_rule_id poisoned");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *assertion = None;
         *last_trig = None;
         *last_rule = None;
@@ -1631,6 +1724,39 @@ mod tests {
         }
     }
 
+    /// A power source whose probe panics, to inject a deterministic worker
+    /// failure into one evaluation iteration.
+    struct TogglePowerSource(AtomicBool);
+
+    impl TogglePowerSource {
+        fn set_should_panic(&self, panic: bool) {
+            self.0.store(panic, Ordering::SeqCst);
+        }
+    }
+
+    impl PowerSourceProvider for TogglePowerSource {
+        fn current_power_source(&self) -> PowerSourceType {
+            if self.0.load(Ordering::SeqCst) {
+                panic!("power probe exploded");
+            }
+            PowerSourceType::Ac
+        }
+    }
+
+    fn health_rule(id: &str) -> AwakeRule {
+        AwakeRule {
+            id: id.to_string(),
+            app_name: "Health test".to_string(),
+            executable_pattern: "non_existent_health_test_process".to_string(),
+            requires_process_pattern: None,
+            application: None,
+            agent_ids: Vec::new(),
+            behavior: AwakeBehavior::PreventSystemSleep,
+            power_condition: PowerCondition::Always,
+            enabled: true,
+        }
+    }
+
     #[test]
     fn set_rules_refuses_a_list_beyond_the_maximum_and_keeps_the_current_rules() {
         let manager = KeepAwakeManager::new();
@@ -1662,5 +1788,79 @@ mod tests {
             .collect::<Vec<_>>();
         manager.set_rules(rules).expect("rules within limit");
         assert_eq!(manager.get_state().rule_evaluations.len(), MAX_AWAKE_RULES);
+    }
+
+    #[test]
+    fn a_panicking_evaluation_iteration_is_recorded_and_the_next_interval_recovers() {
+        let power = Arc::new(TogglePowerSource(AtomicBool::new(false)));
+        let assertion_mock = Arc::new(TestAssertionProvider::new(false));
+        let manager = KeepAwakeManager::with_providers(power.clone(), assertion_mock);
+        manager
+            .set_rules(vec![health_rule("rule.health")])
+            .expect("rules within limit");
+
+        // One successful iteration first, so the record holds a completion.
+        manager.evaluate_guarded();
+        assert_eq!(
+            manager.get_state().evaluation_health.status,
+            crate::runtime_health::BackgroundLoopStatus::Healthy
+        );
+
+        // The iteration panics; the failure becomes observable instead of
+        // silently ending the worker.
+        power.set_should_panic(true);
+        manager.evaluate_guarded();
+        let degraded = manager.get_state().evaluation_health;
+        assert_eq!(
+            degraded.status,
+            crate::runtime_health::BackgroundLoopStatus::Degraded
+        );
+        let reason = degraded
+            .reason
+            .expect("the failure is surfaced with a reason");
+        assert!(
+            reason.contains("power probe exploded"),
+            "the failure reason carries the panic payload: {reason}"
+        );
+        assert!(
+            degraded.last_completed_at.is_some(),
+            "the last successful evaluation stays visible"
+        );
+
+        // The next interval retries and the record is current again; the
+        // stored evaluation is real work, not a stale leftover.
+        power.set_should_panic(false);
+        manager.evaluate_guarded();
+        let recovered = manager.get_state().evaluation_health;
+        assert_eq!(
+            recovered.status,
+            crate::runtime_health::BackgroundLoopStatus::Healthy
+        );
+        assert_eq!(recovered.reason, None);
+        assert_eq!(manager.get_state().rule_evaluations.len(), 1);
+    }
+
+    #[test]
+    fn a_poisoned_rule_lock_does_not_fail_subsequent_commands() {
+        let manager = KeepAwakeManager::new();
+        // Poison the rules lock the way a panicked holder would.
+        std::thread::scope(|scope| {
+            let rules = manager.rules.clone();
+            scope
+                .spawn(move || {
+                    let _guard = rules.lock().unwrap();
+                    panic!("the holder dies with the lock");
+                })
+                .join()
+                .unwrap_err();
+        });
+
+        // Every later command keeps working instead of failing for the
+        // remaining life of the process.
+        manager
+            .set_rules(vec![health_rule("rule.after_poison")])
+            .expect("rules within limit");
+        let state = manager.get_state();
+        assert_eq!(state.rule_evaluations.len(), 1);
     }
 }

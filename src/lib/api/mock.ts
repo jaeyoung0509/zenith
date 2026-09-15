@@ -274,6 +274,7 @@ function mockControlSnapshot(): AiControlCenterSnapshot {
     audit: [],
     quick_summary: { observed_at: now, active_sessions: 1, budget_alerts: 0, safety_findings: 0, quality: 'fresh' },
     keep_awake_active: false,
+    runtime_health: { status: 'healthy', last_completed_at: now, failed_at: null, reason: null },
     partial_errors: [],
   };
 }

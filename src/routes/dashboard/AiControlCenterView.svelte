@@ -114,6 +114,7 @@
   {:else if aiControlStore.snapshot}
     {@const snapshot = aiControlStore.snapshot}
     {#if snapshot.partial_errors.length}<div class="rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs text-warning">Partial snapshot: {snapshot.partial_errors.join(' · ')}</div>{/if}
+    {#if snapshot.runtime_health?.status === 'degraded'}<div class="rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs text-warning">Background advisory tick failed: {snapshot.runtime_health.reason ?? 'unknown error'}. The shown recommendations are the last successful pass; the next interval retries.</div>{/if}
 
     {#if selectedSection === 'overview'}
       <div class="grid grid-cols-4 gap-3">

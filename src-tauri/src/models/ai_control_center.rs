@@ -376,6 +376,11 @@ pub struct AiControlCenterSnapshot {
     pub audit: Vec<AuditEntry>,
     pub quick_summary: ControlCenterQuickSummary,
     pub keep_awake_active: bool,
+    /// Health of the background advisory tick that feeds recommendations and
+    /// resource attributions, so a degraded loop is observable instead of a
+    /// stale snapshot silently passing as current.
+    #[serde(default)]
+    pub runtime_health: crate::runtime_health::BackgroundLoopHealth,
     pub partial_errors: Vec<String>,
 }
 

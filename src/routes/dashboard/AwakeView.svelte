@@ -307,6 +307,14 @@
     />
   {/if}
 
+  {#if awakeState.evaluation_health?.status === 'degraded'}
+    <InlineNotice
+      variant="warning"
+      title="Keep Awake evaluation failed"
+      message={`The background evaluation failed: ${awakeState.evaluation_health.reason ?? 'unknown error'}. The displayed state is the last successful evaluation; the next interval retries automatically.`}
+    />
+  {/if}
+
   {#if settingsStore.error}
     <InlineNotice
       variant="destructive"

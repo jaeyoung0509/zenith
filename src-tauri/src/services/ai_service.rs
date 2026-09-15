@@ -535,6 +535,7 @@ impl AiService {
         let refresh_lock = self.control_refresh_lock.clone();
         let control = self.control_state.clone();
         let memory_sampler = self.memory_sampler.clone();
+        let runtime = self.runtime.clone();
         let awake = self.awake.clone();
         let dev_store = self.dev_ports.clone();
         let environment = self.environment.clone();
@@ -681,6 +682,7 @@ impl AiService {
                         quick_summary,
                         keep_awake_active: awake.get_state().active_rule_id.as_deref()
                             == Some("ai-control.verified-session"),
+                        runtime_health: runtime.tick_health(),
                         partial_errors,
                     };
                     guard.last_snapshot = Some(snapshot.clone());

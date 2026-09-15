@@ -159,7 +159,7 @@ pub struct AwakeRuleEvaluation {
     pub is_power_eligible: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct AwakeState {
     pub is_active: bool,
     pub behavior: Option<AwakeBehavior>,
@@ -173,6 +173,10 @@ pub struct AwakeState {
     pub power_source: PowerSourceType,
     pub last_error: Option<String>,
     pub rule_evaluations: Vec<AwakeRuleEvaluation>,
+    /// Health of the background loop that produces this state, so the
+    /// interface never presents a stale evaluation as current.
+    #[serde(default)]
+    pub evaluation_health: crate::runtime_health::BackgroundLoopHealth,
 }
 
 #[cfg(test)]
