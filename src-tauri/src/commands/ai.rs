@@ -139,6 +139,14 @@ pub async fn get_ai_control_center(
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_ai_runtime_health(
+    state: State<'_, DesktopState>,
+) -> crate::runtime_health::BackgroundLoopHealth {
+    state.ai.control_runtime_health()
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_ai_control_quick_summary(
     state: State<'_, DesktopState>,
 ) -> Option<ControlCenterQuickSummary> {

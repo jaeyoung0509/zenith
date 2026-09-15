@@ -21,6 +21,7 @@
     "allow-post-agent-event",
     "allow-open-project-in-terminal",
     "allow-get-ai-control-center",
+    "allow-get-ai-runtime-health",
     "allow-get-ai-control-quick-summary",
     "allow-save-ai-control-preferences",
     "allow-run-ai-safety-scan",

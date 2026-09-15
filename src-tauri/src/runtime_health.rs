@@ -47,29 +47,31 @@ pub struct BackgroundLoopHealth {
     #[serde(default, with = "crate::ipc_numeric::option_u64")]
     #[specta(type = Option<u64>)]
     pub last_completed_at: Option<u64>,
+    /// The most recent failed iteration. It survives recovery: a loop that
+    /// panicked two ticks ago is healthy again, but the record still says a
+    /// failure happened, because a snapshot-driven interface that never
+    /// re-reads the record in that window would otherwise never see it.
     #[serde(default, with = "crate::ipc_numeric::option_u64")]
     #[specta(type = Option<u64>)]
-    pub failed_at: Option<u64>,
+    pub last_failed_at: Option<u64>,
     #[serde(default)]
-    pub reason: Option<String>,
+    pub last_failure_reason: Option<String>,
 }
 
 impl BackgroundLoopHealth {
-    /// Records a completed iteration: the failure marker is cleared because
-    /// the stored evaluation is current again.
+    /// Records a completed iteration: the loop is current again, and the
+    /// last failure stays on the record for the interface to present.
     fn record_completed(&mut self, now: u64) {
         self.status = BackgroundLoopStatus::Healthy;
         self.last_completed_at = Some(now);
-        self.failed_at = None;
-        self.reason = None;
     }
 
     /// Records a panicked iteration, keeping the last successful pass so the
     /// age of the stored evaluation stays visible.
     fn record_failure(&mut self, now: u64, reason: String) {
         self.status = BackgroundLoopStatus::Degraded;
-        self.failed_at = Some(now);
-        self.reason = Some(reason);
+        self.last_failed_at = Some(now);
+        self.last_failure_reason = Some(reason);
     }
 }
 
@@ -152,7 +154,7 @@ mod tests {
         let record = snapshot(&health);
         assert_eq!(record.status, BackgroundLoopStatus::Healthy);
         assert!(record.last_completed_at.is_some());
-        assert_eq!(record.reason, None);
+        assert_eq!(record.last_failure_reason, None);
     }
 
     #[test]
@@ -174,10 +176,13 @@ mod tests {
             "the last successful pass stays visible"
         );
         assert!(
-            record.failed_at.unwrap_or_default() >= record.last_completed_at.unwrap_or_default(),
+            record.last_failed_at.unwrap_or_default()
+                >= record.last_completed_at.unwrap_or_default(),
             "the failure is at least as recent as the last completion"
         );
-        let reason = record.reason.expect("the failure reason is stored");
+        let reason = record
+            .last_failure_reason
+            .expect("the failure reason is stored");
         assert!(
             reason.contains("cache index was truncated"),
             "the panic payload must survive sanitization: {reason}"
@@ -193,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn a_recovered_iteration_clears_the_degradation() {
+    fn a_recovered_iteration_clears_the_degradation_but_keeps_the_failure() {
         let health = record();
 
         run_iteration("Test loop panicked", &health, || panic!("first pass dies"));
@@ -201,8 +206,17 @@ mod tests {
 
         let record = snapshot(&health);
         assert_eq!(record.status, BackgroundLoopStatus::Healthy);
-        assert_eq!(record.reason, None);
-        assert_eq!(record.failed_at, None);
+        // The failure survives recovery: an interface that never re-read the
+        // record while the loop was degraded must still be able to learn a
+        // failure happened.
+        assert!(
+            record.last_failed_at.is_some(),
+            "the recovered record still names when the last failure happened"
+        );
+        let reason = record
+            .last_failure_reason
+            .expect("the recovered record keeps the failure reason");
+        assert!(reason.contains("first pass dies"), "{reason}");
     }
 
     #[test]
@@ -224,5 +238,27 @@ mod tests {
         let value = run_iteration("Test loop panicked", &health, || 3);
         assert_eq!(value, Some(3));
         assert_eq!(snapshot(&health).status, BackgroundLoopStatus::Healthy);
+    }
+
+    #[test]
+    fn ipc_timestamps_reject_values_javascript_cannot_represent_exactly() {
+        let safe = BackgroundLoopHealth {
+            status: BackgroundLoopStatus::Degraded,
+            last_completed_at: Some(42),
+            last_failed_at: Some(43),
+            last_failure_reason: Some("bounded failure".into()),
+        };
+        let json = serde_json::to_value(&safe).expect("safe health record serializes");
+        assert_eq!(json["last_completed_at"], 42);
+        assert_eq!(json["last_failed_at"], 43);
+
+        let unsafe_record = BackgroundLoopHealth {
+            last_failed_at: Some(crate::ipc_numeric::MAX_SAFE_INTEGER + 1),
+            ..safe
+        };
+        let error = serde_json::to_value(&unsafe_record)
+            .expect_err("unsafe health timestamp is refused")
+            .to_string();
+        assert!(error.contains("Number.MAX_SAFE_INTEGER"), "{error}");
     }
 }

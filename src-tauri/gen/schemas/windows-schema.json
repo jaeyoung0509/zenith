@@ -279,6 +279,12 @@
           "markdownDescription": "Enables the get_ai_provider_descriptors command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_ai_runtime_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ai-runtime-health",
+          "markdownDescription": "Enables the get_ai_runtime_health command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_ai_usage command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-ai-usage",
@@ -667,6 +673,12 @@
           "type": "string",
           "const": "deny-get-ai-provider-descriptors",
           "markdownDescription": "Denies the get_ai_provider_descriptors command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ai_runtime_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ai-runtime-health",
+          "markdownDescription": "Denies the get_ai_runtime_health command without any pre-configured scope."
         },
         {
           "description": "Denies the get_ai_usage command without any pre-configured scope.",

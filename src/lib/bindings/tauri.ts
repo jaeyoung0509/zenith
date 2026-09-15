@@ -20,6 +20,7 @@ export const commands = {
 	postAgentEvent: (event: IngestedAgentEvent_Deserialize) => typedError<null, string>(__TAURI_INVOKE("post_agent_event", { event })),
 	openProjectInTerminal: (projectId: string) => typedError<null, string>(__TAURI_INVOKE("open_project_in_terminal", { projectId })),
 	getAiControlCenter: (force: boolean | null) => typedError<AiControlCenterSnapshot_Serialize, string>(__TAURI_INVOKE("get_ai_control_center", { force })),
+	getAiRuntimeHealth: () => __TAURI_INVOKE<BackgroundLoopHealth_Serialize>("get_ai_runtime_health"),
 	getAiControlQuickSummary: () => __TAURI_INVOKE<{
 	observed_at: number,
 	active_sessions: number,
@@ -606,8 +607,14 @@ export type BackgroundLoopHealth = BackgroundLoopHealth_Serialize | BackgroundLo
 export type BackgroundLoopHealth_Deserialize = {
 	status: BackgroundLoopStatus,
 	last_completed_at?: number | null,
-	failed_at?: number | null,
-	reason?: string | null,
+	/**
+	 *  The most recent failed iteration. It survives recovery: a loop that
+	 *  panicked two ticks ago is healthy again, but the record still says a
+	 *  failure happened, because a snapshot-driven interface that never
+	 *  re-reads the record in that window would otherwise never see it.
+	 */
+	last_failed_at?: number | null,
+	last_failure_reason?: string | null,
 };
 
 /**
@@ -620,8 +627,14 @@ export type BackgroundLoopHealth_Deserialize = {
 export type BackgroundLoopHealth_Serialize = {
 	status: BackgroundLoopStatus,
 	last_completed_at: number | null,
-	failed_at: number | null,
-	reason: string | null,
+	/**
+	 *  The most recent failed iteration. It survives recovery: a loop that
+	 *  panicked two ticks ago is healthy again, but the record still says a
+	 *  failure happened, because a snapshot-driven interface that never
+	 *  re-reads the record in that window would otherwise never see it.
+	 */
+	last_failed_at: number | null,
+	last_failure_reason: string | null,
 };
 
 /**  Whether a long-lived background loop's last iteration succeeded. */

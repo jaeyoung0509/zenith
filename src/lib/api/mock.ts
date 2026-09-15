@@ -7,6 +7,7 @@ import type {
   AwakeBehavior,
   AwakeRule,
   AwakeState,
+  BackgroundLoopHealth,
   Category,
   CleanEvent,
   CleanItemResult,
@@ -274,7 +275,12 @@ function mockControlSnapshot(): AiControlCenterSnapshot {
     audit: [],
     quick_summary: { observed_at: now, active_sessions: 1, budget_alerts: 0, safety_findings: 0, quality: 'fresh' },
     keep_awake_active: false,
-    runtime_health: { status: 'healthy', last_completed_at: now, failed_at: null, reason: null },
+    runtime_health: {
+      status: 'healthy',
+      last_completed_at: now,
+      last_failed_at: null,
+      last_failure_reason: null,
+    },
     partial_errors: [],
   };
 }
@@ -653,6 +659,10 @@ export const mockApi = {
 
   async getAiControlCenter(_force = false): Promise<AiControlCenterSnapshot> {
     return mockControlSnapshot();
+  },
+
+  async getAiRuntimeHealth(): Promise<BackgroundLoopHealth> {
+    return mockControlSnapshot().runtime_health;
   },
 
   async getAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {

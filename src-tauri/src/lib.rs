@@ -509,6 +509,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::post_agent_event,
             commands::open_project_in_terminal,
             commands::get_ai_control_center,
+            commands::get_ai_runtime_health,
             commands::get_ai_control_quick_summary,
             commands::save_ai_control_preferences,
             commands::run_ai_safety_scan,

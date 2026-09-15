@@ -1828,7 +1828,7 @@ mod tests {
             crate::runtime_health::BackgroundLoopStatus::Degraded
         );
         let reason = degraded
-            .reason
+            .last_failure_reason
             .expect("the failure is surfaced with a reason");
         assert!(
             reason.contains("power probe exploded"),
@@ -1848,7 +1848,10 @@ mod tests {
             recovered.status,
             crate::runtime_health::BackgroundLoopStatus::Healthy
         );
-        assert_eq!(recovered.reason, None);
+        assert!(
+            recovered.last_failure_reason.is_some(),
+            "the recovered record still carries the last failure for the interface"
+        );
         assert_eq!(manager.get_state().rule_evaluations.len(), 1);
     }
 

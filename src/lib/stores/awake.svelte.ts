@@ -18,7 +18,12 @@ class AwakeStore {
     power_source: 'unknown',
     last_error: null,
     rule_evaluations: [],
-    evaluation_health: { status: 'healthy', last_completed_at: null, failed_at: null, reason: null },
+    evaluation_health: {
+      status: 'healthy',
+      last_completed_at: null,
+      last_failed_at: null,
+      last_failure_reason: null,
+    },
   });
   isLoading = $state(false);
   error = $state<string | null>(null);

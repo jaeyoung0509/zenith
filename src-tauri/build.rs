@@ -14,6 +14,7 @@ fn main() {
         "post_agent_event",
         "open_project_in_terminal",
         "get_ai_control_center",
+        "get_ai_runtime_health",
         "get_ai_control_quick_summary",
         "save_ai_control_preferences",
         "run_ai_safety_scan",

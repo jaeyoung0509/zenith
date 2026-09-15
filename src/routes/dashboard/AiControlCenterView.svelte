@@ -21,7 +21,10 @@
   let budgetLimit = $state('20');
   let selectedSection = $state<'overview' | 'usage' | 'autopilot' | 'safety'>('overview');
 
-  onMount(() => { void aiControlStore.refresh(); });
+  onMount(() => {
+    void aiControlStore.refresh();
+    return aiControlStore.observeRuntimeHealth();
+  });
 
   const dollars = (micros?: number | null) => micros == null ? '—' : `$${(micros / 1_000_000).toFixed(2)}`;
   const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
@@ -113,8 +116,13 @@
   {#if aiControlStore.isLoading && !aiControlStore.snapshot}<div class="py-20 text-center text-xs text-muted-foreground"><RefreshCw size={22} class="mx-auto mb-3 animate-gentle-spin" />Building a verified snapshot…</div>
   {:else if aiControlStore.snapshot}
     {@const snapshot = aiControlStore.snapshot}
+    {@const runtimeHealth = aiControlStore.runtimeHealth ?? snapshot.runtime_health}
     {#if snapshot.partial_errors.length}<div class="rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs text-warning">Partial snapshot: {snapshot.partial_errors.join(' · ')}</div>{/if}
-    {#if snapshot.runtime_health?.status === 'degraded'}<div class="rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs text-warning">Background advisory tick failed: {snapshot.runtime_health.reason ?? 'unknown error'}. The shown recommendations are the last successful pass; the next interval retries.</div>{/if}
+    {#if runtimeHealth.status === 'degraded'}
+      <div class="rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs text-warning">Background advisory tick failed: {runtimeHealth.last_failure_reason ?? 'unknown error'}. The shown recommendations are the last successful pass; the next interval retries.</div>
+    {:else if runtimeHealth.last_failed_at !== null}
+      <div class="rounded-xl border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">Background advisory tick recovered after: {runtimeHealth.last_failure_reason ?? 'unknown error'}. Recommendations are current again.</div>
+    {/if}
 
     {#if selectedSection === 'overview'}
       <div class="grid grid-cols-4 gap-3">

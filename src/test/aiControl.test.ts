@@ -266,8 +266,8 @@ const sampleSnapshot: AiControlCenterSnapshot = {
   runtime_health: {
     status: 'healthy',
     last_completed_at: 1700000000,
-    failed_at: null,
-    reason: null,
+    last_failed_at: null,
+    last_failure_reason: null,
   },
   partial_errors: [],
 };
@@ -275,6 +275,7 @@ const sampleSnapshot: AiControlCenterSnapshot = {
 describe('AI Control Center Svelte component rendering', () => {
   beforeEach(() => {
     aiControlStore.snapshot = sampleSnapshot;
+    aiControlStore.runtimeHealth = sampleSnapshot.runtime_health;
     aiControlStore.error = null;
     aiControlStore.isLoading = false;
     aiControlStore.preview = null;
@@ -283,6 +284,7 @@ describe('AI Control Center Svelte component rendering', () => {
 
   afterEach(() => {
     aiControlStore.snapshot = null;
+    aiControlStore.runtimeHealth = null;
     aiControlStore.error = null;
     aiControlStore.isLoading = false;
     aiControlStore.preview = null;
@@ -337,6 +339,23 @@ describe('AI Control Center Svelte component rendering', () => {
     expect(rendered.body).toContain('Partial snapshot: Provider rate limited · Symlink skipped');
   });
 
+  it('surfaces both a current failure and a recovered failure observed by polling', () => {
+    aiControlStore.runtimeHealth = {
+      status: 'degraded',
+      last_completed_at: 1700000000,
+      last_failed_at: 1700000010,
+      last_failure_reason: 'AI Control advisory tick panicked: bounded failure',
+    };
+    expect(render(AiControlCenterView).body).toContain(
+      'Background advisory tick failed: AI Control advisory tick panicked: bounded failure'
+    );
+
+    aiControlStore.runtimeHealth = { ...aiControlStore.runtimeHealth, status: 'healthy' };
+    expect(render(AiControlCenterView).body).toContain(
+      'Background advisory tick recovered after: AI Control advisory tick panicked: bounded failure'
+    );
+  });
+
   it('renders recommendation preview modal when a preview is active', () => {
     aiControlStore.preview = {
       id: 'prev-1',
@@ -363,6 +382,43 @@ describe('AI Control Center Svelte component rendering', () => {
 });
 
 describe('AiControlStore logic and transitions', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('shares runtime health polling and stops after the final view unmounts', async () => {
+    vi.useFakeTimers();
+    const store = new AiControlStore();
+    const tauriModule = await import('../lib/utils/tauri');
+    const health = {
+      status: 'healthy' as const,
+      last_completed_at: 1700000000,
+      last_failed_at: null,
+      last_failure_reason: null,
+    };
+    const healthSpy = vi
+      .spyOn(tauriModule, 'tauriGetAiRuntimeHealth')
+      .mockResolvedValue(health);
+
+    const stopFirst = store.observeRuntimeHealth(1_000);
+    const stopSecond = store.observeRuntimeHealth(1_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(healthSpy).toHaveBeenCalledTimes(1);
+    expect(store.runtimeHealth).toEqual(health);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(healthSpy).toHaveBeenCalledTimes(2);
+    stopFirst();
+    stopFirst();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(healthSpy).toHaveBeenCalledTimes(3);
+
+    stopSecond();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(healthSpy).toHaveBeenCalledTimes(3);
+  });
+
   it('manages loading and error states during refresh', async () => {
     const store = new AiControlStore();
     expect(store.isLoading).toBe(false);
@@ -473,6 +529,7 @@ describe('Tauri Capabilities security boundaries for AI Control Center', () => {
 
     expect(quickJson.permissions).toContain('allow-get-ai-control-quick-summary');
     expect(quickJson.permissions).not.toContain('allow-get-ai-control-center');
+    expect(quickJson.permissions).not.toContain('allow-get-ai-runtime-health');
     expect(quickJson.permissions).not.toContain('allow-save-ai-control-preferences');
     expect(quickJson.permissions).not.toContain('allow-run-ai-safety-scan');
     expect(quickJson.permissions).not.toContain('allow-dismiss-ai-safety-finding');
@@ -486,6 +543,7 @@ describe('Tauri Capabilities security boundaries for AI Control Center', () => {
     const mainJson = JSON.parse(readFileSync(mainCapPath, 'utf-8'));
 
     expect(mainJson.permissions).toContain('allow-get-ai-control-center');
+    expect(mainJson.permissions).toContain('allow-get-ai-runtime-health');
     expect(mainJson.permissions).toContain('allow-get-ai-control-quick-summary');
     expect(mainJson.permissions).toContain('allow-save-ai-control-preferences');
     expect(mainJson.permissions).toContain('allow-run-ai-safety-scan');

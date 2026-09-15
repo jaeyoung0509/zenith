@@ -141,6 +141,12 @@ impl AiService {
         self.runtime.clone()
     }
 
+    /// The advisory loop's in-memory health, without rebuilding a Control
+    /// Center snapshot or performing provider/process observation.
+    pub fn control_runtime_health(&self) -> crate::runtime_health::BackgroundLoopHealth {
+        self.runtime.tick_health()
+    }
+
     /// Restores the persisted audit entries at startup.
     ///
     /// The audit store is a persistence concern of this service, so reading it

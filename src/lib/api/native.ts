@@ -5,6 +5,7 @@ import type {
   AiUsageSnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
+  BackgroundLoopHealth,
   ControlCenterQuickSummary,
   AgentActivitySnapshot,
   AgentIntegrationInfo,
@@ -105,6 +106,10 @@ export const nativeApi = {
 
   async getAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
     return await unwrap(commands.getAiControlCenter(force));
+  },
+
+  async getAiRuntimeHealth(): Promise<BackgroundLoopHealth> {
+    return await commands.getAiRuntimeHealth();
   },
 
   async getAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {

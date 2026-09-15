@@ -500,7 +500,7 @@ mod tests {
         );
         drop(state);
         let reason = degraded
-            .reason
+            .last_failure_reason
             .expect("the failure is surfaced with a reason");
         assert!(
             reason.contains("notification sink exploded"),
@@ -515,7 +515,10 @@ mod tests {
             recovered.status,
             crate::runtime_health::BackgroundLoopStatus::Healthy
         );
-        assert_eq!(recovered.reason, None);
+        assert!(
+            recovered.last_failure_reason.is_some(),
+            "the recovered record still carries the last failure for the interface"
+        );
         assert!(
             !runtime.tick_health().last_completed_at.is_none(),
             "the completed tick is timestamped"

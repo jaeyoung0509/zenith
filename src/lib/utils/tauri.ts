@@ -6,6 +6,7 @@ import type {
   AiUsageSnapshot,
   AiControlCenterSnapshot,
   AiControlPreferences,
+  BackgroundLoopHealth,
   AgentActivitySnapshot,
   AppUninstallInspection,
   AwakeBehavior,
@@ -103,6 +104,10 @@ export function tauriGetAiProviderDescriptors(): Promise<ProviderDescriptor[]> {
 
 export function tauriGetAiControlCenter(force = false): Promise<AiControlCenterSnapshot> {
   return api.getAiControlCenter(force);
+}
+
+export function tauriGetAiRuntimeHealth(): Promise<BackgroundLoopHealth> {
+  return api.getAiRuntimeHealth();
 }
 
 export function tauriGetAiControlQuickSummary(): Promise<ControlCenterQuickSummary | null> {
