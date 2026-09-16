@@ -9,6 +9,7 @@ import type {
   AwakeState,
   BackgroundLoopHealth,
   Category,
+  CategoryResult,
   CleanEvent,
   CleanItemResult,
   CleanResult,
@@ -44,9 +45,39 @@ import { createDevelopmentPortsMock } from './mocks/developmentPorts';
 import { previewPlatform } from './mocks/previewPlatform';
 import { goldenCapabilitiesByPlatform } from '../models/platformCapabilities';
 import { goldenPlatformContextByPlatform } from '../models/platformContext';
-import { cleanableBytes, isCleanable } from '../utils/cleanup';
+import { cleanableBytes, isCleanable, observedBytes } from '../utils/cleanup';
 
 type ZenithApi = typeof nativeApi;
+
+/** Every eligibility state, in the order an aggregate reports its buckets. */
+const ELIGIBILITY_ORDER = [
+  'auto_cleanable',
+  'reviewable',
+  'recent',
+  'policy_gated',
+  'advisory',
+  'blocked',
+] as const;
+
+/**
+ * The eligibility breakdown an aggregate carries, summed from the very items
+ * the fixture reports, so the buckets and the rows can never disagree.
+ */
+function eligibilityFor(items: ScanItem[]): NonNullable<CategoryResult['eligibility']> {
+  return {
+    buckets: ELIGIBILITY_ORDER.map((eligibility) => {
+      const matching = items.filter(
+        (item) => (item.disposition?.eligibility ?? 'blocked') === eligibility
+      );
+      return {
+        eligibility,
+        observed_bytes: matching.reduce((acc, item) => acc + observedBytes(item), 0),
+        cleanable_bytes: matching.reduce((acc, item) => acc + cleanableBytes(item), 0),
+        items: matching.length,
+      };
+    }),
+  };
+}
 
 const MOCK_PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
   {
@@ -834,6 +865,8 @@ export const mockApi = {
         }
         const intensiveBytes = 1.4 * 1024 * 1024 * 1024;
         const blockedBytes = 198.6 * 1024 * 1024;
+        const recentBytes = 640 * 1024 * 1024;
+        const namespaceRoot = '~/Library/Caches';
         const intensiveItem: ScanItem = {
           id: 'system.intensive.user_app_caches.mock-app',
           signature_id: 'system.intensive.user_app_caches',
@@ -850,6 +883,14 @@ export const mockApi = {
             cleanable_bytes: intensiveBytes,
             reason: null,
           },
+          unit: {
+            kind: 'child_namespace',
+            root: namespaceRoot,
+            path: '~/Library/Caches/com.example.mock-app',
+          },
+          ownership: { owner: 'com.example.mock-app', confidence: 'inferred' },
+          entry_kind: 'directory',
+          gate: 'open',
           is_selected: true,
           last_modified: Math.floor(Date.now() / 1000) - 8 * 86400,
           exists: true,
@@ -879,6 +920,15 @@ export const mockApi = {
             reason:
               'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
           },
+          unit: {
+            kind: 'child_namespace',
+            root: namespaceRoot,
+            path: '~/Library/Caches/com.example.bundled-cache',
+          },
+          ownership: { owner: 'com.example.bundled-cache', confidence: 'inferred' },
+          structured_state: 'application_bundle',
+          entry_kind: 'directory',
+          gate: 'open',
           is_selected: false,
           last_modified: Math.floor(Date.now() / 1000) - 9 * 86400,
           exists: true,
@@ -887,152 +937,209 @@ export const mockApi = {
             'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
           skipped_entry_count: 1,
         };
-        const intensiveCategory: ScanResult['categories'][number] = {
+        // A unit the age policy does not authorize yet: discovered and
+        // measured like the others, but its bytes are not cleanable until the
+        // cache goes stale. It belongs to the standard temporary signature, so
+        // the state is visible without enabling the opt-in broader scan.
+        const recentItem: ScanItem = {
+          id: 'system.developer_temp.0.vite-cache-8f3c',
+          signature_id: 'system.developer_temp',
+          name: 'vite-cache-8f3c',
+          category: 'system',
+          risk: 'safe',
+          path: '$TMPDIR/vite-cache-8f3c',
+          size: { logical: recentBytes, allocated: recentBytes },
+          file_count: 410,
+          description: 'Known developer-tool temporary files (modified within the last 3 days)',
+          cache_metadata: { provider: 'Zenith', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'approximate' },
+          disposition: {
+            eligibility: 'recent',
+            cleanable_bytes: null,
+            reason:
+              'Modified within the last 3 days; the age policy needs 3 days of inactivity',
+          },
+          unit: {
+            kind: 'child_namespace',
+            root: '$TMPDIR',
+            path: '$TMPDIR/vite-cache-8f3c',
+          },
+          ownership: { owner: 'vite-cache-8f3c', confidence: 'inferred' },
+          age: {
+            min_age_days: 3,
+            newest_modified: Math.floor(Date.now() / 1000) - 2 * 86400,
+            satisfied: false,
+          },
+          entry_kind: 'directory',
+          gate: 'open',
+          is_selected: false,
+          last_modified: Math.floor(Date.now() / 1000) - 2 * 86400,
+          exists: true,
+          quality: 'fresh',
+        };
+        const systemItems: ScanItem[] = [
+          recentItem,
+          ...(intensiveCleanup ? [intensiveItem, blockedItem] : []),
+        ];
+        const systemCategory: ScanResult['categories'][number] = {
           category: 'system',
           display_name: 'System',
-          items: [intensiveItem, blockedItem],
-          // Detected bytes retain the blocked observation while cleanable and
-          // Safe buckets contain only actionable bytes.
-          total_bytes: intensiveBytes + blockedBytes,
-          cleanable_bytes: intensiveBytes,
-          safe_bytes: intensiveBytes,
+          items: systemItems,
+          // Detected bytes retain the age-gated and blocked observations while
+          // cleanable and Safe buckets contain only actionable bytes.
+          total_bytes: recentBytes + (intensiveCleanup ? intensiveBytes + blockedBytes : 0),
+          cleanable_bytes: intensiveCleanup ? intensiveBytes : 0,
+          safe_bytes: intensiveCleanup ? intensiveBytes : 0,
           rebuild_bytes: 0,
           manual_bytes: 0,
-          skipped_entry_count: 1,
-          incomplete_item_count: 1,
-          quality: 'partial',
+          skipped_entry_count: intensiveCleanup ? 1 : 0,
+          incomplete_item_count: intensiveCleanup ? 1 : 0,
+          quality: intensiveCleanup ? 'partial' : 'fresh',
+          eligibility: eligibilityFor(systemItems),
+          suppressed_duplicate_count: 0,
+          suppressed_duplicate_bytes: 0,
         };
 
+        onEvent({ type: 'CategoryStarted', category: 'system' });
+        onEvent({ type: 'ItemFound', item: recentItem });
         if (intensiveCleanup) {
-          onEvent({ type: 'CategoryStarted', category: 'system' });
           onEvent({ type: 'ItemFound', item: intensiveItem });
           onEvent({ type: 'ItemFound', item: blockedItem });
-          onEvent({
-            type: 'CategoryFinished',
-            category: 'system',
-            bytes: intensiveCategory.total_bytes,
-            item_count: 2,
-          });
         }
+        onEvent({
+          type: 'CategoryFinished',
+          category: 'system',
+          bytes: systemCategory.total_bytes,
+          item_count: systemItems.length,
+        });
 
+        const aiItems: ScanItem[] = [
+          {
+            id: 'ai.cursor.cache',
+            signature_id: 'ai.cursor.cache',
+            name: 'Cursor Editor Cache',
+            category: 'ai',
+            risk: 'safe',
+            path: '~/Library/Caches/Cursor',
+            size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
+            file_count: 3200,
+            description: 'V8 code cache and GPU shader cache',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              cleanable_bytes: 2.1 * 1024 * 1024 * 1024,
+              reason: null,
+            },
+            is_selected: true,
+            last_modified: null,
+            exists: true,
+            quality: 'fresh',
+          },
+          {
+            id: 'ai.claude.logs',
+            signature_id: 'ai.claude.logs',
+            name: 'Claude Code Logs',
+            category: 'ai',
+            risk: 'safe',
+            path: '~/.claude/logs',
+            size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
+            file_count: 140,
+            description: 'Session diagnostic logs',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              cleanable_bytes: 1.1 * 1024 * 1024 * 1024,
+              reason: null,
+            },
+            is_selected: true,
+            last_modified: null,
+            exists: true,
+            quality: 'fresh',
+          },
+        ];
+        const developerItems: ScanItem[] = [
+          {
+            id: 'dev.go.build',
+            signature_id: 'dev.go.build',
+            name: 'Go Build Cache',
+            category: 'developer',
+            risk: 'safe',
+            path: '~/Library/Caches/go-build',
+            size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
+            file_count: 12000,
+            description: 'Compiled packages cache',
+            disposition: {
+              eligibility: 'auto_cleanable',
+              cleanable_bytes: 3.1 * 1024 * 1024 * 1024,
+              reason: null,
+            },
+            is_selected: true,
+            last_modified: null,
+            exists: true,
+            quality: 'fresh',
+          },
+          {
+            id: 'dev.cargo.registry.cache',
+            signature_id: 'dev.cargo.registry.cache',
+            name: 'Cargo Registry Cache',
+            category: 'developer',
+            risk: 'rebuild',
+            path: '~/.cargo/registry/cache',
+            size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
+            file_count: 850,
+            description: 'Downloaded crates archive',
+            disposition: {
+              eligibility: 'reviewable',
+              cleanable_bytes: 2.0 * 1024 * 1024 * 1024,
+              reason: null,
+            },
+            is_selected: false,
+            last_modified: null,
+            exists: true,
+            quality: 'fresh',
+          },
+        ];
+        const categories: ScanResult['categories'] = [
+          {
+            category: 'ai',
+            display_name: 'AI Tools',
+            items: aiItems,
+            total_bytes: 3.2 * 1024 * 1024 * 1024,
+            cleanable_bytes: 3.2 * 1024 * 1024 * 1024,
+            safe_bytes: 3.2 * 1024 * 1024 * 1024,
+            rebuild_bytes: 0,
+            manual_bytes: 0,
+            skipped_entry_count: 0,
+            incomplete_item_count: 0,
+            quality: 'fresh',
+            eligibility: eligibilityFor(aiItems),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
+          },
+          {
+            category: 'developer',
+            display_name: 'Developer',
+            items: developerItems,
+            total_bytes: 5.1 * 1024 * 1024 * 1024,
+            cleanable_bytes: 5.1 * 1024 * 1024 * 1024,
+            safe_bytes: 3.1 * 1024 * 1024 * 1024,
+            rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
+            manual_bytes: 0,
+            skipped_entry_count: 0,
+            incomplete_item_count: 0,
+            quality: 'fresh',
+            eligibility: eligibilityFor(developerItems),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
+          },
+          systemCategory,
+        ];
         const result: ScanResult = {
           scan_id: scanId,
           valid_for_seconds: 300,
           started_at: Math.floor(Date.now() / 1000) - 1,
           finished_at: Math.floor(Date.now() / 1000),
-          categories: [
-            {
-              category: 'ai',
-              display_name: 'AI Tools',
-              items: [
-                {
-                  id: 'ai.cursor.cache',
-                  signature_id: 'ai.cursor.cache',
-                  name: 'Cursor Editor Cache',
-                  category: 'ai',
-                  risk: 'safe',
-                  path: '~/Library/Caches/Cursor',
-                  size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
-                  file_count: 3200,
-                  description: 'V8 code cache and GPU shader cache',
-                  disposition: {
-                    eligibility: 'auto_cleanable',
-                    cleanable_bytes: 2.1 * 1024 * 1024 * 1024,
-                    reason: null,
-                  },
-                  is_selected: true,
-                  last_modified: null,
-                  exists: true,
-                  quality: 'fresh',
-                },
-                {
-                  id: 'ai.claude.logs',
-                  signature_id: 'ai.claude.logs',
-                  name: 'Claude Code Logs',
-                  category: 'ai',
-                  risk: 'safe',
-                  path: '~/.claude/logs',
-                  size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
-                  file_count: 140,
-                  description: 'Session diagnostic logs',
-                  disposition: {
-                    eligibility: 'auto_cleanable',
-                    cleanable_bytes: 1.1 * 1024 * 1024 * 1024,
-                    reason: null,
-                  },
-                  is_selected: true,
-                  last_modified: null,
-                  exists: true,
-                  quality: 'fresh',
-                },
-              ],
-              total_bytes: 3.2 * 1024 * 1024 * 1024,
-              cleanable_bytes: 3.2 * 1024 * 1024 * 1024,
-              safe_bytes: 3.2 * 1024 * 1024 * 1024,
-              rebuild_bytes: 0,
-              manual_bytes: 0,
-              skipped_entry_count: 0,
-              incomplete_item_count: 0,
-              quality: 'fresh',
-            },
-            {
-              category: 'developer',
-              display_name: 'Developer',
-              items: [
-                {
-                  id: 'dev.go.build',
-                  signature_id: 'dev.go.build',
-                  name: 'Go Build Cache',
-                  category: 'developer',
-                  risk: 'safe',
-                  path: '~/Library/Caches/go-build',
-                  size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
-                  file_count: 12000,
-                  description: 'Compiled packages cache',
-                  disposition: {
-                    eligibility: 'auto_cleanable',
-                    cleanable_bytes: 3.1 * 1024 * 1024 * 1024,
-                    reason: null,
-                  },
-                  is_selected: true,
-                  last_modified: null,
-                  exists: true,
-                  quality: 'fresh',
-                },
-                {
-                  id: 'dev.cargo.registry.cache',
-                  signature_id: 'dev.cargo.registry.cache',
-                  name: 'Cargo Registry Cache',
-                  category: 'developer',
-                  risk: 'rebuild',
-                  path: '~/.cargo/registry/cache',
-                  size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
-                  file_count: 850,
-                  description: 'Downloaded crates archive',
-                  disposition: {
-                    eligibility: 'reviewable',
-                    cleanable_bytes: 2.0 * 1024 * 1024 * 1024,
-                    reason: null,
-                  },
-                  is_selected: false,
-                  last_modified: null,
-                  exists: true,
-                  quality: 'fresh',
-                },
-              ],
-              total_bytes: 5.1 * 1024 * 1024 * 1024,
-              cleanable_bytes: 5.1 * 1024 * 1024 * 1024,
-              safe_bytes: 3.1 * 1024 * 1024 * 1024,
-              rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
-              manual_bytes: 0,
-              skipped_entry_count: 0,
-              incomplete_item_count: 0,
-              quality: 'fresh',
-            },
-            ...(intensiveCleanup ? [intensiveCategory] : []),
-          ],
+          categories,
           total_bytes:
             8.3 * 1024 * 1024 * 1024 +
+            recentBytes +
             (intensiveCleanup ? intensiveBytes + blockedBytes : 0),
           cleanable_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
@@ -1049,6 +1156,13 @@ export const mockApi = {
                 'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
               ]
             : [],
+          // Buckets sum to `total_bytes` over the observed column: what the scan
+          // found, and how much of it the current policy would reclaim.
+          eligibility: eligibilityFor(
+            categories.flatMap((category) => category.items as ScanItem[])
+          ),
+          suppressed_duplicate_count: 0,
+          suppressed_duplicate_bytes: 0,
         };
 
         lastMockScan = result;
@@ -1091,6 +1205,8 @@ export const mockApi = {
           .reduce((acc, i) => acc + bytesFor(i), 0),
       },
       expires_at: Math.floor(Date.now() / 1000) + 300,
+      // The preview clean path removes targets from disk, and says so.
+      mode: 'permanent_delete',
     };
   },
 
@@ -1122,6 +1238,7 @@ export const mockApi = {
               type: 'ItemFinished',
               item_id: t.item_id,
               name: t.name,
+              status: 'success',
               success: true,
               reclaimed_bytes: t.expected_bytes,
               error: null,
@@ -1132,6 +1249,7 @@ export const mockApi = {
               path: '',
               status: 'success',
               success: true,
+              estimated_bytes: t.expected_bytes,
               bytes_reclaimed: t.expected_bytes,
               failure_reason: null,
               error_message: null,
@@ -1146,6 +1264,7 @@ export const mockApi = {
                 total_failed_bytes: 0,
                 partial_count: 0,
                 failed_count: 0,
+                skipped_count: 0,
                 items,
                 actual_disk_free_delta: plan.expected_reclaim_bytes,
               };
@@ -1184,6 +1303,7 @@ export const mockApi = {
             type: 'ItemFinished',
             item_id: 'mock-safe-item',
             name: 'System Logs',
+            status: 'success',
             success: true,
             reclaimed_bytes: 500 * 1024 * 1024,
             error: null,
@@ -1197,6 +1317,7 @@ export const mockApi = {
             total_failed_bytes: 0,
             partial_count: 0,
             failed_count: 0,
+            skipped_count: 0,
             items: [
               {
                 item_id: 'mock-safe-item',
@@ -1204,6 +1325,7 @@ export const mockApi = {
                 path: '/tmp/logs',
                 status: 'success',
                 success: true,
+                estimated_bytes: 500 * 1024 * 1024,
                 bytes_reclaimed: 500 * 1024 * 1024,
                 failure_reason: null,
                 error_message: null,

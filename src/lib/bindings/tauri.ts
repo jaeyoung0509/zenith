@@ -54,6 +54,14 @@ export const commands = {
 	skipped_entry_count: number,
 	/**  Retained items whose observation is not `Fresh`. */
 	incomplete_item_count: number,
+	/**
+	 *  Observed and cleanable bytes per eligibility state, summed over the
+	 *  categories.
+	 */
+	eligibility: EligibilitySummary_Serialize,
+	/**  Units suppressed as duplicates of an already-counted unit. */
+	suppressed_duplicate_count: number,
+	suppressed_duplicate_bytes: number,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
@@ -132,6 +140,47 @@ export const commands = {
 };
 
 /* Types */
+/**
+ *  What the age policy observed about a unit, and whether it is satisfied.
+ * 
+ *  The whole-tree newest timestamp is the fact, and the comparison against the
+ *  policy is recorded with it because it happened at a stated instant that a
+ *  later reader does not have. Construction goes through [`Self::evaluate`] so
+ *  the two can never disagree, and a unit whose newest timestamp could not be
+ *  read is never satisfied: an unprovable age is not an old one.
+ */
+export type AgeObservation = AgeObservation_Serialize | AgeObservation_Deserialize;
+
+/**
+ *  What the age policy observed about a unit, and whether it is satisfied.
+ * 
+ *  The whole-tree newest timestamp is the fact, and the comparison against the
+ *  policy is recorded with it because it happened at a stated instant that a
+ *  later reader does not have. Construction goes through [`Self::evaluate`] so
+ *  the two can never disagree, and a unit whose newest timestamp could not be
+ *  read is never satisfied: an unprovable age is not an old one.
+ */
+export type AgeObservation_Deserialize = {
+	min_age_days: number,
+	newest_modified?: number | null,
+	satisfied: boolean,
+};
+
+/**
+ *  What the age policy observed about a unit, and whether it is satisfied.
+ * 
+ *  The whole-tree newest timestamp is the fact, and the comparison against the
+ *  policy is recorded with it because it happened at a stated instant that a
+ *  later reader does not have. Construction goes through [`Self::evaluate`] so
+ *  the two can never disagree, and a unit whose newest timestamp could not be
+ *  read is never satisfied: an unprovable age is not an old one.
+ */
+export type AgeObservation_Serialize = {
+	min_age_days: number,
+	newest_modified: number | null,
+	satisfied: boolean,
+};
+
 export type AgentActivitySnapshot = AgentActivitySnapshot_Serialize | AgentActivitySnapshot_Deserialize;
 
 export type AgentActivitySnapshot_Deserialize = {
@@ -695,6 +744,20 @@ export type CategoryResult_Deserialize = {
 	skipped_entry_count?: number,
 	/**  Retained items whose observation is not `Fresh`. */
 	incomplete_item_count?: number,
+	/**
+	 *  Observed and cleanable bytes per eligibility state.
+	 * 
+	 *  The buckets sum to `total_bytes` over the observed column, so a category
+	 *  whose cleanable total is small can always be explained by the states
+	 *  that hold the rest of the bytes.
+	 */
+	eligibility?: EligibilitySummary_Deserialize,
+	/**
+	 *  Units this category discovered but did not count again because an
+	 *  identical unit had already been counted.
+	 */
+	suppressed_duplicate_count?: number,
+	suppressed_duplicate_bytes?: number,
 };
 
 export type CategoryResult_Serialize = {
@@ -711,15 +774,40 @@ export type CategoryResult_Serialize = {
 	skipped_entry_count: number,
 	/**  Retained items whose observation is not `Fresh`. */
 	incomplete_item_count: number,
+	/**
+	 *  Observed and cleanable bytes per eligibility state.
+	 * 
+	 *  The buckets sum to `total_bytes` over the observed column, so a category
+	 *  whose cleanable total is small can always be explained by the states
+	 *  that hold the rest of the bytes.
+	 */
+	eligibility: EligibilitySummary_Serialize,
+	/**
+	 *  Units this category discovered but did not count again because an
+	 *  identical unit had already been counted.
+	 */
+	suppressed_duplicate_count: number,
+	suppressed_duplicate_bytes: number,
 };
 
 export type CleanEvent = CleanEvent_Serialize | CleanEvent_Deserialize;
 
-export type CleanEvent_Deserialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Deserialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never; total_targets?: never };
+export type CleanEvent_Deserialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; status: CleanStatus; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Deserialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; status?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total?: never; total_targets?: never };
 
-export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Serialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; success?: never; total?: never; total_targets?: never };
+export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; status: CleanStatus; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Serialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; status?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total?: never; total_targets?: never };
 
-export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "not_found" | "in_use" | "blacklisted" | "external_command_failed" | "unknown";
+export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "not_found" | "in_use" | "blacklisted" | 
+/**
+ *  The target matched structured state (a database, its companions, a
+ *  lock, a credential, configuration, a bundle, or an executable) that
+ *  generic cleanup never removes.
+ */
+"structured_store" | 
+/**
+ *  The target is now a link, a reparse point, a junction, or a mount
+ *  boundary: traversal and deletion stop there.
+ */
+"safety_boundary" | "external_command_failed" | "unknown";
 
 export type CleanItemResult = CleanItemResult_Serialize | CleanItemResult_Deserialize;
 
@@ -729,6 +817,12 @@ export type CleanItemResult_Deserialize = {
 	path: string,
 	status: CleanStatus,
 	success: boolean,
+	/**
+	 *  What the scan measured for this target. It is an expectation the plan
+	 *  was built from, never a measurement of what a run removed.
+	 */
+	estimated_bytes?: number,
+	/**  What this run actually reclaimed, measured after the mutation. */
 	bytes_reclaimed: number,
 	failure_reason: CleanFailureReason | null,
 	error_message: string | null,
@@ -740,6 +834,12 @@ export type CleanItemResult_Serialize = {
 	path: string,
 	status: CleanStatus,
 	success: boolean,
+	/**
+	 *  What the scan measured for this target. It is an expectation the plan
+	 *  was built from, never a measurement of what a run removed.
+	 */
+	estimated_bytes: number,
+	/**  What this run actually reclaimed, measured after the mutation. */
 	bytes_reclaimed: number,
 	failure_reason: CleanFailureReason | null,
 	error_message: string | null,
@@ -761,6 +861,11 @@ export type CleanResult_Deserialize = {
 	partial_count: number,
 	/**  Targets that reclaimed nothing. */
 	failed_count: number,
+	/**
+	 *  Targets that were not removed because there was nothing to remove:
+	 *  they were already absent, or the plan was replayed.
+	 */
+	skipped_count?: number,
 	items: CleanItemResult_Deserialize[],
 	actual_disk_free_delta: number | null,
 };
@@ -779,11 +884,26 @@ export type CleanResult_Serialize = {
 	partial_count: number,
 	/**  Targets that reclaimed nothing. */
 	failed_count: number,
+	/**
+	 *  Targets that were not removed because there was nothing to remove:
+	 *  they were already absent, or the plan was replayed.
+	 */
+	skipped_count: number,
 	items: CleanItemResult_Serialize[],
 	actual_disk_free_delta: number | null,
 };
 
-export type CleanStatus = "success" | "partial" | "failed";
+export type CleanStatus = 
+/**  The target's postcondition holds because this run removed it. */
+"success" | 
+/**
+ *  The target was not removed, and nothing about it was wrong: it was
+ *  already gone (a replayed plan, or a target another process removed),
+ *  or executing the plan would have deleted a different object.
+ */
+"skipped" | 
+/**  Some of the target was removed. */
+"partial" | "failed";
 
 export type CleanupDisposition = CleanupDisposition_Serialize | CleanupDisposition_Deserialize;
 
@@ -799,7 +919,99 @@ export type CleanupDisposition_Serialize = {
 	cleanable_bytes: number | null,
 };
 
-export type CleanupEligibility = "auto_cleanable" | "reviewable" | "blocked" | "advisory";
+/**
+ *  Whether a discovered unit may be cleaned, and by which action.
+ * 
+ *  A discovered unit is always representable; this type says what may be done
+ *  with it. `AutoCleanable` and `Reviewable` are the two cleanable states —
+ *  the first may be selected automatically, the second only by explicit user
+ *  selection. Everything else is inventory: visible, measured, and explained.
+ */
+export type CleanupEligibility = 
+/**
+ *  Safe to remove without asking: the catalog says so, the observation is
+ *  complete, and the age policy is satisfied.
+ */
+"auto_cleanable" | 
+/**
+ *  Removable only by explicit selection: a rebuild cost, a provider-owned
+ *  cache, or an incomplete observation.
+ */
+"reviewable" | 
+/**
+ *  Discovered, but not old enough yet. The bytes are real and reported;
+ *  the age policy that would authorize removal is not met.
+ */
+"recent" | 
+/**
+ *  Discovered, but the current settings refuse to clean a unit this
+ *  signature found (an opt-in scope that is switched off).
+ */
+"policy_gated" | 
+/**
+ *  Not Zenith's operation: an external manager or provider owns the
+ *  invalidation.
+ */
+"advisory" | "blocked";
+
+/**
+ *  What a plan authorizes doing to its targets.
+ * 
+ *  Preview and mutation are separate values rather than a flag on a mutation,
+ *  and permanent deletion is separate from a move to Trash, because "the user
+ *  looked at a projection of this plan" and "the bytes are gone" are different
+ *  claims. A plan that reaches a mutation primitive carrying [`Self::Preview`]
+ *  is a bug in the caller, and the executor refuses it rather than guessing.
+ */
+export type CleanupMode = 
+/**  Nothing is mutated: the plan is a projection the user reviews. */
+"preview" | 
+/**  Targets are removed from the filesystem. */
+"permanent_delete" | 
+/**  Targets are moved to the platform's recoverable location. */
+"trash";
+
+export type CleanupOwnership = {
+	owner: string,
+	confidence: OwnershipConfidence,
+};
+
+/**
+ *  One deletable object, with the root it was discovered under.
+ * 
+ *  `path` is where the unit lives; `root` is the configured path the signature
+ *  resolved. Keeping both means the execution guard can re-assert containment
+ *  ("this is still a child of the root that authorized it") instead of trusting
+ *  a path string the plan carried.
+ */
+export type CleanupUnit = {
+	kind: CleanupUnitKind,
+	root: string,
+	path: string,
+};
+
+/**
+ *  What kind of object a signature's cleanup unit is.
+ * 
+ *  The kind decides where the deletable boundary sits: a `FixedPath` signature
+ *  authorizes the configured path, a `ChildNamespace` signature authorizes the
+ *  children it enumerated under that path, and the two non-filesystem kinds
+ *  authorize no host path at all.
+ */
+export type CleanupUnitKind = 
+/**  The configured path is itself the deletable object. */
+"fixed_path" | 
+/**  Each direct child of the configured root is a deletable object. */
+"child_namespace" | 
+/**  A named disposable subtree inside an application-owned directory. */
+"named_subtree" | 
+/**
+ *  No host path: a provider CLI invalidates its own cache with fixed
+ *  arguments, and the path is only a staleness assertion.
+ */
+"provider_action" | 
+/**  No host path: a container runtime prunes the resources it owns. */
+"container_resource";
 
 export type ControlCenterQuickSummary = ControlCenterQuickSummary_Serialize | ControlCenterQuickSummary_Deserialize;
 
@@ -1202,6 +1414,76 @@ export type DockerVolumeItem_Serialize = {
 	is_in_use: boolean,
 };
 
+/**
+ *  Observed and cleanable bytes for one eligibility state.
+ * 
+ *  A breakdown is how a scan explains itself: the states sum to the observed
+ *  total, so a large "discovered" number can always be traced to the states
+ *  that hold the bytes and the reasons attached to them.
+ */
+export type EligibilityBucket = EligibilityBucket_Serialize | EligibilityBucket_Deserialize;
+
+/**
+ *  Observed and cleanable bytes for one eligibility state.
+ * 
+ *  A breakdown is how a scan explains itself: the states sum to the observed
+ *  total, so a large "discovered" number can always be traced to the states
+ *  that hold the bytes and the reasons attached to them.
+ */
+export type EligibilityBucket_Deserialize = {
+	eligibility: CleanupEligibility,
+	observed_bytes: number,
+	cleanable_bytes: number,
+	items: number,
+};
+
+/**
+ *  Observed and cleanable bytes for one eligibility state.
+ * 
+ *  A breakdown is how a scan explains itself: the states sum to the observed
+ *  total, so a large "discovered" number can always be traced to the states
+ *  that hold the bytes and the reasons attached to them.
+ */
+export type EligibilityBucket_Serialize = {
+	eligibility: CleanupEligibility,
+	observed_bytes: number,
+	cleanable_bytes: number,
+	items: number,
+};
+
+/**
+ *  The scan-policy fact that decides whether a discovered unit may be cleaned.
+ * 
+ *  Discovery and deletion permission are separate concerns: a scan can honestly
+ *  inventory storage that the current settings refuse to clean. Recording the
+ *  gate as a fact on the item (rather than filtering the item out at discovery
+ *  time) is what lets the interface say "found this, it is not eligible here,
+ *  and here is why".
+ */
+export type EligibilityGate = 
+/**  The current settings permit cleaning a unit this signature discovered. */
+"open" | 
+/**  The signature is opt-in, and the opt-in is off in the current settings. */
+"intensive_cleanup_disabled";
+
+/**  The complete, ordered breakdown every aggregate carries. */
+export type EligibilitySummary = EligibilitySummary_Serialize | EligibilitySummary_Deserialize;
+
+/**  The complete, ordered breakdown every aggregate carries. */
+export type EligibilitySummary_Deserialize = {
+	buckets: EligibilityBucket_Deserialize[],
+};
+
+/**  The complete, ordered breakdown every aggregate carries. */
+export type EligibilitySummary_Serialize = {
+	buckets: EligibilityBucket_Serialize[],
+};
+
+/**  The entry kind the caller observed, as far as the shared rule needs it. */
+export type EntryKind = "file" | "directory" | 
+/**  Neither a regular file nor a directory: a socket, a fifo, a device. */
+"other";
+
 export type EnvironmentReport = {
 	platform: PlatformKind,
 	fingerprint: string[],
@@ -1594,6 +1876,22 @@ export type ObservationScope = "subscription" | "api_key" | "project" | "organiz
 
 export type ObservationSourceKind = "live_authoritative" | "live_quota" | "local_estimate" | "credential_validated" | "manual";
 
+/**
+ *  Who is expected to own a discovered unit, and how strongly that is known.
+ * 
+ *  Ownership is a claim, not a measurement, so it carries its own confidence.
+ *  A catalog entry that names an owner states it; an entry that only names the
+ *  provider has it inferred from that provider; everything else is unknown, and
+ *  a message built from an unknown owner must not pretend otherwise.
+ */
+export type OwnershipConfidence = 
+/**  The catalog states the owner of this location. */
+"declared" | 
+/**  The owner is inferred from the provider the catalog named. */
+"inferred" | 
+/**  Nothing in the catalog identifies the owner. */
+"unknown";
+
 export type PlanPreview = PlanPreview_Serialize | PlanPreview_Deserialize;
 
 export type PlanPreview_Deserialize = {
@@ -1602,6 +1900,12 @@ export type PlanPreview_Deserialize = {
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Deserialize,
 	expires_at: number,
+	/**
+	 *  What executing this plan would do, stated rather than implied: a
+	 *  preview is a projection, and the mode is the difference between "the
+	 *  bytes are gone" and "the bytes are in the Trash".
+	 */
+	mode: CleanupMode,
 };
 
 export type PlanPreview_Serialize = {
@@ -1610,6 +1914,12 @@ export type PlanPreview_Serialize = {
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Serialize,
 	expires_at: number,
+	/**
+	 *  What executing this plan would do, stated rather than implied: a
+	 *  preview is a projection, and the mode is the difference between "the
+	 *  bytes are gone" and "the bytes are in the Trash".
+	 */
+	mode: CleanupMode,
 };
 
 export type PlanTargetPreview = PlanTargetPreview_Serialize | PlanTargetPreview_Deserialize;
@@ -2092,10 +2402,34 @@ export type SafetySnapshot_Serialize = {
 	status_message: string,
 };
 
+/**
+ *  A scan's progress, streamed one event at a time.
+ * 
+ *  `ItemFound` carries the measured item by value: the event exists to be
+ *  rendered once, and boxing it would add an allocation to every item a scan
+ *  discovers to save a `memcpy` on a value that is never stored in a
+ *  collection.
+ */
 export type ScanEvent = ScanEvent_Serialize | ScanEvent_Deserialize;
 
+/**
+ *  A scan's progress, streamed one event at a time.
+ * 
+ *  `ItemFound` carries the measured item by value: the event exists to be
+ *  rendered once, and boxing it would add an allocation to every item a scan
+ *  discovers to save a `memcpy` on a value that is never stored in a
+ *  collection.
+ */
 export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; scan_id?: never };
 
+/**
+ *  A scan's progress, streamed one event at a time.
+ * 
+ *  `ItemFound` carries the measured item by value: the event exists to be
+ *  rendered once, and boxing it would add an allocation to every item a scan
+ *  discovers to save a `memcpy` on a value that is never stored in a
+ *  collection.
+ */
 export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; scan_id?: never };
 
 export type ScanItem = ScanItem_Serialize | ScanItem_Deserialize;
@@ -2112,6 +2446,37 @@ export type ScanItem_Deserialize = {
 	description: string,
 	cache_metadata?: CacheMetadata,
 	disposition?: CleanupDisposition_Deserialize,
+	/**
+	 *  The deletable object this item describes, and the root it was found
+	 *  under.
+	 * 
+	 *  Defaulted rather than required so a scan persisted by an earlier build
+	 *  still deserializes; a unit with an empty path is not a target, and the
+	 *  planner refuses it instead of treating absence as permission.
+	 */
+	unit?: CleanupUnit,
+	/**  Who the catalog expects to own this location, and how strongly. */
+	ownership?: CleanupOwnership,
+	/**  The age policy's verdict, when the unit carries one. */
+	age?: AgeObservation_Deserialize | null,
+	/**
+	 *  The structured state the path was classified as, when it is one.
+	 * 
+	 *  Recorded at discovery so the disposition derivation and the execution
+	 *  guard agree about a path neither of them may delete, and so the reason
+	 *  reaches the interface instead of the item disappearing.
+	 */
+	structured_state?: StructuredStateKind | null,
+	/**
+	 *  What the scan found at the path: a file, a directory, or neither.
+	 * 
+	 *  The plan carries this observation forward so execution can tell "the
+	 *  approved object is still there" from "something else is at that path
+	 *  now", which is the difference between deleting and skipping.
+	 */
+	entry_kind?: EntryKind,
+	/**  The scan-policy gate that applied when this unit was discovered. */
+	gate?: EligibilityGate,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -2137,6 +2502,37 @@ export type ScanItem_Serialize = {
 	description: string,
 	cache_metadata: CacheMetadata,
 	disposition: CleanupDisposition_Serialize,
+	/**
+	 *  The deletable object this item describes, and the root it was found
+	 *  under.
+	 * 
+	 *  Defaulted rather than required so a scan persisted by an earlier build
+	 *  still deserializes; a unit with an empty path is not a target, and the
+	 *  planner refuses it instead of treating absence as permission.
+	 */
+	unit: CleanupUnit,
+	/**  Who the catalog expects to own this location, and how strongly. */
+	ownership: CleanupOwnership,
+	/**  The age policy's verdict, when the unit carries one. */
+	age: AgeObservation_Serialize | null,
+	/**
+	 *  The structured state the path was classified as, when it is one.
+	 * 
+	 *  Recorded at discovery so the disposition derivation and the execution
+	 *  guard agree about a path neither of them may delete, and so the reason
+	 *  reaches the interface instead of the item disappearing.
+	 */
+	structured_state: StructuredStateKind | null,
+	/**
+	 *  What the scan found at the path: a file, a directory, or neither.
+	 * 
+	 *  The plan carries this observation forward so execution can tell "the
+	 *  approved object is still there" from "something else is at that path
+	 *  now", which is the difference between deleting and skipping.
+	 */
+	entry_kind: EntryKind,
+	/**  The scan-policy gate that applied when this unit was discovered. */
+	gate: EligibilityGate,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -2170,6 +2566,14 @@ export type ScanResult_Deserialize = {
 	skipped_entry_count?: number,
 	/**  Retained items whose observation is not `Fresh`. */
 	incomplete_item_count?: number,
+	/**
+	 *  Observed and cleanable bytes per eligibility state, summed over the
+	 *  categories.
+	 */
+	eligibility?: EligibilitySummary_Deserialize,
+	/**  Units suppressed as duplicates of an already-counted unit. */
+	suppressed_duplicate_count?: number,
+	suppressed_duplicate_bytes?: number,
 };
 
 export type ScanResult_Serialize = {
@@ -2190,6 +2594,14 @@ export type ScanResult_Serialize = {
 	skipped_entry_count: number,
 	/**  Retained items whose observation is not `Fresh`. */
 	incomplete_item_count: number,
+	/**
+	 *  Observed and cleanable bytes per eligibility state, summed over the
+	 *  categories.
+	 */
+	eligibility: EligibilitySummary_Serialize,
+	/**  Units suppressed as duplicates of an already-counted unit. */
+	suppressed_duplicate_count: number,
+	suppressed_duplicate_bytes: number,
 };
 
 export type SelectedApplication = {
@@ -2211,6 +2623,29 @@ export type SelfCheckRow = {
 };
 
 export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";
+
+/**  What kind of structured state a path name identifies. */
+export type StructuredStateKind = 
+/**  A database file (`*.sqlite`, `*.db`, `*.realm`, LevelDB tables). */
+"database" | 
+/**
+ *  A file that only means something alongside a database: write-ahead logs,
+ *  shared-memory files, journals, and LevelDB manifests.
+ */
+"database_companion" | 
+/**
+ *  A lock, lease, or pid file: evidence that something else is using the
+ *  location right now.
+ */
+"lock" | 
+/**  Credentials, keys, tokens, and the directories that hold them. */
+"credential" | 
+/**  Configuration and preference state that outlives the cache around it. */
+"configuration" | 
+/**  An application, framework, or library bundle: an installable object. */
+"application_bundle" | 
+/**  An executable image. */
+"executable";
 
 export type TrashItemResult = {
 	item_id: string,

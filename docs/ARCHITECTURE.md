@@ -286,8 +286,8 @@ persisted settings snapshot
    standard | intensive cleanup
                  |
                  v
-registered signatures -- mode-aware filtering
-        / domain adapters
+registered signatures -- scope decides discovery
+        / domain adapters -- scan-policy gate decides eligibility
                  |
                  v
           Rust ScanEngine
@@ -316,6 +316,14 @@ The frontend can request a plan only for item IDs in the current backend scan.
 Plans expire after five minutes and are removed before execution, so they cannot
 be replayed. `CleanupService` owns that lifecycle end to end; the IPC layer
 submits a scan ID, selected item IDs, and an opaque plan ID and nothing else.
+
+A plan states what it authorizes. `mode` is `permanent_delete` for generic
+cleanup (a move to the Trash is a different plan kind with different evidence),
+and the application service refuses to execute a plan whose mode does not
+mutate. Every target carries the scan-time expectations the guard re-asserts —
+the unit that authorized the path, the entry kind, the owner, and the
+catalog-declared process policy — so execution judges the authorized object
+rather than re-reading the catalog.
 
 Execution classifies each target into the operation it authorizes before
 anything mutates:
@@ -354,22 +362,77 @@ file's logical capacity. It never enumerates other group containers, never
 auto-selects the item, and the generic planner rejects the observation before
 signature resolution.
 
+### Discovery, eligibility, and cleanup units
+
+A scan answers two questions separately, because a cleaner that conflates them
+either hides storage it found or claims permission it does not have.
+
+**Discovery** is what a signature's scope looks at. The registry returns the
+signatures a scan may run — a signature whose scope is off is not discovered at
+all — and returns them most-specific-first so two signatures that describe the
+same location are visited in a deterministic order.
+
+**Eligibility** is what may be cleaned. Every discovered unit carries its own
+`CleanupDisposition`, derived from facts the item records and nothing else:
+
+| state | meaning |
+| --- | --- |
+| `auto_cleanable` | safe to remove without asking |
+| `reviewable` | removable only by explicit selection (rebuild cost, provider-owned cache, incomplete observation) |
+| `recent` | discovered, but the age policy is not satisfied yet |
+| `policy_gated` | discovered, but the current settings do not clean a unit this signature found |
+| `advisory` | not Zenith's operation: an external manager owns the invalidation |
+| `blocked` | blocked or inaccessible |
+
+Only `auto_cleanable` and `reviewable` carry cleanable bytes, so
+`selected_bytes <= cleanable_bytes <= observed_bytes` holds for every total the
+interface shows. The items that are *not* cleanable keep their observed bytes,
+their reason, and their state: `CategoryResult` and `ScanResult` carry an
+eligibility breakdown whose observed column sums to `total_bytes`, which is what
+makes "12.4 GB discovered, 3.1 GB cleanable" an explanation rather than a
+discrepancy.
+
+The deletable object is a `CleanupUnit`: the configured path itself
+(`fixed_path`), each enumerated child of a configured root (`child_namespace`), a
+named disposable subtree (`named_subtree`), a provider's own invalidation
+(`provider_action`), or a container runtime's resource (`container_resource`).
+A unit declares the root it was found under, so the planner and the execution
+guard can re-assert containment, and it normalizes to an identity that folds
+case only on a filesystem that does. Two signatures that name the same location
+therefore produce one unit: the first one wins, the duplicate is counted once,
+and the suppressed bytes are reported instead of silently dropped.
+
+Items also carry what the catalog knows about ownership (`owner` and how
+strongly it is known), the age policy's verdict, and the structured-state
+classification of the path. None of it is presentation-only: the planner refuses
+an item whose unit, ownership, or entry kind contradicts the signature, and the
+executor re-derives the same facts from the filesystem before mutating.
+
 ### Standard and intensive scan scopes
 
 Cleanup scope is a backend decision. `start_scan` snapshots the persisted
 `intensive_cleanup` preference together with excluded signature IDs before
-moving work to the blocking scanner thread. `SignatureRegistry` then omits
-signatures marked `intensive_only` in standard mode and includes them in
-intensive mode. The frontend cannot promote an individual signature into the
-broader scope.
+moving work to the blocking scanner thread. The frontend cannot promote an
+individual signature into the broader scope.
+
+A signature declares how the scope treats it through `discovery`. A
+`mode_gated` signature is only looked at while its scope is enabled. An
+`always` signature is inventoried in either mode, and the scope decides
+eligibility: the units it finds are discovered, measured, reported as
+`policy_gated`, and never selectable. Both the discovery gate and the
+eligibility gate are catalog declarations, so widening an inventory is a
+deliberate statement about a signature rather than a side effect of a settings
+toggle. Every shipped signature is still `mode_gated`; the generic macOS and
+Windows roots that opt into always-on discovery do so in their own change.
 
 Intensive signatures remain declarative TOML entries and use the same scan,
 planning, and execution pipeline as standard signatures. Broad cache and log
 roots are never emitted as a single recursive target. The scanner considers
-only their direct children, rejects symlinks and protected prefixes, and emits
-a child only when the newest timestamp in its candidate tree satisfies the
-signature's inactivity threshold. Cleanup repeats that tree-age check directly
-before deletion.
+only their direct children, rejects symlinks and protected prefixes, and ages
+each child against the signature's inactivity threshold. An `always`-discovered
+child that is too new is reported as `recent` with the bytes it holds rather
+than dropped from the scan. Cleanup repeats that tree-age check directly before
+deletion, using the same rule the scan evaluated.
 
 The initial intensive scope covers stale third-party children of
 `~/Library/Caches` and stale application-log groups under `~/Library/Logs`.
@@ -384,8 +447,8 @@ whole-tree inactivity threshold as every other temporary candidate.
 
 One predicate decides what a scan offers and what every surface counts. Items
 whose observation cannot support a cleanup contribute zero bytes to the risk
-buckets, the category totals, the scan totals, and the selection summary, so a
-category total always equals the sum of its buckets and an inaccessible item is
+buckets, the cleanable totals, and the selection summary, so a category's
+cleanable total always equals the sum of its buckets and an ineligible item is
 never selectable. A completed partial scan is explained once, through the
 item's own observation quality and the scan's durable `incomplete_reasons` and
 counters — never through a second, destructive error surface alongside a scan

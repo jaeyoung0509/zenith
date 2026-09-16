@@ -172,6 +172,7 @@ mod tests {
             expected_reclaim_bytes: 0,
             risk: RiskSummary::default(),
             created_at,
+            mode: crate::models::CleanupMode::PermanentDelete,
         }
     }
 

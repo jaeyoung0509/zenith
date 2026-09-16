@@ -16,6 +16,12 @@ impl SignatureLoader {
     }
 
     /// Loads signatures from a TOML string.
+    ///
+    /// A signature that contradicts itself is a load failure rather than a
+    /// dropped entry: the catalog is the only statement of what may be cleaned,
+    /// and a manifest that half-loads is a catalog nobody can reason about. An
+    /// id that is missing entirely is the one exception — the entry names
+    /// nothing to report and nothing to register.
     pub fn load_str(content: &str) -> Result<Vec<Signature>, ZenithError> {
         let manifest: SignatureManifest = toml::from_str(content)
             .map_err(|e| ZenithError::Io(format!("Failed to parse TOML signature: {}", e)))?;
@@ -25,6 +31,7 @@ impl SignatureLoader {
             if sig.id.trim().is_empty() {
                 continue;
             }
+            sig.validate()?;
             valid_signatures.push(sig);
         }
 

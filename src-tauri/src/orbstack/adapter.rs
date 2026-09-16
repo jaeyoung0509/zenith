@@ -1,5 +1,6 @@
 use crate::models::{
-    derive_cleanup_disposition, Category, CleanupEligibility, FileSize, ObservationQuality,
+    derive_cleanup_disposition, Category, CleanupEligibility, CleanupOwnership, CleanupUnit,
+    CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind, FileSize, ObservationQuality,
     RiskTier, ScanItem,
 };
 use std::fs;
@@ -61,13 +62,13 @@ impl OrbStackAdapter {
             .map(|duration| duration.as_secs());
 
         let size = FileSize::new(logical, Some(allocated));
-        let disposition = derive_cleanup_disposition(
+        let disposition = derive_cleanup_disposition(DispositionFacts::new(
             RiskTier::Manual,
             ObservationQuality::Fresh,
             &Default::default(),
             &size,
             None,
-        );
+        ));
         let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable;
 
         Some(ScanItem {
@@ -83,13 +84,23 @@ impl OrbStackAdapter {
                 "Active container and Linux VM data. Inspect or compact it in OrbStack; Zenith will not delete it."
                     .to_string(),
             cache_metadata: Default::default(),
+            disposition,
+            unit: CleanupUnit::new(
+                CleanupUnitKind::ContainerResource,
+                path.to_string_lossy().to_string(),
+                path.to_string_lossy().to_string(),
+            ),
+            ownership: CleanupOwnership::unknown(),
+            age: None,
+            structured_state: None,
+            entry_kind: EntryKind::File,
+            gate: EligibilityGate::Open,
             is_selected,
             last_modified,
             exists: true,
             quality: ObservationQuality::Fresh,
             incomplete_reason: None,
             skipped_entry_count: 0,
-            disposition,
         })
     }
 }

@@ -223,6 +223,21 @@ safety conventions below when changing Zenith.
 - Tool-owned shared caches must use a backend-owned fixed-argument provider or
   remain advisory. `external_command` is never a filesystem-delete fallback;
   rediscover and validate the provider path immediately before mutation.
+- Discovery never implies deletion permission. A discovered unit is reported
+  with its observed bytes and an eligibility state even when it is recent,
+  policy-gated, advisory, or blocked; never drop it to keep a total tidy. Only
+  `AutoCleanable` is pre-selected, and `selected_bytes <= cleanable_bytes <=
+  observed_bytes` holds for every total the interface shows.
+- A cleanup unit is the object a plan authorizes: the configured path, an
+  enumerated child, or a named subtree. Age policies, structured-state
+  classification, and process guards belong to that unit, and the execution
+  guard re-derives all of them from the filesystem immediately before mutating.
+  Evaluate an age policy through `AgeObservation::evaluate` so the scan and the
+  guard cannot drift.
+- Generic cleanup never removes structured state: databases, their WAL/SHM
+  companions, locks, credentials, configuration, bundles, and executables are
+  refused by the planner and skipped by the execution guard. A provider that
+  owns a disposable store needs its own adapter.
 
 ## Product and design
 

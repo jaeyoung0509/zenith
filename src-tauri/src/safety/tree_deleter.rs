@@ -23,6 +23,7 @@ pub struct TreeDeleteReport {
     /// Raw OS error codes recorded alongside `errors`, in push order, so
     /// failure classification can use the code instead of localized text.
     pub os_error_codes: Vec<i32>,
+    pub(crate) protect_structured_state: bool,
 }
 
 impl TreeDeleteReport {
@@ -297,12 +298,25 @@ impl WindowsDeleteHandle {
 }
 
 impl SafeTreeDeleter {
+    #[cfg(test)]
     fn delete_contents_unchecked(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        let mut report = TreeDeleteReport::default();
+        Self::delete_contents_with_policy(root, exclusions, environment, false)
+    }
+
+    fn delete_contents_with_policy(
+        root: &Path,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+        protect_structured_state: bool,
+    ) -> TreeDeleteReport {
+        let mut report = TreeDeleteReport {
+            protect_structured_state,
+            ..Default::default()
+        };
         let root_metadata = match fs::symlink_metadata(root) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return report,
@@ -391,12 +405,25 @@ impl SafeTreeDeleter {
         report
     }
 
+    #[cfg(test)]
     fn delete_path_unchecked(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        let mut report = TreeDeleteReport::default();
+        Self::delete_path_with_policy(root, exclusions, environment, false)
+    }
+
+    fn delete_path_with_policy(
+        root: &Path,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+        protect_structured_state: bool,
+    ) -> TreeDeleteReport {
+        let mut report = TreeDeleteReport {
+            protect_structured_state,
+            ..Default::default()
+        };
         match fs::symlink_metadata(root) {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => return report,
@@ -430,7 +457,12 @@ impl SafeTreeDeleter {
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
         let auth = authority.into();
-        Self::delete_contents_unchecked(auth.path(), auth.exclusions(), environment)
+        Self::delete_contents_with_policy(
+            auth.path(),
+            auth.exclusions(),
+            environment,
+            auth.protect_structured_state(),
+        )
     }
 
     /// Mutates the filesystem by deleting a path, requiring a verified deletion authority.
@@ -439,7 +471,12 @@ impl SafeTreeDeleter {
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
         let auth = authority.into();
-        Self::delete_path_unchecked(auth.path(), auth.exclusions(), environment)
+        Self::delete_path_with_policy(
+            auth.path(),
+            auth.exclusions(),
+            environment,
+            auth.protect_structured_state(),
+        )
     }
 
     /// Deletes directory children using the already-verified parent directory
@@ -503,6 +540,21 @@ impl SafeTreeDeleter {
                     continue;
                 }
             };
+
+            // The preflight ran before deletion began. Reclassify each entry
+            // here as well so a newly inserted structured file is never unlinked.
+            if let Some((kind, _)) = report
+                .protect_structured_state
+                .then(|| super::structured_state_at(&child_path))
+                .flatten()
+            {
+                report.errors.push(format!(
+                    "{} is {}; refusing structured state",
+                    child_path.display(),
+                    kind.display_name()
+                ));
+                continue;
+            }
 
             if let Err(error) = Self::validate_verified_scope(&child_path, verified_root) {
                 report.errors.push(error);
@@ -668,6 +720,19 @@ impl SafeTreeDeleter {
                 return;
             }
         };
+
+        if let Some((kind, _)) = report
+            .protect_structured_state
+            .then(|| super::structured_state_at(path))
+            .flatten()
+        {
+            report.errors.push(format!(
+                "{} is {}; refusing structured state",
+                path.display(),
+                kind.display_name()
+            ));
+            return;
+        }
 
         if let Err(error) = Self::validate_verified_scope(path, verified_root) {
             report.errors.push(error);

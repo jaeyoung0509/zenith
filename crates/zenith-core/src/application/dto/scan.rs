@@ -8,8 +8,15 @@
 use crate::domain::{Category, ScanItem, ScanResult};
 use serde::{Deserialize, Serialize};
 
+/// A scan's progress, streamed one event at a time.
+///
+/// `ItemFound` carries the measured item by value: the event exists to be
+/// rendered once, and boxing it would add an allocation to every item a scan
+/// discovers to save a `memcpy` on a value that is never stored in a
+/// collection.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum ScanEvent {
     Started {
         scan_id: String,

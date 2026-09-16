@@ -34,6 +34,16 @@
       .toSorted((left, right) => right.total_bytes - left.total_bytes)
   );
 
+  // Detected bytes the scan reports but will not remove, summed over the
+  // eligibility states. Stated next to the detected total so the figure never
+  // stands without saying how much of it is not cleanable.
+  let notCleanableBytes = $derived.by(() =>
+    (scanStore.lastScan?.eligibility?.buckets ?? []).reduce(
+      (sum, bucket) => sum + Math.max(0, bucket.observed_bytes - bucket.cleanable_bytes),
+      0
+    )
+  );
+
   async function refresh() {
     if (isLoading) return;
     isLoading = true;
@@ -159,7 +169,15 @@
         <h3 class="text-sm font-semibold">Cleanup Opportunities</h3>
         <p class="mt-0.5 text-caption text-muted-foreground">Largest detected categories first</p>
       </div>
-      <span class="font-mono text-xs text-muted-foreground">{formatBytes(scanStore.lastScan?.total_bytes ?? 0)} detected</span>
+      <span class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+        <span>{formatBytes(scanStore.lastScan?.total_bytes ?? 0)} detected</span>
+        {#if notCleanableBytes > 0}
+          <span
+            class="text-caption"
+            title="Discovered bytes Zenith will not remove with the current settings"
+          >· {formatBytes(notCleanableBytes)} not cleanable</span>
+        {/if}
+      </span>
     </div>
     <Card class="divide-y divide-border/60 overflow-hidden">
       {#each opportunities as category (category.category)}

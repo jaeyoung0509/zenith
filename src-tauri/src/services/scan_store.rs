@@ -96,6 +96,9 @@ mod tests {
             quality: crate::models::ObservationQuality::Fresh,
             skipped_entry_count: 0,
             incomplete_item_count: 0,
+            eligibility: Default::default(),
+            suppressed_duplicate_count: 0,
+            suppressed_duplicate_bytes: 0,
         }
     }
 
