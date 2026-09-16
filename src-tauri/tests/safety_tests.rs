@@ -900,7 +900,7 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
 }
 
 #[test]
-fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
+fn recursive_delete_refuses_a_unit_with_nested_protected_state() {
     let dir = tempdir().unwrap();
     let cache_root = dir.path().join("cache");
     let nested = cache_root.join("nested");
@@ -914,19 +914,39 @@ fn recursive_delete_preserves_nested_git_and_declared_exclusions() {
 
     let exclusions = vec![excluded.to_string_lossy().into_owned()];
     let environment = PlatformEnvironment::native();
-    let validated = validated_filesystem_target(
-        &cache_root,
-        CleanStrategy::DeleteContents,
-        &exclusions,
-        &environment,
-    );
-    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
-    assert!(report.is_success());
+    let target = DeleteTarget {
+        item_id: "protected-cache".into(),
+        signature_id: "test.protected-cache".into(),
+        name: "Protected cache".into(),
+        path: cache_root.clone(),
+        strategy: CleanStrategy::DeleteContents,
+        expected_bytes: 5,
+        risk: RiskTier::Safe,
+        identity: ToctouGuard::capture(&cache_root),
+        exclusions,
+        min_age_days: None,
+        unit: CleanupUnit::fixed_path(cache_root.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+    match SafetyValidator::revalidate(&target, &environment) {
+        RevalidationOutcome::Skipped(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::StructuredStore)
+            );
+        }
+        other => panic!("nested protected state must skip the whole unit: {other:?}"),
+    }
 
     assert!(cache_root.exists());
     assert!(git.join("config").exists());
     assert!(excluded.exists());
-    assert!(!removable.exists());
+    assert!(
+        removable.exists(),
+        "no sibling may be removed before preflight ends"
+    );
 }
 
 #[cfg(unix)]
@@ -2008,6 +2028,127 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
     let text = serialized.to_string();
     assert!(!text.contains(&cache.to_string_lossy().into_owned()));
     assert!(!text.contains("strategy"));
+
+    for mode in [CleanupMode::Preview, CleanupMode::Trash] {
+        let mut refused_plan = plan.clone();
+        refused_plan.mode = mode;
+        let result = CleanExecutor::execute(refused_plan, &native_environment(), |_| {});
+        assert_eq!(result.failed_count, 1, "{mode:?} must be refused");
+        assert_eq!(result.total_reclaimed_bytes, 0);
+        assert!(
+            cache.join("payload.bin").exists(),
+            "{mode:?} mutated the target"
+        );
+    }
+}
+
+#[test]
+fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
+    let fixture = tempdir().expect("fixture");
+    let cache = fixture.path().join("ordinary-cache");
+    fs::create_dir(&cache).unwrap();
+    let disposable = cache.join("disposable.bin");
+    fs::write(&disposable, b"keep too").unwrap();
+    let nested = cache.join("session.sqlite");
+    fs::write(&nested, b"database").unwrap();
+
+    let mut registry = SignatureRegistry::new();
+    registry.register(Signature {
+        id: "test.nested-structured".into(),
+        name: "Ordinary cache".into(),
+        category: Category::System,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteContents,
+        paths: vec![cache.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "test fixture".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
+        platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
+        provider: String::new(),
+        management_mode: Default::default(),
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+        reclaimable_is_lower_bound: false,
+    });
+    let mut item = ScanItem::mock(
+        "ordinary-cache",
+        "test.nested-structured",
+        "Ordinary cache",
+        Category::System,
+        RiskTier::Safe,
+        cache.to_string_lossy().into_owned(),
+        FileSize::new(16, Some(16)),
+        2,
+    );
+    item.is_selected = true;
+    let error = SafetyPlanner::create_plan(&[item], &registry)
+        .expect_err("nested structured state must be rejected before confirmation");
+    assert!(
+        matches!(&error, ZenithError::InvalidPlan(message) if message.contains("session.sqlite"))
+    );
+
+    let plan = DeletePlan {
+        id: uuid::Uuid::new_v4(),
+        scan_id: "scan-nested-structured".into(),
+        targets: vec![DeleteTarget {
+            item_id: "ordinary-cache".into(),
+            signature_id: "test.nested-structured".into(),
+            name: "Ordinary cache".into(),
+            path: cache.clone(),
+            strategy: CleanStrategy::DeleteContents,
+            expected_bytes: 16,
+            risk: RiskTier::Safe,
+            identity: ToctouGuard::capture(&cache),
+            exclusions: vec![],
+            min_age_days: None,
+            unit: CleanupUnit::fixed_path(cache.to_string_lossy().into_owned()),
+            target_kind: EntryKind::Directory,
+            owner: CleanupOwnership::unknown(),
+            process_guard: RunningProcessPolicy::none(),
+        }],
+        expected_reclaim_bytes: 16,
+        risk: zenith_lib::models::RiskSummary::default(),
+        created_at: 0,
+        mode: CleanupMode::PermanentDelete,
+    };
+
+    let result = CleanExecutor::execute(plan, &native_environment(), |_| {});
+    assert_eq!(result.skipped_count, 1);
+    assert_eq!(
+        result.items[0].failure_reason,
+        Some(CleanFailureReason::StructuredStore)
+    );
+    assert_eq!(result.total_reclaimed_bytes, 0);
+    assert!(nested.exists());
+    assert!(disposable.exists(), "preflight must precede every mutation");
+}
+
+#[test]
+fn tree_deleter_refuses_structured_state_added_after_validation() {
+    let fixture = tempdir().expect("fixture");
+    let cache = fixture.path().join("ordinary-cache");
+    fs::create_dir(&cache).unwrap();
+    let environment = native_environment();
+    let validated =
+        validated_filesystem_target(&cache, CleanStrategy::DeleteContents, &[], &environment);
+
+    let inserted = cache.join("config.json");
+    fs::write(&inserted, b"configuration").unwrap();
+    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
+    assert!(!report.is_success());
+    assert!(report
+        .errors
+        .iter()
+        .any(|error| error.contains("structured state")));
+    assert!(inserted.exists());
 }
 
 #[cfg(unix)]

@@ -2,28 +2,67 @@ use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
-    Category, CategoryResult, CleanupUnitIdentity, EligibilitySummary, ObservationQuality,
-    PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult,
+    Category, CategoryResult, CleanupUnitIdentity, EligibilitySummary, FileIdentity,
+    ObservationQuality, PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult,
 };
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use uuid::Uuid;
-use zenith_platform::path_algebra::PathFlavor;
 use zenith_platform::PlatformEnvironment;
 
-/// Whether the scanned filesystem folds case, so unit identity is decided by
-/// the same rule the filesystem uses.
-fn path_identity(environment: &PlatformEnvironment) -> PathIdentity {
-    match environment.flavor() {
-        PathFlavor::Windows => PathIdentity::CaseInsensitive,
-        PathFlavor::Posix => PathIdentity::CaseSensitive,
+pub struct ScanEngine;
+
+/// Resolve the actual directory entry for a spelling that reached `entity`.
+/// On a case-folding volume, `pip` can open an entry stored as `Pip`; on a
+/// case-sensitive volume both spellings may be separate hardlinks to one inode.
+fn actual_entry_name(path: &Path, entity: FileIdentity) -> Option<OsString> {
+    let requested = path.file_name()?;
+    let mut folded_match = None;
+    for entry in std::fs::read_dir(path.parent()?).ok()?.flatten() {
+        let name = entry.file_name();
+        if name != requested
+            && !name
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&requested.to_string_lossy())
+        {
+            continue;
+        }
+        let matches_entity = crate::safety::ToctouGuard::capture(&entry.path())
+            .is_some_and(|identity| identity.entity() == entity);
+        if !matches_entity {
+            continue;
+        }
+        if name == requested {
+            return Some(name);
+        }
+        if folded_match.is_some() {
+            return None;
+        }
+        folded_match = Some(name);
     }
+    folded_match
 }
 
-pub struct ScanEngine;
+fn same_directory_entry(first: &Path, second: &Path, entity: FileIdentity) -> bool {
+    let parents_match = first
+        .parent()
+        .and_then(crate::safety::ToctouGuard::capture)
+        .zip(
+            second
+                .parent()
+                .and_then(crate::safety::ToctouGuard::capture),
+        )
+        .is_some_and(|(left, right)| left.entity().same_entity(right.entity()));
+    parents_match
+        && actual_entry_name(first, entity)
+            .zip(actual_entry_name(second, entity))
+            .is_some_and(|(left, right)| left == right)
+}
 
 fn aggregate_quality(
     qualities: impl IntoIterator<Item = ObservationQuality>,
@@ -57,19 +96,18 @@ struct CategoryAccumulator {
     rebuild_bytes: u64,
     manual_bytes: u64,
     eligibility: EligibilitySummary,
-    identity: PathIdentity,
     suppressed_duplicate_count: u64,
     suppressed_duplicate_bytes: u64,
 }
 
 impl Default for CategoryAccumulator {
     fn default() -> Self {
-        Self::new(PathIdentity::CaseSensitive)
+        Self::new()
     }
 }
 
 impl CategoryAccumulator {
-    fn new(identity: PathIdentity) -> Self {
+    fn new() -> Self {
         Self {
             items: Vec::new(),
             total_bytes: 0,
@@ -78,7 +116,6 @@ impl CategoryAccumulator {
             rebuild_bytes: 0,
             manual_bytes: 0,
             eligibility: EligibilitySummary::default(),
-            identity,
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
         }
@@ -96,6 +133,7 @@ impl CategoryAccumulator {
         &mut self,
         item: ScanItem,
         seen_units: &mut HashSet<CleanupUnitIdentity>,
+        seen_entities: &mut HashMap<FileIdentity, Vec<PathBuf>>,
     ) -> Option<&ScanItem> {
         let item = item.with_derived_disposition();
         let bytes = item.cleanable_bytes();
@@ -107,8 +145,25 @@ impl CategoryAccumulator {
             return None;
         }
 
-        let unit = item.unit_identity(self.identity);
-        if !seen_units.insert(unit) {
+        // Text is a fallback for paths without a stable OS identity. Path
+        // syntax alone says nothing about the mounted volume's case behavior.
+        let unit = item.unit_identity(PathIdentity::CaseSensitive);
+        let entity = item
+            .unit
+            .kind
+            .is_filesystem()
+            .then(|| crate::safety::ToctouGuard::capture(Path::new(&item.unit.path)))
+            .flatten()
+            .map(|identity| identity.entity())
+            .filter(|entity| !entity.is_unknown());
+        let duplicate_entity = entity.is_some_and(|entity| {
+            seen_entities.get(&entity).is_some_and(|paths| {
+                paths
+                    .iter()
+                    .any(|seen| same_directory_entry(seen, Path::new(&item.unit.path), entity))
+            })
+        });
+        if seen_units.contains(&unit) || duplicate_entity {
             self.suppressed_duplicate_count += 1;
             self.suppressed_duplicate_bytes += observed;
             crate::diagnostics::log_error(
@@ -119,6 +174,13 @@ impl CategoryAccumulator {
                 ),
             );
             return None;
+        }
+        seen_units.insert(unit);
+        if let Some(entity) = entity {
+            seen_entities
+                .entry(entity)
+                .or_default()
+                .push(PathBuf::from(&item.unit.path));
         }
 
         self.total_bytes += observed;
@@ -248,6 +310,7 @@ impl ScanEngine {
         // One identity set for the whole scan: a unit two signatures both found
         // is counted once, whichever category it was found under.
         let mut seen_units: HashSet<CleanupUnitIdentity> = HashSet::new();
+        let mut seen_entities: HashMap<FileIdentity, Vec<PathBuf>> = HashMap::new();
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
         let directory_pool = shared_scan_pool();
@@ -260,7 +323,7 @@ impl ScanEngine {
 
             on_event(ScanEvent::CategoryStarted { category });
 
-            let mut accumulator = CategoryAccumulator::new(path_identity(environment));
+            let mut accumulator = CategoryAccumulator::new();
 
             // 1. Scan filesystem signatures for this category
             // Discovery and eligibility are decided separately: the registry
@@ -284,7 +347,9 @@ impl ScanEngine {
                     gate,
                 );
                 for item in items {
-                    if let Some(retained) = accumulator.push(item, &mut seen_units) {
+                    if let Some(retained) =
+                        accumulator.push(item, &mut seen_units, &mut seen_entities)
+                    {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -299,7 +364,9 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) = accumulator.push(item, &mut seen_units) {
+                    if let Some(retained) =
+                        accumulator.push(item, &mut seen_units, &mut seen_entities)
+                    {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -317,7 +384,9 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) = accumulator.push(item, &mut seen_units) {
+                    if let Some(retained) =
+                        accumulator.push(item, &mut seen_units, &mut seen_entities)
+                    {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -408,11 +477,13 @@ impl ScanEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_quality, ScanEngine};
+    use super::{aggregate_quality, same_directory_entry, CategoryAccumulator, ScanEngine};
     use crate::models::{
-        Category, CleanStrategy, ObservationQuality, RiskTier, ScanEvent, Signature,
+        Category, CleanStrategy, FileSize, ObservationQuality, RiskTier, ScanEvent, ScanItem,
+        Signature,
     };
     use crate::signatures::SignatureRegistry;
+    use std::collections::HashSet;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use zenith_platform::path_algebra::PathFlavor;
@@ -528,6 +599,80 @@ mod tests {
         assert_eq!(developer.suppressed_duplicate_bytes, 8_192);
         assert_eq!(result.suppressed_duplicate_count, 1);
         assert_eq!(result.suppressed_duplicate_bytes, 8_192);
+    }
+
+    #[test]
+    fn distinct_hardlinks_remain_distinct_cleanup_units() {
+        let fixture = tempfile::tempdir().unwrap();
+        let first = fixture.path().join("Pip");
+        let alias = fixture.path().join("pip-alias");
+        std::fs::write(&first, b"shared bytes").unwrap();
+        std::fs::hard_link(&first, &alias).unwrap();
+
+        let mut accumulator = CategoryAccumulator::new();
+        let mut paths = HashSet::new();
+        let mut entities = std::collections::HashMap::new();
+        for (index, path) in [&first, &alias].iter().enumerate() {
+            let mut item = ScanItem::mock(
+                format!("duplicate-{index}"),
+                "test.duplicate",
+                "Cache",
+                Category::Developer,
+                RiskTier::Safe,
+                path.to_string_lossy().into_owned(),
+                FileSize::new(12, Some(12)),
+                1,
+            );
+            item.entry_kind = crate::models::EntryKind::File;
+            accumulator.push(item, &mut paths, &mut entities);
+        }
+        assert_eq!(accumulator.items.len(), 2);
+        assert_eq!(accumulator.suppressed_duplicate_count, 0);
+    }
+
+    #[test]
+    fn directory_entry_identity_follows_the_actual_volume() {
+        let fixture = tempfile::tempdir().unwrap();
+        let stored = fixture.path().join("Pip");
+        let alternate = fixture.path().join("pip");
+        std::fs::create_dir(&stored).unwrap();
+        let entity = crate::safety::ToctouGuard::capture(&stored)
+            .expect("directory identity")
+            .entity();
+
+        if alternate.exists() {
+            assert!(same_directory_entry(&stored, &alternate, entity));
+        } else {
+            std::fs::create_dir(&alternate).unwrap();
+            assert!(!same_directory_entry(&stored, &alternate, entity));
+        }
+
+        let mut accumulator = CategoryAccumulator::new();
+        let mut paths = HashSet::new();
+        let mut entities = std::collections::HashMap::new();
+        for (index, path) in [&stored, &alternate].iter().enumerate() {
+            let item = ScanItem::mock(
+                format!("case-{index}"),
+                "test.case",
+                "Cache",
+                Category::Developer,
+                RiskTier::Safe,
+                path.to_string_lossy().into_owned(),
+                FileSize::new(12, Some(12)),
+                1,
+            );
+            accumulator.push(item, &mut paths, &mut entities);
+        }
+        let expected_units = if entity.same_entity(
+            crate::safety::ToctouGuard::capture(&alternate)
+                .expect("alternate identity")
+                .entity(),
+        ) {
+            1
+        } else {
+            2
+        };
+        assert_eq!(accumulator.items.len(), expected_units);
     }
 
     /// The breakdown explains the total: every observed byte lands in exactly

@@ -3,7 +3,7 @@ use crate::docker::DockerAdapter;
 use crate::metrics::DiskMetricsCollector;
 use crate::models::{
     CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanStrategy,
-    CleanupOperation, DeletePlan, DeleteTarget,
+    CleanupMode, CleanupOperation, DeletePlan, DeleteTarget,
 };
 use crate::safety::SafeTreeDeleter;
 use std::time::SystemTime;
@@ -117,7 +117,23 @@ impl CleanExecutor {
                 total: total_count,
             });
 
-            let result = Self::clean_target(target, environment);
+            // The executor is the destructive boundary. A future caller may
+            // build a Preview or Trash plan without passing through the current
+            // service, so only the implemented deletion mode may reach an adapter.
+            let result = if plan.mode == CleanupMode::PermanentDelete {
+                Self::clean_target(target, environment)
+            } else {
+                item_result(
+                    target,
+                    CleanStatus::Failed,
+                    Some(CleanFailureReason::Unknown),
+                    0,
+                    Some(format!(
+                        "{} is not implemented by this executor; refusing to mutate",
+                        plan.mode.display_name()
+                    )),
+                )
+            };
 
             match result.status {
                 CleanStatus::Success | CleanStatus::Partial => {

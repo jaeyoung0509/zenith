@@ -197,6 +197,29 @@ impl SafetyPlanner {
                         kind.display_name()
                     )));
                 }
+                if matches!(
+                    strategy,
+                    CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
+                ) && path.is_dir()
+                {
+                    match crate::safety::validator::structured_descendant(&path) {
+                        Ok(Some((nested, kind))) => {
+                            return Err(ZenithError::InvalidPlan(format!(
+                                "`{}` contains {} ({}); generic cleanup cannot remove this unit",
+                                item.name,
+                                nested.display(),
+                                kind.display_name()
+                            )));
+                        }
+                        Err(error) => {
+                            return Err(ZenithError::InvalidPlan(format!(
+                                "Could not inspect all of `{}` before planning cleanup: {error}",
+                                item.name
+                            )));
+                        }
+                        Ok(None) => {}
+                    }
+                }
 
                 // 7. The entry kind the scan observed must still hold, so a
                 //    plan states the kind of object it intends to delete.

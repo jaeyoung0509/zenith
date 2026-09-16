@@ -294,6 +294,14 @@ describe('cleanOutcome', () => {
     expect(
       cleanOutcome({ items: [skipped], partial_count: 0, failed_count: 0, skipped_count: 1 })
     ).toBe('partial');
+    expect(
+      cleanOutcome({
+        items: [item('success', true), skipped],
+        partial_count: 0,
+        failed_count: 0,
+        skipped_count: 1,
+      })
+    ).toBe('partial');
     // The legacy fallback infers failures from `!success`, which a skip
     // satisfies: one failed target beside a skip is still a partial run, not a
     // total failure.

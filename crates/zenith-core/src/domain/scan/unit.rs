@@ -165,10 +165,10 @@ impl std::fmt::Display for CleanupUnitIdentity {
 
 /// Whether the filesystem the scan observed folds case in path comparisons.
 ///
-/// The shared domain states the fact; the platform layer derives it from the
-/// path flavor it was built with, so a Windows scan never counts
-/// `Caches\Pip` and `caches\pip` as two units and a POSIX scan never folds two
-/// genuinely different directories into one.
+/// The caller states the fact. Path syntax alone does not determine case
+/// behavior: APFS and NTFS volumes can each use different settings. The
+/// scanner compares stable filesystem identities for existing objects and
+/// uses case-sensitive text only when an identity is unavailable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PathIdentity {
     #[default]

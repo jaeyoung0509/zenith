@@ -9,12 +9,12 @@ export type CleanOutcome = 'success' | 'partial' | 'failed';
  * The three answers mean:
  * - `success`: the run removed every target the plan authorized.
  * - `partial`: the run removed less than that — a target failed, a target was
- *   only partly removed, or every target was skipped, so nothing was reclaimed.
+ *   only partly removed, or any target was skipped.
  * - `failed`: no target was reached at all, or every target failed.
  *
  * A skipped target is neither a failure nor a success: it was not removed and
  * nothing about it went wrong, so it never counts as a failure, and it never
- * lets a run that reclaimed nothing claim a clean success.
+ * lets a run with an untouched target claim a clean success.
  *
  * The backend's own counts win when the payload carries them: it is the side
  * that knows which targets did not fully clean, and it counts a partial target
@@ -43,9 +43,6 @@ export function cleanOutcome(
     ).length;
 
   if (failedCount === result.items.length) return 'failed';
-  if (failedCount > 0 || partialCount > 0) return 'partial';
-  // Every target was skipped: the plan authorized nothing this run could
-  // remove, and `success` would claim a cleanup that never happened.
-  if (skippedCount >= result.items.length) return 'partial';
+  if (failedCount > 0 || partialCount > 0 || skippedCount > 0) return 'partial';
   return 'success';
 }

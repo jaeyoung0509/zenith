@@ -179,6 +179,40 @@ fn crosses_mount_boundary(_path: &Path) -> bool {
     false
 }
 
+/// Inspect the whole authorized unit before its first mutation. A directory
+/// with an ordinary name can still contain a database or configuration file.
+/// Symlinks are classified by name but never followed.
+pub(crate) fn structured_descendant(
+    path: &Path,
+) -> std::io::Result<Option<(PathBuf, StructuredStateKind)>> {
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&current)?;
+        let kind = entry_kind_of(&metadata);
+        let name = current
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+        let facts = PathFacts::new(&name, kind)
+            .executable(kind == EntryKind::File && is_executable(&metadata));
+        if let Some(structured) = classify_structured_state(facts) {
+            return Ok(Some((current, structured)));
+        }
+        if kind == EntryKind::Directory && !SymlinkGuard::is_symlink_metadata(&current)? {
+            if current != path && crosses_mount_boundary(&current) {
+                return Err(std::io::Error::other(format!(
+                    "{} crosses a mount boundary",
+                    current.display()
+                )));
+            }
+            for entry in std::fs::read_dir(&current)? {
+                pending.push(entry?.path());
+            }
+        }
+    }
+    Ok(None)
+}
+
 pub struct SafetyValidator;
 
 impl SafetyValidator {
@@ -349,7 +383,8 @@ impl SafetyValidator {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let facts = PathFacts::new(&target_name, current_kind).executable(is_executable(&metadata));
+        let facts = PathFacts::new(&target_name, current_kind)
+            .executable(current_kind == EntryKind::File && is_executable(&metadata));
         if let Some(kind) = classify_structured_state(facts) {
             return skipped(
                 target,
@@ -360,6 +395,41 @@ impl SafetyValidator {
                     kind.display_name()
                 ),
             );
+        }
+
+        // A target with a harmless basename may contain structured state.
+        // Finish the full walk before allowing any mutation of this unit.
+        if current_kind == EntryKind::Directory
+            && matches!(
+                target.strategy,
+                CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
+            )
+        {
+            match structured_descendant(path) {
+                Ok(Some((nested, kind))) => {
+                    return skipped(
+                        target,
+                        CleanFailureReason::StructuredStore,
+                        format!(
+                            "{} contains {} ({}); generic cleanup leaves the entire unit untouched",
+                            path.display(),
+                            nested.display(),
+                            kind.display_name()
+                        ),
+                    );
+                }
+                Err(error) => {
+                    return skipped(
+                        target,
+                        CleanFailureReason::SafetyBoundary,
+                        format!(
+                            "Could not inspect the whole unit {} before cleanup: {error}",
+                            path.display()
+                        ),
+                    );
+                }
+                Ok(None) => {}
+            }
         }
 
         // 7. The strategy must still fit the object it would act on.
@@ -467,6 +537,10 @@ impl<'a> FilesystemDeleteAuthority<'a> {
             AuthorityKind::ModelInventory(_) => &[],
         }
     }
+
+    pub(crate) fn protect_structured_state(&self) -> bool {
+        matches!(self.inner, AuthorityKind::Cleanup(_))
+    }
 }
 
 impl<'a> From<&'a ValidatedTarget> for FilesystemDeleteAuthority<'a> {
@@ -498,7 +572,8 @@ pub fn structured_state_at(path: &Path) -> Option<(StructuredStateKind, EntryKin
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let facts = PathFacts::new(&name, entry_kind).executable(is_executable(&metadata));
+    let facts = PathFacts::new(&name, entry_kind)
+        .executable(entry_kind == EntryKind::File && is_executable(&metadata));
     classify_structured_state(facts).map(|kind| (kind, entry_kind))
 }
 
