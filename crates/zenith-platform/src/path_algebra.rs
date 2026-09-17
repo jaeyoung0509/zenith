@@ -167,6 +167,51 @@ pub fn join(base: &str, tail: &str, flavor: PathFlavor) -> String {
     normalize(&text, flavor)
 }
 
+/// A path split into the root it starts from and the components below it.
+///
+/// The split follows the stated flavor, so a Windows-shaped path is judged by
+/// Windows rules on any runner. Empty segments and `.` are dropped; `..` is
+/// preserved, because a caller that must refuse traversal has to be able to see
+/// it rather than receive an already-resolved path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathParts {
+    /// `C:`, `\\server\\share`, or empty on POSIX.
+    pub prefix: String,
+    /// Whether the path is rooted: `/a`, `C:\\a`, or a UNC share.
+    pub rooted: bool,
+    pub components: Vec<String>,
+}
+
+pub fn split_path(path: &str, flavor: PathFlavor) -> PathParts {
+    let canonical = canonical_separators(&strip_verbatim(path, flavor), flavor);
+    let split = split_prefix(&canonical, flavor);
+    let components = split
+        .remainder
+        .split(|ch| flavor.is_separator(ch))
+        .filter(|component| !component.is_empty() && *component != ".")
+        .map(str::to_string)
+        .collect();
+    PathParts {
+        prefix: split.prefix,
+        rooted: split.rooted,
+        components,
+    }
+}
+
+/// Rebuilds a path from [`PathParts`].
+pub fn join_parts(parts: &PathParts, flavor: PathFlavor) -> String {
+    let separator = flavor.separator();
+    let mut text = parts.prefix.clone();
+    // A rooted path has a separator between its prefix and its first component:
+    // `/a` on POSIX, `C:\a` and `\\server\share\a` on Windows. A
+    // drive-relative `C:a` does not.
+    if parts.rooted && !parts.prefix.ends_with(separator) {
+        text.push(separator);
+    }
+    text.push_str(&parts.components.join(&separator.to_string()));
+    text
+}
+
 /// Removes trailing separators except when the path is itself a root.
 pub fn trim_trailing_separators(path: &str, flavor: PathFlavor) -> String {
     let separator = flavor.separator();

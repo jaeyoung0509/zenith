@@ -184,6 +184,8 @@ export type AiProviderId = ProviderId;
 export type CleanStrategy =
   | 'delete_contents'
   | 'delete_directory'
+  /** Remove the entries whose own age satisfies the signature's policy. */
+  | 'delete_stale_contents'
   | 'external_command'
   | 'docker_prune'
   | 'manual';

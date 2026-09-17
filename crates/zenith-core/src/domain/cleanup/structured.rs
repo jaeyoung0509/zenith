@@ -173,6 +173,19 @@ const BUNDLE_EXTENSIONS: [&str; 11] = [
     "sparsebundle",
 ];
 
+/// Cache containers whose extension says "database" but whose content is
+/// regenerated on demand.
+///
+/// Windows Explorer keeps its thumbnail and icon caches in `.db` files
+/// (`thumbcache_<size>.db`, `iconcache_<n>.db`). They are caches by contract —
+/// Windows rebuilds them the next time it needs a picture — so treating the
+/// extension alone as evidence of user state would protect a regenerable cache
+/// and report its bytes as permanently unreclaimable. The list is deliberately
+/// closed: a name that is not here is judged by the database rule, because the
+/// cost of being wrong in that direction is a cache the user can still clear by
+/// other means, not a database someone deletes.
+const DISPOSABLE_CACHE_STORE_PREFIXES: [&str; 2] = ["thumbcache_", "iconcache_"];
+
 const EXECUTABLE_EXTENSIONS: [&str; 17] = [
     "exe", "dll", "sys", "com", "scr", "msi", "msp", "bat", "cmd", "ps1", "sh", "zsh", "bash",
     "command", "dylib", "so", "o",
@@ -232,6 +245,16 @@ pub fn classify_structured_state(facts: PathFacts<'_>) -> Option<StructuredState
     }
     if CREDENTIAL_NAMES.contains(&lower.as_str()) || CREDENTIAL_EXTENSIONS.contains(&extension) {
         return Some(StructuredStateKind::Credential);
+    }
+    if DISPOSABLE_CACHE_STORE_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        // A cache container that happens to use a database extension. It is
+        // still acted on only because a signature names it and its age policy
+        // is satisfied; this rule decides that it is a cache, not that it is
+        // disposable anywhere it appears.
+        return None;
     }
     if DATABASE_EXTENSIONS.contains(&extension) {
         return Some(StructuredStateKind::Database);
@@ -334,6 +357,26 @@ mod tests {
             classify_structured_state(PathFacts::new("helper", EntryKind::File)),
             None
         );
+    }
+
+    /// A cache container is not a database, however its extension reads.
+    #[test]
+    fn explorer_thumbnail_and_icon_caches_are_caches_not_databases() {
+        for name in ["thumbcache_256.db", "THUMBCACHE_1024.DB", "iconcache_48.db"] {
+            assert_eq!(file(name), None, "{name} is a regenerable cache");
+        }
+
+        // The exception is closed: any other `.db` is still structured state,
+        // and the prefix has to be the whole leading name.
+        for name in ["history.db", "places.sqlite", "my-thumbcache.db"] {
+            assert_eq!(
+                file(name),
+                Some(StructuredStateKind::Database),
+                "{name} is not one of the cache containers"
+            );
+        }
+        // A name with no database extension was never protected by that rule.
+        assert_eq!(file("thumbcache"), None);
     }
 
     #[test]

@@ -304,7 +304,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_contents_with_policy(root, exclusions, environment, false)
+        Self::delete_contents_with_policy(root, exclusions, environment, false, None)
     }
 
     fn delete_contents_with_policy(
@@ -312,6 +312,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         protect_structured_state: bool,
+        stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
             protect_structured_state,
@@ -336,7 +337,14 @@ impl SafeTreeDeleter {
             }
         };
         if root_is_link || !root_metadata.is_dir() {
-            Self::delete_entry(root, root, exclusions, environment, &mut report);
+            Self::delete_entry(
+                root,
+                root,
+                exclusions,
+                environment,
+                stale_policy,
+                &mut report,
+            );
             return report;
         }
 
@@ -377,6 +385,7 @@ impl SafeTreeDeleter {
                     root,
                     exclusions,
                     environment,
+                    stale_policy,
                     &mut report,
                 );
                 Self::restore_directory_permissions(root, permissions, &mut report);
@@ -395,9 +404,14 @@ impl SafeTreeDeleter {
 
         for entry in entries {
             match entry {
-                Ok(ent) => {
-                    Self::delete_entry(&ent.path(), root, exclusions, environment, &mut report)
-                }
+                Ok(ent) => Self::delete_entry(
+                    &ent.path(),
+                    root,
+                    exclusions,
+                    environment,
+                    stale_policy,
+                    &mut report,
+                ),
                 Err(e) => report.errors.push(e.to_string()),
             }
         }
@@ -411,7 +425,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_path_with_policy(root, exclusions, environment, false)
+        Self::delete_path_with_policy(root, exclusions, environment, false, None)
     }
 
     fn delete_path_with_policy(
@@ -419,6 +433,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         protect_structured_state: bool,
+        stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
             protect_structured_state,
@@ -447,7 +462,14 @@ impl SafeTreeDeleter {
             report.errors.push(e.to_string());
             return report;
         }
-        Self::delete_entry(root, root, exclusions, environment, &mut report);
+        Self::delete_entry(
+            root,
+            root,
+            exclusions,
+            environment,
+            stale_policy,
+            &mut report,
+        );
         report
     }
 
@@ -462,6 +484,36 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
+            auth.stale_policy(),
+        )
+    }
+
+    /// Removes the entries under a path whose own age satisfies the policy.
+    ///
+    /// This is the same walk as [`Self::delete_contents_validated`] with the
+    /// entry policy applied: every file is judged on its own timestamp and on
+    /// its own classification, directories are descended into (never through a
+    /// link) and removed only when they end up empty, and a file that is too
+    /// recent or that holds structured state is counted as skipped rather than
+    /// as an error.
+    pub fn prune_stale_contents_validated<'a>(
+        authority: impl Into<super::FilesystemDeleteAuthority<'a>>,
+        environment: &PlatformEnvironment,
+    ) -> TreeDeleteReport {
+        let auth = authority.into();
+        let Some(policy) = auth.stale_policy() else {
+            let mut report = TreeDeleteReport::default();
+            report
+                .errors
+                .push("A stale-entry cleanup was requested without an age policy".to_string());
+            return report;
+        };
+        Self::delete_contents_with_policy(
+            auth.path(),
+            auth.exclusions(),
+            environment,
+            auth.protect_structured_state(),
+            Some(policy),
         )
     }
 
@@ -476,6 +528,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
+            auth.stale_policy(),
         )
     }
 
@@ -490,6 +543,7 @@ impl SafeTreeDeleter {
         verified_root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
+        stale_policy: Option<super::StaleEntryPolicy>,
         report: &mut TreeDeleteReport,
     ) {
         let entries = match fs::read_dir(dir_path) {
@@ -584,6 +638,22 @@ impl SafeTreeDeleter {
                     report.errors.push(error);
                     continue;
                 }
+                // An entry is removed only when its own age satisfies the
+                // policy. A directory is still descended into: its entries are
+                // judged one by one, and it disappears only if it ends up empty.
+                if let Some(policy) = stale_policy {
+                    let name = file_name.to_string_lossy().into_owned();
+                    if !policy.allows(
+                        &name,
+                        super::stale::entry_kind(&metadata),
+                        super::stale::is_executable(&metadata),
+                        metadata.modified().ok(),
+                        std::time::SystemTime::now(),
+                    ) {
+                        report.skipped_files += 1;
+                        continue;
+                    }
+                }
                 let bytes = allocated_bytes(&metadata);
                 match Self::unlink_via_parent(dir_file, file_name, false) {
                     Ok(()) => {
@@ -628,6 +698,7 @@ impl SafeTreeDeleter {
                     verified_root,
                     exclusions,
                     environment,
+                    stale_policy,
                     report,
                 );
             }
@@ -693,11 +764,13 @@ impl SafeTreeDeleter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn delete_entry(
         path: &Path,
         verified_root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
+        stale_policy: Option<super::StaleEntryPolicy>,
         report: &mut TreeDeleteReport,
     ) {
         if Self::is_excluded(path, exclusions, environment)
@@ -845,6 +918,7 @@ impl SafeTreeDeleter {
                 verified_root,
                 exclusions,
                 environment,
+                stale_policy,
                 report,
             );
             if let Err(error) = Self::verify_directory_identity(path, &permissions) {
@@ -893,9 +967,14 @@ impl SafeTreeDeleter {
 
         for entry in entries {
             match entry {
-                Ok(ent) => {
-                    Self::delete_entry(&ent.path(), verified_root, exclusions, environment, report)
-                }
+                Ok(ent) => Self::delete_entry(
+                    &ent.path(),
+                    verified_root,
+                    exclusions,
+                    environment,
+                    stale_policy,
+                    report,
+                ),
                 Err(e) => report.errors.push(format!("{}: {}", path.display(), e)),
             }
         }
@@ -1511,7 +1590,7 @@ mod tests {
         let missing = dir.path().join("vanished.bin");
 
         let mut report = TreeDeleteReport::default();
-        SafeTreeDeleter::delete_entry(&missing, dir.path(), &[], &environment(), &mut report);
+        SafeTreeDeleter::delete_entry(&missing, dir.path(), &[], &environment(), None, &mut report);
 
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert_eq!(report.skipped_files, 1);

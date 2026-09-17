@@ -2460,6 +2460,11 @@ export type ScanItem_Deserialize = {
 	/**  The age policy's verdict, when the unit carries one. */
 	age?: AgeObservation_Deserialize | null,
 	/**
+	 *  The per-entry verdict, when the unit's policy ages the entries inside it
+	 *  rather than the unit as a whole.
+	 */
+	stale?: StaleEntryObservation_Deserialize | null,
+	/**
 	 *  The structured state the path was classified as, when it is one.
 	 * 
 	 *  Recorded at discovery so the disposition derivation and the execution
@@ -2477,6 +2482,15 @@ export type ScanItem_Deserialize = {
 	entry_kind?: EntryKind,
 	/**  The scan-policy gate that applied when this unit was discovered. */
 	gate?: EligibilityGate,
+	/**
+	 *  Whether the application that owns this location is running right now.
+	 * 
+	 *  A cache an application is using is not abandoned storage, however old
+	 *  its bytes are: removing it while the application holds it open is a
+	 *  race the user did not ask for. The scan records the fact and the
+	 *  disposition keeps the unit selectable but never automatic.
+	 */
+	owner_running?: boolean,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -2516,6 +2530,11 @@ export type ScanItem_Serialize = {
 	/**  The age policy's verdict, when the unit carries one. */
 	age: AgeObservation_Serialize | null,
 	/**
+	 *  The per-entry verdict, when the unit's policy ages the entries inside it
+	 *  rather than the unit as a whole.
+	 */
+	stale: StaleEntryObservation_Serialize | null,
+	/**
 	 *  The structured state the path was classified as, when it is one.
 	 * 
 	 *  Recorded at discovery so the disposition derivation and the execution
@@ -2533,6 +2552,15 @@ export type ScanItem_Serialize = {
 	entry_kind: EntryKind,
 	/**  The scan-policy gate that applied when this unit was discovered. */
 	gate: EligibilityGate,
+	/**
+	 *  Whether the application that owns this location is running right now.
+	 * 
+	 *  A cache an application is using is not abandoned storage, however old
+	 *  its bytes are: removing it while the application holds it open is a
+	 *  race the user did not ask for. The scan records the fact and the
+	 *  disposition keeps the unit selectable but never automatic.
+	 */
+	owner_running: boolean,
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -2623,6 +2651,53 @@ export type SelfCheckRow = {
 };
 
 export type SnapshotQuality = "fresh" | "stale" | "partial" | "unavailable";
+
+/**
+ *  What an age policy that applies to *entries* observed about a unit.
+ * 
+ *  A cache namespace is written to while it is being cleaned: one file touched
+ *  this morning sits among gigabytes that have not changed in weeks. The
+ *  whole-tree verdict cannot express that, so the policy is evaluated per entry
+ *  and the unit reports how much of itself satisfies it. Nothing is removed on
+ *  a verdict about its neighbours — the executor re-evaluates each entry — but
+ *  the estimate and the reason the interface shows are about the entries that
+ *  would actually go.
+ */
+export type StaleEntryObservation = StaleEntryObservation_Serialize | StaleEntryObservation_Deserialize;
+
+/**
+ *  What an age policy that applies to *entries* observed about a unit.
+ * 
+ *  A cache namespace is written to while it is being cleaned: one file touched
+ *  this morning sits among gigabytes that have not changed in weeks. The
+ *  whole-tree verdict cannot express that, so the policy is evaluated per entry
+ *  and the unit reports how much of itself satisfies it. Nothing is removed on
+ *  a verdict about its neighbours — the executor re-evaluates each entry — but
+ *  the estimate and the reason the interface shows are about the entries that
+ *  would actually go.
+ */
+export type StaleEntryObservation_Deserialize = {
+	min_age_days: number,
+	stale_bytes: number,
+	stale_file_count: number,
+};
+
+/**
+ *  What an age policy that applies to *entries* observed about a unit.
+ * 
+ *  A cache namespace is written to while it is being cleaned: one file touched
+ *  this morning sits among gigabytes that have not changed in weeks. The
+ *  whole-tree verdict cannot express that, so the policy is evaluated per entry
+ *  and the unit reports how much of itself satisfies it. Nothing is removed on
+ *  a verdict about its neighbours — the executor re-evaluates each entry — but
+ *  the estimate and the reason the interface shows are about the entries that
+ *  would actually go.
+ */
+export type StaleEntryObservation_Serialize = {
+	min_age_days: number,
+	stale_bytes: number,
+	stale_file_count: number,
+};
 
 /**  What kind of structured state a path name identifies. */
 export type StructuredStateKind = 

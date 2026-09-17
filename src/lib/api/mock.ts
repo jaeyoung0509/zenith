@@ -976,34 +976,45 @@ export const mockApi = {
           exists: true,
           quality: 'fresh',
         };
-        const systemItems: ScanItem[] = [
-          recentItem,
-          ...(intensiveCleanup ? [intensiveItem, blockedItem] : []),
-        ];
+        // The native scan discovers these roots in either scope; the scope
+        // decides whether they are eligible. The preview states the same thing:
+        // without the opt-in the rows are present, unselected, and carry the
+        // reason that kept them out.
+        const gatedIntensiveItem: ScanItem = intensiveCleanup
+          ? intensiveItem
+          : {
+              ...intensiveItem,
+              is_selected: false,
+              disposition: {
+                eligibility: 'policy_gated',
+                cleanable_bytes: null,
+                reason:
+                  'Discovered for visibility only: intensive cleanup is disabled in settings',
+              },
+            };
+        const systemItems: ScanItem[] = [recentItem, gatedIntensiveItem, blockedItem];
         const systemCategory: ScanResult['categories'][number] = {
           category: 'system',
           display_name: 'System',
           items: systemItems,
           // Detected bytes retain the age-gated and blocked observations while
           // cleanable and Safe buckets contain only actionable bytes.
-          total_bytes: recentBytes + (intensiveCleanup ? intensiveBytes + blockedBytes : 0),
+          total_bytes: recentBytes + intensiveBytes + blockedBytes,
           cleanable_bytes: intensiveCleanup ? intensiveBytes : 0,
           safe_bytes: intensiveCleanup ? intensiveBytes : 0,
           rebuild_bytes: 0,
           manual_bytes: 0,
-          skipped_entry_count: intensiveCleanup ? 1 : 0,
-          incomplete_item_count: intensiveCleanup ? 1 : 0,
-          quality: intensiveCleanup ? 'partial' : 'fresh',
+          skipped_entry_count: 1,
+          incomplete_item_count: 1,
+          quality: 'partial',
           eligibility: eligibilityFor(systemItems),
           suppressed_duplicate_count: 0,
           suppressed_duplicate_bytes: 0,
         };
 
         onEvent({ type: 'CategoryStarted', category: 'system' });
-        onEvent({ type: 'ItemFound', item: recentItem });
-        if (intensiveCleanup) {
-          onEvent({ type: 'ItemFound', item: intensiveItem });
-          onEvent({ type: 'ItemFound', item: blockedItem });
+        for (const item of systemItems) {
+          onEvent({ type: 'ItemFound', item });
         }
         onEvent({
           type: 'CategoryFinished',
@@ -1137,25 +1148,20 @@ export const mockApi = {
           started_at: Math.floor(Date.now() / 1000) - 1,
           finished_at: Math.floor(Date.now() / 1000),
           categories,
-          total_bytes:
-            8.3 * 1024 * 1024 * 1024 +
-            recentBytes +
-            (intensiveCleanup ? intensiveBytes + blockedBytes : 0),
+          total_bytes: 8.3 * 1024 * 1024 * 1024 + recentBytes + intensiveBytes + blockedBytes,
           cleanable_bytes: 8.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           safe_bytes: 6.3 * 1024 * 1024 * 1024 + (intensiveCleanup ? intensiveBytes : 0),
           rebuild_bytes: 2.0 * 1024 * 1024 * 1024,
           manual_bytes: 0,
-          skipped_entry_count: intensiveCleanup ? 1 : 0,
-          incomplete_item_count: intensiveCleanup ? 1 : 0,
+          skipped_entry_count: 1,
+          incomplete_item_count: 1,
           // The real response always states the scan's observation quality and
           // the durable reasons behind it; the preview states them too so a
           // partial scan is presented the same way it is natively.
-          quality: intensiveCleanup ? 'partial' : 'fresh',
-          incomplete_reasons: intensiveCleanup
-            ? [
-                'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
-              ]
-            : [],
+          quality: 'partial',
+          incomplete_reasons: [
+            'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
+          ],
           // Buckets sum to `total_bytes` over the observed column: what the scan
           // found, and how much of it the current policy would reclaim.
           eligibility: eligibilityFor(

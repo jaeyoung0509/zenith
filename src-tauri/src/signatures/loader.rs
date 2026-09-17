@@ -15,6 +15,61 @@ impl SignatureLoader {
         Self::load_str(&content)
     }
 
+    /// Rewrites a Windows `%VAR%` spelling into the placeholder the expander
+    /// resolves.
+    ///
+    /// Every Windows path list in the wild is written with `%VAR%`, while the
+    /// expander accepts `${VAR}`. Normalizing here means the catalog has one
+    /// spelling, the lint and the platform classification see that spelling,
+    /// and a manifest cannot silently resolve to nothing because it was copied
+    /// from documentation. A `%VAR%` this table does not know is left alone and
+    /// refused by `Signature::validate`, so an unsupported spelling is an
+    /// error rather than an empty expansion.
+    pub fn normalize_pattern(value: &str) -> String {
+        // Only spellings whose placeholder resolves to the same directory are
+        // listed. `%PROGRAMFILES(X86)%` is deliberately absent: on a 64-bit
+        // machine it is a different tree from `%PROGRAMFILES%`, so mapping it
+        // onto `${PROGRAM_FILES}` would quietly point a signature at the wrong
+        // root. A manifest that uses it fails the load and names the supported
+        // spellings instead.
+        const KNOWN: [(&str, &str); 9] = [
+            ("USERPROFILE", "${USER_HOME}"),
+            ("LOCALAPPDATA", "${LOCAL_APP_DATA}"),
+            ("APPDATA", "${ROAMING_APP_DATA}"),
+            ("PROGRAMDATA", "${PROGRAM_DATA}"),
+            ("PROGRAMFILES", "${PROGRAM_FILES}"),
+            ("SYSTEMROOT", "${SYSTEM_ROOT}"),
+            ("WINDIR", "${SYSTEM_ROOT}"),
+            ("TEMP", "${TEMP}"),
+            // `%TMP%` is the short spelling of the same variable.
+            ("TMP", "${TEMP}"),
+        ];
+
+        let mut normalized = value.to_string();
+        for (name, placeholder) in KNOWN {
+            let mut search_from = 0;
+            while let Some(open) = normalized[search_from..]
+                .find('%')
+                .map(|offset| search_from + offset)
+            {
+                let Some(close) = normalized[open + 1..]
+                    .find('%')
+                    .map(|offset| open + 1 + offset)
+                else {
+                    break;
+                };
+                let inner = normalized[open + 1..close].to_string();
+                if inner.eq_ignore_ascii_case(name) {
+                    normalized.replace_range(open..=close, placeholder);
+                    search_from = open + placeholder.len();
+                } else {
+                    search_from = close + 1;
+                }
+            }
+        }
+        normalized
+    }
+
     /// Loads signatures from a TOML string.
     ///
     /// A signature that contradicts itself is a load failure rather than a
@@ -27,9 +82,15 @@ impl SignatureLoader {
             .map_err(|e| ZenithError::Io(format!("Failed to parse TOML signature: {}", e)))?;
 
         let mut valid_signatures = Vec::new();
-        for sig in manifest.signatures {
+        for mut sig in manifest.signatures {
             if sig.id.trim().is_empty() {
                 continue;
+            }
+            for pattern in sig.paths.iter_mut() {
+                *pattern = Self::normalize_pattern(pattern);
+            }
+            for exclusion in sig.exclusions.iter_mut() {
+                *exclusion = Self::normalize_pattern(exclusion);
             }
             sig.validate()?;
             valid_signatures.push(sig);
@@ -136,6 +197,59 @@ mod tests {
     use zenith_platform::path_algebra::PathFlavor;
     use zenith_platform::paths::SimulatedPaths;
     use zenith_platform::{KnownFolder, PlatformEnvironment};
+
+    /// A manifest written the way Windows documents paths resolves, and a
+    /// spelling this build does not know fails the load instead of quietly
+    /// matching nothing.
+    #[test]
+    fn a_windows_variable_spelling_is_normalized_or_refused() {
+        let manifest = r#"
+[[signatures]]
+id = "test.normalized"
+name = "Normalized"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+paths = [
+    "%LOCALAPPDATA%\\Temp",
+    "%TMP%",
+    "%SystemRoot%\\Temp",
+    "%USERPROFILE%\\AppData\\Roaming",
+]
+exclusions = ["%APPDATA%\\tool\\settings.json"]
+"#;
+        let signatures = SignatureLoader::load_str(manifest).expect("the manifest loads");
+        let signature = &signatures[0];
+        assert_eq!(signature.paths[0], "${LOCAL_APP_DATA}\\Temp");
+        assert_eq!(signature.paths[1], "${TEMP}");
+        assert_eq!(signature.paths[2], "${SYSTEM_ROOT}\\Temp");
+        assert_eq!(signature.paths[3], "${USER_HOME}\\AppData\\Roaming");
+        assert_eq!(
+            signature.exclusions[0],
+            "${ROAMING_APP_DATA}\\tool\\settings.json"
+        );
+
+        // An unknown variable is refused rather than left to resolve to
+        // nothing: a manifest that names a root this build cannot resolve would
+        // otherwise be a scan that silently covers less.
+        let unknown = manifest.replace("%LOCALAPPDATA%", "%SOMEWHERE_ELSE%");
+        let error =
+            SignatureLoader::load_str(&unknown).expect_err("an unknown variable is refused");
+        assert!(
+            error.to_string().contains("environment spelling"),
+            "the refusal names the problem: {error}"
+        );
+
+        // `%PROGRAMFILES(X86)%` is a different directory on a 64-bit machine,
+        // so it is refused instead of being mapped onto the 64-bit root.
+        let x86 = manifest.replace("%LOCALAPPDATA%", "%PROGRAMFILES(X86)%");
+        let error =
+            SignatureLoader::load_str(&x86).expect_err("the x86 root is not the 64-bit one");
+        assert!(
+            error.to_string().contains("environment spelling"),
+            "the refusal names the problem: {error}"
+        );
+    }
 
     #[test]
     fn expand_path_preserves_absolute_paths_without_home_lookup() {

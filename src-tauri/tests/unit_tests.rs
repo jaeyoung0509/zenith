@@ -502,9 +502,11 @@ fn test_windows_platform_capabilities_batch2() {
         caps.installed_apps.status,
         PlatformFeatureStatus::Unavailable
     );
+    // Windows has its own intensive signatures, so the broader scope is
+    // implemented rather than refused.
     assert_eq!(
         caps.intensive_cleanup.status,
-        PlatformFeatureStatus::Unavailable
+        PlatformFeatureStatus::Available
     );
     assert_eq!(
         caps.app_uninstall.status,

@@ -187,8 +187,7 @@
       "status": "unavailable"
     },
     "intensive_cleanup": {
-      "reason": "Zenith does not implement intensive cleanup on Windows yet; no Windows-specific intensive signatures are defined.",
-      "status": "unavailable"
+      "status": "available"
     },
     "keep_awake": {
       "status": "available"

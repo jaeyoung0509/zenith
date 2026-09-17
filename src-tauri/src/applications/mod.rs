@@ -92,6 +92,97 @@ pub struct NativeAppFsProbe;
 
 impl AppFsProbe for NativeAppFsProbe {}
 
+/// The bundle identifiers of the applications that are running right now.
+///
+/// A cleanup scan needs to know whether the application that owns a cache
+/// namespace is using it: removing a cache out from under a running
+/// application is a race the user did not ask for. The answer comes from the
+/// process table rather than from the application inventory — a process whose
+/// executable lives inside a `.app` bundle is running that bundle, so the
+/// probe costs one process-table pass and one `Info.plist` read per running
+/// bundle, and it needs no per-application rule and no inventory walk.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunningApplications {
+    bundle_ids: Vec<String>,
+}
+
+impl RunningApplications {
+    /// Asks the process table which application bundles are in use.
+    pub fn probe() -> Self {
+        let mut system = System::new_all();
+        system.refresh_processes(ProcessesToUpdate::All, true);
+        let mut bundle_ids = Vec::new();
+        for process in system.processes().values() {
+            let Some(executable) = process.exe() else {
+                continue;
+            };
+            let Some(bundle) = app_bundle_of(executable) else {
+                continue;
+            };
+            if let Some(identifier) = bundle_identifier(bundle) {
+                bundle_ids.push(identifier);
+            }
+        }
+        Self::from_ids(bundle_ids)
+    }
+
+    /// States the running bundles. The production probe is the process table;
+    /// a test states what it wants the scan to see.
+    pub fn from_ids(ids: impl IntoIterator<Item = String>) -> Self {
+        let mut bundle_ids: Vec<String> = ids
+            .into_iter()
+            .map(|identifier| identifier.to_ascii_lowercase())
+            .filter(|identifier| !identifier.is_empty())
+            .collect();
+        bundle_ids.sort();
+        bundle_ids.dedup();
+        Self { bundle_ids }
+    }
+
+    /// The running application that owns a cache namespace, if any.
+    ///
+    /// A namespace belongs to a bundle when it is that bundle's identifier or
+    /// one of its children (`com.example.app`, `com.example.app.helper`), which
+    /// is how applications name their per-process caches.
+    pub fn owner_of(&self, namespace: &str) -> Option<&str> {
+        let namespace = namespace.to_ascii_lowercase();
+        self.bundle_ids
+            .iter()
+            .find(|identifier| {
+                namespace == **identifier
+                    || namespace
+                        .strip_prefix(identifier.as_str())
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+            .map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bundle_ids.is_empty()
+    }
+}
+
+/// The `.app` bundle a path lives inside, if any.
+fn app_bundle_of(path: &Path) -> Option<&Path> {
+    path.ancestors().find(|ancestor| {
+        ancestor
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn bundle_identifier(bundle: &Path) -> Option<String> {
+    read_bundle_metadata(bundle).metadata.bundle_id
+}
+
+#[cfg(target_os = "windows")]
+fn bundle_identifier(_bundle: &Path) -> Option<String> {
+    // Bundle identifiers are a macOS concept; a Windows process has none to
+    // match a cache namespace against.
+    None
+}
+
 pub struct ApplicationScanner;
 
 impl ApplicationScanner {
@@ -1213,5 +1304,53 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("Could not read related data directory")));
+    }
+
+    #[test]
+    fn a_running_bundle_owns_its_namespaces_and_their_children() {
+        let running = RunningApplications::from_ids(vec![
+            "com.example.App".to_string(),
+            "com.other.Tool".to_string(),
+            "com.example.App".to_string(),
+        ]);
+        assert_eq!(running.owner_of("com.example.app"), Some("com.example.app"));
+        assert_eq!(
+            running.owner_of("com.example.app.helper"),
+            Some("com.example.app"),
+            "an application's per-process caches belong to the application"
+        );
+        assert_eq!(running.owner_of("com.other.Tool"), Some("com.other.tool"));
+        assert_eq!(running.owner_of("com.example.application"), None);
+        assert_eq!(running.owner_of("com.example.apphelper"), None);
+        assert_eq!(running.owner_of("com.someone.else"), None);
+
+        // An empty probe (no application running, or another platform) owns
+        // nothing rather than everything.
+        let none = RunningApplications::default();
+        assert!(none.is_empty());
+        assert_eq!(none.owner_of("com.example.app"), None);
+    }
+
+    #[test]
+    fn the_bundle_of_an_executable_is_the_application_that_runs_it() {
+        assert_eq!(
+            app_bundle_of(Path::new(
+                "/Applications/Example.app/Contents/MacOS/Example"
+            )),
+            Some(Path::new("/Applications/Example.app"))
+        );
+        assert_eq!(
+            app_bundle_of(Path::new(
+                "/Applications/Example.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"
+            )),
+            Some(Path::new(
+                "/Applications/Example.app/Contents/Frameworks/Helper.app"
+            ))
+        );
+        assert_eq!(app_bundle_of(Path::new("/usr/bin/git")), None);
+        assert_eq!(
+            app_bundle_of(Path::new("/Applications/Example/bin/tool")),
+            None
+        );
     }
 }

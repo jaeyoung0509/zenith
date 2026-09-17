@@ -133,6 +133,32 @@ provider that legitimately owns a disposable database must go through its own
 adapter with its own lifecycle, which is what `CleanupOperation::Provider`
 exists for.
 
+### A running owner
+
+An application that is running keeps its own cache out of the default
+selection. The scan asks the process table which application bundles are in
+use — a process whose executable lives inside a `.app` bundle is running that
+bundle — and a cache namespace named after a running bundle identifier (or one
+of its children, such as `com.example.app.helper`) is reported as `reviewable`
+with the reason rather than as `auto_cleanable`. The bytes are still counted,
+and an explicit selection still cleans them: the rule removes the *default*
+decision, not the user's.
+
+A namespace whose owner is not running is judged by its age policy as usual. An
+orphaned namespace — one whose application is gone — is the ordinary case, and
+it needs no vendor list to be recognized: nothing in the catalog enumerates
+which applications may own a cache.
+
+### Unreadable roots
+
+A location the process may not read is reported with the reason, never as an
+absence: the item carries `quality = "unavailable"` and its `incomplete_reason`,
+the scan counts it, and on macOS a refusal inside a protected location
+(other applications' containers, Mail, Messages, Safari, the device-backup
+store) names Full Disk Access as the setting that would change it. A scan that
+could not read part of the machine says so instead of reporting a smaller
+total.
+
 ## Absent targets and skipped results
 
 A target that no longer exists when cleanup reaches it is already in the desired
@@ -231,13 +257,69 @@ Broad user cache and log signatures are constrained as follows:
   deletion and aborts if anything became recent.
 
 The current thresholds are seven days for third-party children under
-`~/Library/Caches` and fourteen days for application-log groups under
-`~/Library/Logs`. Diagnostic and crash-report groups remain protected, as are
-the Apple cache namespaces and the tool-managed namespaces named in the
-signature, such as `dotslash` and `ms-playwright`.
+`~/Library/Caches`, for the application cache subtrees under
+`~/Library/Application Support/*/{Cache,Code Cache,GPUCache,...}`, for the
+system per-user cache root (`${DARWIN_USER_CACHE}`), and for the Windows
+application and browser caches; fourteen days for application-log groups under
+`~/Library/Logs`, for sandbox and group container caches, and for an
+unrecognized entry in `%TEMP%`; and thirty days for Xcode device support.
+Diagnostic and crash-report groups remain protected, as are the Apple cache
+namespaces and the tool-managed namespaces named in the signature, such as
+`dotslash` and `ms-playwright`.
 Intensive mode does not scan user documents, preferences, credentials,
-databases, browser profiles, model weights, arbitrary system cache roots, or
-unknown `/tmp` children.
+databases, model weights, unknown `/tmp` children, or any Windows-owned
+maintenance store.
+
+### Age policies
+
+Two shapes of age policy exist, and the difference is what the policy is about:
+
+- **A whole unit.** The newest timestamp anywhere in the unit's tree must be
+  older than the threshold, or nothing in it is removed. This is the policy for
+  a cache an application abandons as a whole.
+- **The entries inside a unit** (`strategy = "delete_stale_contents"`). Each
+  entry is judged on its own timestamp, and only the entries that satisfy the
+  policy are removed. This is the policy for a namespace that is written to
+  while it is being cleaned: one file touched this morning no longer hides the
+  gigabytes beside it, and the file that is being written stays.
+
+The second shape is still a per-entry decision at execution time, not a
+tree-level verdict applied to leaves: `StaleEntryPolicy` evaluates one entry
+from its own name, kind, and timestamp, the scan measures with it and the
+execution guard re-evaluates it for every file immediately before that file is
+unlinked. An entry whose age cannot be read is not an old entry, and an entry
+that is structured state is never stale-deletable however old it is — the
+database, write-ahead log, lock, credential, configuration file, bundle, or
+executable rules apply per file here exactly as they do at a unit root.
+
+A directory inside such a unit is descended into (never through a link) and
+disappears only when it ends up empty, so a namespace keeps whatever it still
+holds.
+
+### Selectors
+
+A catalog root may contain two kinds of pattern: `*`, which matches one
+directory name, and `{a,b,c}`, which matches one of those names. Nothing else is
+a selector — `Cache*`, `**`, and nested braces are refused when the catalog
+loads, because a pattern that silently matches nothing is an entry that
+silently does nothing.
+
+A selector is allowed in `paths` only. `exclusions`, `include_prefixes`, and
+`exclude_prefixes` are matched against concrete names or paths, so selector
+syntax there is a load error rather than a pattern that protects nothing.
+
+Expansion is bounded (256 matches per pattern, with a recorded diagnostic when
+the cap is reached), deterministic (sorted, matched case-insensitively only on
+a platform that folds case), and never descends through a link: a selector
+component is resolved with `symlink_metadata`, so a symlinked application
+directory is not enumerated as a root. The placeholder expander runs first, so
+`${LOCAL_APP_DATA}/Packages/*/TempState` resolves the root and then selects
+within it.
+
+Whether a match is a cleanup unit or a root whose children are units is the
+signature's `unit` declaration: `named_subtree` treats each match as one object
+that is aged and deleted whole, `child_namespace` ages each child separately.
+The unit you age is the unit you delete, in both shapes.
 
 ## Large Files Inspector
 

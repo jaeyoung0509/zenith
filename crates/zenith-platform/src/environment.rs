@@ -92,12 +92,59 @@ pub fn describe_access_refusal(
         current().controlled_folder_access,
         path,
     ) {
-        format!(
+        return format!(
             "{error} Controlled Folder Access is enabled on this machine and this location is inside your profile, so it is the likely cause. {CONTROLLED_FOLDER_ACCESS_REMEDY}"
-        )
-    } else {
-        error.to_string()
+        );
     }
+    if refusal_may_be_full_disk_access(environment, path) {
+        return format!("{error} {FULL_DISK_ACCESS_REMEDY}");
+    }
+    error.to_string()
+}
+
+pub const FULL_DISK_ACCESS_REMEDY: &str = "macOS protects this location from other applications. Grant Zenith Full Disk Access in System Settings > Privacy & Security > Full Disk Access, then scan again. Until then the location is reported as unreadable rather than as empty.";
+
+/// Whether an access refusal on `path` should be attributed to Full Disk
+/// Access on macOS.
+///
+/// macOS grants a process access to its own profile and to its own containers,
+/// and refuses the rest of the protected set (other applications' containers,
+/// Mail, Messages, Safari, the device-backup store) until the user grants Full
+/// Disk Access. The paths are matched by shape rather than by asking the
+/// system, because the whole point is that the system is refusing to answer.
+///
+/// The refusal is *stated*, never worked around: a root this function claims
+/// stays unreadable, and the scan reports it with this reason instead of
+/// silently reporting a smaller total.
+pub fn refusal_may_be_full_disk_access(environment: &PlatformEnvironment, path: &Path) -> bool {
+    use crate::path_algebra;
+
+    if environment.flavor() != PathFlavor::Posix {
+        return false;
+    }
+    let Some(home) = environment.user_home() else {
+        return false;
+    };
+    let path = path.to_string_lossy().into_owned();
+    if !path_algebra::contains(&home.to_string_lossy(), &path, PathFlavor::Posix) {
+        return false;
+    }
+    const PROTECTED: [&str; 8] = [
+        "Library/Containers",
+        "Library/Group Containers",
+        "Library/Mail",
+        "Library/Messages",
+        "Library/Safari",
+        "Library/Application Support/MobileSync",
+        "Library/Calendars",
+        "Library/HomeKit",
+    ];
+    let normalized = path_algebra::normalize(&path, PathFlavor::Posix);
+    let home = path_algebra::normalize(&home.to_string_lossy(), PathFlavor::Posix);
+    PROTECTED.iter().any(|relative| {
+        let protected = path_algebra::join(&home, relative, PathFlavor::Posix);
+        path_algebra::contains(&protected, &normalized, PathFlavor::Posix)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -597,5 +644,63 @@ mod tests {
         assert_eq!(SecurityPolicyState::Enabled.label(), "enabled");
         assert_eq!(SecurityPolicyState::Disabled.label(), "disabled");
         assert_eq!(SecurityPolicyState::Unknown.label(), "unknown");
+    }
+
+    use super::{describe_access_refusal, refusal_may_be_full_disk_access};
+    use crate::path_algebra::PathFlavor;
+    use crate::PlatformEnvironment;
+    use std::path::Path;
+
+    /// A refusal inside a protected macOS location names Full Disk Access, and
+    /// a refusal anywhere else is reported as it came.
+    #[test]
+    fn a_refusal_inside_a_protected_location_names_full_disk_access() {
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::Posix).with_roots(std::sync::Arc::new(
+                crate::paths::SimulatedPaths::new()
+                    .with_flavor(PathFlavor::Posix)
+                    .with_home("/Users/tester"),
+            ));
+
+        for path in [
+            "/Users/tester/Library/Containers/com.example.app/Data/Library/Caches",
+            "/Users/tester/Library/Group Containers/GROUP.id/Library/Caches",
+            "/Users/tester/Library/Mail/V10",
+            "/Users/tester/Library/Application Support/MobileSync/Backup",
+        ] {
+            assert!(
+                refusal_may_be_full_disk_access(&environment, Path::new(path)),
+                "{path} is protected by macOS"
+            );
+            let described =
+                describe_access_refusal(&environment, Path::new(path), "Operation not permitted");
+            assert!(
+                described.contains("Full Disk Access"),
+                "the refusal names the setting: {described}"
+            );
+        }
+
+        // An ordinary cache is not attributed to a privacy setting.
+        for path in [
+            "/Users/tester/Library/Caches/com.example.app",
+            "/Users/tester/Library/Application Support/Slack/Cache",
+            "/var/folders/ab/cdefgh/C/com.example.app",
+        ] {
+            assert!(!refusal_may_be_full_disk_access(
+                &environment,
+                Path::new(path)
+            ));
+            assert_eq!(
+                describe_access_refusal(&environment, Path::new(path), "Operation not permitted"),
+                "Operation not permitted"
+            );
+        }
+
+        // Another platform's refusal is never attributed to a macOS setting.
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
+        assert!(!refusal_may_be_full_disk_access(
+            &windows,
+            Path::new(r"C:\Users\tester\Library\Containers\x")
+        ));
     }
 }

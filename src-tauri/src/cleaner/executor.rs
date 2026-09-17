@@ -315,6 +315,9 @@ impl CleanExecutor {
             CleanStrategy::DeleteDirectory => {
                 SafeTreeDeleter::delete_path_validated(&validated_target, environment)
             }
+            CleanStrategy::DeleteStaleContents => {
+                SafeTreeDeleter::prune_stale_contents_validated(&validated_target, environment)
+            }
             // The classification above produced a filesystem operation from one
             // of these strategies, and `ValidatedTarget` carries the planned
             // strategy unchanged, so no other arm is reachable. Refusing

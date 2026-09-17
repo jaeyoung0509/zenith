@@ -10,6 +10,30 @@ pub trait PlatformPathsProvider: Send + Sync {
     fn program_files(&self) -> Option<PathBuf>;
     fn program_data(&self) -> Option<PathBuf>;
 
+    /// The per-user cache directory the operating system owns outside the
+    /// profile.
+    ///
+    /// On macOS this is `confstr(_CS_DARWIN_USER_CACHE_DIR)`
+    /// (`/var/folders/<xx>/<yyyy>/C`), the sibling of the temp directory that
+    /// non-sandboxed applications park their real caches in. It is not
+    /// `~/Library/Caches`, and it is not derivable from it: the two are
+    /// separately owned roots that happen to hold the same kind of data.
+    ///
+    /// `None` where the platform has no such root, so a catalog entry that
+    /// names it cannot resolve on a machine that would not understand it.
+    fn user_cache_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// The Windows installation root (`%SystemRoot%`, e.g. `C:\Windows`).
+    ///
+    /// Resolved from the operating system rather than from the process
+    /// environment, so a spoofed `SystemRoot` cannot point a signature at a
+    /// different tree. `None` on platforms without one.
+    fn system_root(&self) -> Option<PathBuf> {
+        None
+    }
+
     /// Resolves a user-content folder token.
     ///
     /// The literal profile path is only a fallback: Known Folder Move,
@@ -34,6 +58,8 @@ pub trait PlatformPathsProvider: Send + Sync {
     /// - `${TEMP}` or `$TMPDIR`
     /// - `${PROGRAM_FILES}`
     /// - `${PROGRAM_DATA}`
+    /// - `${DARWIN_USER_CACHE}`
+    /// - `${SYSTEM_ROOT}`
     ///
     /// Rejects arbitrary environment variables, empty roots, and broad filesystem roots.
     ///
@@ -103,6 +129,20 @@ pub trait PlatformPathsProvider: Send + Sync {
             joined(self.program_data()?, rest)
         } else if pattern == "${PROGRAM_DATA}" {
             self.program_data()?
+        } else if let Some(rest) = pattern
+            .strip_prefix("${DARWIN_USER_CACHE}/")
+            .or_else(|| pattern.strip_prefix("${DARWIN_USER_CACHE}\\"))
+        {
+            joined(self.user_cache_dir()?, rest)
+        } else if pattern == "${DARWIN_USER_CACHE}" {
+            self.user_cache_dir()?
+        } else if let Some(rest) = pattern
+            .strip_prefix("${SYSTEM_ROOT}/")
+            .or_else(|| pattern.strip_prefix("${SYSTEM_ROOT}\\"))
+        {
+            joined(self.system_root()?, rest)
+        } else if pattern == "${SYSTEM_ROOT}" {
+            self.system_root()?
         } else if pattern.starts_with("${") {
             // Reject any unapproved arbitrary placeholder
             return None;
@@ -524,6 +564,64 @@ fn windows_ascii_eq(actual: u16, expected_uppercase: u16) -> bool {
             && actual == expected_uppercase + (b'a' - b'A') as u16)
 }
 
+/// The per-user cache directory, asked of the operating system.
+///
+/// `confstr` is the only source that is correct for a per-user directory whose
+/// name is not derivable from the profile: it is the value the system itself
+/// hands to applications, and it is the same call `std::env::temp_dir` makes
+/// for the sibling temp directory. A process that cannot obtain it (a sandboxed
+/// or misconfigured context) reports `None` rather than guessing a path the
+/// catalog could then delete from.
+#[cfg(target_os = "macos")]
+fn darwin_user_cache_dir() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut buffer = vec![0u8; libc::PATH_MAX as usize];
+    let length = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_CACHE_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    // `confstr` returns 0 on failure and the required size when the buffer was
+    // too small, in which case nothing was written.
+    if length == 0 || length > buffer.len() {
+        return None;
+    }
+    buffer.truncate(length.saturating_sub(1));
+    let path = PathBuf::from(std::ffi::OsString::from_vec(buffer));
+    (path.is_absolute() && !is_broad_root(&path)).then_some(path)
+}
+
+/// The Windows installation root, taken from the operating system.
+///
+/// `GetWindowsDirectoryW` is authoritative for the machine that is running,
+/// while `%SystemRoot%` is inherited process state a launcher can rewrite.
+#[cfg(target_os = "windows")]
+fn windows_directory() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
+
+    // `GetWindowsDirectoryW` documents `MAX_PATH + 1` as the required size and
+    // returns the needed length when the buffer is too small, so a longer path
+    // is refused here rather than truncated into another directory's name.
+    const WINDOWS_DIRECTORY_CAPACITY: usize = 512;
+    let mut buffer = vec![0u16; WINDOWS_DIRECTORY_CAPACITY];
+    let length = unsafe {
+        GetWindowsDirectoryW(
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+        )
+    };
+    if length == 0 || usize::try_from(length).ok()? >= buffer.len() {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    let path = PathBuf::from(std::ffi::OsString::from_wide(&buffer));
+    (path.is_absolute() && !is_broad_root(&path)).then_some(path)
+}
+
 #[cfg(windows)]
 fn windows_known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
@@ -615,6 +713,30 @@ impl PlatformPathsProvider for NativePlatformPaths {
 
     fn temp_dir(&self) -> PathBuf {
         std::env::temp_dir()
+    }
+
+    fn user_cache_dir(&self) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            darwin_user_cache_dir()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
+    fn system_root(&self) -> Option<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            windows_directory()
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
     }
 
     /// Only fixed user-content tokens may cross the IPC boundary. On Windows
@@ -743,6 +865,8 @@ pub struct SimulatedPaths {
     temp_dir: Option<PathBuf>,
     program_files: Option<PathBuf>,
     program_data: Option<PathBuf>,
+    user_cache_dir: Option<PathBuf>,
+    system_root: Option<PathBuf>,
 }
 
 impl Default for SimulatedPaths {
@@ -755,6 +879,8 @@ impl Default for SimulatedPaths {
             temp_dir: None,
             program_files: None,
             program_data: None,
+            user_cache_dir: None,
+            system_root: None,
         }
     }
 }
@@ -795,6 +921,19 @@ impl SimulatedPaths {
         self
     }
 
+    /// States the per-user cache directory the system owns outside the
+    /// profile (macOS `/var/folders/<xx>/<yyyy>/C`).
+    pub fn with_user_cache_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.user_cache_dir = Some(path.into());
+        self
+    }
+
+    /// States the platform installation root (`C:\Windows`).
+    pub fn with_system_root(mut self, path: impl Into<PathBuf>) -> Self {
+        self.system_root = Some(path.into());
+        self
+    }
+
     pub fn with_program_data(mut self, path: impl Into<PathBuf>) -> Self {
         self.program_data = Some(path.into());
         self
@@ -818,6 +957,14 @@ impl PlatformPathsProvider for SimulatedPaths {
         self.temp_dir
             .clone()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
+    }
+
+    fn user_cache_dir(&self) -> Option<PathBuf> {
+        self.user_cache_dir.clone()
+    }
+
+    fn system_root(&self) -> Option<PathBuf> {
+        self.system_root.clone()
     }
 
     fn program_files(&self) -> Option<PathBuf> {
@@ -1114,5 +1261,56 @@ mod tests {
             environment.expand_placeholder("relative/path/not/allowed"),
             None
         );
+    }
+
+    /// The stated cache root resolves through the placeholder, and a machine
+    /// that does not state one cannot resolve it at all.
+    #[test]
+    fn the_stated_user_cache_dir_resolves_and_is_absent_when_unstated() {
+        let stated = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Posix)
+            .with_home("/Users/tester")
+            .with_user_cache_dir("/var/folders/ab/cdefgh/T/../C");
+        // The stated value is normalized lexically: `T/..` collapses onto the
+        // directory that contains it, exactly as the platform would resolve it.
+        assert_eq!(
+            stated.expand_placeholder("${DARWIN_USER_CACHE}"),
+            Some(PathBuf::from("/var/folders/ab/cdefgh/C"))
+        );
+        assert_eq!(
+            stated.expand_placeholder("${DARWIN_USER_CACHE}/com.apple.dyld"),
+            Some(PathBuf::from("/var/folders/ab/cdefgh/C/com.apple.dyld"))
+        );
+
+        let unstated = SimulatedPaths::new().with_flavor(PathFlavor::Posix);
+        assert_eq!(unstated.expand_placeholder("${DARWIN_USER_CACHE}"), None);
+        assert_eq!(
+            unstated.expand_placeholder("${DARWIN_USER_CACHE}/com.apple.dyld"),
+            None
+        );
+    }
+
+    /// A Windows machine resolves its installation root and keeps the
+    /// separator rules of the flavor it states.
+    #[test]
+    fn the_stated_system_root_resolves_with_its_own_separators() {
+        let windows = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Windows)
+            .with_system_root(r"D:\Windows");
+        assert_eq!(
+            windows.expand_placeholder("${SYSTEM_ROOT}"),
+            Some(PathBuf::from(r"D:\Windows"))
+        );
+        assert_eq!(
+            windows.expand_placeholder("${SYSTEM_ROOT}\\Minidump"),
+            Some(PathBuf::from(r"D:\Windows\Minidump"))
+        );
+
+        // The installation root is a broad root, so naming it alone is refused
+        // rather than expanded into a deletable target.
+        let spoofed = SimulatedPaths::new()
+            .with_flavor(PathFlavor::Windows)
+            .with_system_root(r"C:\");
+        assert_eq!(spoofed.expand_placeholder("${SYSTEM_ROOT}"), None);
     }
 }

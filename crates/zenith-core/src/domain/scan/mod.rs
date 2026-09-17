@@ -26,7 +26,7 @@ pub mod unit;
 
 pub use unit::{
     AgeObservation, CleanupOwnership, CleanupUnit, CleanupUnitIdentity, CleanupUnitKind,
-    EligibilityGate, OwnershipConfidence, PathIdentity,
+    EligibilityGate, OwnershipConfidence, PathIdentity, StaleEntryObservation,
 };
 
 fn unavailable_observation_quality() -> ObservationQuality {
@@ -413,8 +413,12 @@ pub struct DispositionFacts<'a> {
     pub incomplete_reason: Option<&'a str>,
     /// The scan-policy gate that applied when the unit was discovered.
     pub gate: EligibilityGate,
+    /// Whether the owning application is running.
+    pub owner_running: bool,
     /// The age policy's verdict, when the unit carries one.
     pub age: Option<&'a AgeObservation>,
+    /// The per-entry verdict for a unit whose policy ages its entries.
+    pub stale: Option<&'a StaleEntryObservation>,
     /// The structured state the path was classified as, when it is one.
     pub structured_state: Option<StructuredStateKind>,
 }
@@ -436,7 +440,9 @@ impl<'a> DispositionFacts<'a> {
             size,
             incomplete_reason,
             gate: EligibilityGate::Open,
+            owner_running: false,
             age: None,
+            stale: None,
             structured_state: None,
         }
     }
@@ -446,8 +452,18 @@ impl<'a> DispositionFacts<'a> {
         self
     }
 
+    pub fn with_running_owner(mut self, owner_running: bool) -> Self {
+        self.owner_running = owner_running;
+        self
+    }
+
     pub fn with_age(mut self, age: Option<&'a AgeObservation>) -> Self {
         self.age = age;
+        self
+    }
+
+    pub fn with_stale_entries(mut self, stale: Option<&'a StaleEntryObservation>) -> Self {
+        self.stale = stale;
         self
     }
 
@@ -465,7 +481,9 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
         size,
         incomplete_reason,
         gate,
+        owner_running,
         age,
+        stale,
         structured_state,
     } = facts;
 
@@ -514,6 +532,18 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
         return CleanupDisposition::policy_gated(reason);
     }
 
+    // 6b. A policy that ages the entries inside the unit reports how much of it
+    //     satisfies the policy: nothing old enough is the `recent` state, and a
+    //     partial remainder is what the unit could actually reclaim.
+    if let Some(stale) = stale {
+        if stale.nothing_is_stale() {
+            return CleanupDisposition::recent(format!(
+                "Nothing in this location has been inactive for {} days",
+                stale.min_age_days
+            ));
+        }
+    }
+
     // 7. An age policy that is not satisfied blocks removal. The measurement is
     //    real and reported; the authorization is not there yet.
     if let Some(age) = age {
@@ -532,6 +562,7 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
     }
 
     let observed = size.observed_bytes();
+    let reclaimable = stale.map(|stale| stale.stale_bytes).unwrap_or(observed);
 
     // 8. Tool-managed caches: provider policy decides, never AutoCleanable
     if cache_metadata.management_mode == CacheManagementMode::ToolManaged {
@@ -540,13 +571,13 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
         }
         if quality == ObservationQuality::Partial {
             return CleanupDisposition::reviewable(
-                observed,
+                reclaimable,
                 incomplete_reason.map(Into::into).or_else(|| {
                     Some("Incomplete scan; review before pruning with provider".into())
                 }),
             );
         }
-        return CleanupDisposition::reviewable(observed, None);
+        return CleanupDisposition::reviewable(reclaimable, None);
     }
 
     // 9. Partial observation quality: reviewable, never auto-selected or quick-cleanable
@@ -555,10 +586,23 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
             return CleanupDisposition::blocked("No cleanable data found");
         }
         return CleanupDisposition::reviewable(
-            observed,
+            reclaimable,
             incomplete_reason
                 .map(Into::into)
                 .or_else(|| Some("Incomplete scan; review before cleaning".into())),
+        );
+    }
+
+    // 9b. An application that is running keeps its own cache: the unit stays
+    //     selectable, because the user may know better, but it is never
+    //     removed without that decision.
+    if owner_running {
+        return CleanupDisposition::reviewable(
+            reclaimable,
+            Some(
+                "The application that owns this location is running; close it before cleaning"
+                    .to_string(),
+            ),
         );
     }
 
@@ -566,9 +610,30 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
     if observed == 0 {
         return CleanupDisposition::blocked("No cleanable data found");
     }
+    // A stale-entry policy that only part of the unit satisfies says so: the
+    // estimate is the part that would go, and the reason names the rest.
+    let partial_reason = stale
+        .filter(|stale| stale.stale_bytes < observed)
+        .map(|stale| {
+            format!(
+                "Removing what has been inactive for {} days; the rest was modified more recently",
+                stale.min_age_days
+            )
+        });
+
     match risk {
-        RiskTier::Safe => CleanupDisposition::auto_cleanable(observed),
-        RiskTier::Rebuild => CleanupDisposition::reviewable(observed, None),
+        RiskTier::Safe => {
+            let disposition = CleanupDisposition::auto_cleanable(reclaimable);
+            match partial_reason {
+                Some(reason) => CleanupDisposition::new(
+                    disposition.eligibility,
+                    Some(reason),
+                    disposition.cleanable_bytes,
+                ),
+                None => disposition,
+            }
+        }
+        RiskTier::Rebuild => CleanupDisposition::reviewable(reclaimable, partial_reason),
         RiskTier::Manual => CleanupDisposition::blocked("Manual cleanup only"),
     }
 }
@@ -602,6 +667,10 @@ pub struct ScanItem {
     /// The age policy's verdict, when the unit carries one.
     #[serde(default)]
     pub age: Option<AgeObservation>,
+    /// The per-entry verdict, when the unit's policy ages the entries inside it
+    /// rather than the unit as a whole.
+    #[serde(default)]
+    pub stale: Option<StaleEntryObservation>,
     /// The structured state the path was classified as, when it is one.
     ///
     /// Recorded at discovery so the disposition derivation and the execution
@@ -619,6 +688,14 @@ pub struct ScanItem {
     /// The scan-policy gate that applied when this unit was discovered.
     #[serde(default)]
     pub gate: EligibilityGate,
+    /// Whether the application that owns this location is running right now.
+    ///
+    /// A cache an application is using is not abandoned storage, however old
+    /// its bytes are: removing it while the application holds it open is a
+    /// race the user did not ask for. The scan records the fact and the
+    /// disposition keeps the unit selectable but never automatic.
+    #[serde(default)]
+    pub owner_running: bool,
     pub is_selected: bool,
     #[serde(with = "crate::ipc_numeric::option_u64")]
     #[specta(type = Option<u64>)]
@@ -652,7 +729,9 @@ impl ScanItem {
             self.incomplete_reason.as_deref(),
         )
         .with_gate(self.gate)
+        .with_running_owner(self.owner_running)
         .with_age(self.age.as_ref())
+        .with_stale_entries(self.stale.as_ref())
         .with_structured_state(self.structured_state)
     }
 
@@ -728,7 +807,9 @@ impl ScanItem {
             unit: CleanupUnit::fixed_path(path),
             ownership: CleanupOwnership::unknown(),
             age: None,
+            stale: None,
             structured_state: None,
+            owner_running: false,
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             is_selected,
@@ -1036,9 +1117,11 @@ mod tests {
             unit: CleanupUnit::fixed_path("/Users/test/Library/Caches/uv"),
             ownership: CleanupOwnership::declared("Astral"),
             age: None,
+            stale: None,
             structured_state: None,
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
+            owner_running: false,
             is_selected: false,
             last_modified: Some(MAX_SAFE - 2),
             exists: true,
@@ -1335,6 +1418,57 @@ mod tests {
             CleanupEligibility::AutoCleanable
         );
         assert_eq!(item.cleanable_bytes(), 2_500_000_000);
+    }
+
+    /// A cache whose owner is running is never automatic, whatever its age.
+    #[test]
+    fn a_running_owner_keeps_its_cache_selectable_but_not_automatic() {
+        let size = FileSize::new(4_000_000, Some(4_000_000));
+        let meta = zenith_metadata();
+        let disposition = derive_cleanup_disposition(
+            DispositionFacts::new(
+                RiskTier::Safe,
+                ObservationQuality::Fresh,
+                &meta,
+                &size,
+                None,
+            )
+            .with_running_owner(true),
+        );
+        assert_eq!(disposition.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(disposition.cleanable_bytes, Some(4_000_000));
+        assert!(disposition.is_cleanable(), "the user may still choose it");
+        assert!(disposition
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("running")));
+
+        let mut item = ScanItem::mock(
+            "system.intensive.user_app_caches.0.com.example.app",
+            "system.intensive.user_app_caches",
+            "com.example.app",
+            Category::System,
+            RiskTier::Safe,
+            "/Users/test/Library/Caches/com.example.app",
+            size,
+            12,
+        );
+        item.owner_running = true;
+        item.unit = CleanupUnit::child_namespace(
+            "/Users/test/Library/Caches",
+            "/Users/test/Library/Caches/com.example.app",
+        );
+        let item = item.with_derived_disposition();
+        assert!(item.has_current_disposition());
+        assert_eq!(item.disposition.eligibility, CleanupEligibility::Reviewable);
+        assert!(
+            !item.is_selected,
+            "an application that is running keeps its cache out of the default selection"
+        );
+        assert!(
+            item.allows_cleanup(),
+            "an explicit selection is still allowed"
+        );
     }
 
     /// The breakdown is the explanation: discovered bytes partition into the

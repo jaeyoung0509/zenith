@@ -133,7 +133,9 @@ impl Signature {
             CleanStrategy::DockerPrune => CleanupUnitKind::ContainerResource,
             CleanStrategy::ExternalCommand => CleanupUnitKind::ProviderAction,
             CleanStrategy::Manual => CleanupUnitKind::FixedPath,
-            CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory => {
+            CleanStrategy::DeleteContents
+            | CleanStrategy::DeleteDirectory
+            | CleanStrategy::DeleteStaleContents => {
                 if self.min_age_days.is_some() {
                     CleanupUnitKind::ChildNamespace
                 } else {
@@ -150,9 +152,9 @@ impl Signature {
             CleanStrategy::DockerPrune => CleanupUnitKind::ContainerResource,
             CleanStrategy::ExternalCommand => CleanupUnitKind::ProviderAction,
             CleanStrategy::Manual => CleanupUnitKind::FixedPath,
-            CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory => {
-                CleanupUnitKind::FixedPath
-            }
+            CleanStrategy::DeleteContents
+            | CleanStrategy::DeleteDirectory
+            | CleanStrategy::DeleteStaleContents => CleanupUnitKind::FixedPath,
         }
     }
 
@@ -222,6 +224,60 @@ impl Signature {
                 "unit `{}` owns no host path, but the signature declares paths",
                 kind.display_name()
             ));
+        }
+
+        // A selector is allowed in `paths` only: the scanner enumerates roots
+        // from it, while an exclusion or a child prefix is matched against a
+        // concrete name, where `*` would match nothing and silently fail to
+        // protect what it names.
+        for exclusion in &self.exclusions {
+            if zenith_platform::selector::contains_selector_syntax(exclusion) {
+                return invalid(format!(
+                    "exclusion `{exclusion}` contains selector syntax; name the path or the entry instead"
+                ));
+            }
+        }
+        for prefix in self
+            .include_prefixes
+            .iter()
+            .chain(self.exclude_prefixes.iter())
+        {
+            if zenith_platform::selector::contains_selector_syntax(prefix) {
+                return invalid(format!(
+                    "prefix `{prefix}` contains selector syntax; a prefix is a literal name fragment"
+                ));
+            }
+        }
+
+        for pattern in &self.paths {
+            if pattern.contains('%') {
+                return invalid(format!(
+                    "path `{pattern}` uses an environment spelling this build does not resolve; \
+                     write it as ${{...}} (`${{USER_HOME}}`, `${{LOCAL_APP_DATA}}`, \
+                     `${{ROAMING_APP_DATA}}`, `${{PROGRAM_FILES}}`, `${{PROGRAM_DATA}}`, \
+                     `${{TEMP}}`, `${{SYSTEM_ROOT}}`, `${{DARWIN_USER_CACHE}}`) or as an absolute path"
+                ));
+            }
+            if let Err(reason) = zenith_platform::selector::validate_pattern_syntax(pattern) {
+                return invalid(reason);
+            }
+        }
+
+        if self.strategy == CleanStrategy::DeleteStaleContents {
+            if self.min_age_days.is_none() {
+                return invalid(
+                    "a stale-entry cleanup needs an age policy: without one it removes every \
+                     entry it finds"
+                        .to_string(),
+                );
+            }
+            if !matches!(kind, CleanupUnitKind::ChildNamespace) {
+                return invalid(format!(
+                    "a stale-entry cleanup ages the entries inside a discovered unit, but the \
+                     declared unit is `{}`",
+                    kind.display_name()
+                ));
+            }
         }
 
         for executable in &self.fail_if_running {
