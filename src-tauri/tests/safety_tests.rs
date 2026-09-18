@@ -2221,13 +2221,6 @@ fn the_shipped_explorer_cache_entry_scans_and_plans() {
         "the shipped prefix list keeps the rest of the directory out of scope"
     );
 
-    eprintln!(
-        "DEBUG item ownership={:?} signature ownership={:?} unit={:?}",
-        cache_item.ownership,
-        signature.ownership(),
-        cache_item.unit
-    );
-
     // Discovery is not the claim: the plan must be buildable too.
     let mut selected = cache_item.clone();
     selected.is_selected = true;
