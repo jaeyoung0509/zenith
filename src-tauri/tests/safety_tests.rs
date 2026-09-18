@@ -1998,6 +1998,20 @@ fn age_entry(path: &std::path::Path, days: u64) {
     let when = std::time::SystemTime::now()
         .checked_sub(std::time::Duration::from_secs(days * 86_400))
         .expect("the fixture clock has a past");
+    #[cfg(unix)]
+    let entry = std::fs::File::open(path).expect("open fixture entry");
+    #[cfg(windows)]
+    let entry = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .expect("open fixture entry")
+    };
+    #[cfg(not(any(unix, windows)))]
     let entry = std::fs::OpenOptions::new()
         .write(true)
         .open(path)
@@ -2655,6 +2669,196 @@ fn a_target_that_changed_kind_between_scan_and_clean_is_skipped() {
         other => panic!("expected the changed kind to be refused, got {other:?}"),
     }
     assert!(target.exists());
+}
+
+#[test]
+fn stale_cleanup_requires_identity_at_revalidation() {
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("stale-cache");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("old.bin"), b"data").unwrap();
+
+    let plan_target = DeleteTarget {
+        item_id: "stale-no-identity".into(),
+        signature_id: "test.stale".into(),
+        name: "Stale cache".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteStaleContents,
+        expected_bytes: 4,
+        risk: RiskTier::Safe,
+        identity: None,
+        exclusions: vec![],
+        min_age_days: Some(7),
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Failed(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::ChangedSinceScan)
+            );
+            assert!(
+                result
+                    .error_message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("Filesystem identity is missing"),
+                "error was: {:?}",
+                result.error_message
+            );
+        }
+        other => panic!("expected missing identity to fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn stale_cleanup_allows_mtime_change_with_same_entity() {
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("stale-cache");
+    fs::create_dir(&target).unwrap();
+    let old = target.join("old.bin");
+    fs::write(&old, b"stale").unwrap();
+    age_entry(&old, 30);
+    age_entry(&target, 30);
+
+    let identity = ToctouGuard::capture(&target);
+    assert!(identity.is_some());
+
+    // Directory mtime changes
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    fs::write(target.join("fresh.bin"), b"fresh").unwrap();
+
+    let plan_target = DeleteTarget {
+        item_id: "stale-mtime".into(),
+        signature_id: "test.stale".into(),
+        name: "Stale cache".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteStaleContents,
+        expected_bytes: 5,
+        risk: RiskTier::Safe,
+        identity,
+        exclusions: vec![],
+        min_age_days: Some(7),
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Validated(validated) => {
+            assert_eq!(validated.path(), &target);
+        }
+        other => panic!("expected validated target despite mtime change, got {other:?}"),
+    }
+}
+
+#[test]
+fn stale_cleanup_refuses_replaced_directory_at_revalidation() {
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("stale-cache");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("old.bin"), b"stale").unwrap();
+
+    let identity = ToctouGuard::capture(&target);
+    assert!(identity.is_some());
+
+    fs::remove_dir_all(&target).unwrap();
+    fs::create_dir(&target).unwrap();
+    let old = target.join("old.bin");
+    fs::write(&old, b"stale").unwrap();
+    age_entry(&old, 30);
+
+    let plan_target = DeleteTarget {
+        item_id: "stale-replaced".into(),
+        signature_id: "test.stale".into(),
+        name: "Stale cache".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteStaleContents,
+        expected_bytes: 5,
+        risk: RiskTier::Safe,
+        identity,
+        exclusions: vec![],
+        min_age_days: Some(7),
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
+        RevalidationOutcome::Skipped(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::ChangedSinceScan)
+            );
+        }
+        other => panic!("expected replaced directory to be skipped, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_cleanup_refuses_incomplete_directory_tree_at_revalidation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = tempdir().expect("fixture");
+    let target = fixture.path().join("stale-cache");
+    let sub = target.join("inaccessible");
+    fs::create_dir_all(&sub).unwrap();
+    let old = target.join("old.bin");
+    fs::write(&old, b"stale-data-500mb").unwrap();
+    age_entry(&old, 30);
+    age_entry(&target, 30);
+
+    let identity = ToctouGuard::capture(&target);
+    assert!(identity.is_some());
+
+    // Subtree becomes unreadable
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let plan_target = DeleteTarget {
+        item_id: "stale-incomplete".into(),
+        signature_id: "test.stale".into(),
+        name: "Stale cache".into(),
+        path: target.clone(),
+        strategy: CleanStrategy::DeleteStaleContents,
+        expected_bytes: 16,
+        risk: RiskTier::Safe,
+        identity,
+        exclusions: vec![],
+        min_age_days: Some(7),
+        unit: CleanupUnit::fixed_path(target.to_string_lossy().into_owned()),
+        target_kind: EntryKind::Directory,
+        owner: CleanupOwnership::unknown(),
+        process_guard: RunningProcessPolicy::none(),
+    };
+
+    let outcome = SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native());
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    match outcome {
+        RevalidationOutcome::Skipped(result) => {
+            assert_eq!(
+                result.failure_reason,
+                Some(CleanFailureReason::ChangedSinceScan)
+            );
+            assert!(
+                result
+                    .error_message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("Directory structure could not be fully verified"),
+                "error was: {:?}",
+                result.error_message
+            );
+        }
+        other => panic!("expected incomplete tree to be skipped, got {other:?}"),
+    }
 }
 
 /// A scan result that carries the given items, taken now, so a test plans

@@ -81,6 +81,13 @@ pub struct PathSelector {
     flavor: PathFlavor,
 }
 
+/// An access or I/O failure encountered while expanding a pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectionFailure {
+    pub path: PathBuf,
+    pub error: String,
+}
+
 /// What an expansion found, and whether it stopped early.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SelectionOutcome {
@@ -88,6 +95,16 @@ pub struct SelectionOutcome {
     pub matches: Vec<PathBuf>,
     /// True when the match cap stopped the enumeration before it finished.
     pub truncated: bool,
+    /// Locations where enumeration failed because of permissions or I/O errors.
+    pub failures: Vec<SelectionFailure>,
+}
+
+impl SelectionOutcome {
+    pub fn record_failure(&mut self, path: PathBuf, error: String) {
+        if !self.failures.iter().any(|f| f.path == path) {
+            self.failures.push(SelectionFailure { path, error });
+        }
+    }
 }
 
 impl PathSelector {
@@ -283,11 +300,26 @@ impl PathSelector {
             // nothing rather than enumerating a filesystem root.
             return outcome;
         }
-        let mut frontier = vec![PathParts {
+
+        let static_parts = PathParts {
             prefix: self.parts.prefix.clone(),
             rooted: self.parts.rooted,
             components: static_components,
-        }];
+        };
+        let static_path = path_algebra::join_parts(&static_parts, flavor);
+        let static_path_buf = PathBuf::from(&static_path);
+        match std::fs::metadata(&static_path_buf) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return outcome;
+            }
+            Err(err) => {
+                outcome.record_failure(static_path_buf, err.to_string());
+                return outcome;
+            }
+        }
+
+        let mut frontier = vec![static_parts];
         let mut truncated = false;
 
         let last_index = self.components.len().saturating_sub(1);
@@ -300,22 +332,54 @@ impl PathSelector {
                         let mut extended = parts.clone();
                         extended.components.push(name.clone());
                         let joined = path_algebra::join_parts(&extended, flavor);
-                        if accepts_match(std::path::Path::new(&joined), is_last) {
-                            next.push(extended);
+                        let candidate_path = std::path::Path::new(&joined);
+                        match evaluate_entry(candidate_path, is_last) {
+                            EntryAcceptance::Accepted => {
+                                next.push(extended);
+                            }
+                            EntryAcceptance::Rejected => {}
+                            EntryAcceptance::Failed(err) => {
+                                outcome.record_failure(candidate_path.to_path_buf(), err);
+                            }
                         }
                     }
                     SelectorComponent::AnyOne | SelectorComponent::OneOf(_) => {
                         let base = path_algebra::join_parts(parts, flavor);
-                        let entries = match std::fs::read_dir(&base) {
+                        let base_path = std::path::Path::new(&base);
+                        let entries = match std::fs::read_dir(base_path) {
                             Ok(entries) => entries,
-                            Err(_) => continue,
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(err) => {
+                                outcome.record_failure(base_path.to_path_buf(), err.to_string());
+                                continue;
+                            }
                         };
-                        let mut names: Vec<String> = entries
-                            .flatten()
-                            .filter(|entry| accepts_match(&entry.path(), is_last))
-                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                            .filter(|name| component.matches(name, flavor))
-                            .collect();
+                        let mut names: Vec<String> = Vec::new();
+                        for entry_result in entries {
+                            let entry = match entry_result {
+                                Ok(entry) => entry,
+                                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                                Err(err) => {
+                                    outcome
+                                        .record_failure(base_path.to_path_buf(), err.to_string());
+                                    continue;
+                                }
+                            };
+                            let entry_path = entry.path();
+                            let name = entry.file_name().to_string_lossy().into_owned();
+                            if !component.matches(&name, flavor) {
+                                continue;
+                            }
+                            match evaluate_entry(&entry_path, is_last) {
+                                EntryAcceptance::Accepted => {
+                                    names.push(name);
+                                }
+                                EntryAcceptance::Rejected => {}
+                                EntryAcceptance::Failed(err) => {
+                                    outcome.record_failure(entry_path, err);
+                                }
+                            }
+                        }
                         names.sort_by(|left, right| {
                             path_algebra::fold(left, flavor)
                                 .cmp(&path_algebra::fold(right, flavor))
@@ -392,19 +456,27 @@ fn mask_placeholders(value: &str) -> String {
     masked
 }
 
-/// Whether an entry may appear at this position of an expansion.
+enum EntryAcceptance {
+    Accepted,
+    Rejected,
+    Failed(String),
+}
+
+/// Evaluates whether an entry may appear at this position of an expansion.
 ///
 /// A component that is not the last one is descended into, so it must be a
 /// directory the filesystem presents directly: a link, or a Windows reparse
 /// point of any tag, ends the branch. The last component is the match, so it
 /// only has to exist — the scan decides what it is and reports what it cannot
 /// clean.
-fn accepts_match(path: &Path, is_last: bool) -> bool {
+fn evaluate_entry(path: &Path, is_last: bool) -> EntryAcceptance {
     match std::fs::symlink_metadata(path) {
         // The last component is the match: it only has to exist, whatever it is.
-        Ok(_) if is_last => true,
-        Ok(metadata) => is_traversable_directory(&metadata),
-        Err(_) => false,
+        Ok(_) if is_last => EntryAcceptance::Accepted,
+        Ok(metadata) if is_traversable_directory(&metadata) => EntryAcceptance::Accepted,
+        Ok(_) => EntryAcceptance::Rejected,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => EntryAcceptance::Rejected,
+        Err(err) => EntryAcceptance::Failed(err.to_string()),
     }
 }
 
@@ -755,6 +827,36 @@ mod tests {
         let outcome = selector.expand(POSIX, SELECTION_LIMIT);
         assert!(outcome.matches.is_empty());
         assert!(!outcome.truncated);
+        assert!(outcome.failures.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_inaccessible_intermediate_directory_reports_selection_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let parent = fixture.path().join("Containers");
+        let app = parent.join("com.example.app");
+        let cache = app.join("Data").join("Caches");
+        std::fs::create_dir_all(&cache).expect("fixture");
+
+        // Make Containers unreadable
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+        let pattern = format!(
+            "{}/Containers/*/Data/Caches",
+            fixture.path().to_string_lossy()
+        );
+        let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
+        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+
+        // Restore permission so tempdir cleanup succeeds
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        assert!(outcome.matches.is_empty());
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].path, parent);
     }
 
     const SELECTION_LIMIT: usize = SELECTOR_MATCH_LIMIT;

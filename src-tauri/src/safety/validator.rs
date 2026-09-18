@@ -304,7 +304,9 @@ impl SafetyValidator {
         // strategies never reach a filesystem mutation primitive.
         if matches!(
             target.strategy,
-            CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
+            CleanStrategy::DeleteContents
+                | CleanStrategy::DeleteDirectory
+                | CleanStrategy::DeleteStaleContents
         ) && target.identity.is_none()
         {
             return failed(
@@ -371,7 +373,12 @@ impl SafetyValidator {
 
         // 4. TOCTOU identity verification
         if let Some(expected_identity) = &target.identity {
-            if let Err(e) = ToctouGuard::verify(path, expected_identity) {
+            let verify_result = if target.strategy == CleanStrategy::DeleteStaleContents {
+                ToctouGuard::verify_entity(path, expected_identity)
+            } else {
+                ToctouGuard::verify(path, expected_identity)
+            };
+            if let Err(e) = verify_result {
                 if crate::safety::is_already_absent(&e) {
                     return skipped(
                         target,
@@ -485,6 +492,23 @@ impl SafetyValidator {
                     &crate::models::NeverCancelled,
                     stale_policy,
                 );
+                if !stats.complete {
+                    if let Err(error) = std::fs::symlink_metadata(path) {
+                        if error.kind() == std::io::ErrorKind::NotFound {
+                            return skipped(
+                                target,
+                                CleanFailureReason::NotFound,
+                                format!("{} was already absent before cleanup", path.display()),
+                            );
+                        }
+                    }
+                    return skipped(
+                        target,
+                        CleanFailureReason::ChangedSinceScan,
+                        "Directory structure could not be fully verified; aborted to protect active files",
+                    );
+                }
+
                 // A stale-entry target is allowed to be recent as a whole: what
                 // it authorizes is the entries inside it that are not. The
                 // measurement above counted them, and the primitive counts them
@@ -501,22 +525,6 @@ impl SafetyValidator {
                         );
                     }
                     return RevalidationOutcome::Validated(ValidatedTarget::from_planned(target));
-                }
-                if !stats.complete {
-                    if let Err(error) = std::fs::symlink_metadata(path) {
-                        if error.kind() == std::io::ErrorKind::NotFound {
-                            return skipped(
-                                target,
-                                CleanFailureReason::NotFound,
-                                format!("{} was already absent before cleanup", path.display()),
-                            );
-                        }
-                    }
-                    return skipped(
-                        target,
-                        CleanFailureReason::ChangedSinceScan,
-                        "Directory structure could not be fully verified; aborted to protect active files",
-                    );
                 }
                 let newest = stats.newest_mtime.and_then(|modified| {
                     modified

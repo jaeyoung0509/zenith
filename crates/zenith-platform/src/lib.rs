@@ -56,8 +56,8 @@ pub use path_algebra::PathFlavor;
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
 pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
 pub use selector::{
-    validate_pattern_syntax, PathSelector, SelectionOutcome, SelectorComponent, SelectorError,
-    SELECTOR_MATCH_LIMIT,
+    validate_pattern_syntax, PathSelector, SelectionFailure, SelectionOutcome, SelectorComponent,
+    SelectorError, SELECTOR_MATCH_LIMIT,
 };
 pub use subprocess::{run_with_timeout, run_with_timeout_async, set_error_sink, SubprocessError};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};
