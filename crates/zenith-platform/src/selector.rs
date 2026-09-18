@@ -100,10 +100,19 @@ pub struct SelectionOutcome {
 }
 
 impl SelectionOutcome {
+    /// Records an access or I/O failure once per path.
+    ///
+    /// The events arrive in filesystem order, which is not stable. The recorded
+    /// list is kept sorted by path so that an item derived from it —
+    /// `…unavailable.<index>` — has one identity per snapshot of the tree, no
+    /// matter which branch failed first.
     pub fn record_failure(&mut self, path: PathBuf, error: String) {
-        if !self.failures.iter().any(|f| f.path == path) {
-            self.failures.push(SelectionFailure { path, error });
+        if self.failures.iter().any(|failure| failure.path == path) {
+            return;
         }
+        self.failures.push(SelectionFailure { path, error });
+        self.failures
+            .sort_by(|left, right| left.path.cmp(&right.path));
     }
 }
 
@@ -308,8 +317,23 @@ impl PathSelector {
         };
         let static_path = path_algebra::join_parts(&static_parts, flavor);
         let static_path_buf = PathBuf::from(&static_path);
-        match std::fs::metadata(&static_path_buf) {
-            Ok(_) => {}
+        // The root the frontier starts from is judged like every component the
+        // selector walks: it has to be a directory this expansion may descend
+        // into. The components above it are taken as the environment spelled
+        // them — macOS states its roots through `/var`, which is itself a link —
+        // but this one is the pattern's own statement of where the tree is, and
+        // following a link here would read a tree the signature does not name.
+        match std::fs::symlink_metadata(&static_path_buf) {
+            Ok(metadata) if is_traversable_directory(&metadata) => {}
+            Ok(metadata) => {
+                let reason = if metadata.file_type().is_symlink() || metadata.is_dir() {
+                    "the pattern's static root is an indirection; a pattern is not expanded through one"
+                } else {
+                    "the pattern's static root is not a directory the scan can descend into"
+                };
+                outcome.record_failure(static_path_buf, reason.to_string());
+                return outcome;
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return outcome;
             }
@@ -386,8 +410,11 @@ impl PathSelector {
                                 .then_with(|| left.cmp(right))
                         });
                         for name in names {
-                            if next.len() >= limit {
-                                truncated = true;
+                            // One candidate past the cap is kept: it is what
+                            // proves the enumeration was cut short, so a
+                            // pattern with exactly `limit` matches is not
+                            // reported as truncated.
+                            if next.len() > limit {
                                 break;
                             }
                             let mut extended = parts.clone();
@@ -396,7 +423,8 @@ impl PathSelector {
                         }
                     }
                 }
-                if next.len() >= limit {
+                if next.len() > limit {
+                    next.truncate(limit);
                     truncated = true;
                     break;
                 }
@@ -857,6 +885,86 @@ mod tests {
         assert!(outcome.matches.is_empty());
         assert_eq!(outcome.failures.len(), 1);
         assert_eq!(outcome.failures[0].path, parent);
+    }
+
+    /// The root the pattern starts from is judged like every component the
+    /// selector walks: a link there would read the tree behind it.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_static_root_is_not_expanded() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let elsewhere = tempfile::tempdir().expect("fixture");
+        std::fs::create_dir_all(elsewhere.path().join("com.example.app").join("GPUCache"))
+            .expect("fixture");
+        let linked = fixture.path().join("Application Support");
+        symlink(elsewhere.path(), &linked).expect("link fixture");
+
+        let pattern = format!("{}/*/GPUCache", linked.to_string_lossy());
+        let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
+        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+
+        assert!(
+            outcome.matches.is_empty(),
+            "the tree behind a linked static root is never read: {outcome:?}"
+        );
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].path, linked);
+        assert!(outcome.failures[0].error.contains("indirection"));
+    }
+
+    /// Exactly the cap is a complete enumeration, not a truncation.
+    #[test]
+    fn an_exact_limit_expansion_is_not_reported_as_truncated() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        for index in 0..2 {
+            std::fs::create_dir_all(fixture.path().join(format!("app{index}"))).expect("fixture");
+        }
+        let pattern = format!("{}/*", fixture.path().to_string_lossy());
+        let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
+
+        let outcome = selector.expand(POSIX, 2);
+        assert_eq!(outcome.matches.len(), 2);
+        assert!(
+            !outcome.truncated,
+            "one match per enumerated candidate is not a truncation"
+        );
+    }
+
+    /// Failures arrive in directory order, which is not stable, and the order
+    /// decides which `unavailable.<index>` a location becomes.
+    #[cfg(unix)]
+    #[test]
+    fn selection_failures_are_ordered_by_path_not_by_directory_order() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture.path().join("namespace");
+        std::fs::create_dir_all(&root).expect("fixture");
+        for name in ["zeta", "alpha"] {
+            std::fs::write(root.join(name), b"x").expect("fixture");
+        }
+        // Readable but not searchable: the names are listed, and every entry
+        // then fails to answer for itself.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o400)).expect("chmod");
+
+        let pattern = format!("{}/*", root.to_string_lossy());
+        let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
+        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let paths: Vec<std::path::PathBuf> = outcome
+            .failures
+            .iter()
+            .map(|failure| failure.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![root.join("alpha"), root.join("zeta")],
+            "the recorded order is the path order, not the directory order"
+        );
     }
 
     const SELECTION_LIMIT: usize = SELECTOR_MATCH_LIMIT;
