@@ -1492,24 +1492,27 @@ mod tests {
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
         let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
+        let mut expected_names = vec![
+            "Test aged caches (com.example.aged)",
+            "Test aged caches (com.example.fresh)",
+        ];
+        // The linked match comes from the POSIX-only symlink fixture above.
+        #[cfg(unix)]
+        expected_names.push("Test aged caches (com.example.linked)");
         assert_eq!(
-            names,
-            vec![
-                "Test aged caches (com.example.aged)",
-                "Test aged caches (com.example.fresh)",
-                "Test aged caches (com.example.linked)"
-            ],
+            names, expected_names,
             "each match is reported once, named by the component the pattern left open"
         );
 
         let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+        let mut expected_ids = vec![
+            "system.test.aged.0.com.example.aged",
+            "system.test.aged.0.com.example.fresh",
+        ];
+        #[cfg(unix)]
+        expected_ids.push("system.test.aged.0.com.example.linked");
         assert_eq!(
-            ids,
-            vec![
-                "system.test.aged.0.com.example.aged",
-                "system.test.aged.0.com.example.fresh",
-                "system.test.aged.0.com.example.linked"
-            ],
+            ids, expected_ids,
             "two matches of one pattern never share an identity"
         );
 
