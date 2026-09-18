@@ -844,6 +844,26 @@ impl SafeTreeDeleter {
                 report.errors.push(error);
                 return;
             }
+            // An entry is removed only when its own age satisfies the policy.
+            // This path walker and the descriptor-relative one must refuse the
+            // same entries, or the guard's promise would depend on which route
+            // the filesystem allowed.
+            if let Some(policy) = stale_policy {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if !policy.allows(
+                    &name,
+                    super::stale::entry_kind(&metadata),
+                    super::stale::is_executable(&metadata),
+                    metadata.modified().ok(),
+                    std::time::SystemTime::now(),
+                ) {
+                    report.skipped_files += 1;
+                    return;
+                }
+            }
             let bytes = allocated_bytes(&metadata);
             #[cfg(unix)]
             {
@@ -1804,5 +1824,95 @@ mod tests {
         // Restore readonly on failure
         handle.restore_readonly().unwrap();
         assert!(std::fs::metadata(&target).unwrap().permissions().readonly());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_path_walker_refuses_recent_files_and_keeps_recent_directories() {
+        use std::time::{Duration, SystemTime};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("cache");
+        let old_dir = root.join("old");
+        let recent_dir = root.join("recent");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&recent_dir).unwrap();
+        let old_file = old_dir.join("old.bin");
+        let recent_file = old_dir.join("recent.bin");
+        let recent_only = recent_dir.join("recent.bin");
+        std::fs::write(&old_file, vec![0u8; 64]).unwrap();
+        std::fs::write(&recent_file, vec![0u8; 64]).unwrap();
+        std::fs::write(&recent_only, vec![0u8; 64]).unwrap();
+
+        let old = SystemTime::now() - Duration::from_secs(40 * 24 * 60 * 60);
+        for path in [&old_file, &recent_file, &recent_only] {
+            let handle = std::fs::File::options().write(true).open(path).unwrap();
+            let modified = if path == &old_file {
+                old
+            } else {
+                SystemTime::now()
+            };
+            handle.set_modified(modified).unwrap();
+        }
+        for path in [&old_dir, &recent_dir] {
+            let handle = std::fs::File::open(path).unwrap();
+            handle
+                .set_modified(SystemTime::now() - Duration::from_secs(10 * 24 * 60 * 60))
+                .unwrap();
+        }
+
+        let environment = environment();
+        let policy = super::super::StaleEntryPolicy::from_days(7);
+        let report =
+            SafeTreeDeleter::delete_path_with_policy(&root, &[], &environment, true, Some(policy));
+
+        assert!(!old_file.exists(), "a stale file is removed");
+        assert!(recent_file.exists(), "a recent file beside it stays");
+        assert!(
+            recent_dir.exists(),
+            "a directory is descended into and kept"
+        );
+        assert!(recent_only.exists(), "its recent entry stays");
+        assert_eq!(report.skipped_files, 2);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(report.reclaimed_bytes > 0);
+    }
+
+    /// The path walker judges a file on its own age. It is the route a
+    /// filesystem that refuses a parent descriptor falls back to, and it must
+    /// refuse the same entries as the descriptor-relative walk.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_entry_is_judged_on_its_own_age() {
+        use std::time::{Duration, SystemTime};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let dir = fixture.path().join("cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        let recent = dir.join("recent.bin");
+        let old = dir.join("old.bin");
+        std::fs::write(&recent, vec![0u8; 64]).unwrap();
+        std::fs::write(&old, vec![0u8; 64]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(40 * 24 * 60 * 60))
+            .unwrap();
+
+        let environment = environment();
+        let policy = super::super::StaleEntryPolicy::from_days(7);
+        let mut report = TreeDeleteReport {
+            protect_structured_state: true,
+            ..Default::default()
+        };
+        SafeTreeDeleter::delete_entry(&recent, &dir, &[], &environment, Some(policy), &mut report);
+        assert!(recent.exists(), "a recent entry is refused");
+        assert_eq!(report.skipped_files, 1);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+        SafeTreeDeleter::delete_entry(&old, &dir, &[], &environment, Some(policy), &mut report);
+        assert!(!old.exists(), "a stale entry on the same route is removed");
+        assert_eq!(report.deleted_files, 1);
     }
 }
