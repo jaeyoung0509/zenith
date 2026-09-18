@@ -108,22 +108,34 @@ pub struct RunningApplications {
 
 impl RunningApplications {
     /// Asks the process table which application bundles are in use.
+    ///
+    /// Bundle identifiers are a macOS fact, and so is this probe: elsewhere no
+    /// cache namespace is named after one, so the call costs nothing and
+    /// reports nothing.
     pub fn probe() -> Self {
-        let mut system = System::new_all();
-        system.refresh_processes(ProcessesToUpdate::All, true);
-        let mut bundle_ids = Vec::new();
-        for process in system.processes().values() {
-            let Some(executable) = process.exe() else {
-                continue;
-            };
-            let Some(bundle) = app_bundle_of(executable) else {
-                continue;
-            };
-            if let Some(identifier) = bundle_identifier(bundle) {
-                bundle_ids.push(identifier);
+        #[cfg(target_os = "macos")]
+        {
+            let mut system = System::new();
+            system.refresh_processes(ProcessesToUpdate::All, true);
+            let mut bundle_ids = Vec::new();
+            for process in system.processes().values() {
+                let Some(executable) = process.exe() else {
+                    continue;
+                };
+                let Some(bundle) = app_bundle_of(executable) else {
+                    continue;
+                };
+                if let Some(identifier) = bundle_identifier(bundle) {
+                    bundle_ids.push(identifier);
+                }
             }
+            Self::from_ids(bundle_ids)
         }
-        Self::from_ids(bundle_ids)
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::default()
+        }
     }
 
     /// States the running bundles. The production probe is the process table;
@@ -163,6 +175,7 @@ impl RunningApplications {
 }
 
 /// The `.app` bundle a path lives inside, if any.
+#[cfg(target_os = "macos")]
 fn app_bundle_of(path: &Path) -> Option<&Path> {
     path.ancestors().find(|ancestor| {
         ancestor
@@ -171,16 +184,9 @@ fn app_bundle_of(path: &Path) -> Option<&Path> {
     })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn bundle_identifier(bundle: &Path) -> Option<String> {
     read_bundle_metadata(bundle).metadata.bundle_id
-}
-
-#[cfg(target_os = "windows")]
-fn bundle_identifier(_bundle: &Path) -> Option<String> {
-    // Bundle identifiers are a macOS concept; a Windows process has none to
-    // match a cache namespace against.
-    None
 }
 
 pub struct ApplicationScanner;
@@ -1331,6 +1337,17 @@ mod tests {
         assert_eq!(none.owner_of("com.example.app"), None);
     }
 
+    /// Bundle ownership is a macOS fact. On any other platform the probe must
+    /// still exist, type-check, and answer "nothing is running" — rather than
+    /// make every scan pay for a process-table pass whose answer cannot match
+    /// a cache namespace.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_probe_is_inert_where_bundles_do_not_exist() {
+        assert!(RunningApplications::probe().is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_bundle_of_an_executable_is_the_application_that_runs_it() {
         assert_eq!(
