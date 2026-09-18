@@ -1338,11 +1338,24 @@ mod tests {
             .checked_sub(std::time::Duration::from_secs(days * 86_400))
             .expect("the fixture clock has a past");
         // A POSIX directory can only be opened for reading, and a read-only
-        // handle can still set its timestamp; Windows needs write access to
-        // change one, and only the file fixtures are backdated there.
+        // handle can still set its timestamp. Windows refuses `GENERIC_WRITE`
+        // for a directory, so a directory handle asks for
+        // `FILE_WRITE_ATTRIBUTES` — which is what setting a timestamp needs —
+        // and `FILE_FLAG_BACKUP_SEMANTICS`, which is what opens a directory.
         #[cfg(unix)]
         let entry = std::fs::File::open(path).expect("open fixture entry");
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let entry = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .expect("open fixture entry")
+        };
+        #[cfg(not(any(unix, windows)))]
         let entry = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
