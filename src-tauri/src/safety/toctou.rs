@@ -64,33 +64,36 @@ impl ToctouGuard {
         }
     }
 
-    /// Verifies that the filesystem identity matches what was recorded during scanning.
-    pub fn verify(path: &Path, expected: &CleanupIdentity) -> Result<(), ZenithError> {
-        let current = match Self::capture(path) {
-            Some(id) => id,
+    fn capture_or_err(path: &Path) -> Result<CleanupIdentity, ZenithError> {
+        match Self::capture(path) {
+            Some(id) => Ok(id),
             None => match fs::symlink_metadata(path) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(ZenithError::Missing(path.display().to_string()));
+                    Err(ZenithError::Missing(path.display().to_string()))
                 }
-                Err(error) => {
-                    return Err(ZenithError::ChangedSinceScan(format!(
-                        "Could not read metadata for {}: {}",
-                        path.display(),
-                        error
-                    )));
-                }
+                Err(error) => Err(ZenithError::ChangedSinceScan(format!(
+                    "Could not read metadata for {}: {}",
+                    path.display(),
+                    error
+                ))),
                 Ok(_) => {
                     // The path still exists, but `capture` could not derive a
                     // complete identity (for example, Windows could not open
                     // the handle). That is never equivalent to absence.
-                    return Err(ZenithError::ChangedSinceScan(format!(
+                    Err(ZenithError::ChangedSinceScan(format!(
                         "Could not verify filesystem identity for {}",
                         path.display()
-                    )));
+                    )))
                 }
             },
-        };
+        }
+    }
 
+    fn verify_entity_identity(
+        current: &CleanupIdentity,
+        expected: &CleanupIdentity,
+        path: &Path,
+    ) -> Result<(), ZenithError> {
         // A missing or zero identity is never accepted as verified when
         // identity comparison is required. Previous Windows captures that
         // could not open a directory recorded (0, 0) and skipped the check;
@@ -129,12 +132,28 @@ impl ToctouGuard {
             )));
         }
 
+        Ok(())
+    }
+
+    /// Verifies the filesystem entity (device/inode or volume/file ID and kind)
+    /// without requiring modification timestamp or size equality.
+    ///
+    /// Used by stale-content cleanup where child files change and modify the
+    /// directory's mtime, but the target must remain the same filesystem object
+    /// approved by the scan.
+    pub fn verify_entity(path: &Path, expected: &CleanupIdentity) -> Result<(), ZenithError> {
+        let current = Self::capture_or_err(path)?;
+        Self::verify_entity_identity(&current, expected, path)
+    }
+
+    /// Verifies that the filesystem identity matches what was recorded during scanning.
+    pub fn verify(path: &Path, expected: &CleanupIdentity) -> Result<(), ZenithError> {
+        let current = Self::capture_or_err(path)?;
+        Self::verify_entity_identity(&current, expected, path)?;
+
         // Modification timestamp and size must match for files. Directories
         // are also freshness-checked by default so a target directory changed
-        // after scanning fails closed. The narrowly documented exception is
-        // stale-temp signatures (`min_age_days`): the executor re-measures the
-        // full tree newest-mtime immediately before deletion instead of
-        // relying on the single directory mtime captured at plan time.
+        // after scanning fails closed.
         if current.modified() != expected.modified() {
             return Err(ZenithError::ChangedSinceScan(format!(
                 "{} was modified after scanning (mtime mismatch)",
@@ -274,6 +293,43 @@ mod tests {
 
         assert!(matches!(
             ToctouGuard::verify(&target, &identity),
+            Err(ZenithError::ChangedSinceScan(_))
+        ));
+    }
+
+    /// `verify_entity` allows mtime changes on a directory while strictly verifying entity.
+    #[test]
+    fn verify_entity_allows_mtime_change_on_same_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let identity = ToctouGuard::capture(&target).expect("capture identity");
+
+        // Adding a file updates the directory's mtime
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::fs::write(target.join("new_entry.tmp"), b"data").unwrap();
+
+        assert!(
+            ToctouGuard::verify_entity(&target, &identity).is_ok(),
+            "verify_entity must succeed despite directory mtime change"
+        );
+    }
+
+    /// `verify_entity` refuses a directory that was replaced with a new one at the same path.
+    #[test]
+    fn verify_entity_refuses_replaced_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let identity = ToctouGuard::capture(&target).expect("capture identity");
+
+        std::fs::remove_dir_all(&target).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+
+        // On filesystems with unique inodes/file IDs, recreation has a different ID
+        #[cfg(any(unix, windows))]
+        assert!(matches!(
+            ToctouGuard::verify_entity(&target, &identity),
             Err(ZenithError::ChangedSinceScan(_))
         ));
     }

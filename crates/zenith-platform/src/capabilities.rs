@@ -134,12 +134,17 @@ mod tests {
         let without_cli = NativePlatformCapabilities::runtime_capabilities(&environment, false);
 
         // Unimplemented Windows features are a property of the snapshot itself,
-        // not of this machine's probe.
+        // not of this machine's probe. Intensive cleanup used to be one of them;
+        // it now has Windows signatures and a Windows adapter behind the same
+        // capability, so it is asserted as available where that is the case.
         let windows = PlatformCapabilities::windows();
+        assert_eq!(
+            windows.feature(PlatformFeature::IntensiveCleanup).status,
+            PlatformFeatureStatus::Available
+        );
         for feature in [
             PlatformFeature::InstalledApps,
             PlatformFeature::AppUninstall,
-            PlatformFeature::IntensiveCleanup,
         ] {
             assert_eq!(
                 windows.feature(feature).status,

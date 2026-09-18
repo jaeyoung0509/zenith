@@ -42,7 +42,7 @@ id = "system.intensive.user_app_caches"
 name = "Stale Third-Party Application Cache"
 category = "system"
 risk = "safe"
-strategy = "delete_directory"
+strategy = "delete_stale_contents"
 platforms = ["macos"]
 paths = ["~/Library/Caches"]
 min_age_days = 7
@@ -57,14 +57,15 @@ exclude_prefixes = [
     "ms-playwright"
 ]
 intensive_only = true
-description = "A third-party application cache whose entire tree has been inactive for at least 7 days. Apple, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. dotslash is a content-addressed cache that the dotslash CLI itself downloads, validates, and invalidates. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
+discovery = "always"
+description = "A third-party application cache whose entries have been inactive for at least 7 days: what is old is removed, what was written recently stays. Apple, system, and tool-managed cache namespaces are excluded, matched case-insensitively so a namespace's on-disk casing does not admit it. dotslash is a content-addressed cache that the dotslash CLI itself downloads, validates, and invalidates. ms-playwright is owned by the Playwright CLI and nests a Chromium `Google Chrome for Testing.app` bundle that macOS App Management protects from generic deletion, so only the Playwright CLI can invalidate it."
 
 [[signatures]]
 id = "system.intensive.application_logs"
 name = "Stale Application Logs"
 category = "system"
 risk = "safe"
-strategy = "delete_directory"
+strategy = "delete_stale_contents"
 platforms = ["macos"]
 paths = ["~/Library/Logs"]
 min_age_days = 14
@@ -73,4 +74,356 @@ exclude_prefixes = [
     "CrashReporter"
 ]
 intensive_only = true
-description = "Application log groups whose entire tree has been inactive for at least 14 days. Diagnostic and crash reports remain protected."
+discovery = "always"
+description = "Application log entries that have been inactive for at least 14 days: an application that is running keeps the file it is writing. Diagnostic and crash reports remain protected."
+
+# ---------------------------------------------------------------------------
+# macOS: roots that belong to the system rather than to the profile, plus the
+# per-application cache subtrees that the broad cargo-cult roots miss.
+#
+# Every entry here is discovered in a standard scan; what differs is
+# eligibility. An entry marked `intensive_only` reports its bytes as
+# `policy_gated` until the user opts into the broader scope, and an entry with
+# `intensive_only = false` is eligible as soon as its age policy is satisfied.
+# ---------------------------------------------------------------------------
+
+[[signatures]]
+id = "system.darwin_user_cache"
+name = "System Per-User Cache"
+category = "system"
+risk = "safe"
+strategy = "delete_stale_contents"
+platforms = ["macos"]
+paths = ["${DARWIN_USER_CACHE}"]
+min_age_days = 7
+include_prefixes = [
+    "com.apple.dyld",
+    "com.apple.nsurlsessiond",
+    "com.apple.QuickLook.thumbnailcache",
+    "com.apple.fonts",
+    "com.apple.iconservices",
+    "com.apple.appstore",
+    "com.apple.helpd",
+    "com.apple.parsecd",
+]
+description = "Entries of the per-user caches the system keeps outside the profile (`/var/folders/<xx>/<yyyy>/C`), which is the sibling of the temporary directory and not reachable through `~/Library/Caches`. Only cache namespaces whose owner is the system itself are eligible: the rest of the tree is inventoried by the broader entry below and stays unselected."
+
+[[signatures]]
+id = "system.intensive.darwin_user_cache_other"
+name = "Stale Per-User Cache Namespace"
+category = "system"
+risk = "rebuild"
+strategy = "delete_stale_contents"
+platforms = ["macos"]
+paths = ["${DARWIN_USER_CACHE}"]
+min_age_days = 7
+exclude_prefixes = [
+    "com.apple.",
+    "CloudKit",
+    "FamilyCircle",
+    "GeoServices",
+    "HomeKit",
+    "dotslash",
+    "ms-playwright",
+]
+intensive_only = true
+discovery = "always"
+description = "Entries of third-party cache namespaces under the system per-user cache directory that have been inactive for at least 7 days. Reported in a standard scan as discovered-but-out-of-scope, so a large cache tree is never silently absent from the totals. Opt-in because this root is also where short-lived system caches live."
+
+[[signatures]]
+id = "system.app_support_cache_segments"
+name = "Application Cache Subtree"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = [
+    "~/Library/Application Support/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache,CacheStorage}",
+    "~/Library/Application Support/*/Service Worker/CacheStorage",
+]
+unit = "named_subtree"
+min_age_days = 7
+description = "The disposable cache subtree an application keeps inside its own data directory, which is where every Electron and Chromium-based application parks its renderer, GPU, and shader caches. Each subtree is its own unit and is removed only when everything inside it has been inactive for at least 7 days, so an application that is running keeps its caches."
+
+[[signatures]]
+id = "system.saved_application_state"
+name = "Saved Application State"
+category = "system"
+risk = "safe"
+strategy = "delete_stale_contents"
+platforms = ["macos"]
+paths = ["~/Library/Saved Application State"]
+min_age_days = 7
+description = "Window and session restoration state written by applications that have not been opened for at least 7 days."
+
+[[signatures]]
+id = "system.xcode_device_support"
+name = "Xcode iOS Device Support"
+category = "developer"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Developer/Xcode/iOS DeviceSupport/*"]
+unit = "named_subtree"
+min_age_days = 30
+provider = "Xcode"
+artifact_kind = "build_artifact"
+consequence = "Xcode re-downloads the symbol set the next time the device is connected."
+description = "Per-OS-version symbol dumps kept for devices that have not been connected for at least 30 days."
+
+[[signatures]]
+id = "system.intensive.containers_caches"
+name = "Sandboxed Application Cache"
+category = "system"
+risk = "rebuild"
+strategy = "delete_stale_contents"
+platforms = ["macos"]
+paths = ["~/Library/Containers/*/Data/Library/Caches"]
+min_age_days = 14
+intensive_only = true
+description = "Entries of cache directories inside sandboxed application containers that have been inactive for at least 14 days. The container's own state, preferences, and documents are outside this scope either way: only the `Caches` directory is read, and only the entries inside it that are old enough are removed. Reading this tree needs Full Disk Access; without it the affected containers are reported as inaccessible rather than as empty."
+
+[[signatures]]
+id = "system.intensive.group_containers_caches"
+name = "Group Container Cache"
+category = "system"
+risk = "rebuild"
+strategy = "delete_stale_contents"
+platforms = ["macos"]
+paths = ["~/Library/Group Containers/*/Library/Caches"]
+min_age_days = 14
+intensive_only = true
+description = "Entries of cache directories inside group containers, which shared application families write. Only the `Caches` directory is in scope, and only the entries inside it that have been inactive for at least 14 days are removed."
+
+[[signatures]]
+id = "system.advisory.macos_system_caches"
+name = "System Cache and Log Locations"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["macos"]
+paths = [
+    "/Library/Caches",
+    "/private/var/log/asl",
+    "/private/var/log/DiagnosticMessages",
+]
+description = "Locations that hold reclaimable bytes the generic cleaner does not remove: they are owned by the system, may need administrator rights, and some are maintained by their own tools. Reported so a scan can explain why its total differs from another cleaner's."
+
+[[signatures]]
+id = "system.advisory.device_backups"
+name = "Device Backups"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["macos"]
+paths = ["~/Library/Application Support/MobileSync/Backup"]
+description = "Local backups of iOS and iPadOS devices. Restoring a device is the only way back from deleting one, so Zenith reports the space and never offers it for cleanup."
+
+[[signatures]]
+id = "system.advisory.simulator_devices"
+name = "Simulator Devices"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["macos"]
+paths = ["~/Library/Developer/CoreSimulator/Devices"]
+description = "Simulator device data. Simulators are created and removed through `xcrun simctl`, which also updates the runtime's own registry, so Zenith reports the space instead of deleting a device out from under it."
+
+# ---------------------------------------------------------------------------
+# Windows: the same rules, applied to the roots a Windows profile actually
+# accumulates. A broad root (LocalAppData, Roaming, a package tree) is a
+# discovery boundary only: the entries below name the disposable subtree inside
+# it, never the root itself.
+# ---------------------------------------------------------------------------
+
+[[signatures]]
+id = "system.windows.roaming_cache_segments"
+name = "Roaming Application Cache Subtree"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+platforms = ["windows"]
+paths = [
+    "${ROAMING_APP_DATA}/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache,CacheStorage}",
+    "${ROAMING_APP_DATA}/*/Service Worker/CacheStorage",
+]
+unit = "named_subtree"
+min_age_days = 7
+description = "The disposable cache subtree an application keeps under the roaming profile, removed only when everything inside it has been inactive for at least 7 days."
+
+[[signatures]]
+id = "system.windows.temp_known"
+name = "Known Developer Temporary Files"
+category = "system"
+risk = "safe"
+strategy = "delete_stale_contents"
+platforms = ["windows"]
+paths = ["${TEMP}"]
+min_age_days = 3
+priority = 10
+include_prefixes = [
+    "agent-browser-chrome-",
+    "antigravity-",
+    "claude-",
+    "claude_",
+    "codex-",
+    "codex_",
+    "com.anthropic.",
+    "com.openai.",
+    "com.brave.",
+    "com.google.Chrome.",
+    "com.spotify.",
+    "com.tinyspeck.",
+    "discord-",
+    "esbuild-",
+    "gemini-",
+    "metro-cache",
+    "metro-file-map-",
+    "node-compile-cache",
+    "opencode-",
+    "opencode_",
+    "openai-docs-cache",
+    "pytest-of-",
+    "tauri-",
+    "torchinductor_",
+    "v8-compile-cache-",
+    "vite-",
+]
+description = "Known AI and developer-tool artifacts in the per-user temporary directory whose entries have not changed for at least 3 days. The broader entry below reports everything else in the same directory, so an unrecognized installer or scratch directory is visible without being auto-selected."
+
+[[signatures]]
+id = "system.windows.temp_other"
+name = "Temporary Directory Entry"
+category = "system"
+risk = "rebuild"
+strategy = "delete_stale_contents"
+platforms = ["windows"]
+paths = ["${TEMP}"]
+min_age_days = 14
+priority = 0
+description = "Any other entry in the per-user temporary directory whose contents have not changed for at least 14 days. Reported and never auto-selected: an installer extraction or an application's scratch directory is reclaimable, but only the user can say whether the application that owns it still needs it."
+
+[[signatures]]
+id = "system.intensive.windows_user_caches"
+name = "Stale Application Cache Subtree"
+category = "system"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/*/{Cache,Caches,Code Cache,GPUCache,ShaderCache,CacheStorage}"]
+unit = "named_subtree"
+min_age_days = 7
+intensive_only = true
+discovery = "always"
+description = "The disposable cache subtree an application keeps under its own LocalAppData directory. Discovered in either scope so the bytes are never invisible; eligible only after the user opts into the broader scan, and only when everything inside the subtree has been inactive for at least 7 days."
+
+[[signatures]]
+id = "system.intensive.windows_browser_caches"
+name = "Browser Profile Cache"
+category = "system"
+risk = "safe"
+strategy = "delete_directory"
+platforms = ["windows"]
+paths = [
+    "${LOCAL_APP_DATA}/Google/Chrome/User Data/*/{Cache,Code Cache,GPUCache,CacheStorage}",
+    "${LOCAL_APP_DATA}/Google/Chrome/User Data/*/Service Worker/CacheStorage",
+    "${LOCAL_APP_DATA}/Microsoft/Edge/User Data/*/{Cache,Code Cache,GPUCache,CacheStorage}",
+    "${LOCAL_APP_DATA}/Microsoft/Edge/User Data/*/Service Worker/CacheStorage",
+    "${LOCAL_APP_DATA}/BraveSoftware/Brave-Browser/User Data/*/{Cache,Code Cache,GPUCache,CacheStorage}",
+    "${LOCAL_APP_DATA}/BraveSoftware/Brave-Browser/User Data/*/Service Worker/CacheStorage",
+    "${LOCAL_APP_DATA}/Mozilla/Firefox/Profiles/*/cache2",
+    "${ROAMING_APP_DATA}/Mozilla/Firefox/Profiles/*/cache2",
+]
+unit = "named_subtree"
+min_age_days = 7
+intensive_only = true
+discovery = "always"
+description = "Chromium and Firefox profile caches, enumerated per profile so an installation with several profiles is covered rather than only its first one. Discovered in either scope, eligible in the broader scope, and removed only when the profile's cache subtree has been inactive for at least 7 days."
+
+[[signatures]]
+id = "system.intensive.windows_packages"
+name = "Packaged Application Temp State"
+category = "system"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/Packages/*/{TempState,Temp}"]
+unit = "named_subtree"
+min_age_days = 7
+intensive_only = true
+description = "Temporary state written by packaged (MSIX/UWP) applications. Only `TempState` and `Temp` are in scope: `LocalState` and the rest of the package directory hold the application's own data and stay outside the cleanup boundary."
+
+[[signatures]]
+id = "system.windows.user_caches"
+name = "User Temporary and Cache Locations"
+category = "system"
+risk = "safe"
+strategy = "delete_stale_contents"
+platforms = ["windows"]
+paths = [
+    "${LOCAL_APP_DATA}/CrashDumps",
+    "${LOCAL_APP_DATA}/Microsoft/Windows/INetCache",
+]
+min_age_days = 7
+description = "Crash dumps and the per-user internet cache, entry by entry. These locations exist on every profile, are regenerated by the system, and are not part of any application's working state. The neighbouring WebCache store is deliberately not here: it holds a proprietary database of browsing artifacts rather than a regenerable file cache, and it is reported as an observation instead."
+
+[[signatures]]
+id = "system.windows.explorer_thumbnails"
+name = "Explorer Thumbnail and Icon Cache"
+category = "system"
+risk = "safe"
+strategy = "delete_stale_contents"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/Microsoft/Windows/Explorer"]
+unit = "child_namespace"
+min_age_days = 7
+include_prefixes = ["thumbcache_", "iconcache_"]
+description = "Explorer's thumbnail and icon caches, which Windows rebuilds on demand. Only the cache files are in scope: the Explorer directory also holds the shell's own state."
+
+[[signatures]]
+id = "system.advisory.windows_store_state"
+name = "Package Persistent State"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/Packages/*/LocalState"]
+description = "Application-owned state of packaged applications. It shares a directory tree with the disposable temp state, so Zenith reports it and never offers it for cleanup."
+
+[[signatures]]
+id = "system.advisory.windows_web_cache"
+name = "Windows Web Cache Store"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["windows"]
+paths = ["${LOCAL_APP_DATA}/Microsoft/Windows/WebCache"]
+description = "The WebCache store holds a proprietary database of local file-access and browsing artifacts rather than a regenerable file cache, so generic cleanup does not touch it: it is reported so its bytes are not invisible, and clearing it belongs to a Windows-aware workflow that knows what that store is for."
+
+[[signatures]]
+id = "system.advisory.windows_maintenance"
+name = "Windows Maintenance Stores"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["windows"]
+paths = [
+    "${SYSTEM_ROOT}/SoftwareDistribution/Download",
+    "${SYSTEM_ROOT}/Temp",
+    "${SYSTEM_ROOT}/Minidump",
+    "${LOCAL_APP_DATA}/Docker/wsl",
+]
+description = "Stores that hold significant space and are owned by Windows or by a tool that maintains its own lifecycle: update payloads, the system temporary directory, kernel dumps, and WSL virtual disks. Reclaiming these needs the owning tool's own operation (Windows Update servicing, `cleanmgr`, `Optimize-VHD`), so Zenith reports the bytes and leaves the operation to it."
+
+[[signatures]]
+id = "system.advisory.trash"
+name = "Trash"
+category = "system"
+risk = "manual"
+strategy = "manual"
+platforms = ["macos"]
+paths = [
+    "~/.Trash",
+    "/Volumes/*/.Trashes/*",
+]
+description = "Items that have been moved to the Trash and their per-volume counterparts, which occupy space until the Trash is emptied. Emptying it is a Finder operation with its own semantics (restore, put back, per-volume behaviour), so Zenith reports the space and leaves the operation to the system that owns it."

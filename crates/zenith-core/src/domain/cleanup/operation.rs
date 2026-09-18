@@ -48,6 +48,10 @@ impl<'a> CleanupOperation<'a> {
                 target,
                 removes: FilesystemMutation::Directory,
             })),
+            CleanStrategy::DeleteStaleContents => Some(Self::Filesystem(FilesystemCleanup {
+                target,
+                removes: FilesystemMutation::StaleContents,
+            })),
             CleanStrategy::DockerPrune => Some(Self::Container(ContainerCleanup {
                 signature_id: &target.signature_id,
             })),
@@ -67,6 +71,9 @@ pub enum FilesystemMutation {
     Contents,
     /// The directory and everything under it is removed.
     Directory,
+    /// The path's children whose own age satisfies the target's age policy are
+    /// removed; the rest and the directory itself stay.
+    StaleContents,
 }
 
 /// A signature-scoped filesystem mutation.

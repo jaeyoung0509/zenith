@@ -252,6 +252,16 @@ impl PlatformEnvironment {
         PlatformPathsProvider::temp_dir(self)
     }
 
+    /// The per-user cache directory the system owns outside the profile.
+    pub fn user_cache_dir(&self) -> Option<PathBuf> {
+        PlatformPathsProvider::user_cache_dir(self)
+    }
+
+    /// The platform installation root, where the platform has one.
+    pub fn system_root(&self) -> Option<PathBuf> {
+        PlatformPathsProvider::system_root(self)
+    }
+
     pub fn program_files(&self) -> Option<PathBuf> {
         PlatformPathsProvider::program_files(self)
     }
@@ -551,6 +561,14 @@ impl PlatformPathsProvider for PlatformEnvironment {
 
     fn program_data(&self) -> Option<PathBuf> {
         self.roots.program_data()
+    }
+
+    fn user_cache_dir(&self) -> Option<PathBuf> {
+        self.roots.user_cache_dir()
+    }
+
+    fn system_root(&self) -> Option<PathBuf> {
+        self.roots.system_root()
     }
 
     fn content_dir(&self, token: &str) -> Option<PathBuf> {

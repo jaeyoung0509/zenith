@@ -81,7 +81,7 @@ pub use zenith_core::domain::scan::{
     CacheManagementMode, CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult,
     CleanupDisposition, CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitIdentity,
     CleanupUnitKind, DispositionFacts, EligibilityBucket, EligibilityGate, EligibilitySummary,
-    FileSize, OwnershipConfidence, PathIdentity, ScanItem, ScanResult,
+    FileSize, OwnershipConfidence, PathIdentity, ScanItem, ScanResult, StaleEntryObservation,
 };
 pub use zenith_core::domain::storage::{
     AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,

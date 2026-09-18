@@ -1,4 +1,4 @@
-use crate::models::{Category, PlatformKind, RiskTier, Signature, ZenithError};
+use crate::models::{Category, CleanStrategy, PlatformKind, RiskTier, Signature, ZenithError};
 use crate::safety::Blacklist;
 use crate::signatures::SignatureLoader;
 use std::collections::{BTreeSet, HashMap};
@@ -253,6 +253,80 @@ impl SignatureRegistry {
             .collect()
     }
 
+    /// The concrete roots that authorize a path, in pattern order.
+    ///
+    /// A literal pattern authorizes its resolved path, and — for a signature
+    /// that enumerates children — each direct child of it. A selector pattern
+    /// authorizes every path it matches, with the same child rule.
+    ///
+    /// Matching is textual and flavor-correct: it reads no metadata, so the
+    /// scope a plan is checked against cannot be widened by a link, and a
+    /// selector that matches nothing simply authorizes nothing. An empty result
+    /// means the path is outside the signature's scope.
+    pub fn authorizing_roots(
+        &self,
+        signature: &Signature,
+        path: &Path,
+        environment: &PlatformEnvironment,
+    ) -> Vec<PathBuf> {
+        let flavor = environment.flavor();
+        let enumerates_children = signature.unit_kind().is_enumerated_child();
+        let path_text = path.to_string_lossy();
+        let parent_text = path
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned());
+        let mut roots = Vec::new();
+
+        for pattern in &signature.paths {
+            let Some(expanded) = SignatureLoader::expand_path(pattern, environment) else {
+                continue;
+            };
+            let expanded_text = expanded.to_string_lossy().into_owned();
+
+            if zenith_platform::selector::PathSelector::is_pattern(&expanded_text) {
+                let Ok(selector) =
+                    zenith_platform::selector::PathSelector::parse(&expanded_text, flavor)
+                else {
+                    continue;
+                };
+                if selector.matches(&path_text, flavor) {
+                    roots.push(PathBuf::from(path_text.to_string()));
+                    continue;
+                }
+                if enumerates_children {
+                    if let Some(parent) = parent_text.as_deref() {
+                        if selector.matches(parent, flavor) {
+                            roots.push(PathBuf::from(parent.to_string()));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if path == expanded.as_path() {
+                roots.push(expanded);
+                continue;
+            }
+            if enumerates_children && path.parent() == Some(expanded.as_path()) {
+                roots.push(expanded);
+            }
+        }
+
+        roots
+    }
+
+    /// Whether a signature authorizes a concrete path.
+    pub fn path_is_in_scope(
+        &self,
+        signature: &Signature,
+        path: &Path,
+        environment: &PlatformEnvironment,
+    ) -> bool {
+        !self
+            .authorizing_roots(signature, path, environment)
+            .is_empty()
+    }
+
     /// The pure manifest lint the environment doctor and CI both run.
     ///
     /// Four invariants are checked for every signature, against the described
@@ -262,7 +336,9 @@ impl SignatureRegistry {
     ///   pattern is a finding; a dynamic pattern the environment cannot resolve
     ///   is not, since "not present here" is a legitimate answer);
     /// * no resolved path is blacklisted — except for a signature that selects
-    ///   aged children inside its root, which never deletes the root itself;
+    ///   aged children inside its root, which never deletes the root itself,
+    ///   and except for an observation-only (`Manual`) entry, which reports
+    ///   bytes the generic cleaner may not remove;
     /// * every path-shaped exclusion resolves inside its own signature's scope,
     ///   so an exclusion cannot protect something the signature never touches;
     /// * a signature whose paths resolve under a platform-specific root
@@ -287,17 +363,27 @@ impl SignatureRegistry {
         findings
     }
 
-    /// Returns which platform (if any) a path pattern or placeholder is specifically tied to.
+    /// Returns which platform (if any) a path pattern or placeholder is
+    /// specifically tied to.
+    ///
+    /// Patterns arrive normalized by the loader, so a manifest written with a
+    /// Windows `%VAR%` spelling is judged by the placeholder it became. The
+    /// `%VAR%` arms below stay for signatures built by hand in tests and
+    /// adapters, where treating a Windows spelling as platform-neutral would
+    /// skip the platform gate in the fail-open direction.
     pub fn is_platform_specific_path(pattern: &str) -> Option<PlatformKind> {
         let p = pattern.trim();
         if p.starts_with("~/Library")
             || p.starts_with("/Applications")
             || p.starts_with("/Library")
             || p.starts_with("/System")
+            || p.starts_with("/Volumes")
             || p.starts_with("/private/")
+            || p.contains("${DARWIN_USER_CACHE}")
         {
             Some(PlatformKind::Macos)
-        } else if p.contains("${LOCAL_APP_DATA}")
+        } else if p.contains("${SYSTEM_ROOT}")
+            || p.contains("${LOCAL_APP_DATA}")
             || p.contains("${ROAMING_APP_DATA}")
             || p.contains("${PROGRAM_DATA}")
             || p.contains("${PROGRAM_FILES}")
@@ -326,12 +412,49 @@ fn audit_signature(
     let mut findings = Vec::new();
     let mut resolved: Vec<PathBuf> = Vec::new();
 
+    // A pattern that names another platform is not this machine's path: it is
+    // checked when the lint runs against that platform, and resolving it here
+    // would report a `~/Library` root as a relative path on Windows.
+    let stated_platform = match flavor {
+        PathFlavor::Windows => PlatformKind::Windows,
+        PathFlavor::Posix => PlatformKind::Macos,
+    };
+
     for pattern in &signature.paths {
         if pattern.trim().is_empty() {
             continue;
         }
+        if SignatureRegistry::is_platform_specific_path(pattern)
+            .is_some_and(|target| target != stated_platform)
+        {
+            continue;
+        }
         match SignatureLoader::expand_path(pattern, environment) {
             Some(path) => {
+                let expanded_text = path.to_string_lossy().into_owned();
+                if zenith_platform::selector::PathSelector::is_pattern(&expanded_text) {
+                    // A selector names roots the catalog cannot spell out, so
+                    // the rule is about what it *can*: a literal prefix to scan
+                    // from. A pattern that begins with a selector would be
+                    // resolved against `/` or a drive root on every run.
+                    match zenith_platform::selector::PathSelector::parse(&expanded_text, flavor) {
+                        Ok(selector) => match selector.static_root() {
+                            Some(static_root) if is_absolute(&static_root, flavor) => {}
+                            _ => findings.push(finding(
+                                signature,
+                                None,
+                                format!(
+                                    "pattern `{pattern}` begins with a selector; it needs an absolute literal prefix"
+                                ),
+                            )),
+                        },
+                        Err(error) => findings.push(finding(
+                            signature,
+                            None,
+                            format!("pattern `{pattern}` is not a usable selector: {error}"),
+                        )),
+                    }
+                }
                 if !is_absolute(&path.to_string_lossy(), flavor) {
                     findings.push(finding(
                         signature,
@@ -339,7 +462,12 @@ fn audit_signature(
                         format!("path pattern `{pattern}` did not resolve to an absolute path"),
                     ));
                 }
-                if signature.min_age_days.is_none() {
+                // An observation-only entry does not need a deletion boundary
+                // checked: the planner refuses a `Manual` target and the
+                // executor has no operation for it, so what the entry covers is
+                // reported and never removed.
+                let may_delete = signature.strategy != CleanStrategy::Manual;
+                if may_delete && signature.min_age_days.is_none() {
                     if let Some(root) = zenith_platform::path_algebra::protected_root(
                         &path.to_string_lossy(),
                         flavor,
@@ -376,6 +504,15 @@ fn audit_signature(
 
     if let Some(scope) = common_scope(&resolved, flavor) {
         for exclusion in &signature.exclusions {
+            // The same rule as a path: an exclusion written for another
+            // platform is checked when the lint runs against that platform,
+            // and comparing it with this machine's scope would report a
+            // correct manifest as inconsistent.
+            if SignatureRegistry::is_platform_specific_path(exclusion)
+                .is_some_and(|target| target != stated_platform)
+            {
+                continue;
+            }
             let Some(expanded) = SignatureLoader::expand_exclusion(exclusion, environment) else {
                 continue;
             };
@@ -577,6 +714,7 @@ mod tests {
                 .with_home("/home/tester")
                 .with_local_app_data("/home/tester/.local/share")
                 .with_roaming_app_data("/home/tester/.config")
+                .with_user_cache_dir("/var/folders/ab/cdefgh/C")
                 .with_temp_dir("/tmp"),
         ))
     }
@@ -590,6 +728,7 @@ mod tests {
             SimulatedPaths::new()
                 .with_flavor(PathFlavor::Windows)
                 .with_home(r"D:\Users\tester")
+                .with_system_root(r"D:\Windows")
                 .with_temp_dir(r"D:\Users\tester\AppData\Local\Temp")
                 .with_local_app_data(r"D:\Users\tester\AppData\Local")
                 .with_roaming_app_data(r"D:\Users\tester\AppData\Roaming")
@@ -659,15 +798,31 @@ mod tests {
             "{windows_findings:?}"
         );
 
-        // The same literal under POSIX rules is a relative path, so the POSIX
-        // audit reports it as such instead of inheriting the Windows verdict.
+        // The same literal is a Windows spelling, so the POSIX audit does not
+        // judge it at all: a signature that declares its platform is checked
+        // where it runs, and reporting a Windows path as relative on a POSIX
+        // machine would make every cross-platform manifest a false finding.
         let posix_findings =
             SignatureRegistry::audit_signature_platforms(&registry, &stated_environment());
-        assert_eq!(posix_findings.len(), 1, "{posix_findings:?}");
         assert!(
-            posix_findings[0].message.contains("not an absolute path"),
-            "{posix_findings:?}"
+            posix_findings.is_empty(),
+            "a foreign-platform pattern is not this machine's path: {posix_findings:?}"
         );
+
+        // A pattern that names no platform is judged on every machine, which is
+        // what keeps a typo such as a relative path a finding.
+        let mut neutral = SignatureRegistry::new();
+        let mut relative = test_signature("developer.test.relative", vec!["data/cache"], vec![]);
+        relative.min_age_days = None;
+        neutral.register(relative);
+        for environment in [stated_environment(), stated_windows_environment()] {
+            let findings = SignatureRegistry::audit_signature_platforms(&neutral, &environment);
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert!(
+                findings[0].message.contains("not an absolute path"),
+                "{findings:?}"
+            );
+        }
     }
 
     #[test]
@@ -724,6 +879,127 @@ mod tests {
         SignatureRegistry::audit_signature_platforms(&registry, &stated_environment())
     }
 
+    /// The macOS entries resolve against a stated macOS machine, including the
+    /// root the system owns outside the profile.
+    #[test]
+    fn the_macos_entries_resolve_on_a_stated_macos_machine() {
+        let environment = stated_environment();
+        let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+
+        let findings = SignatureRegistry::audit_signature_platforms(&registry, &environment);
+        assert!(findings.is_empty(), "{findings:?}");
+
+        let system_cache = registry
+            .get("system.darwin_user_cache")
+            .expect("the system cache entry is in the catalog");
+        let resolved = registry.resolve_paths(system_cache, &environment);
+        assert_eq!(
+            resolved,
+            vec![PathBuf::from("/var/folders/ab/cdefgh/C")],
+            "the per-user cache root resolves through the system, not through the profile"
+        );
+
+        // A selector entry names a literal prefix, and matches the shapes a
+        // machine actually has.
+        let segments = registry
+            .get("system.app_support_cache_segments")
+            .expect("the segment entry is in the catalog");
+        let pattern = segments
+            .paths
+            .iter()
+            .find(|pattern| pattern.contains("GPUCache"))
+            .expect("the entry names a GPU cache segment");
+        let expanded = SignatureLoader::expand_path(pattern, &environment)
+            .expect("the pattern resolves to its literal prefix");
+        let selector = zenith_platform::selector::PathSelector::parse(
+            &expanded.to_string_lossy(),
+            PathFlavor::Posix,
+        )
+        .expect("the selector parses");
+        assert!(selector.matches(
+            "/home/tester/Library/Application Support/Slack/GPUCache",
+            PathFlavor::Posix
+        ));
+        assert!(!selector.matches(
+            "/home/tester/Library/Application Support/Slack/Local Storage",
+            PathFlavor::Posix
+        ));
+    }
+
+    /// The Windows entries resolve against a stated Windows machine, including
+    /// the roots the catalog now names there.
+    #[test]
+    fn the_windows_entries_resolve_on_a_stated_windows_machine() {
+        let environment = stated_windows_environment();
+        let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+
+        let findings = SignatureRegistry::audit_signature_platforms(&registry, &environment);
+        assert!(findings.is_empty(), "{findings:?}");
+
+        let maintenance = registry
+            .get("system.advisory.windows_maintenance")
+            .expect("the maintenance entry is in the catalog");
+        let resolved = registry.resolve_paths(maintenance, &environment);
+        assert!(
+            resolved.iter().any(|path| path
+                .to_string_lossy()
+                .ends_with(r"D:\Windows\SoftwareDistribution\Download")),
+            "the installation root resolves from the stated machine: {resolved:?}"
+        );
+
+        let browsers = registry
+            .get("system.intensive.windows_browser_caches")
+            .expect("the browser entry is in the catalog");
+        let expanded = SignatureLoader::expand_path(&browsers.paths[0], &environment)
+            .expect("the pattern resolves to its literal prefix");
+        let selector = zenith_platform::selector::PathSelector::parse(
+            &expanded.to_string_lossy(),
+            PathFlavor::Windows,
+        )
+        .expect("the selector parses");
+        assert!(selector.matches(
+            r"D:\Users\tester\AppData\Local\Google\Chrome\User Data\Profile 3\Cache",
+            PathFlavor::Windows
+        ));
+        assert!(
+            !selector.matches(
+                r"D:\Users\tester\AppData\Local\Google\Chrome\User Data\Default\Local Storage",
+                PathFlavor::Windows
+            ),
+            "a sibling directory under the profile is not a cache"
+        );
+    }
+
+    /// A store that holds browsing artifacts is never a generic delete target,
+    /// on any platform: the entries that name it must be observation-only.
+    #[test]
+    fn no_deletable_entry_names_a_browsing_artifact_store() {
+        let registry = SignatureRegistry::load_embedded_catalog().expect("catalog");
+        let named: Vec<&Signature> = registry
+            .all()
+            .into_iter()
+            .filter(|signature| {
+                signature
+                    .paths
+                    .iter()
+                    .any(|pattern| pattern.contains("WebCache"))
+            })
+            .collect();
+        assert!(
+            !named.is_empty(),
+            "the store is still reported, so its bytes are not invisible"
+        );
+        for signature in named {
+            assert_eq!(
+                signature.strategy,
+                CleanStrategy::Manual,
+                "{} names a store that holds user artifacts and must not delete it",
+                signature.id
+            );
+            assert_eq!(signature.risk, RiskTier::Manual);
+        }
+    }
+
     /// Every shipped entry satisfies the catalog schema, and the granularity it
     /// implies matches the strategy it declares. A manifest that contradicts
     /// itself fails the load instead of reaching a scan.
@@ -751,18 +1027,27 @@ mod tests {
                     "{} is performed by its provider",
                     signature.id
                 ),
-                CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory => {
+                CleanStrategy::DeleteContents
+                | CleanStrategy::DeleteDirectory
+                | CleanStrategy::DeleteStaleContents => {
                     assert!(
                         kind.is_filesystem(),
                         "{} deletes a host path and must own a filesystem unit",
                         signature.id
                     );
                     if signature.min_age_days.is_some() {
-                        assert_eq!(
+                        // An age policy belongs to a unit the scanner either
+                        // enumerates (each child) or treats whole (a named
+                        // subtree); it never ages a fixed path in place.
+                        let ages_a_unit = matches!(
                             kind,
-                            CleanupUnitKind::ChildNamespace,
-                            "{} ages enumerated children",
-                            signature.id
+                            CleanupUnitKind::ChildNamespace | CleanupUnitKind::NamedSubtree
+                        );
+                        assert!(
+                            ages_a_unit,
+                            "{} ages an enumerated or named unit, not `{}`",
+                            signature.id,
+                            kind.display_name()
                         );
                     }
                 }
@@ -915,25 +1200,72 @@ mod tests {
         }
     }
 
+    /// The scope decides discovery for a mode-gated signature and eligibility
+    /// for one that opted into always-on discovery. A signature that is
+    /// discovered outside its scope is reported with a gate, never silently
+    /// cleaned.
     #[test]
-    fn intensive_signatures_are_opt_in() {
+    fn intensive_signatures_are_opt_in_or_discovered_with_a_gate() {
         let registry = SignatureRegistry::load_embedded().unwrap();
 
         let standard = registry.by_category_for_mode(Category::System, false);
-        assert!(standard.iter().all(|signature| !signature.intensive_only));
+        for signature in &standard {
+            if signature.intensive_only {
+                assert_eq!(
+                    signature.discovery,
+                    DiscoveryScope::Always,
+                    "{} is discovered in a standard scan only because it says so",
+                    signature.id
+                );
+                assert_eq!(
+                    signature.eligibility_gate(false),
+                    EligibilityGate::IntensiveCleanupDisabled,
+                    "{} reports why it is out of scope",
+                    signature.id
+                );
+            }
+        }
 
         #[cfg(target_os = "macos")]
         {
+            // The two generic user roots are the reason a default scan no
+            // longer reports zero bytes for `~/Library/Caches`.
+            let discovered_in_standard: Vec<&str> = standard
+                .iter()
+                .filter(|signature| signature.intensive_only)
+                .map(|signature| signature.id.as_str())
+                .collect();
+            assert!(
+                discovered_in_standard.contains(&"system.intensive.user_app_caches"),
+                "the generic user cache root is inventoried in a standard scan: {discovered_in_standard:?}"
+            );
+            assert!(discovered_in_standard.contains(&"system.intensive.application_logs"));
+
             let intensive = registry.by_category_for_mode(Category::System, true);
             assert!(intensive.iter().any(|signature| signature.intensive_only));
-            assert!(intensive.len() > standard.len());
+            assert!(intensive.len() >= standard.len());
+            for signature in &intensive {
+                assert_eq!(
+                    signature.eligibility_gate(true),
+                    EligibilityGate::Open,
+                    "{} is eligible once its scope is on",
+                    signature.id
+                );
+            }
         }
 
         #[cfg(target_os = "windows")]
         {
             let intensive = registry.by_category_for_mode(Category::System, true);
-            assert_eq!(intensive.len(), standard.len());
-            assert!(intensive.iter().all(|signature| !signature.intensive_only));
+            assert!(intensive.len() >= standard.len());
+            for signature in intensive.iter().filter(|s| s.intensive_only) {
+                assert_eq!(
+                    signature.eligibility_gate(true),
+                    EligibilityGate::Open,
+                    "the opt-in scope is what makes {} eligible",
+                    signature.id
+                );
+            }
         }
     }
 
@@ -1222,26 +1554,37 @@ mod tests {
         );
     }
 
+    /// An opt-in signature is only offered where an adapter exists, and every
+    /// one of them declares the platform it runs on.
     #[test]
-    fn intensive_signatures_are_unavailable_on_windows() {
+    fn intensive_signatures_declare_a_supported_platform() {
         let registry = SignatureRegistry::load_embedded().unwrap();
-        let intensive_sigs: Vec<_> = registry
+        let intensive: Vec<_> = registry
             .all()
             .into_iter()
-            .filter(|s| s.intensive_only)
+            .filter(|signature| signature.intensive_only)
             .collect();
         assert!(
-            !intensive_sigs.is_empty(),
-            "Expected at least one intensive signature"
+            !intensive.is_empty(),
+            "the broader scope has at least one signature to widen"
         );
-        for sig in intensive_sigs {
+        for signature in &intensive {
             assert!(
-                sig.platforms.contains(&crate::models::PlatformKind::Macos)
-                    && !sig
-                        .platforms
-                        .contains(&crate::models::PlatformKind::Windows),
-                "Intensive signature {} must not target Windows",
-                sig.id
+                signature.platforms.contains(&PlatformKind::Macos)
+                    || signature.platforms.contains(&PlatformKind::Windows),
+                "{} is offered on a platform Zenith ships",
+                signature.id
+            );
+        }
+        // Both shipped platforms now have intensive coverage: enabling the
+        // scope changes what a `%TEMP%`-side scan reports on Windows, and what
+        // a `~/Library/Caches`-side scan reports on macOS.
+        for platform in [PlatformKind::Macos, PlatformKind::Windows] {
+            assert!(
+                intensive
+                    .iter()
+                    .any(|signature| signature.platforms.contains(&platform)),
+                "{platform:?} has at least one intensive signature"
             );
         }
     }

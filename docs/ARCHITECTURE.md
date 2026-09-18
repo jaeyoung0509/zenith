@@ -367,6 +367,18 @@ signature resolution.
 A scan answers two questions separately, because a cleaner that conflates them
 either hides storage it found or claims permission it does not have.
 
+The unit a signature authorizes is aged in one of two ways: as a whole tree
+(`delete_directory`, `delete_contents`), or entry by entry inside a namespace
+that is written to while it is cleaned (`delete_stale_contents`). The second
+shape reports the namespace once with its observed bytes and the stale subset as
+its estimate, and removes only the entries whose own age satisfies the policy —
+see [SAFETY.md](SAFETY.md#age-policies).
+
+Two environment facts refine eligibility without changing authority: which
+application bundles are running (a cache whose owner is running is `reviewable`,
+never automatic) and whether a location could be read at all (an unreadable
+location is reported as unavailable with its reason).
+
 **Discovery** is what a signature's scope looks at. The registry returns the
 signatures a scan may run — a signature whose scope is off is not discovered at
 all — and returns them most-specific-first so two signatures that describe the
@@ -396,6 +408,11 @@ The deletable object is a `CleanupUnit`: the configured path itself
 (`fixed_path`), each enumerated child of a configured root (`child_namespace`), a
 named disposable subtree (`named_subtree`), a provider's own invalidation
 (`provider_action`), or a container runtime's resource (`container_resource`).
+A root may be written as a selector — `*` for one directory name, `{a,b}` for
+one of several — which is how the catalog names every browser profile, every
+packaged application, and every Electron cache subtree without listing the
+`Default` profile and calling it coverage. See
+[SAFETY.md](SAFETY.md#selectors) for the grammar and the bounds.
 A unit declares the root it was found under, so the planner and the execution
 guard can re-assert containment, and it normalizes to an identity that folds
 case only on a filesystem that does. Two signatures that name the same location
@@ -422,8 +439,16 @@ eligibility: the units it finds are discovered, measured, reported as
 `policy_gated`, and never selectable. Both the discovery gate and the
 eligibility gate are catalog declarations, so widening an inventory is a
 deliberate statement about a signature rather than a side effect of a settings
-toggle. Every shipped signature is still `mode_gated`; the generic macOS and
-Windows roots that opt into always-on discovery do so in their own change.
+toggle.
+
+The generic user roots are the reason this distinction exists: on macOS
+`~/Library/Caches`, `~/Library/Logs`, `${DARWIN_USER_CACHE}`, and the
+application cache subtrees under `~/Library/Application Support` are all
+discovered in a standard scan, and on Windows the application, browser, and
+packaged-application caches are. Without the opt-in they are reported with their
+bytes and a `policy_gated` reason; with it they become eligible, subject to
+their age policy. Windows therefore has an intensive tier of its own, and
+`intensive_cleanup` is `available` on both shipped platforms.
 
 Intensive signatures remain declarative TOML entries and use the same scan,
 planning, and execution pipeline as standard signatures. Broad cache and log
@@ -435,7 +460,10 @@ than dropped from the scan. Cleanup repeats that tree-age check directly before
 deletion, using the same rule the scan evaluated.
 
 The initial intensive scope covers stale third-party children of
-`~/Library/Caches` and stale application-log groups under `~/Library/Logs`.
+`~/Library/Caches`, the system per-user cache root, sandbox and group container
+caches, and stale application-log groups under `~/Library/Logs`; on Windows it
+covers application cache subtrees, browser profile caches, and packaged
+application temp state.
 Apple/system cache namespaces and diagnostic/crash reports are excluded, and a
 prefix exclusion matches case-insensitively because a cache namespace's on-disk
 casing is not stable. A namespace whose owner publishes its own invalidation

@@ -223,9 +223,7 @@ impl PlatformCapabilities {
             platform: PlatformKind::Windows,
             system_actions: PlatformFeatureCapability::available(),
             cleanup: PlatformFeatureCapability::available(),
-            intensive_cleanup: PlatformFeatureCapability::unavailable(
-                "Zenith does not implement intensive cleanup on Windows yet; no Windows-specific intensive signatures are defined.",
-            ),
+            intensive_cleanup: PlatformFeatureCapability::available(),
             large_files: PlatformFeatureCapability::available(),
             developer_artifacts: PlatformFeatureCapability::available(),
             installed_apps: PlatformFeatureCapability::unavailable(
@@ -330,7 +328,6 @@ mod tests {
         for feature in [
             PlatformFeature::InstalledApps,
             PlatformFeature::AppUninstall,
-            PlatformFeature::IntensiveCleanup,
         ] {
             let declared = capabilities.feature(feature);
             assert_eq!(
@@ -425,8 +422,10 @@ mod tests {
         assert!(windows["app_uninstall"].get("reason").is_some());
         assert_eq!(windows["installed_apps"]["status"], "unavailable");
         assert!(windows["installed_apps"].get("reason").is_some());
-        assert_eq!(windows["intensive_cleanup"]["status"], "unavailable");
-        assert!(windows["intensive_cleanup"].get("reason").is_some());
+        // Intensive cleanup is implemented on Windows, so its capability is
+        // stated as available and carries no reason.
+        assert_eq!(windows["intensive_cleanup"]["status"], "available");
+        assert!(windows["intensive_cleanup"].get("reason").is_none());
     }
 
     #[test]
@@ -467,9 +466,11 @@ mod tests {
         assert!(windows
             .require(PlatformFeature::InstalledApps, CapabilityAccess::Mutate)
             .is_err());
+        // A feature with a Windows adapter is available for inspection, the
+        // same as its macOS counterpart.
         assert!(windows
             .require(PlatformFeature::IntensiveCleanup, CapabilityAccess::Inspect)
-            .is_err());
+            .is_ok());
 
         // ReadOnly permits inspection and refuses mutation with the reason kept
         let mut readonly_caps = PlatformCapabilities::macos();

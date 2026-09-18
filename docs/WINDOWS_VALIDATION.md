@@ -149,10 +149,10 @@ they do not replace the manual matrix above for real-machine behavior.
    - Backend commands `get_installed_apps`, `inspect_app_uninstall`, and `prepare_app_uninstall` strictly enforce capability requirements and fail closed on Windows with `PlatformCapabilityError::Unavailable`.
    - `StorageView.svelte` omits the Applications tab when `installed_apps` is unavailable, and `ApplicationsView.svelte` renders an informational banner explaining that application inventory is not supported on Windows.
 
-4. **Intensive Cleanup Boundary (#159):**
-   - `PlatformCapabilities::windows()` explicitly marks `intensive_cleanup` as `Unavailable` with an explanatory reason (`"Intensive cleanup is unavailable on Windows because no Windows-specific intensive signatures are defined."`).
-   - All intensive signatures (`system.intensive.*`) declare `platforms = ["macos"]` and are excluded from the Windows catalog.
-   - The intensive cleanup switch in Settings is disabled with an "Unavailable" badge on Windows, and backend cleanup scanning rejects intensive requests on Windows.
+4. **Intensive Cleanup Scope (was an unavailable boundary, now implemented):**
+   - `PlatformCapabilities::windows()` marks `intensive_cleanup` as `Available`: the Windows catalog now carries opt-in signatures (`system.intensive.windows_user_caches`, `system.intensive.windows_browser_caches`, `system.intensive.windows_packages`), so the switch changes what a scan reports.
+   - A Windows scan discovers those roots in either scope, and the scope decides eligibility: without the opt-in the units are reported as `policy_gated` and are never selectable.
+   - What has *not* changed: no Windows-owned maintenance store (`SoftwareDistribution`, the Recycle Bin, `%SYSTEMROOT%\Temp`, WSL virtual disks) is a generic delete target. Those are inventory-only (`risk = "manual"`) until a lifecycle-aware provider owns them, and nothing here has been validated on a real Windows 11 machine yet — the fixtures are simulated.
 
 Microsoft references: [Known Folders](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders),
 [user profiles](https://learn.microsoft.com/en-us/windows/win32/shell/about-user-profiles),

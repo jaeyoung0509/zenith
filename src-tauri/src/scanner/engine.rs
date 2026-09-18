@@ -310,6 +310,10 @@ impl ScanEngine {
         // One identity set for the whole scan: a unit two signatures both found
         // is counted once, whichever category it was found under.
         let mut seen_units: HashSet<CleanupUnitIdentity> = HashSet::new();
+        // One process-table pass for the whole scan: the scan asks which
+        // application bundles are running, and every signature sees the same
+        // answer.
+        let running_apps = crate::applications::RunningApplications::probe();
         let mut seen_entities: HashMap<FileIdentity, Vec<PathBuf>> = HashMap::new();
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
@@ -345,6 +349,7 @@ impl ScanEngine {
                     environment,
                     cancellation,
                     gate,
+                    &running_apps,
                 );
                 for item in items {
                     if let Some(retained) =

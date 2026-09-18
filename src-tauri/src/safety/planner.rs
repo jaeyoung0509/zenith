@@ -1,6 +1,6 @@
 use crate::models::{
     CleanStrategy, CleanupMode, DeletePlan, DeleteTarget, RiskSummary, RiskTier, ScanItem,
-    ScanResult, ZenithError,
+    ScanResult, Signature, ZenithError,
 };
 use crate::safety::{entry_kind_at, structured_state_at, Blacklist, SymlinkGuard, ToctouGuard};
 use crate::signatures::SignatureRegistry;
@@ -9,6 +9,29 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use uuid::Uuid;
 use zenith_platform::PlatformEnvironment;
+
+/// Whether an item's ownership follows from the signature that discovered it.
+///
+/// A catalog entry that names an owner states it, and the item must agree. An
+/// entry that names nobody leaves the child to speak for itself: a namespace
+/// enumerated under a broad root reports the inference from its own name, which
+/// is the only statement available and is labelled as an inference.
+fn ownership_is_derivable(item: &ScanItem, signature: &Signature) -> bool {
+    let catalog = signature.ownership();
+    if item.ownership == catalog {
+        return true;
+    }
+    if catalog.is_known()
+        || item.ownership.confidence != crate::models::OwnershipConfidence::Inferred
+    {
+        return false;
+    }
+    item.unit
+        .path
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name == item.ownership.owner)
+}
 
 pub struct SafetyPlanner;
 
@@ -134,10 +157,12 @@ impl SafetyPlanner {
                 )));
             }
 
-            // The ownership the item reports must be the ownership the catalog
-            // states: a message built from the plan must not describe a
-            // location by a claim the catalog never made.
-            if item.ownership != signature.ownership() {
+            // The ownership the item reports must be derivable from the catalog
+            // entry: either exactly what the entry states, or — when the entry
+            // states nothing — the inference an enumerated child carries from its
+            // own name. A message built from the plan then never describes a
+            // location by a claim the catalog cannot support.
+            if !ownership_is_derivable(item, signature) {
                 return Err(ZenithError::InvalidPlan(format!(
                     "Item '{}' reports ownership the catalog does not state; scan again",
                     item.name
@@ -155,13 +180,11 @@ impl SafetyPlanner {
             } else {
                 // Filesystem strategies: DeleteContents, DeleteDirectory, ExternalCommand
                 if !signature.paths.is_empty() {
-                    let resolved_roots = registry.resolve_paths(signature, environment);
-                    let allowed = resolved_roots.iter().any(|root| {
-                        path == *root
-                            || (signature.min_age_days.is_some()
-                                && path.parent() == Some(root.as_path()))
-                    });
-                    if !allowed {
+                    // The roots that authorize this path, re-derived from the
+                    // signature: a literal root, a selected root, or a parent
+                    // of one for a signature that enumerates children.
+                    let resolved_roots = registry.authorizing_roots(signature, &path, environment);
+                    if resolved_roots.is_empty() {
                         return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
                     }
 
@@ -310,9 +333,11 @@ mod tests {
             unit: crate::models::CleanupUnit::fixed_path("/untrusted/data.img.raw"),
             ownership: Default::default(),
             age: None,
+            stale: None,
             structured_state: None,
             entry_kind: crate::models::EntryKind::File,
             gate: Default::default(),
+            owner_running: false,
             is_selected: true,
             last_modified: None,
             exists: true,
@@ -326,6 +351,70 @@ mod tests {
             result,
             Err(ZenithError::UnsupportedManualOperation(name))
                 if name == "OrbStack VM Storage"
+        ));
+    }
+
+    /// A namespace enumerated under a broad root names nobody in the catalog, so
+    /// its item reports the inference from its own name. That inference is what
+    /// the catalog can support, and a plan may be built from it.
+    #[test]
+    fn an_inferred_owner_from_an_enumerated_child_is_plannable() {
+        use crate::models::{CleanupOwnership, CleanupUnit, EntryKind, Signature};
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(Signature {
+            id: "test.broad-root".into(),
+            name: "Broad root".into(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: crate::models::CleanStrategy::DeleteDirectory,
+            paths: vec!["/tmp/broad-root".into()],
+            exclusions: vec![],
+            description: String::new(),
+            min_age_days: Some(7),
+            include_prefixes: vec![],
+            exclude_prefixes: vec![],
+            intensive_only: false,
+            platforms: vec![],
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        });
+
+        let mut item = ScanItem::mock(
+            "test.broad-root.0.com.example.app",
+            "test.broad-root",
+            "com.example.app",
+            Category::System,
+            RiskTier::Safe,
+            "/tmp/broad-root/com.example.app",
+            FileSize::new(1024, Some(1024)),
+            1,
+        );
+        item.unit =
+            CleanupUnit::child_namespace("/tmp/broad-root", "/tmp/broad-root/com.example.app");
+        item.ownership = CleanupOwnership::inferred("com.example.app");
+        item.entry_kind = EntryKind::Directory;
+        let mut item = item.with_derived_disposition();
+        item.is_selected = true;
+
+        // The inference is accepted ...
+        let plan = super::ownership_is_derivable(&item, registry.get("test.broad-root").unwrap());
+        assert!(plan, "an inference from the unit's own name is derivable");
+
+        // ... and a claim the catalog cannot support is not.
+        let mut forged = item.clone();
+        forged.ownership = CleanupOwnership::inferred("somebody.else");
+        assert!(!super::ownership_is_derivable(
+            &forged,
+            registry.get("test.broad-root").unwrap()
         ));
     }
 

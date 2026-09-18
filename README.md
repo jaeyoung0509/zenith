@@ -335,6 +335,27 @@ intensive_only = true
 description = "Third-party cache trees inactive for at least seven days."
 ```
 
+A root may be a selector when the catalog cannot spell it out: `*` matches one
+directory name and `{a,b}` matches one of several, so one entry covers every
+browser profile or every Electron cache subtree. A selector belongs in `paths`
+only — an exclusion that contained `*` would protect nothing — and the
+signature's `unit` decides whether each match is the cleanup unit
+(`named_subtree`) or a root whose children are (`child_namespace`). Selector
+expansion never follows a link, is capped at 256 matches per pattern, and is
+reported as truncated when it reaches the cap. Windows spellings are accepted
+too: `%LOCALAPPDATA%\Temp` is normalized to the placeholder the expander
+resolves, and an environment variable this build does not know fails the load
+instead of resolving to nothing.
+
+A signature states how its age policy applies. `delete_directory` ages a child
+as a whole and removes all of it or none. `delete_stale_contents` ages the
+entries inside a unit and removes only those (`min_age_days` is required with
+it), which is what a cache namespace needs when an application writes to it
+while the cleaner works: a file touched this morning no longer hides the
+gigabytes beside it. Structured state — databases, locks, credentials,
+configuration, bundles, executables — is never removed by either policy, in a
+unit root or inside a pruned tree.
+
 A signature can also state what its deletion would disturb. `fail_if_running`
 names the executables whose running state refuses the cleanup (a compiler or
 runtime holding its own cache open). `owner` names who the catalog expects to

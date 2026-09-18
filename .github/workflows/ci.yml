@@ -139,7 +139,6 @@ jobs:
       - name: Install Rust toolchain (MSVC)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable-x86_64-pc-windows-msvc
           components: rustfmt, clippy
 
       - name: Rust Cache
@@ -207,8 +206,6 @@ jobs:
 
       - name: Install Rust toolchain (the declared rust-version)
         uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          toolchain: 1.95.0-x86_64-pc-windows-msvc
 
       - name: Setup Node.js
         uses: actions/setup-node@v5

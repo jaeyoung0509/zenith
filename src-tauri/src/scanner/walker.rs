@@ -2,7 +2,7 @@ use crate::models::{
     classify_structured_state, derive_cleanup_disposition, AgeObservation, CacheSizeSemantics,
     CancellationProbe, CleanupEligibility, CleanupOwnership, CleanupUnit, DispositionFacts,
     EligibilityGate, EntryKind, FileSize, ObservationQuality, PathFacts, ScanItem, Signature,
-    StructuredStateKind,
+    StaleEntryObservation, StructuredStateKind,
 };
 use crate::scanner::{PathMeasurement, SizeCalculator};
 use crate::signatures::SignatureLoader;
@@ -16,6 +16,17 @@ use zenith_platform::PlatformEnvironment;
 use std::os::unix::fs::MetadataExt;
 
 pub struct DirectoryScanner;
+
+/// One concrete root a catalog pattern authorizes.
+///
+/// `key` is the part of the path the pattern did not spell out — the matched
+/// application, package, or profile — so two matches of one pattern never share
+/// an item identity. A literal pattern produces one root with no key, and its
+/// identity is exactly what it has always been.
+struct SignatureRoot {
+    path: std::path::PathBuf,
+    key: Option<String>,
+}
 
 /// What the filesystem states about a candidate, in the terms the shared rule
 /// uses: the entry kind, whether it is executable, and whether the name alone
@@ -86,15 +97,17 @@ impl DirectoryScanner {
             environment,
             cancellation,
             EligibilityGate::Open,
+            &crate::applications::RunningApplications::default(),
         )
     }
 
-    pub(crate) fn scan_signature_with_pool(
+    pub fn scan_signature_with_pool(
         signature: &Signature,
         pool: Option<&ThreadPool>,
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
         gate: EligibilityGate,
+        running_apps: &crate::applications::RunningApplications,
     ) -> Vec<ScanItem> {
         let mut items = Vec::new();
 
@@ -103,165 +116,82 @@ impl DirectoryScanner {
             return items;
         }
 
+        let unit_is_root = !signature.unit_kind().is_enumerated_child();
+
         for (idx, pattern) in signature.paths.iter().enumerate() {
-            let path_buf = match SignatureLoader::expand_path(pattern, environment) {
-                Some(p) => p,
-                None => continue,
+            let Some(path_buf) = SignatureLoader::expand_path(pattern, environment) else {
+                continue;
             };
 
-            if let Some(min_age_days) = signature.min_age_days {
-                items.extend(Self::scan_aged_children(
-                    environment,
+            let (roots, failures) = Self::signature_roots(&path_buf, environment);
+
+            for (fail_idx, failure) in failures.iter().enumerate() {
+                let reason = format!(
+                    "Could not inspect {}: {}",
+                    failure.path.display(),
+                    zenith_platform::environment::describe_access_refusal(
+                        environment,
+                        &failure.path,
+                        &failure.error,
+                    )
+                );
+                items.push(Self::unavailable_selector_item(
                     signature,
-                    &path_buf,
+                    &failure.path,
                     idx,
-                    min_age_days,
-                    cancellation,
+                    fail_idx,
+                    failures.len(),
+                    reason,
                     gate,
                 ));
-                continue;
             }
 
-            // `Path::exists()` collapses every metadata error into `false`.
-            // Keep permission and I/O failures observable instead of treating
-            // a configured path as if it simply did not exist.
-            let (exists, measurement, facts) = match fs::symlink_metadata(&path_buf) {
-                Ok(metadata) if metadata.file_type().is_symlink() => (
-                    true,
-                    PathMeasurement::unavailable(format!(
-                        "Configured path {} is a symlink; cleanup is blocked",
-                        path_buf.display()
-                    )),
-                    None,
-                ),
-                Ok(metadata) => {
-                    let facts = CandidateFacts::read(&path_buf, &metadata);
-                    (
-                        true,
-                        SizeCalculator::measure_path_with_pool(
-                            &path_buf,
-                            &signature.exclusions,
-                            pool,
+            // One pattern can name many roots (`Application Support/*/GPUCache`),
+            // and each root is scanned on its own so nothing about one match
+            // decides another. A pattern with no selector yields exactly one
+            // root and keeps its historical identity.
+            for root in roots {
+                let root_path = root.path.clone();
+                if let Some(min_age_days) = signature.min_age_days {
+                    if !unit_is_root {
+                        items.extend(Self::scan_aged_children(
                             environment,
+                            signature,
+                            &root_path,
+                            idx,
+                            min_age_days,
                             cancellation,
-                        ),
-                        Some(facts),
-                    )
+                            gate,
+                            root.key.as_deref(),
+                            running_apps,
+                        ));
+                        continue;
+                    }
+                    items.push(Self::scan_aged_unit(
+                        environment,
+                        signature,
+                        &root_path,
+                        idx,
+                        min_age_days,
+                        gate,
+                        root.key.as_deref(),
+                    ));
+                    continue;
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => (
-                    false,
-                    PathMeasurement::complete(FileSize::default(), 0),
-                    None,
-                ),
-                Err(err) => (
-                    true,
-                    PathMeasurement::unavailable(format!(
-                        "Could not inspect configured path {}: {}",
-                        path_buf.display(),
-                        err
-                    )),
-                    None,
-                ),
-            };
 
-            let size = measurement.size;
-            let file_count = measurement.file_count;
-            let skipped_entry_count = measurement.skipped_entries;
-            let (quality, incomplete_reason) = if !exists || measurement.complete {
-                (ObservationQuality::Fresh, None)
-            } else if size.observed_bytes() == 0 {
-                (
-                    ObservationQuality::Unavailable,
-                    measurement
-                        .incomplete_reason
-                        .or_else(|| Some("Inaccessible path; read failed".into())),
-                )
-            } else {
-                (
-                    ObservationQuality::Partial,
-                    measurement
-                        .incomplete_reason
-                        .or_else(|| Some("Incomplete scan; some entries could not be read".into())),
-                )
-            };
-
-            let mut cache_metadata = signature.cache_metadata();
-            if quality == ObservationQuality::Partial {
-                cache_metadata.size_semantics = CacheSizeSemantics::ConservativeLowerBound;
-            } else if quality == ObservationQuality::Unavailable {
-                cache_metadata.size_semantics = CacheSizeSemantics::Informational;
+                if let Some(item) = Self::scan_fixed_unit(
+                    signature,
+                    &root_path,
+                    idx,
+                    pool,
+                    environment,
+                    cancellation,
+                    gate,
+                    root.key.as_deref(),
+                ) {
+                    items.push(item);
+                }
             }
-
-            let last_modified = if exists {
-                fs::metadata(&path_buf)
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-            } else {
-                None
-            };
-
-            let item_id = if signature.paths.len() > 1 {
-                format!("{}.{}", signature.id, idx)
-            } else {
-                signature.id.clone()
-            };
-
-            let display_name = if signature.paths.len() > 1 {
-                format!(
-                    "{} ({})",
-                    signature.name,
-                    path_buf
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(pattern)
-                )
-            } else {
-                signature.name.clone()
-            };
-
-            let path_text = path_buf.to_string_lossy().to_string();
-            let disposition = derive_cleanup_disposition(
-                DispositionFacts::new(
-                    signature.risk,
-                    quality,
-                    &cache_metadata,
-                    &size,
-                    incomplete_reason.as_deref(),
-                )
-                .with_gate(gate)
-                .with_structured_state(facts.as_ref().and_then(|facts| facts.structured_state)),
-            );
-
-            items.push(ScanItem {
-                id: item_id,
-                signature_id: signature.id.clone(),
-                name: display_name,
-                category: signature.category,
-                risk: signature.risk,
-                path: path_text.clone(),
-                size,
-                file_count,
-                description: signature.description.clone(),
-                cache_metadata,
-                disposition,
-                unit: CleanupUnit::new(signature.unit_kind(), path_text.clone(), path_text),
-                ownership: signature.ownership(),
-                age: None,
-                structured_state: facts.as_ref().and_then(|facts| facts.structured_state),
-                entry_kind: facts
-                    .as_ref()
-                    .map(|facts| facts.entry_kind)
-                    .unwrap_or(EntryKind::Directory),
-                gate,
-                is_selected: false,
-                last_modified,
-                exists,
-                quality,
-                incomplete_reason,
-                skipped_entry_count,
-            });
         }
 
         // A selection is derived from the facts above, so it is applied after
@@ -276,12 +206,474 @@ impl DirectoryScanner {
         items
     }
 
+    /// The concrete roots one pattern authorizes, alongside any branches that
+    /// failed to enumerate due to permission or I/O errors.
+    ///
+    /// A literal pattern is its own root; a selector pattern is expanded once,
+    /// deterministically, and produces one entry per match with the key that
+    /// distinguishes them.
+    fn signature_roots(
+        expanded: &std::path::Path,
+        environment: &PlatformEnvironment,
+    ) -> (
+        Vec<SignatureRoot>,
+        Vec<zenith_platform::selector::SelectionFailure>,
+    ) {
+        let text = expanded.to_string_lossy().into_owned();
+        if !zenith_platform::selector::PathSelector::is_pattern(&text) {
+            return (
+                vec![SignatureRoot {
+                    path: expanded.to_path_buf(),
+                    key: None,
+                }],
+                Vec::new(),
+            );
+        }
+
+        let Ok(selector) =
+            zenith_platform::selector::PathSelector::parse(&text, environment.flavor())
+        else {
+            // The catalog refuses a malformed selector at load time; a pattern
+            // that reaches here is refused rather than treated as a literal
+            // directory name.
+            crate::diagnostics::log_error(
+                "scanner",
+                &format!("Refused a malformed catalog pattern: {text}"),
+            );
+            return (Vec::new(), Vec::new());
+        };
+
+        let outcome = selector.expand(
+            environment.flavor(),
+            zenith_platform::selector::SELECTOR_MATCH_LIMIT,
+        );
+        if outcome.truncated {
+            crate::diagnostics::log_error(
+                "scanner",
+                &format!(
+                    "Pattern `{text}` matched more than {} roots; the scan reports the first ones",
+                    zenith_platform::selector::SELECTOR_MATCH_LIMIT
+                ),
+            );
+        }
+        let roots = outcome
+            .matches
+            .into_iter()
+            .map(|path| {
+                let key = selector
+                    .match_key(&path.to_string_lossy(), environment.flavor())
+                    .unwrap_or_default();
+                SignatureRoot {
+                    path,
+                    key: Some(key),
+                }
+            })
+            .collect();
+        (roots, outcome.failures)
+    }
+
+    /// Scans one root when the root itself is the cleanup unit.
+    ///
+    /// The root's whole tree is the unit, so its identity, its entry kind, and
+    /// its structured-state classification describe exactly what a plan would
+    /// delete.
+    #[allow(clippy::too_many_arguments)]
+    fn scan_fixed_unit(
+        signature: &Signature,
+        path_buf: &std::path::Path,
+        idx: usize,
+        pool: Option<&ThreadPool>,
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+        gate: EligibilityGate,
+        root_key: Option<&str>,
+    ) -> Option<ScanItem> {
+        // `Path::exists()` collapses every metadata error into `false`.
+        // Keep permission and I/O failures observable instead of treating
+        // a configured path as if it simply did not exist.
+        let (exists, measurement, facts) = match fs::symlink_metadata(path_buf) {
+            Ok(metadata) if metadata.file_type().is_symlink() => (
+                true,
+                PathMeasurement::unavailable(format!(
+                    "Configured path {} is a symlink; cleanup is blocked",
+                    path_buf.display()
+                )),
+                None,
+            ),
+            Ok(metadata) => {
+                let facts = CandidateFacts::read(path_buf, &metadata);
+                (
+                    true,
+                    SizeCalculator::measure_path_with_pool(
+                        path_buf,
+                        &signature.exclusions,
+                        pool,
+                        environment,
+                        cancellation,
+                    ),
+                    Some(facts),
+                )
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => (
+                false,
+                PathMeasurement::complete(FileSize::default(), 0),
+                None,
+            ),
+            Err(err) => (
+                true,
+                PathMeasurement::unavailable(format!(
+                    "Could not inspect configured path {}: {}",
+                    path_buf.display(),
+                    zenith_platform::environment::describe_access_refusal(
+                        environment,
+                        path_buf,
+                        &err.to_string(),
+                    )
+                )),
+                None,
+            ),
+        };
+
+        let size = measurement.size;
+        let file_count = measurement.file_count;
+        let skipped_entry_count = measurement.skipped_entries;
+        let (quality, incomplete_reason) = if !exists || measurement.complete {
+            (ObservationQuality::Fresh, None)
+        } else if size.observed_bytes() == 0 {
+            (
+                ObservationQuality::Unavailable,
+                measurement
+                    .incomplete_reason
+                    .or_else(|| Some("Inaccessible path; read failed".into())),
+            )
+        } else {
+            (
+                ObservationQuality::Partial,
+                measurement
+                    .incomplete_reason
+                    .or_else(|| Some("Incomplete scan; some entries could not be read".into())),
+            )
+        };
+
+        let mut cache_metadata = signature.cache_metadata();
+        if quality == ObservationQuality::Partial {
+            cache_metadata.size_semantics = CacheSizeSemantics::ConservativeLowerBound;
+        } else if quality == ObservationQuality::Unavailable {
+            cache_metadata.size_semantics = CacheSizeSemantics::Informational;
+        }
+
+        let last_modified = if exists {
+            fs::metadata(path_buf)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        } else {
+            None
+        };
+
+        let item_id = match (signature.paths.len() > 1, root_key) {
+            (multi, Some(key)) => {
+                let index = if multi {
+                    format!(".{idx}")
+                } else {
+                    String::new()
+                };
+                format!("{}{}.{}", signature.id, index, key)
+            }
+            (true, None) => format!("{}.{}", signature.id, idx),
+            (false, None) => signature.id.clone(),
+        };
+
+        let display_name = match root_key {
+            // A selected root is one of several: the row names which one, so
+            // two matches of the same pattern never look like one another.
+            Some(key) => format!("{} ({})", signature.name, key),
+            None if signature.paths.len() > 1 => format!(
+                "{} ({})",
+                signature.name,
+                path_buf
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+            ),
+            None => signature.name.clone(),
+        };
+
+        let path_text = path_buf.to_string_lossy().to_string();
+        let disposition = derive_cleanup_disposition(
+            DispositionFacts::new(
+                signature.risk,
+                quality,
+                &cache_metadata,
+                &size,
+                incomplete_reason.as_deref(),
+            )
+            .with_gate(gate)
+            .with_stale_entries(None)
+            .with_structured_state(facts.as_ref().and_then(|facts| facts.structured_state)),
+        );
+
+        Some(ScanItem {
+            id: item_id,
+            signature_id: signature.id.clone(),
+            name: display_name,
+            category: signature.category,
+            risk: signature.risk,
+            path: path_text.clone(),
+            size,
+            file_count,
+            description: signature.description.clone(),
+            cache_metadata,
+            disposition,
+            unit: CleanupUnit::new(signature.unit_kind(), path_text.clone(), path_text),
+            ownership: signature.ownership(),
+            age: None,
+            stale: None,
+            structured_state: facts.as_ref().and_then(|facts| facts.structured_state),
+            entry_kind: facts
+                .as_ref()
+                .map(|facts| facts.entry_kind)
+                .unwrap_or(EntryKind::Directory),
+            gate,
+            owner_running: false,
+            is_selected: false,
+            last_modified,
+            exists,
+            quality,
+            incomplete_reason,
+            skipped_entry_count,
+        })
+    }
+
+    /// Scans one root as a unit whose whole tree carries the age policy.
+    ///
+    /// A named cache subtree is deleted whole or not at all, so its freshness
+    /// is the freshness of everything inside it. This is the shape the generic
+    /// aged-child rule cannot cover: the root is the unit, not its children.
+    #[allow(clippy::too_many_arguments)]
+    fn scan_aged_unit(
+        environment: &PlatformEnvironment,
+        signature: &Signature,
+        path_buf: &std::path::Path,
+        idx: usize,
+        min_age_days: u32,
+        gate: EligibilityGate,
+        root_key: Option<&str>,
+    ) -> ScanItem {
+        let stats = fs::symlink_metadata(path_buf);
+        let stats = match stats {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Self::unavailable_aged_item(
+                    signature,
+                    path_buf,
+                    Self::item_id_for(signature, idx, root_key, None),
+                    Self::display_name_for(signature, path_buf, root_key),
+                    FileSize::default(),
+                    0,
+                    None,
+                    1,
+                    format!(
+                        "Configured path {} is a symlink; cleanup is blocked",
+                        path_buf.display()
+                    ),
+                    gate,
+                    false,
+                );
+            }
+            Ok(_) => Self::measure_tree_stats(
+                environment,
+                path_buf,
+                &signature.exclusions,
+                0,
+                32,
+                &crate::models::NeverCancelled,
+                None,
+            ),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Self::unavailable_aged_item(
+                    signature,
+                    path_buf,
+                    Self::item_id_for(signature, idx, root_key, None),
+                    Self::display_name_for(signature, path_buf, root_key),
+                    FileSize::default(),
+                    0,
+                    None,
+                    0,
+                    format!("Configured path {} does not exist", path_buf.display()),
+                    gate,
+                    false,
+                );
+            }
+            Err(err) => {
+                return Self::unavailable_aged_item(
+                    signature,
+                    path_buf,
+                    Self::item_id_for(signature, idx, root_key, None),
+                    Self::display_name_for(signature, path_buf, root_key),
+                    FileSize::default(),
+                    0,
+                    None,
+                    1,
+                    format!(
+                        "Could not inspect {}: {}",
+                        path_buf.display(),
+                        zenith_platform::environment::describe_access_refusal(
+                            environment,
+                            path_buf,
+                            &err.to_string(),
+                        )
+                    ),
+                    gate,
+                    false,
+                );
+            }
+        };
+
+        let size = FileSize::new(stats.logical, Some(stats.allocated));
+        let newest_modified = stats
+            .newest_mtime
+            .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        let now_secs = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let age = AgeObservation::evaluate(min_age_days, newest_modified, now_secs);
+
+        if !stats.complete {
+            let reason = stats
+                .incomplete_reason
+                .clone()
+                .unwrap_or_else(|| format!("Could not completely inspect {}", path_buf.display()));
+            return Self::unavailable_aged_item(
+                signature,
+                path_buf,
+                Self::item_id_for(signature, idx, root_key, None),
+                Self::display_name_for(signature, path_buf, root_key),
+                size,
+                stats.file_count,
+                newest_modified,
+                stats.skipped_entries,
+                reason,
+                gate,
+                false,
+            );
+        }
+
+        let facts = match fs::symlink_metadata(path_buf) {
+            Ok(metadata) => CandidateFacts::read(path_buf, &metadata),
+            Err(_) => CandidateFacts {
+                entry_kind: EntryKind::Directory,
+                structured_state: None,
+            },
+        };
+
+        let description = if age.satisfied {
+            format!(
+                "{} (unchanged for at least {} days)",
+                signature.description, min_age_days
+            )
+        } else {
+            format!(
+                "{} (used within the last {} days; kept until it is stale)",
+                signature.description, min_age_days
+            )
+        };
+
+        let path_text = path_buf.to_string_lossy().to_string();
+        let cache_metadata = signature.cache_metadata();
+        let disposition = derive_cleanup_disposition(
+            DispositionFacts::new(
+                signature.risk,
+                ObservationQuality::Fresh,
+                &cache_metadata,
+                &size,
+                None,
+            )
+            .with_gate(gate)
+            .with_age(Some(&age))
+            .with_structured_state(facts.structured_state),
+        );
+
+        ScanItem {
+            id: Self::item_id_for(signature, idx, root_key, None),
+            signature_id: signature.id.clone(),
+            name: Self::display_name_for(signature, path_buf, root_key),
+            category: signature.category,
+            risk: signature.risk,
+            path: path_text.clone(),
+            size,
+            file_count: stats.file_count,
+            description,
+            cache_metadata,
+            disposition,
+            unit: CleanupUnit::new(signature.unit_kind(), path_text.clone(), path_text),
+            ownership: signature.ownership(),
+            age: Some(age),
+            stale: None,
+            structured_state: facts.structured_state,
+            entry_kind: facts.entry_kind,
+            gate,
+            owner_running: false,
+            is_selected: false,
+            last_modified: newest_modified,
+            exists: true,
+            quality: ObservationQuality::Fresh,
+            incomplete_reason: None,
+            skipped_entry_count: stats.skipped_entries,
+        }
+    }
+
+    /// The item identity for one root: signature, pattern, selected key, child.
+    fn item_id_for(
+        signature: &Signature,
+        idx: usize,
+        root_key: Option<&str>,
+        child: Option<&str>,
+    ) -> String {
+        let mut id = signature.id.clone();
+        if signature.paths.len() > 1 || root_key.is_some() {
+            id.push_str(&format!(".{idx}"));
+        }
+        if let Some(key) = root_key {
+            id.push('.');
+            id.push_str(key);
+        }
+        if let Some(child) = child {
+            id.push('.');
+            id.push_str(child);
+        }
+        id
+    }
+
+    /// The display name for one root.
+    fn display_name_for(
+        signature: &Signature,
+        path_buf: &std::path::Path,
+        root_key: Option<&str>,
+    ) -> String {
+        match root_key {
+            Some(key) => format!("{} ({})", signature.name, key),
+            None if signature.paths.len() > 1 => format!(
+                "{} ({})",
+                signature.name,
+                path_buf
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+            ),
+            None => signature.name.clone(),
+        }
+    }
+
     /// Enumerates the children of an aged root and reports each as its own unit.
     ///
     /// A child is inventoried whatever its age: the age policy decides
     /// eligibility, not visibility. That is the difference between "this cache
     /// is 4 GB and it is being written right now" and a namespace that silently
     /// vanishes from the totals.
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn scan_aged_children(
         environment: &PlatformEnvironment,
@@ -291,14 +683,26 @@ impl DirectoryScanner {
         min_age_days: u32,
         cancellation: &dyn CancellationProbe,
         gate: EligibilityGate,
+        root_key: Option<&str>,
+        running_apps: &crate::applications::RunningApplications,
     ) -> Vec<ScanItem> {
+        // A signature that removes stale entries ages each entry of a namespace;
+        // every other aged signature removes a child whole and ages that child's
+        // whole tree. The strategy is the difference, and it decides which
+        // verdict the scan reports.
+        let stale_policy = (signature.strategy
+            == crate::models::CleanStrategy::DeleteStaleContents)
+            .then(|| crate::safety::StaleEntryPolicy::from_days(min_age_days));
         match fs::symlink_metadata(root) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return vec![Self::unavailable_aged_item(
                     signature,
                     root,
-                    format!("{}.{}.unavailable", signature.id, path_index),
-                    signature.name.clone(),
+                    format!(
+                        "{}.unavailable",
+                        Self::item_id_for(signature, path_index, root_key, None)
+                    ),
+                    Self::display_name_for(signature, root, root_key),
                     FileSize::default(),
                     0,
                     None,
@@ -308,6 +712,7 @@ impl DirectoryScanner {
                         root.display()
                     ),
                     gate,
+                    false,
                 )];
             }
             Ok(_) => {}
@@ -316,14 +721,26 @@ impl DirectoryScanner {
                 return vec![Self::unavailable_aged_item(
                     signature,
                     root,
-                    format!("{}.{}.unavailable", signature.id, path_index),
-                    signature.name.clone(),
+                    format!(
+                        "{}.unavailable",
+                        Self::item_id_for(signature, path_index, root_key, None)
+                    ),
+                    Self::display_name_for(signature, root, root_key),
                     FileSize::default(),
                     0,
                     None,
                     1,
-                    format!("Could not inspect {}: {}", root.display(), err),
+                    format!(
+                        "Could not inspect {}: {}",
+                        root.display(),
+                        zenith_platform::environment::describe_access_refusal(
+                            environment,
+                            root,
+                            &err.to_string(),
+                        )
+                    ),
                     gate,
+                    false,
                 )];
             }
         }
@@ -334,14 +751,26 @@ impl DirectoryScanner {
                 return vec![Self::unavailable_aged_item(
                     signature,
                     root,
-                    format!("{}.{}.unavailable", signature.id, path_index),
-                    signature.name.clone(),
+                    format!(
+                        "{}.unavailable",
+                        Self::item_id_for(signature, path_index, root_key, None)
+                    ),
+                    Self::display_name_for(signature, root, root_key),
                     FileSize::default(),
                     0,
                     None,
                     1,
-                    format!("Could not inspect {}: {}", root.display(), err),
+                    format!(
+                        "Could not inspect {}: {}",
+                        root.display(),
+                        zenith_platform::environment::describe_access_refusal(
+                            environment,
+                            root,
+                            &err.to_string(),
+                        )
+                    ),
                     gate,
+                    false,
                 )];
             }
         };
@@ -384,7 +813,7 @@ impl DirectoryScanner {
                     items.push(Self::unavailable_aged_item(
                         signature,
                         &path,
-                        format!("{}.{}.{}", signature.id, path_index, name),
+                        Self::item_id_for(signature, path_index, root_key, Some(&name)),
                         name,
                         FileSize::default(),
                         0,
@@ -395,6 +824,7 @@ impl DirectoryScanner {
                             path.display()
                         ),
                         gate,
+                        false,
                     ));
                     continue;
                 }
@@ -403,14 +833,23 @@ impl DirectoryScanner {
                     items.push(Self::unavailable_aged_item(
                         signature,
                         &path,
-                        format!("{}.{}.{}", signature.id, path_index, name),
+                        Self::item_id_for(signature, path_index, root_key, Some(&name)),
                         name,
                         FileSize::default(),
                         0,
                         None,
                         1,
-                        format!("Could not inspect {}: {}", path.display(), err),
+                        format!(
+                            "Could not inspect {}: {}",
+                            path.display(),
+                            zenith_platform::environment::describe_access_refusal(
+                                environment,
+                                &path,
+                                &err.to_string(),
+                            )
+                        ),
                         gate,
+                        false,
                     ));
                     continue;
                 }
@@ -439,6 +878,7 @@ impl DirectoryScanner {
                 0,
                 32,
                 cancellation,
+                stale_policy,
             );
             // An incomplete tree cannot prove the candidate's newest timestamp,
             // so retain it for observability but block cleanup.
@@ -451,7 +891,7 @@ impl DirectoryScanner {
                 items.push(Self::unavailable_aged_item(
                     signature,
                     &path,
-                    format!("{}.{}.{}", signature.id, path_index, name),
+                    Self::item_id_for(signature, path_index, root_key, Some(&name)),
                     name,
                     size,
                     stats.file_count,
@@ -461,6 +901,7 @@ impl DirectoryScanner {
                         format!("Could not completely inspect {}", path.display())
                     }),
                     gate,
+                    false,
                 ));
                 continue;
             }
@@ -471,23 +912,40 @@ impl DirectoryScanner {
                 .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
                 .map(|duration| duration.as_secs());
             let age = AgeObservation::evaluate(min_age_days, newest_modified, now_secs);
+            let stale = stale_policy.map(|_| {
+                StaleEntryObservation::new(min_age_days, stats.stale_bytes, stats.stale_file_count)
+            });
 
             // An empty fresh observation carries nothing a user could act on.
             if size.observed_bytes() == 0 && age.satisfied {
                 continue;
             }
 
-            let description = if age.satisfied {
-                format!(
+            let description = match stale {
+                Some(stale) if stale.nothing_is_stale() => format!(
+                    "{} (nothing inside has been inactive for {} days)",
+                    signature.description, min_age_days
+                ),
+                Some(stale) => format!(
+                    "{} ({} of it has been inactive for at least {} days)",
+                    signature.description,
+                    format_bytes(stale.stale_bytes),
+                    min_age_days
+                ),
+                None if age.satisfied => format!(
                     "{} (unchanged for at least {} days)",
                     signature.description, min_age_days
-                )
-            } else {
-                format!(
+                ),
+                None => format!(
                     "{} (used within the last {} days; kept until it is stale)",
                     signature.description, min_age_days
-                )
+                ),
             };
+
+            // A namespace named after a running application's bundle
+            // identifier belongs to that application, and the unit is reported
+            // as selectable but never automatic.
+            let owner_running = running_apps.owner_of(&name).is_some();
 
             let cache_metadata = signature.cache_metadata();
             let disposition = derive_cleanup_disposition(
@@ -499,16 +957,22 @@ impl DirectoryScanner {
                     None,
                 )
                 .with_gate(gate)
-                .with_age(Some(&age))
+                .with_running_owner(owner_running)
+                .with_age(stale.is_none().then_some(&age))
+                .with_stale_entries(stale.as_ref())
                 .with_structured_state(facts.structured_state),
             );
             let is_selected = disposition.eligibility == CleanupEligibility::AutoCleanable
                 && disposition.cleanable_bytes.unwrap_or(0) > 0;
 
+            let display_name = match root_key {
+                Some(key) => format!("{name} ({key})"),
+                None => name.clone(),
+            };
             items.push(ScanItem {
-                id: format!("{}.{}.{}", signature.id, path_index, name),
+                id: Self::item_id_for(signature, path_index, root_key, Some(&name)),
                 signature_id: signature.id.clone(),
-                name,
+                name: display_name,
                 category: signature.category,
                 risk: signature.risk,
                 path: path_text,
@@ -519,10 +983,12 @@ impl DirectoryScanner {
                 disposition,
                 unit,
                 ownership,
-                age: Some(age),
+                age: stale.is_none().then_some(age),
+                stale,
                 structured_state: facts.structured_state,
                 entry_kind: facts.entry_kind,
                 gate,
+                owner_running,
                 is_selected,
                 last_modified: newest_modified,
                 exists: true,
@@ -536,18 +1002,100 @@ impl DirectoryScanner {
             items.push(Self::unavailable_aged_item(
                 signature,
                 root,
-                format!("{}.{}.unavailable", signature.id, path_index),
-                format!("{} (scan incomplete)", signature.name),
+                format!(
+                    "{}.unavailable",
+                    Self::item_id_for(signature, path_index, root_key, None)
+                ),
+                format!(
+                    "{} (scan incomplete)",
+                    Self::display_name_for(signature, root, root_key)
+                ),
                 FileSize::default(),
                 0,
                 None,
                 1,
                 reason,
                 gate,
+                false,
             ));
         }
 
         items
+    }
+
+    fn unavailable_selector_item(
+        signature: &Signature,
+        path: &Path,
+        idx: usize,
+        fail_idx: usize,
+        fail_count: usize,
+        reason: String,
+        gate: EligibilityGate,
+    ) -> ScanItem {
+        let failure_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let display_name = if failure_name.is_empty() || failure_name == signature.name {
+            signature.name.clone()
+        } else {
+            format!("{} ({failure_name})", signature.name)
+        };
+        let item_id = if fail_count > 1 {
+            format!("{}.{idx}.unavailable.{fail_idx}", signature.id)
+        } else if signature.paths.len() > 1 {
+            format!("{}.{idx}.unavailable", signature.id)
+        } else {
+            format!("{}.unavailable", signature.id)
+        };
+        let description = if signature.min_age_days.is_some() {
+            format!(
+                "{} Age eligibility could not be verified, so cleanup is blocked.",
+                signature.description
+            )
+        } else {
+            signature.description.clone()
+        };
+        let mut cache_metadata = signature.cache_metadata();
+        cache_metadata.size_semantics = CacheSizeSemantics::Informational;
+        let disposition = derive_cleanup_disposition(
+            DispositionFacts::new(
+                signature.risk,
+                ObservationQuality::Unavailable,
+                &cache_metadata,
+                &FileSize::default(),
+                Some(&reason),
+            )
+            .with_gate(gate),
+        );
+        let path_text = path.to_string_lossy().to_string();
+        ScanItem {
+            id: item_id,
+            signature_id: signature.id.clone(),
+            name: display_name,
+            category: signature.category,
+            risk: signature.risk,
+            path: path_text.clone(),
+            size: FileSize::default(),
+            file_count: 0,
+            description,
+            cache_metadata,
+            disposition,
+            unit: CleanupUnit::new(signature.unit_kind(), path_text.clone(), path_text),
+            ownership: signature.ownership(),
+            age: None,
+            stale: None,
+            structured_state: None,
+            entry_kind: EntryKind::Directory,
+            gate,
+            owner_running: false,
+            is_selected: false,
+            last_modified: None,
+            exists: true,
+            quality: ObservationQuality::Unavailable,
+            incomplete_reason: Some(reason),
+            skipped_entry_count: 1,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -562,6 +1110,7 @@ impl DirectoryScanner {
         skipped_entry_count: u64,
         reason: String,
         gate: EligibilityGate,
+        owner_running: bool,
     ) -> ScanItem {
         let mut cache_metadata = signature.cache_metadata();
         // An uninspectable candidate's size is informational: it can never be
@@ -596,9 +1145,11 @@ impl DirectoryScanner {
             unit: CleanupUnit::new(signature.unit_kind(), path_text.clone(), path_text),
             ownership: signature.ownership(),
             age: None,
+            stale: None,
             structured_state: None,
             entry_kind: EntryKind::Directory,
             gate,
+            owner_running,
             is_selected: false,
             last_modified,
             exists: true,
@@ -617,8 +1168,11 @@ impl DirectoryScanner {
         current_depth: usize,
         max_depth: usize,
         cancellation: &dyn CancellationProbe,
+        stale_policy: Option<crate::safety::StaleEntryPolicy>,
     ) -> TreeStats {
         let mut stats = TreeStats {
+            stale_bytes: 0,
+            stale_file_count: 0,
             logical: 0,
             allocated: 0,
             file_count: 0,
@@ -695,6 +1249,27 @@ impl DirectoryScanner {
                 stats.allocated = len;
             }
             stats.file_count = 1;
+
+            // The entry's own verdict, from the entry's own facts. The
+            // execution guard evaluates the same predicate for the same file,
+            // so the estimate and the deletion agree by construction.
+            if let Some(policy) = stale_policy {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let now = SystemTime::now();
+                if policy.allows(
+                    &name,
+                    crate::safety::stale::entry_kind(&meta),
+                    crate::safety::stale::is_executable(&meta),
+                    meta.modified().ok(),
+                    now,
+                ) {
+                    stats.stale_bytes += stats.allocated;
+                    stats.stale_file_count = 1;
+                }
+            }
             return stats;
         }
 
@@ -710,7 +1285,11 @@ impl DirectoryScanner {
                 stats.incomplete_reason = Some(format!(
                     "Failed to read directory {}: {}",
                     path.display(),
-                    err
+                    zenith_platform::environment::describe_access_refusal(
+                        environment,
+                        path,
+                        &err.to_string(),
+                    )
                 ));
                 return stats;
             }
@@ -735,7 +1314,11 @@ impl DirectoryScanner {
                         stats.incomplete_reason = Some(format!(
                             "Failed to read entry in {}: {}",
                             path.display(),
-                            err
+                            zenith_platform::environment::describe_access_refusal(
+                                environment,
+                                path,
+                                &err.to_string(),
+                            )
                         ));
                     }
                     continue;
@@ -768,6 +1351,7 @@ impl DirectoryScanner {
                 current_depth + 1,
                 max_depth,
                 cancellation,
+                stale_policy,
             );
             if !sub_stats.complete {
                 stats.complete = false;
@@ -778,6 +1362,8 @@ impl DirectoryScanner {
             stats.logical += sub_stats.logical;
             stats.allocated += sub_stats.allocated;
             stats.file_count += sub_stats.file_count;
+            stats.stale_bytes += sub_stats.stale_bytes;
+            stats.stale_file_count += sub_stats.stale_file_count;
             stats.skipped_entries += sub_stats.skipped_entries;
             if let Some(sub_mtime) = sub_stats.newest_mtime {
                 stats.newest_mtime = Some(match stats.newest_mtime {
@@ -793,6 +1379,11 @@ impl DirectoryScanner {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeStats {
+    /// Bytes in files whose *own* age satisfies the stale-entry policy, when the
+    /// caller supplied one. Zero when it did not.
+    pub stale_bytes: u64,
+    /// How many files that subset holds.
+    pub stale_file_count: u64,
     pub logical: u64,
     pub allocated: u64,
     pub file_count: usize,
@@ -802,6 +1393,30 @@ pub struct TreeStats {
     /// Entries the walk did not account for: excluded, blacklisted, protected,
     /// unreadable, or beyond the depth limit.
     pub skipped_entries: u64,
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * KIB;
+    const GIB: f64 = 1024.0 * MIB;
+    const TIB: f64 = 1024.0 * GIB;
+
+    let b = bytes as f64;
+    let (val, unit) = if b >= TIB {
+        (b / TIB, "TB")
+    } else if b >= GIB {
+        (b / GIB, "GB")
+    } else if b >= MIB {
+        (b / MIB, "MB")
+    } else if b >= KIB {
+        (b / KIB, "KB")
+    } else {
+        return format!("{bytes} B");
+    };
+
+    let formatted = format!("{val:.1}");
+    let trimmed = formatted.strip_suffix(".0").unwrap_or(&formatted);
+    format!("{trimmed} {unit}")
 }
 
 #[cfg(test)]
@@ -855,11 +1470,24 @@ mod tests {
             .checked_sub(std::time::Duration::from_secs(days * 86_400))
             .expect("the fixture clock has a past");
         // A POSIX directory can only be opened for reading, and a read-only
-        // handle can still set its timestamp; Windows needs write access to
-        // change one, and only the file fixtures are backdated there.
+        // handle can still set its timestamp. Windows refuses `GENERIC_WRITE`
+        // for a directory, so a directory handle asks for
+        // `FILE_WRITE_ATTRIBUTES` — which is what setting a timestamp needs —
+        // and `FILE_FLAG_BACKUP_SEMANTICS`, which is what opens a directory.
         #[cfg(unix)]
         let entry = std::fs::File::open(path).expect("open fixture entry");
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let entry = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .expect("open fixture entry")
+        };
+        #[cfg(not(any(unix, windows)))]
         let entry = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
@@ -962,6 +1590,172 @@ mod tests {
         assert!(recent_item.observed_bytes() > 0);
     }
 
+    /// One pattern can name many roots, and each match is its own unit: two
+    /// applications with a same-named cache never share an identity, and one
+    /// match's age never decides another's.
+    #[test]
+    fn a_selector_pattern_scans_every_match_as_its_own_unit() {
+        let root = tempfile::tempdir().unwrap();
+        let aged = root.path().join("com.example.aged").join("GPUCache");
+        let fresh = root.path().join("com.example.fresh").join("GPUCache");
+        std::fs::create_dir_all(&aged).unwrap();
+        std::fs::create_dir_all(&fresh).unwrap();
+        let aged_blob = aged.join("data_0");
+        let fresh_blob = fresh.join("data_0");
+        std::fs::write(&aged_blob, vec![1u8; 4096]).unwrap();
+        std::fs::write(&fresh_blob, vec![2u8; 8192]).unwrap();
+        // The namespace's own timestamp is part of the tree's freshness.
+        age_entry(&aged_blob, 30);
+        age_entry(&aged, 30);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // A linked application directory is not a root: expansion never
+            // follows a link into another tree.
+            let linked = root.path().join("com.example.linked");
+            std::fs::create_dir_all(&linked).unwrap();
+            symlink(&aged, linked.join("GPUCache")).unwrap();
+        }
+
+        let mut signature = child_signature(root.path(), 7);
+        signature.paths = vec![format!("{}/*/GPUCache", root.path().to_string_lossy())];
+        signature.unit = Some(crate::models::CleanupUnitKind::NamedSubtree);
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
+        let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
+        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+
+        // The linked match comes from the POSIX-only symlink fixture above, so
+        // each platform states its own exact expectation.
+        #[cfg(unix)]
+        let (expected_names, expected_ids) = (
+            vec![
+                "Test aged caches (com.example.aged)",
+                "Test aged caches (com.example.fresh)",
+                "Test aged caches (com.example.linked)",
+            ],
+            vec![
+                "system.test.aged.0.com.example.aged",
+                "system.test.aged.0.com.example.fresh",
+                "system.test.aged.0.com.example.linked",
+            ],
+        );
+        #[cfg(not(unix))]
+        let (expected_names, expected_ids) = (
+            vec![
+                "Test aged caches (com.example.aged)",
+                "Test aged caches (com.example.fresh)",
+            ],
+            vec![
+                "system.test.aged.0.com.example.aged",
+                "system.test.aged.0.com.example.fresh",
+            ],
+        );
+
+        assert_eq!(
+            names, expected_names,
+            "each match is reported once, named by the component the pattern left open"
+        );
+        assert_eq!(
+            ids, expected_ids,
+            "two matches of one pattern never share an identity"
+        );
+
+        let aged_item = &items[0];
+        assert_eq!(
+            aged_item.disposition.eligibility,
+            crate::models::CleanupEligibility::AutoCleanable
+        );
+        assert!(aged_item.is_selected);
+        assert_eq!(
+            aged_item.unit.kind,
+            crate::models::CleanupUnitKind::NamedSubtree
+        );
+        assert_eq!(aged_item.unit.path, aged.to_string_lossy());
+        assert_eq!(aged_item.entry_kind, crate::models::EntryKind::Directory);
+
+        let fresh_item = &items[1];
+        assert_eq!(
+            fresh_item.disposition.eligibility,
+            crate::models::CleanupEligibility::Recent
+        );
+        assert!(!fresh_item.is_selected);
+        assert!(fresh_item.observed_bytes() >= 8192);
+
+        #[cfg(unix)]
+        {
+            // A match that resolves to a link is reported as a blocked
+            // observation: the scan says why it is not cleanable instead of
+            // hiding the location.
+            let linked_item = &items[2];
+            assert_eq!(
+                linked_item.disposition.eligibility,
+                crate::models::CleanupEligibility::Blocked
+            );
+            assert!(linked_item
+                .disposition
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("symlink")));
+            assert!(!linked_item.is_selected);
+        }
+    }
+
+    /// A selector that matches nothing is an empty scan, not an error and not a
+    /// literal directory name.
+    #[test]
+    fn a_selector_pattern_that_matches_nothing_reports_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let mut signature = child_signature(root.path(), 7);
+        signature.paths = vec![format!("{}/*/GPUCache", root.path().to_string_lossy())];
+        signature.unit = Some(crate::models::CleanupUnitKind::NamedSubtree);
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
+        assert!(items.is_empty());
+    }
+
+    /// The pattern decides the granularity: a signature that enumerates
+    /// children ages each child of every match separately.
+    #[test]
+    fn a_selector_pattern_can_enumerate_the_children_of_each_match() {
+        let root = tempfile::tempdir().unwrap();
+        for package in ["app.one", "app.two"] {
+            let namespace = root.path().join(package);
+            let temp = namespace.join("TempState");
+            std::fs::create_dir_all(&temp).unwrap();
+            std::fs::write(temp.join("scratch.bin"), vec![3u8; 2048]).unwrap();
+            age_entry(&temp.join("scratch.bin"), 30);
+            age_entry(&temp, 30);
+            std::fs::create_dir_all(namespace.join("LocalState")).unwrap();
+            std::fs::write(namespace.join("LocalState/state.bin"), vec![4u8; 1024]).unwrap();
+        }
+
+        let mut signature = child_signature(root.path(), 7);
+        signature.paths = vec![format!("{}/*", root.path().to_string_lossy())];
+        signature.include_prefixes = vec!["TempState".into()];
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
+        let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["TempState (app.one)", "TempState (app.two)"],
+            "only the selected child of each match is a candidate"
+        );
+        for item in &items {
+            assert_eq!(
+                item.unit.kind,
+                crate::models::CleanupUnitKind::ChildNamespace
+            );
+            assert_eq!(
+                item.disposition.eligibility,
+                crate::models::CleanupEligibility::AutoCleanable
+            );
+        }
+        assert_ne!(items[0].id, items[1].id);
+        assert!(!items.iter().any(|item| item.name.starts_with("LocalState")));
+    }
+
     /// A signature that is discovered outside its scope reports what it found
     /// with a gate, and the gate is the only reason it is not cleanable.
     #[test]
@@ -982,6 +1776,7 @@ mod tests {
             &environment(),
             &NeverCancelled,
             crate::models::EligibilityGate::IntensiveCleanupDisabled,
+            &crate::applications::RunningApplications::default(),
         );
         let item = gated
             .iter()
@@ -1200,8 +1995,15 @@ mod tests {
         std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
 
         let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
-        let stats =
-            DirectoryScanner::measure_tree_stats(&windows, &candidate, &[], 0, 32, &NeverCancelled);
+        let stats = DirectoryScanner::measure_tree_stats(
+            &windows,
+            &candidate,
+            &[],
+            0,
+            32,
+            &NeverCancelled,
+            None,
+        );
 
         assert_eq!(stats.file_count, 1);
         assert_eq!(stats.logical, 4_096);
@@ -1216,8 +2018,15 @@ mod tests {
         );
 
         let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
-        let stats =
-            DirectoryScanner::measure_tree_stats(&posix, &candidate, &[], 0, 32, &NeverCancelled);
+        let stats = DirectoryScanner::measure_tree_stats(
+            &posix,
+            &candidate,
+            &[],
+            0,
+            32,
+            &NeverCancelled,
+            None,
+        );
         assert_eq!(stats.skipped_entries, 1, "only `.git` is a POSIX boundary");
         assert_eq!(
             stats.logical,
@@ -1316,6 +2125,7 @@ mod tests {
             0,
             32,
             &NeverCancelled,
+            None,
         );
         assert!(!stats.complete);
         let mixed_case_stats = DirectoryScanner::measure_tree_stats(
@@ -1325,6 +2135,7 @@ mod tests {
             0,
             32,
             &NeverCancelled,
+            None,
         );
         assert!(!mixed_case_stats.complete);
     }
@@ -1386,5 +2197,124 @@ mod tests {
         );
         assert_eq!(items[0].quality, ObservationQuality::Fresh);
         assert!(items[0].is_selected);
+    }
+
+    #[test]
+    fn format_bytes_produces_readable_units() {
+        assert_eq!(super::format_bytes(0), "0 B");
+        assert_eq!(super::format_bytes(512), "512 B");
+        assert_eq!(super::format_bytes(1024), "1 KB");
+        assert_eq!(super::format_bytes(1536), "1.5 KB");
+        assert_eq!(super::format_bytes(1048576), "1 MB");
+        assert_eq!(super::format_bytes(524288000), "500 MB");
+        assert_eq!(super::format_bytes(1073741824), "1 GB");
+    }
+
+    #[test]
+    fn stale_entry_description_formats_bytes_correctly() {
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("com.example.client");
+        std::fs::create_dir_all(&app).unwrap();
+        let old_file = app.join("old.bin");
+        std::fs::write(&old_file, vec![1u8; 1024]).unwrap();
+        age_entry(&old_file, 30);
+        age_entry(&app, 30);
+
+        let signature = Signature {
+            id: "system.test.stale_desc".into(),
+            name: "Test stale desc".into(),
+            category: Category::System,
+            risk: RiskTier::Safe,
+            strategy: CleanStrategy::DeleteStaleContents,
+            paths: vec![root.path().to_string_lossy().into_owned()],
+            exclusions: vec![],
+            description: "App cache".into(),
+            min_age_days: Some(7),
+            include_prefixes: vec![],
+            exclude_prefixes: vec![],
+            intensive_only: false,
+            platforms: vec![],
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        };
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
+        assert_eq!(items.len(), 1);
+        assert!(
+            items[0]
+                .description
+                .contains("of it has been inactive for at least 7 days")
+                && !items[0].description.contains("7 of it has been inactive"),
+            "description was: {}",
+            items[0].description
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_selector_pattern_produces_unavailable_item() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let containers = root.path().join("Containers");
+        let app = containers.join("com.example.app");
+        let caches = app.join("Data").join("Caches");
+        std::fs::create_dir_all(&caches).unwrap();
+
+        std::fs::set_permissions(&containers, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let signature = Signature {
+            id: "system.test.containers".into(),
+            name: "Sandboxed Application Cache".into(),
+            category: Category::System,
+            risk: RiskTier::Rebuild,
+            strategy: CleanStrategy::DeleteStaleContents,
+            paths: vec![format!(
+                "{}/Containers/*/Data/Caches",
+                root.path().to_string_lossy()
+            )],
+            exclusions: vec![],
+            description: "Sandboxed caches".into(),
+            min_age_days: Some(14),
+            include_prefixes: vec![],
+            exclude_prefixes: vec![],
+            intensive_only: true,
+            platforms: vec![],
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
+            provider: String::new(),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        };
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
+        std::fs::set_permissions(&containers, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            items.len(),
+            1,
+            "the inaccessible branch is retained as an unavailable item"
+        );
+        assert_eq!(items[0].quality, ObservationQuality::Unavailable);
+        assert_eq!(items[0].cleanable_bytes(), 0);
+        assert!(!items[0].is_selected);
+        let reason = items[0]
+            .incomplete_reason
+            .as_deref()
+            .expect("incomplete reason");
+        assert!(reason.contains("Could not inspect"));
     }
 }

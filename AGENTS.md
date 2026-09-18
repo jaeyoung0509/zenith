@@ -223,17 +223,31 @@ safety conventions below when changing Zenith.
 - Tool-owned shared caches must use a backend-owned fixed-argument provider or
   remain advisory. `external_command` is never a filesystem-delete fallback;
   rediscover and validate the provider path immediately before mutation.
+- A catalog root may select (`paths` with `*` or `{a,b}`); nothing else may.
+  Selector syntax in an exclusion or a prefix is a load error, because a pattern
+  that matches no name protects nothing. Expansion is bounded, sorted, and never
+  descends through a link, and the planner re-derives a path's authorizing roots
+  from the pattern instead of trusting the scan.
+- An observation-only entry (`strategy = "manual"`) may name an OS-owned root,
+  because it reports bytes and never removes them; a deletable entry may not.
 - Discovery never implies deletion permission. A discovered unit is reported
   with its observed bytes and an eligibility state even when it is recent,
   policy-gated, advisory, or blocked; never drop it to keep a total tidy. Only
   `AutoCleanable` is pre-selected, and `selected_bytes <= cleanable_bytes <=
   observed_bytes` holds for every total the interface shows.
 - A cleanup unit is the object a plan authorizes: the configured path, an
-  enumerated child, or a named subtree. Age policies, structured-state
-  classification, and process guards belong to that unit, and the execution
-  guard re-derives all of them from the filesystem immediately before mutating.
-  Evaluate an age policy through `AgeObservation::evaluate` so the scan and the
-  guard cannot drift.
+  enumerated child, or a selected subtree. A unit's `cleanable_bytes` is what
+  removing it reclaims: either the whole unit or — for a
+  `delete_stale_contents` unit — exactly the entries whose own age was
+  evaluated and will be re-evaluated at execution. Never report an estimate
+  whose entries another rule would then refuse. Evaluate a whole-tree policy
+  through `AgeObservation::evaluate` and a per-entry one through
+  `StaleEntryPolicy::allows`, so the scan and the guard cannot drift.
+- Structured-state classification, process guards, and the running-owner fact
+  are re-derived at execution: a database, a lock, a credential, a
+  configuration file, a bundle, or an executable inside a pruned tree stays,
+  and a cache whose application is running is `reviewable` rather than
+  automatic.
 - Generic cleanup never removes structured state: databases, their WAL/SHM
   companions, locks, credentials, configuration, bundles, and executables are
   refused by the planner and skipped by the execution guard. A provider that

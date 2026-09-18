@@ -266,6 +266,41 @@ impl AgeObservation {
     }
 }
 
+/// What an age policy that applies to *entries* observed about a unit.
+///
+/// A cache namespace is written to while it is being cleaned: one file touched
+/// this morning sits among gigabytes that have not changed in weeks. The
+/// whole-tree verdict cannot express that, so the policy is evaluated per entry
+/// and the unit reports how much of itself satisfies it. Nothing is removed on
+/// a verdict about its neighbours — the executor re-evaluates each entry — but
+/// the estimate and the reason the interface shows are about the entries that
+/// would actually go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct StaleEntryObservation {
+    pub min_age_days: u32,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub stale_bytes: u64,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub stale_file_count: u64,
+}
+
+impl StaleEntryObservation {
+    pub fn new(min_age_days: u32, stale_bytes: u64, stale_file_count: u64) -> Self {
+        Self {
+            min_age_days,
+            stale_bytes,
+            stale_file_count,
+        }
+    }
+
+    /// Whether nothing in the unit is old enough to remove.
+    pub fn nothing_is_stale(&self) -> bool {
+        self.stale_bytes == 0
+    }
+}
+
 /// The scan-policy fact that decides whether a discovered unit may be cleaned.
 ///
 /// Discovery and deletion permission are separate concerns: a scan can honestly

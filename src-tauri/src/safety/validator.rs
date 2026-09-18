@@ -25,10 +25,22 @@ pub struct ValidatedTarget {
     strategy: CleanStrategy,
     expected_bytes: u64,
     exclusions: Vec<String>,
+    /// The entry-level age policy, for a target whose strategy removes stale
+    /// entries rather than everything. The primitive re-evaluates it for every
+    /// file it touches, so this is what makes the removal a per-entry decision
+    /// rather than a tree-level one.
+    stale_policy: Option<crate::safety::StaleEntryPolicy>,
+    min_age_days: Option<u32>,
 }
 
 impl ValidatedTarget {
     fn from_planned(target: &DeleteTarget) -> Self {
+        let stale_policy = match (target.strategy, target.min_age_days) {
+            (CleanStrategy::DeleteStaleContents, Some(days)) => {
+                Some(crate::safety::StaleEntryPolicy::from_days(days))
+            }
+            _ => None,
+        };
         Self {
             item_id: target.item_id.clone(),
             name: target.name.clone(),
@@ -36,6 +48,8 @@ impl ValidatedTarget {
             strategy: target.strategy,
             expected_bytes: target.expected_bytes,
             exclusions: target.exclusions.clone(),
+            stale_policy,
+            min_age_days: target.min_age_days,
         }
     }
 
@@ -61,6 +75,14 @@ impl ValidatedTarget {
 
     pub fn exclusions(&self) -> &[String] {
         &self.exclusions
+    }
+
+    pub fn stale_policy(&self) -> Option<crate::safety::StaleEntryPolicy> {
+        self.stale_policy
+    }
+
+    pub fn min_age_days(&self) -> Option<u32> {
+        self.min_age_days
     }
 }
 
@@ -282,7 +304,9 @@ impl SafetyValidator {
         // strategies never reach a filesystem mutation primitive.
         if matches!(
             target.strategy,
-            CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
+            CleanStrategy::DeleteContents
+                | CleanStrategy::DeleteDirectory
+                | CleanStrategy::DeleteStaleContents
         ) && target.identity.is_none()
         {
             return failed(
@@ -349,7 +373,12 @@ impl SafetyValidator {
 
         // 4. TOCTOU identity verification
         if let Some(expected_identity) = &target.identity {
-            if let Err(e) = ToctouGuard::verify(path, expected_identity) {
+            let verify_result = if target.strategy == CleanStrategy::DeleteStaleContents {
+                ToctouGuard::verify_entity(path, expected_identity)
+            } else {
+                ToctouGuard::verify(path, expected_identity)
+            };
+            if let Err(e) = verify_result {
                 if crate::safety::is_already_absent(&e) {
                     return skipped(
                         target,
@@ -452,6 +481,8 @@ impl SafetyValidator {
                 // The execution-time age re-check is not part of a
                 // cancellable scan: it must observe the whole tree before a
                 // deletion is allowed, so it runs to completion.
+                let stale_policy = (target.strategy == CleanStrategy::DeleteStaleContents)
+                    .then(|| crate::safety::StaleEntryPolicy::from_days(days));
                 let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
                     environment,
                     path,
@@ -459,6 +490,7 @@ impl SafetyValidator {
                     0,
                     32,
                     &crate::models::NeverCancelled,
+                    stale_policy,
                 );
                 if !stats.complete {
                     if let Err(error) = std::fs::symlink_metadata(path) {
@@ -475,6 +507,24 @@ impl SafetyValidator {
                         CleanFailureReason::ChangedSinceScan,
                         "Directory structure could not be fully verified; aborted to protect active files",
                     );
+                }
+
+                // A stale-entry target is allowed to be recent as a whole: what
+                // it authorizes is the entries inside it that are not. The
+                // measurement above counted them, and the primitive counts them
+                // again for every file it touches.
+                if stale_policy.is_some() {
+                    if stats.stale_bytes == 0 {
+                        return skipped(
+                            target,
+                            CleanFailureReason::NotFound,
+                            format!(
+                                "Nothing under {} has been inactive for {days} days",
+                                path.display()
+                            ),
+                        );
+                    }
+                    return RevalidationOutcome::Validated(ValidatedTarget::from_planned(target));
                 }
                 let newest = stats.newest_mtime.and_then(|modified| {
                     modified
@@ -535,6 +585,17 @@ impl<'a> FilesystemDeleteAuthority<'a> {
         match self.inner {
             AuthorityKind::Cleanup(target) => target.exclusions(),
             AuthorityKind::ModelInventory(_) => &[],
+        }
+    }
+
+    /// The entry-level age policy this authority carries, when it carries one.
+    ///
+    /// A model-inventory deletion has no such policy: the reviewed scope that
+    /// authorized it names the objects, not an age.
+    pub(crate) fn stale_policy(&self) -> Option<crate::safety::StaleEntryPolicy> {
+        match self.inner {
+            AuthorityKind::Cleanup(target) => target.stale_policy(),
+            AuthorityKind::ModelInventory(_) => None,
         }
     }
 
