@@ -1492,25 +1492,39 @@ mod tests {
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
         let names: Vec<&str> = items.iter().map(|item| item.name.as_str()).collect();
-        let mut expected_names = vec![
-            "Test aged caches (com.example.aged)",
-            "Test aged caches (com.example.fresh)",
-        ];
-        // The linked match comes from the POSIX-only symlink fixture above.
+        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+
+        // The linked match comes from the POSIX-only symlink fixture above, so
+        // each platform states its own exact expectation.
         #[cfg(unix)]
-        expected_names.push("Test aged caches (com.example.linked)");
+        let (expected_names, expected_ids) = (
+            vec![
+                "Test aged caches (com.example.aged)",
+                "Test aged caches (com.example.fresh)",
+                "Test aged caches (com.example.linked)",
+            ],
+            vec![
+                "system.test.aged.0.com.example.aged",
+                "system.test.aged.0.com.example.fresh",
+                "system.test.aged.0.com.example.linked",
+            ],
+        );
+        #[cfg(not(unix))]
+        let (expected_names, expected_ids) = (
+            vec![
+                "Test aged caches (com.example.aged)",
+                "Test aged caches (com.example.fresh)",
+            ],
+            vec![
+                "system.test.aged.0.com.example.aged",
+                "system.test.aged.0.com.example.fresh",
+            ],
+        );
+
         assert_eq!(
             names, expected_names,
             "each match is reported once, named by the component the pattern left open"
         );
-
-        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
-        let mut expected_ids = vec![
-            "system.test.aged.0.com.example.aged",
-            "system.test.aged.0.com.example.fresh",
-        ];
-        #[cfg(unix)]
-        expected_ids.push("system.test.aged.0.com.example.linked");
         assert_eq!(
             ids, expected_ids,
             "two matches of one pattern never share an identity"
