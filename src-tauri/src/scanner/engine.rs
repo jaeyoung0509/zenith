@@ -2,8 +2,9 @@ use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
-    Category, CategoryResult, CleanupUnitIdentity, EligibilitySummary, FileIdentity,
-    ObservationQuality, PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult,
+    resolve_unit_overlaps, Category, CategoryResult, CleanupOverlap, CleanupUnit,
+    CleanupUnitIdentity, EligibilitySummary, FileIdentity, ObservationQuality, OverlappedDiscovery,
+    PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult,
 };
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
@@ -129,11 +130,16 @@ impl CategoryAccumulator {
     /// it twice would report a total no user could reconcile with their disk.
     /// The first unit wins — signatures are visited most-specific-first — and
     /// the duplicate's bytes are recorded as suppressed rather than dropped.
+    /// The rule that lost is carried as provenance on the unit that counted the
+    /// bytes: its verdict still decides the surviving unit's eligibility, and
+    /// the interface can name the rule it came from.
     fn push(
         &mut self,
         item: ScanItem,
+        identity: PathIdentity,
         seen_units: &mut HashSet<CleanupUnitIdentity>,
         seen_entities: &mut HashMap<FileIdentity, Vec<PathBuf>>,
+        overlapped: &mut Vec<OverlappedDiscovery>,
     ) -> Option<&ScanItem> {
         let item = item.with_derived_disposition();
         let bytes = item.cleanable_bytes();
@@ -145,9 +151,10 @@ impl CategoryAccumulator {
             return None;
         }
 
-        // Text is a fallback for paths without a stable OS identity. Path
-        // syntax alone says nothing about the mounted volume's case behavior.
-        let unit = item.unit_identity(PathIdentity::CaseSensitive);
+        // Text is a fallback for paths without a stable OS identity, and the
+        // stated filesystem decides whether that text folds case. Path syntax
+        // alone says nothing about the mounted volume's case behavior.
+        let unit = item.unit_identity(identity);
         let entity = item
             .unit
             .kind
@@ -156,16 +163,30 @@ impl CategoryAccumulator {
             .flatten()
             .map(|identity| identity.entity())
             .filter(|entity| !entity.is_unknown());
-        let duplicate_entity = entity.is_some_and(|entity| {
-            seen_entities.get(&entity).is_some_and(|paths| {
-                paths
+        let duplicate_of = if seen_units.contains(&unit) {
+            Some(unit.clone())
+        } else {
+            // The same object under another spelling: a hardlinked alias shares
+            // the inode, and a case-folding volume answers to either spelling of
+            // a name.
+            entity.and_then(|entity| {
+                seen_entities
+                    .get(&entity)?
                     .iter()
-                    .any(|seen| same_directory_entry(seen, Path::new(&item.unit.path), entity))
+                    .find(|seen| same_directory_entry(seen, Path::new(&item.unit.path), entity))
+                    .map(|path| {
+                        CleanupUnit::fixed_path(path.to_string_lossy().into_owned())
+                            .identity(identity)
+                    })
             })
-        });
-        if seen_units.contains(&unit) || duplicate_entity {
+        };
+        if let Some(retained) = duplicate_of {
             self.suppressed_duplicate_count += 1;
             self.suppressed_duplicate_bytes += observed;
+            overlapped.push(OverlappedDiscovery {
+                retained,
+                overlap: CleanupOverlap::of(&item),
+            });
             crate::diagnostics::log_error(
                 "scanner",
                 &format!(
@@ -256,6 +277,11 @@ impl CategoryAccumulator {
             eligibility: self.eligibility,
             suppressed_duplicate_count: self.suppressed_duplicate_count,
             suppressed_duplicate_bytes: self.suppressed_duplicate_bytes,
+            // Filled by `resolve_unit_overlaps`, which is the only place that
+            // can see the whole result: a unit is overlapped by one in another
+            // category as readily as by one beside it.
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         }
     }
 }
@@ -307,6 +333,20 @@ impl ScanEngine {
         let mut eligibility = EligibilitySummary::default();
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
+        // The scan states whether the filesystem it looked at folds case: a
+        // Windows volume folds by default and a POSIX one does not. Volume
+        // settings can differ from the platform default, so a path that exists
+        // is still decided by its stable filesystem identity; the stated fact
+        // is what text-only comparison uses.
+        let identity = if environment.flavor().is_windows() {
+            PathIdentity::CaseInsensitive
+        } else {
+            PathIdentity::CaseSensitive
+        };
+        // Discoveries that were dropped where they were found because the unit
+        // that counted them already existed. The pass after the scan folds them
+        // into that unit as provenance.
+        let mut overlapped: Vec<OverlappedDiscovery> = Vec::new();
         // One identity set for the whole scan: a unit two signatures both found
         // is counted once, whichever category it was found under.
         let mut seen_units: HashSet<CleanupUnitIdentity> = HashSet::new();
@@ -352,9 +392,13 @@ impl ScanEngine {
                     &running_apps,
                 );
                 for item in items {
-                    if let Some(retained) =
-                        accumulator.push(item, &mut seen_units, &mut seen_entities)
-                    {
+                    if let Some(retained) = accumulator.push(
+                        item,
+                        identity,
+                        &mut seen_units,
+                        &mut seen_entities,
+                        &mut overlapped,
+                    ) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -369,9 +413,13 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) =
-                        accumulator.push(item, &mut seen_units, &mut seen_entities)
-                    {
+                    if let Some(retained) = accumulator.push(
+                        item,
+                        identity,
+                        &mut seen_units,
+                        &mut seen_entities,
+                        &mut overlapped,
+                    ) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -389,9 +437,13 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) =
-                        accumulator.push(item, &mut seen_units, &mut seen_entities)
-                    {
+                    if let Some(retained) = accumulator.push(
+                        item,
+                        identity,
+                        &mut seen_units,
+                        &mut seen_entities,
+                        &mut overlapped,
+                    ) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -403,6 +455,19 @@ impl ScanEngine {
                 category,
                 was_cancelled.then_some(ObservationQuality::Partial),
             );
+            category_results.push(category_result);
+
+            if was_cancelled {
+                break;
+            }
+        }
+
+        // Counting a location once is a decision about the whole result: a unit
+        // inside a broader one is that unit's provenance, not a second total,
+        // and the broader unit can be in another category. The categories are
+        // restated before any number derived from them is reported.
+        let overlap = resolve_unit_overlaps(&mut category_results, &overlapped, identity);
+        for category_result in &category_results {
             total_bytes += category_result.total_bytes;
             cleanable_bytes += category_result.cleanable_bytes;
             safe_bytes += category_result.safe_bytes;
@@ -413,19 +478,22 @@ impl ScanEngine {
             eligibility.merge(&category_result.eligibility);
             suppressed_duplicate_count += category_result.suppressed_duplicate_count;
             suppressed_duplicate_bytes += category_result.suppressed_duplicate_bytes;
+        }
+        let suppressed_overlap_count = overlap.suppressed_count;
+        let suppressed_overlap_bytes = overlap.suppressed_bytes;
 
-            if !was_cancelled {
-                on_event(ScanEvent::CategoryFinished {
-                    category,
-                    bytes: category_result.total_bytes,
-                    item_count: category_result.items.len(),
-                });
-            }
-            category_results.push(category_result);
-
-            if was_cancelled {
+        // The per-category events carry the totals the resolution settled: a
+        // category that folded an overlapping unit away reports what it now
+        // accounts for, not what it held mid-scan.
+        for (index, category_result) in category_results.iter().enumerate() {
+            if was_cancelled && index + 1 == category_results.len() {
                 break;
             }
+            on_event(ScanEvent::CategoryFinished {
+                category: category_result.category,
+                bytes: category_result.total_bytes,
+                item_count: category_result.items.len(),
+            });
         }
 
         let finished_at = SystemTime::now()
@@ -470,6 +538,8 @@ impl ScanEngine {
             eligibility,
             suppressed_duplicate_count,
             suppressed_duplicate_bytes,
+            suppressed_overlap_count,
+            suppressed_overlap_bytes,
         };
 
         on_event(ScanEvent::Finished {
@@ -484,8 +554,8 @@ impl ScanEngine {
 mod tests {
     use super::{aggregate_quality, same_directory_entry, CategoryAccumulator, ScanEngine};
     use crate::models::{
-        Category, CleanStrategy, FileSize, ObservationQuality, RiskTier, ScanEvent, ScanItem,
-        Signature,
+        Category, CleanStrategy, FileSize, ObservationQuality, PathIdentity, RiskTier, ScanEvent,
+        ScanItem, Signature,
     };
     use crate::signatures::SignatureRegistry;
     use std::collections::HashSet;
@@ -604,6 +674,269 @@ mod tests {
         assert_eq!(developer.suppressed_duplicate_bytes, 8_192);
         assert_eq!(result.suppressed_duplicate_count, 1);
         assert_eq!(result.suppressed_duplicate_bytes, 8_192);
+        let provenance: Vec<&str> = developer.items[0]
+            .overlaps
+            .iter()
+            .map(|overlap| overlap.signature_id.as_str())
+            .collect();
+        let suppressed = if developer.items[0].signature_id == "test.overlap.specific" {
+            "test.overlap.broad"
+        } else {
+            "test.overlap.specific"
+        };
+        assert_eq!(
+            provenance,
+            vec![suppressed],
+            "the rule that did not count the bytes is still named on the unit that did"
+        );
+    }
+
+    /// A unit inside a broader one is that unit's bytes: the scan counts them
+    /// once, keeps the narrower rule as provenance, and states how much was
+    /// folded away.
+    #[test]
+    fn a_child_unit_is_accounted_by_the_broader_unit_that_contains_it() {
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("Cache");
+        let child = parent.join("Service Worker");
+        std::fs::create_dir_all(&child).unwrap();
+        // Both files are whole allocation blocks, so the expected totals state
+        // the same thing on every filesystem a scan runs against.
+        std::fs::write(parent.join("data.bin"), vec![1u8; 8_192]).unwrap();
+        std::fs::write(child.join("worker.bin"), vec![2u8; 8_192]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.broad",
+            "Broad cache",
+            Category::Developer,
+            &parent,
+            vec![],
+            None,
+        ));
+        registry.register(signature(
+            "test.narrow",
+            "Service worker cache",
+            Category::Developer,
+            &child,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        let developer = result
+            .categories
+            .iter()
+            .find(|category| category.category == Category::Developer)
+            .expect("the developer category is scanned");
+        assert_eq!(developer.items.len(), 1, "one location is one unit");
+        assert_eq!(developer.items[0].path, parent.to_string_lossy());
+        assert_eq!(
+            developer.total_bytes, 16_384,
+            "the broader unit reports the bytes its subtree holds, once"
+        );
+        assert_eq!(developer.suppressed_overlap_count, 1);
+        assert_eq!(developer.suppressed_overlap_bytes, 8_192);
+        assert_eq!(result.suppressed_overlap_count, 1);
+        assert_eq!(result.suppressed_overlap_bytes, 8_192);
+        assert_eq!(
+            result.total_bytes, 16_384,
+            "no total counts the contained unit a second time"
+        );
+        let provenance: Vec<&str> = developer.items[0]
+            .overlaps
+            .iter()
+            .map(|overlap| overlap.signature_id.as_str())
+            .collect();
+        assert_eq!(provenance, vec!["test.narrow"]);
+    }
+
+    /// The strictest rule that described a location decides whether it may be
+    /// cleaned, even when the broader rule found it first.
+    #[test]
+    fn a_stricter_child_rule_withholds_the_overlapping_unit() {
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("Cache");
+        let child = parent.join("local-state");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(parent.join("data.bin"), vec![1u8; 8_192]).unwrap();
+        std::fs::write(child.join("state.bin"), vec![2u8; 8_192]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.broad",
+            "Broad cache",
+            Category::Developer,
+            &parent,
+            vec![],
+            None,
+        ));
+        let mut manual = signature(
+            "test.guarded",
+            "Application state",
+            Category::Developer,
+            &child,
+            vec![],
+            None,
+        );
+        manual.risk = RiskTier::Manual;
+        registry.register(manual);
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        let developer = result
+            .categories
+            .iter()
+            .find(|category| category.category == Category::Developer)
+            .expect("the developer category is scanned");
+        assert_eq!(developer.items.len(), 1);
+        let surviving = &developer.items[0];
+        assert_eq!(
+            surviving.disposition.eligibility,
+            crate::models::CleanupEligibility::Blocked,
+            "the stricter rule keeps the bytes out of the automatic total"
+        );
+        assert!(!surviving.is_selected);
+        assert_eq!(developer.cleanable_bytes, 0);
+        assert_eq!(
+            developer.total_bytes, 16_384,
+            "the bytes are still discovered and reported"
+        );
+    }
+
+    /// Text identity follows the stated filesystem: a case variant is one unit
+    /// where the filesystem folds case, and two where it does not.
+    #[test]
+    fn case_variant_units_follow_the_stated_filesystem() {
+        let upper = ScanItem::mock(
+            "case-upper",
+            "test.case",
+            "Cache",
+            Category::Developer,
+            RiskTier::Safe,
+            r"C:\Users\tester\Cache",
+            FileSize::new(1_024, Some(1_024)),
+            1,
+        );
+        let lower = ScanItem::mock(
+            "case-lower",
+            "test.case",
+            "Cache",
+            Category::Developer,
+            RiskTier::Safe,
+            r"c:\users\tester\cache",
+            FileSize::new(1_024, Some(1_024)),
+            1,
+        );
+
+        for (identity, expected_items, expected_suppressed) in [
+            (PathIdentity::CaseInsensitive, 1, 1),
+            (PathIdentity::CaseSensitive, 2, 0),
+        ] {
+            let mut accumulator = CategoryAccumulator::new();
+            let mut paths = HashSet::new();
+            let mut entities = std::collections::HashMap::new();
+            let mut overlapped = Vec::new();
+            for item in [upper.clone(), lower.clone()] {
+                accumulator.push(item, identity, &mut paths, &mut entities, &mut overlapped);
+            }
+            assert_eq!(
+                accumulator.items.len(),
+                expected_items,
+                "identity {identity:?}"
+            );
+            assert_eq!(accumulator.suppressed_duplicate_count, expected_suppressed);
+        }
+    }
+
+    /// Two scans of one filesystem state state the same totals in the same
+    /// order: nothing about the accounting may depend on map iteration or on
+    /// the order a directory listing happened to answer in.
+    #[test]
+    fn repeated_scans_state_the_same_totals_in_the_same_order() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("Cache");
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join("data.bin"), vec![1u8; 8_192]).unwrap();
+        std::fs::write(nested.join("state.bin"), vec![2u8; 8_192]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.parent",
+            "Parent cache",
+            Category::Developer,
+            &root,
+            vec![],
+            None,
+        ));
+        registry.register(signature(
+            "test.child",
+            "Nested cache",
+            Category::Developer,
+            &nested,
+            vec![],
+            None,
+        ));
+
+        let scan = || {
+            ScanEngine::scan(
+                &registry,
+                None,
+                &[],
+                false,
+                &scan_environment(),
+                &crate::models::NeverCancelled,
+                |_| {},
+            )
+        };
+        let first = scan();
+        let second = scan();
+
+        assert_eq!(first.total_bytes, second.total_bytes);
+        assert_eq!(first.cleanable_bytes, second.cleanable_bytes);
+        assert_eq!(
+            first.suppressed_overlap_count,
+            second.suppressed_overlap_count
+        );
+        assert_eq!(
+            first.suppressed_overlap_bytes,
+            second.suppressed_overlap_bytes
+        );
+        assert_eq!(first.eligibility, second.eligibility);
+        let describe = |result: &crate::models::ScanResult| -> Vec<(String, u64, u64)> {
+            result
+                .categories
+                .iter()
+                .flat_map(|category| {
+                    category.items.iter().map(|item| {
+                        (
+                            item.id.clone(),
+                            item.observed_bytes(),
+                            item.cleanable_bytes(),
+                        )
+                    })
+                })
+                .collect()
+        };
+        assert_eq!(describe(&first), describe(&second));
     }
 
     #[test]
@@ -629,7 +962,13 @@ mod tests {
                 1,
             );
             item.entry_kind = crate::models::EntryKind::File;
-            accumulator.push(item, &mut paths, &mut entities);
+            accumulator.push(
+                item,
+                PathIdentity::CaseSensitive,
+                &mut paths,
+                &mut entities,
+                &mut Vec::new(),
+            );
         }
         assert_eq!(accumulator.items.len(), 2);
         assert_eq!(accumulator.suppressed_duplicate_count, 0);
@@ -666,7 +1005,13 @@ mod tests {
                 FileSize::new(12, Some(12)),
                 1,
             );
-            accumulator.push(item, &mut paths, &mut entities);
+            accumulator.push(
+                item,
+                PathIdentity::CaseSensitive,
+                &mut paths,
+                &mut entities,
+                &mut Vec::new(),
+            );
         }
         let expected_units = if entity.same_entity(
             crate::safety::ToctouGuard::capture(&alternate)

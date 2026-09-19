@@ -97,6 +97,7 @@ impl OrbStackAdapter {
             entry_kind: EntryKind::File,
             gate: EligibilityGate::Open,
             owner_running: false,
+            overlaps: Vec::new(),
             is_selected,
             last_modified,
             exists: true,

@@ -99,6 +99,8 @@ mod tests {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         }
     }
 

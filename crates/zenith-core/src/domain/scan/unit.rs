@@ -129,21 +129,37 @@ impl CleanupUnit {
     /// same cache directory therefore produce one key, and the aggregation
     /// layer can count the bytes once.
     pub fn identity(&self, identity: PathIdentity) -> CleanupUnitIdentity {
-        let mut normalized = String::with_capacity(self.path.len());
-        for component in self.path.split(['/', '\\']) {
-            if component.is_empty() {
-                continue;
-            }
-            if !normalized.is_empty() {
-                normalized.push('/');
-            }
-            if identity == PathIdentity::CaseInsensitive {
-                normalized.extend(component.chars().flat_map(char::to_lowercase));
-            } else {
-                normalized.push_str(component);
-            }
-        }
-        CleanupUnitIdentity(normalized)
+        CleanupUnitIdentity(
+            self.normalized_components(identity)
+                .collect::<Vec<_>>()
+                .join("/"),
+        )
+    }
+
+    /// Whether this unit names the same location as, or a location inside,
+    /// `other`.
+    ///
+    /// Containment is component-wise rather than textual: `/a/b` is inside
+    /// `/a`, and `/a-b` is inside neither `/a` nor `/b`. The scan uses this to
+    /// count a location once when a broader rule and a narrower rule both
+    /// describe it.
+    pub fn is_within(&self, other: &CleanupUnit, identity: PathIdentity) -> bool {
+        self.identity(identity).is_within(&other.identity(identity))
+    }
+
+    /// This unit's path, normalized component by component.
+    fn normalized_components(&self, identity: PathIdentity) -> impl Iterator<Item = String> + '_ {
+        let folded = identity == PathIdentity::CaseInsensitive;
+        self.path
+            .split(['/', '\\'])
+            .filter(|component| !component.is_empty())
+            .map(move |component| {
+                if folded {
+                    component.chars().flat_map(char::to_lowercase).collect()
+                } else {
+                    component.to_string()
+                }
+            })
     }
 }
 
@@ -154,6 +170,25 @@ pub struct CleanupUnitIdentity(String);
 impl CleanupUnitIdentity {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The path components this key was normalized from.
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/').filter(|component| !component.is_empty())
+    }
+
+    /// Whether this key names the same location as, or a location inside,
+    /// `other`.
+    ///
+    /// An empty key names no location: it is inside nothing and contains
+    /// nothing, so a unit that was never declared cannot suppress another.
+    pub fn is_within(&self, other: &Self) -> bool {
+        let own: Vec<&str> = self.components().collect();
+        let outer: Vec<&str> = other.components().collect();
+        !own.is_empty()
+            && !outer.is_empty()
+            && own.len() >= outer.len()
+            && own[..outer.len()] == outer[..]
     }
 }
 
@@ -373,6 +408,34 @@ mod tests {
         assert!(!CleanupUnit::default().is_declared());
         assert!(CleanupUnit::fixed_path("/tmp/cache").is_declared());
         assert!(CleanupUnit::child_namespace("/tmp", "/tmp/cache").is_declared());
+    }
+
+    /// Containment is decided per path component, so a shared prefix that is
+    /// not a directory boundary is not containment, and a unit with no path
+    /// neither contains nor is contained.
+    #[test]
+    fn containment_is_component_wise() {
+        let parent = CleanupUnit::fixed_path("/Users/tester/Library/Application Support");
+        let child = CleanupUnit::fixed_path("/Users/tester/Library/Application Support/Pip/Cache");
+        let sibling = CleanupUnit::fixed_path("/Users/tester/Library/Application SupportX");
+        let undeclared = CleanupUnit::default();
+
+        assert!(child.is_within(&parent, PathIdentity::CaseSensitive));
+        assert!(parent.is_within(&parent, PathIdentity::CaseSensitive));
+        assert!(!parent.is_within(&child, PathIdentity::CaseSensitive));
+        assert!(!sibling.is_within(&parent, PathIdentity::CaseSensitive));
+        assert!(!undeclared.is_within(&parent, PathIdentity::CaseSensitive));
+        assert!(!parent.is_within(&undeclared, PathIdentity::CaseSensitive));
+        assert!(!undeclared.is_within(&undeclared, PathIdentity::CaseSensitive));
+    }
+
+    #[test]
+    fn containment_follows_the_stated_case_rules() {
+        let parent = CleanupUnit::fixed_path(r"C:\Users\tester\AppData\Local");
+        let child = CleanupUnit::fixed_path(r"c:\users\TESTER\appdata\local\Temp\app");
+
+        assert!(child.is_within(&parent, PathIdentity::CaseInsensitive));
+        assert!(!child.is_within(&parent, PathIdentity::CaseSensitive));
     }
 
     /// The gate is the only reason a discovered unit may be ineligible without

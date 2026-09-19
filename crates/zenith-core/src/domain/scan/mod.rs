@@ -22,8 +22,10 @@ use crate::domain::cleanup::{EntryKind, StructuredStateKind};
 use crate::domain::{Category, ObservationQuality, RiskTier};
 use serde::{Deserialize, Serialize};
 
+pub mod overlap;
 pub mod unit;
 
+pub use overlap::{resolve_unit_overlaps, CleanupOverlap, OverlapReport, OverlappedDiscovery};
 pub use unit::{
     AgeObservation, CleanupOwnership, CleanupUnit, CleanupUnitIdentity, CleanupUnitKind,
     EligibilityGate, OwnershipConfidence, PathIdentity, StaleEntryObservation,
@@ -188,6 +190,34 @@ impl CleanupEligibility {
             Self::PolicyGated => "Outside the current scope",
             Self::Advisory => "Managed outside Zenith",
             Self::Blocked => "Blocked or inaccessible",
+        }
+    }
+
+    /// How restrictive the state is, least reversible first.
+    ///
+    /// The order is part of the accounting contract: when two rules describe
+    /// one location, the scan states the stricter verdict, and "stricter" has
+    /// to mean the same thing on every run and every platform. A state that
+    /// can never be cleaned outranks one that needs a settings change, which
+    /// outranks one that needs time, which outranks one that needs the user to
+    /// look at it.
+    pub fn strictness(self) -> u8 {
+        match self {
+            Self::Blocked => 0,
+            Self::Advisory => 1,
+            Self::PolicyGated => 2,
+            Self::Recent => 3,
+            Self::Reviewable => 4,
+            Self::AutoCleanable => 5,
+        }
+    }
+
+    /// The stricter of two states, with ties keeping `self`.
+    pub fn strictest(self, other: Self) -> Self {
+        if other.strictness() < self.strictness() {
+            other
+        } else {
+            self
         }
     }
 }
@@ -421,6 +451,9 @@ pub struct DispositionFacts<'a> {
     pub stale: Option<&'a StaleEntryObservation>,
     /// The structured state the path was classified as, when it is one.
     pub structured_state: Option<StructuredStateKind>,
+    /// The strictest verdict another rule reached about the same location, and
+    /// the rule that reached it.
+    pub overlap: Option<(CleanupEligibility, &'a str)>,
 }
 
 impl<'a> DispositionFacts<'a> {
@@ -444,6 +477,7 @@ impl<'a> DispositionFacts<'a> {
             age: None,
             stale: None,
             structured_state: None,
+            overlap: None,
         }
     }
 
@@ -471,9 +505,40 @@ impl<'a> DispositionFacts<'a> {
         self.structured_state = state;
         self
     }
+
+    /// States the strictest verdict another rule reached about this location.
+    pub fn with_overlap(mut self, overlap: Option<(CleanupEligibility, &'a str)>) -> Self {
+        self.overlap = overlap;
+        self
+    }
 }
 
 pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
+    let disposition = derive_own_disposition(facts);
+    let Some((verdict, source)) = facts.overlap else {
+        return disposition;
+    };
+    if verdict.strictness() >= disposition.eligibility.strictness() {
+        return disposition;
+    }
+    // The item states the stricter verdict, and the reason names the rule that
+    // reached it, so the number on the screen can be traced to a rule rather
+    // than to an unexplained downgrade.
+    CleanupDisposition::new(
+        verdict,
+        Some(format!(
+            "Another rule for this location ({}), classifies it as {}; the stricter verdict applies",
+            source,
+            verdict.display_name().to_lowercase()
+        )),
+        verdict
+            .is_cleanable()
+            .then(|| disposition.cleanable_bytes.unwrap_or(0)),
+    )
+}
+
+/// The verdict this item's own facts support, before other rules are folded in.
+fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
     let DispositionFacts {
         risk,
         quality,
@@ -485,6 +550,9 @@ pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposi
         age,
         stale,
         structured_state,
+        // The overlap verdict is applied by the caller, after these facts have
+        // produced their own answer.
+        overlap: _,
     } = facts;
 
     // 1. Safety violations (protected .app bundle, symlink escape, blacklist) fail closed
@@ -696,6 +764,15 @@ pub struct ScanItem {
     /// disposition keeps the unit selectable but never automatic.
     #[serde(default)]
     pub owner_running: bool,
+    /// The other catalog rules that described the same location.
+    ///
+    /// Two rules can name one cache directory, or a broad rule can name a
+    /// directory that contains a unit a narrower rule enumerated. The bytes are
+    /// counted once — by this item — and the rules that did not count them are
+    /// carried here, so the strictest verdict still applies and the interface
+    /// can say which rule imposed it.
+    #[serde(default)]
+    pub overlaps: Vec<CleanupOverlap>,
     pub is_selected: bool,
     #[serde(with = "crate::ipc_numeric::option_u64")]
     #[specta(type = Option<u64>)]
@@ -720,7 +797,16 @@ impl ScanItem {
 
     /// Everything the eligibility decision is derived from, taken from this
     /// item's own facts.
+    ///
+    /// The rules that described the same location are part of those facts: a
+    /// unit another rule classifies more strictly is never made cleaner by the
+    /// fact that a second rule matched it.
     pub fn disposition_facts(&self) -> DispositionFacts<'_> {
+        let overlap = self
+            .overlaps
+            .iter()
+            .map(|overlap| (overlap.eligibility, overlap.name.as_str()))
+            .min_by_key(|(eligibility, _)| eligibility.strictness());
         DispositionFacts::new(
             self.risk,
             self.quality,
@@ -733,6 +819,7 @@ impl ScanItem {
         .with_age(self.age.as_ref())
         .with_stale_entries(self.stale.as_ref())
         .with_structured_state(self.structured_state)
+        .with_overlap(overlap)
     }
 
     pub fn derive_disposition(&self) -> CleanupDisposition {
@@ -757,9 +844,14 @@ impl ScanItem {
     /// different states of the same item — the planner re-derives the
     /// disposition and refuses the mismatch, but the interface would already
     /// have shown the item as selected.
-    pub fn with_derived_disposition(mut self) -> Self {
+    pub fn rederive_disposition(&mut self) {
         self.disposition = self.derive_disposition();
         self.is_selected = self.is_selected && self.is_pre_selectable();
+    }
+
+    /// The same, for a caller that owns the item.
+    pub fn with_derived_disposition(mut self) -> Self {
+        self.rederive_disposition();
         self
     }
 
@@ -810,6 +902,7 @@ impl ScanItem {
             stale: None,
             structured_state: None,
             owner_running: false,
+            overlaps: Vec::new(),
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             is_selected,
@@ -900,6 +993,14 @@ pub struct CategoryResult {
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub suppressed_duplicate_bytes: u64,
+    /// Units inside a broader unit this category reported, so their bytes are
+    /// already in `total_bytes` and are not counted a second time.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub suppressed_overlap_count: u64,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub suppressed_overlap_bytes: u64,
 }
 
 impl CategoryResult {
@@ -911,6 +1012,53 @@ impl CategoryResult {
     /// Retained items in one eligibility state.
     pub fn eligibility_items(&self, eligibility: CleanupEligibility) -> u64 {
         self.eligibility.items(eligibility)
+    }
+
+    /// States the aggregates again from the items the category still retains.
+    ///
+    /// Removing a unit that another unit already accounted for changes every
+    /// byte total and the eligibility breakdown. The category restates them
+    /// from what is left instead of subtracting the removed unit from each
+    /// field, so the totals stay a function of the retained items rather than
+    /// of the order the removals happened in.
+    ///
+    /// `quality` is not recomputed: it may have been stated by the scan (a
+    /// cancelled category is `Partial` whatever its items look like).
+    pub(super) fn recompute_accounting(&mut self) {
+        let mut total_bytes = 0u64;
+        let mut cleanable_bytes = 0u64;
+        let mut safe_bytes = 0u64;
+        let mut rebuild_bytes = 0u64;
+        let mut manual_bytes = 0u64;
+        let mut eligibility = EligibilitySummary::default();
+        for item in &self.items {
+            let observed = item.observed_bytes();
+            let cleanable = item.cleanable_bytes();
+            total_bytes += observed;
+            cleanable_bytes += cleanable;
+            eligibility.add(item);
+            if item.disposition.is_cleanable() {
+                match item.risk {
+                    RiskTier::Safe => safe_bytes += cleanable,
+                    RiskTier::Rebuild => rebuild_bytes += cleanable,
+                    RiskTier::Manual => {}
+                }
+            } else if item.risk == RiskTier::Manual {
+                manual_bytes += observed;
+            }
+        }
+        self.total_bytes = total_bytes;
+        self.cleanable_bytes = cleanable_bytes;
+        self.safe_bytes = safe_bytes;
+        self.rebuild_bytes = rebuild_bytes;
+        self.manual_bytes = manual_bytes;
+        self.eligibility = eligibility;
+        self.skipped_entry_count = self.items.iter().map(|item| item.skipped_entry_count).sum();
+        self.incomplete_item_count = self
+            .items
+            .iter()
+            .filter(|item| item.quality != ObservationQuality::Fresh)
+            .count() as u64;
     }
 }
 
@@ -964,6 +1112,13 @@ pub struct ScanResult {
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub suppressed_duplicate_bytes: u64,
+    /// Units whose bytes a broader unit already accounts for.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub suppressed_overlap_count: u64,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub suppressed_overlap_bytes: u64,
 }
 
 impl ScanResult {
@@ -1045,6 +1200,8 @@ mod tests {
             eligibility: EligibilitySummary::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         };
         assert!(scan.is_fresh_at(1000));
         assert!(scan.is_fresh_at(1299));
@@ -1079,6 +1236,8 @@ mod tests {
             eligibility: EligibilitySummary::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         };
         // A partial scan must NEVER report Fresh, even within the TTL window
         assert!(!scan.is_fresh_at(1000));
@@ -1122,6 +1281,7 @@ mod tests {
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             owner_running: false,
+            overlaps: Vec::new(),
             is_selected: false,
             last_modified: Some(MAX_SAFE - 2),
             exists: true,

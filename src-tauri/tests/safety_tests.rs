@@ -710,6 +710,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -723,6 +725,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -1282,6 +1286,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 eligibility: Default::default(),
                 suppressed_duplicate_count: 0,
                 suppressed_duplicate_bytes: 0,
+                suppressed_overlap_count: 0,
+                suppressed_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1307,6 +1313,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 eligibility: Default::default(),
                 suppressed_duplicate_count: 0,
                 suppressed_duplicate_bytes: 0,
+                suppressed_overlap_count: 0,
+                suppressed_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1332,6 +1340,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 eligibility: Default::default(),
                 suppressed_duplicate_count: 0,
                 suppressed_duplicate_bytes: 0,
+                suppressed_overlap_count: 0,
+                suppressed_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
         ],
@@ -1341,6 +1351,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
         skipped_entry_count: 0,
     };
 
@@ -1443,6 +1455,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        overlaps: Vec::new(),
         is_selected: partial_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
@@ -1484,6 +1497,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        overlaps: Vec::new(),
         is_selected: unavailable_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
@@ -1531,6 +1545,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Permission denied in subtree".to_string()],
@@ -1539,6 +1555,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
     };
 
     let settings = ZenithSettings::default();
@@ -1734,6 +1752,7 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             owner_running: false,
+            overlaps: Vec::new(),
             is_selected: disposition.eligibility == CleanupEligibility::AutoCleanable,
             last_modified: None,
             exists: true,
@@ -2888,6 +2907,8 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -2901,6 +2922,8 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
     }
 }
 
@@ -3041,6 +3064,7 @@ fn test_nested_protected_app_bundle_fails_closed() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        overlaps: Vec::new(),
         is_selected: false,
         last_modified: None,
         exists: true,
@@ -3080,6 +3104,8 @@ fn test_nested_protected_app_bundle_fails_closed() {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Protected system or application bundle detected".into()],
@@ -3088,6 +3114,8 @@ fn test_nested_protected_app_bundle_fails_closed() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
     };
 
     let settings = ZenithSettings::default();

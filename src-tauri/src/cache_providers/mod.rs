@@ -214,6 +214,7 @@ impl CacheProviderRegistry {
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             owner_running: false,
+            overlaps: Vec::new(),
             is_selected,
             last_modified,
             exists: true,
