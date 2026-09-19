@@ -1741,7 +1741,10 @@ mod tests {
             },
         );
 
-        assert!(result.cancelled, "a stop inside the final signature must survive into the final result");
+        assert!(
+            result.cancelled,
+            "a stop inside the final signature must survive into the final result"
+        );
         assert_eq!(
             roots.len(),
             1,
