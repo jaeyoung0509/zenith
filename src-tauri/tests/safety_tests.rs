@@ -712,6 +712,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -727,6 +729,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         suppressed_duplicate_bytes: 0,
         suppressed_overlap_count: 0,
         suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -1288,6 +1292,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 suppressed_duplicate_bytes: 0,
                 suppressed_overlap_count: 0,
                 suppressed_overlap_bytes: 0,
+                ambiguous_overlap_count: 0,
+                ambiguous_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1315,6 +1321,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 suppressed_duplicate_bytes: 0,
                 suppressed_overlap_count: 0,
                 suppressed_overlap_bytes: 0,
+                ambiguous_overlap_count: 0,
+                ambiguous_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1342,6 +1350,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 suppressed_duplicate_bytes: 0,
                 suppressed_overlap_count: 0,
                 suppressed_overlap_bytes: 0,
+                ambiguous_overlap_count: 0,
+                ambiguous_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
         ],
@@ -1353,6 +1363,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
         suppressed_duplicate_bytes: 0,
         suppressed_overlap_count: 0,
         suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
         skipped_entry_count: 0,
     };
 
@@ -1547,6 +1559,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Permission denied in subtree".to_string()],
@@ -1557,6 +1571,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         suppressed_duplicate_bytes: 0,
         suppressed_overlap_count: 0,
         suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     };
 
     let settings = ZenithSettings::default();
@@ -2298,74 +2314,81 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
     registry.register(cursor_rule);
     registry.register(stale_rule);
 
-    let scan = |intensive: bool| {
-        ScanEngine::scan(
-            &registry,
-            Some(&[Category::Ai, Category::System]),
-            &[],
-            intensive,
-            &PlatformEnvironment::native(),
-            &zenith_lib::models::NeverCancelled,
-            |_| {},
-        )
-    };
-    let item_at_cursor = |result: &ScanResult| -> ScanItem {
-        let found: Vec<&ScanItem> = result
-            .categories
-            .iter()
-            .flat_map(|category| category.items.iter())
-            .filter(|item| item.path.replace('\\', "/").ends_with("Caches/Cursor"))
-            .collect();
-        assert_eq!(
-            found.len(),
-            1,
-            "one location is one unit however many rules name it: {found:?}"
-        );
-        found[0].clone()
-    };
-
     // Intensive cleanup runs both rules. The wider operation (`delete_contents`
     // with no age policy) may not be built out of a location another rule only
-    // authorizes entry by entry.
-    let intensive = scan(true);
-    let surviving = item_at_cursor(&intensive);
-    assert_eq!(
-        surviving.disposition.eligibility,
-        CleanupEligibility::Blocked,
-        "two rules with different operations leave the location unplanned: {:?}",
-        surviving.disposition
-    );
-    assert!(!surviving.is_selected);
-    assert_eq!(surviving.cleanable_bytes(), 0);
-    assert!(
-        surviving
-            .overlaps
-            .iter()
-            .any(|overlap| overlap.authority_conflict),
-        "the location states which rule it disagrees with: {:?}",
-        surviving.overlaps
-    );
-    assert!(
-        SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry).is_err(),
-        "a location blocked by an overlapping rule cannot be planned"
-    );
-    assert_eq!(
-        intensive.total_bytes,
-        surviving.observed_bytes(),
-        "the location is counted once, not once per rule"
-    );
+    // authorizes entry by entry. The answer must not depend on which category
+    // the scan visits first, so the same facts are scanned in both orders.
+    for order in [
+        vec![Category::Ai, Category::System],
+        vec![Category::System, Category::Ai],
+    ] {
+        let scan = |intensive: bool| {
+            ScanEngine::scan(
+                &registry,
+                Some(&order),
+                &[],
+                intensive,
+                &PlatformEnvironment::native(),
+                &zenith_lib::models::NeverCancelled,
+                |_| {},
+            )
+        };
+        let item_at_cursor = |result: &ScanResult| -> ScanItem {
+            let found: Vec<&ScanItem> = result
+                .categories
+                .iter()
+                .flat_map(|category| category.items.iter())
+                .filter(|item| item.path.replace('\\', "/").ends_with("Caches/Cursor"))
+                .collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "one location is one unit however many rules name it ({order:?}): {found:?}"
+            );
+            found[0].clone()
+        };
 
-    // The scope that is switched off states nothing about the location: a
-    // standard scan still offers the cache the running rule authorizes.
-    let standard = scan(false);
-    let offered = item_at_cursor(&standard);
-    assert_eq!(
-        offered.disposition.eligibility,
-        CleanupEligibility::AutoCleanable,
-        "a gated rule cannot withhold another rule's permission: {:?}",
-        offered.disposition
-    );
-    assert!(offered.is_selected);
+        let intensive = scan(true);
+        let surviving = item_at_cursor(&intensive);
+        assert_eq!(
+            surviving.disposition.eligibility,
+            CleanupEligibility::Blocked,
+            "two rules with different operations leave the location unplanned ({order:?}): {:?}",
+            surviving.disposition
+        );
+        assert!(!surviving.is_selected);
+        assert_eq!(surviving.cleanable_bytes(), 0);
+        assert!(
+            surviving
+                .overlaps
+                .iter()
+                .any(|overlap| overlap.authority_conflict),
+            "the location states which rule it disagrees with ({order:?}): {:?}",
+            surviving.overlaps
+        );
+        assert!(
+            SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry).is_err(),
+            "a location blocked by an overlapping rule cannot be planned"
+        );
+        assert_eq!(
+            intensive.total_bytes,
+            surviving.observed_bytes(),
+            "the location is counted once, not once per rule ({order:?})"
+        );
+
+        // The scope that is switched off states nothing about the location: a
+        // standard scan still offers the cache the running rule authorizes,
+        // whichever category is visited first.
+        let standard = scan(false);
+        let offered = item_at_cursor(&standard);
+        assert_eq!(
+            offered.disposition.eligibility,
+            CleanupEligibility::AutoCleanable,
+            "a gated rule cannot withhold another rule's permission ({order:?}): {:?}",
+            offered.disposition
+        );
+        assert!(offered.is_selected);
+    }
 }
 
 /// A cache namespace that is written to while it is being cleaned: the aged
@@ -3013,6 +3036,8 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -3028,6 +3053,8 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
         suppressed_duplicate_bytes: 0,
         suppressed_overlap_count: 0,
         suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     }
 }
 
@@ -3210,6 +3237,8 @@ fn test_nested_protected_app_bundle_fails_closed() {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Protected system or application bundle detected".into()],
@@ -3220,6 +3249,8 @@ fn test_nested_protected_app_bundle_fails_closed() {
         suppressed_duplicate_bytes: 0,
         suppressed_overlap_count: 0,
         suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     };
 
     let settings = ZenithSettings::default();

@@ -92,6 +92,12 @@ pub struct OverlappedDiscovery {
 pub struct OverlapReport {
     pub suppressed_count: u64,
     pub suppressed_bytes: u64,
+    /// Containments the resolution kept as two rows. The bytes are counted in
+    /// the totals, but they may already be part of the container's measurement,
+    /// so the union is between `total_bytes - ambiguous_bytes` and
+    /// `total_bytes`.
+    pub ambiguous_count: u64,
+    pub ambiguous_bytes: u64,
 }
 
 /// The relationship established by the filesystem for two scanned units.
@@ -168,7 +174,7 @@ where
         }
     }
 
-    let mut candidates: Vec<(usize, CleanupUnitIdentity, u8, usize, usize)> = Vec::new();
+    let mut candidates: Vec<(usize, CleanupUnitIdentity, u8, u8, usize, usize)> = Vec::new();
     for (category_index, category) in categories.iter().enumerate() {
         for (item_index, item) in category.items.iter().enumerate() {
             if !item.unit.is_declared() {
@@ -178,6 +184,11 @@ where
             candidates.push((
                 key.components().count(),
                 key,
+                // A rule the current settings do run outranks one whose scope is
+                // switched off: a gated rule states what the catalog could find,
+                // not what this scan may clean, so it cannot take the location's
+                // surviving row away from the rule that is actually running.
+                u8::from(!item.gate.is_open()),
                 retention_priority(item),
                 category_index,
                 item_index,
@@ -188,6 +199,7 @@ where
         left.0
             .cmp(&right.0)
             .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
             .then_with(|| left.1.cmp(&right.1))
     });
 
@@ -199,13 +211,18 @@ where
     //  whether the two rules disagree about the operation that may be run)
     let mut suppressed: Vec<(usize, usize, usize, usize, bool, bool, bool)> = Vec::new();
     let mut authority_conflicts: Vec<(usize, usize, CleanupOverlap)> = Vec::new();
-    for (_, key, _, category_index, item_index) in candidates {
+    // (container category, nested bytes) for a containment the resolution kept
+    // as two rows: the nested bytes may already be inside the container's
+    // measurement, so they are stated instead of added as if disjoint.
+    let mut ambiguities: Vec<(usize, u64)> = Vec::new();
+    for (_, key, _, _, category_index, item_index) in candidates {
         // Candidates are visited broadest-first, so a unit inside a unit that
         // was folded already is part of that unit's bytes: it is folded too,
         // but contributes them once.
         let already_counted = suppressed_keys.iter().any(|outer| key.is_within(outer));
         let candidate = &categories[category_index].items[item_index];
         let mut conflict_target = None;
+        let mut ambiguity_target = false;
         let suppression_target = retained
             .iter()
             .find_map(|(outer, outer_category, outer_item)| {
@@ -226,21 +243,32 @@ where
                     UnitRelationship::EquivalentConflict => {
                         Some((*outer_category, *outer_item, true, true))
                     }
-                    UnitRelationship::Contained if completely_observed(container) => {
+                    UnitRelationship::Contained
+                        if completely_observed(container)
+                            && (container.gate.is_open() || !candidate.gate.is_open()) =>
+                    {
                         if containment_authority_is_compatible(container, candidate) {
                             Some((*outer_category, *outer_item, false, false))
                         } else {
                             conflict_target = Some((*outer_category, *outer_item));
+                            ambiguity_target = true;
                             None
                         }
                     }
                     UnitRelationship::AuthorityConflict if completely_observed(container) => {
                         conflict_target = Some((*outer_category, *outer_item));
+                        ambiguity_target = true;
                         None
                     }
-                    UnitRelationship::Distinct
-                    | UnitRelationship::Contained
-                    | UnitRelationship::AuthorityConflict => None,
+                    UnitRelationship::Contained | UnitRelationship::AuthorityConflict => {
+                        // Containment the resolution cannot fold: a partial walk
+                        // cannot prove which entries it measured, and a gated
+                        // container must not absorb a rule the settings do run.
+                        // The nested unit keeps its own row.
+                        ambiguity_target = true;
+                        None
+                    }
+                    UnitRelationship::Distinct => None,
                 }
             });
         match suppression_target {
@@ -259,6 +287,12 @@ where
                 }
             }
             None => {
+                if ambiguity_target {
+                    ambiguities.push((
+                        category_index,
+                        categories[category_index].items[item_index].observed_bytes(),
+                    ));
+                }
                 if let Some((outer_category, outer_item)) = conflict_target {
                     let mut conflict =
                         CleanupOverlap::of(&categories[category_index].items[item_index]);
@@ -268,6 +302,15 @@ where
                 retained.push((key, category_index, item_index));
             }
         }
+    }
+
+    for (category_index, bytes) in ambiguities {
+        let category = &mut categories[category_index];
+        category.ambiguous_overlap_count += 1;
+        category.ambiguous_overlap_bytes += bytes;
+        report.ambiguous_count += 1;
+        report.ambiguous_bytes += bytes;
+        touched.insert(category_index);
     }
 
     for (category_index, item_index, conflict) in authority_conflicts {
@@ -468,6 +511,8 @@ mod tests {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         };
         result.recompute_accounting();
         result
@@ -646,9 +691,19 @@ mod tests {
 
         let report = resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
 
-        assert_eq!(report, OverlapReport::default());
+        assert_eq!(report.suppressed_count, 0, "nothing was folded");
+        assert_eq!(
+            report.ambiguous_count, 1,
+            "the containment is stated, not folded"
+        );
+        assert_eq!(
+            report.ambiguous_bytes, 400,
+            "the nested bytes may already be inside the container's measurement"
+        );
         assert_eq!(categories[0].items.len(), 2);
         assert_eq!(categories[0].total_bytes, 1_000);
+        assert_eq!(categories[0].ambiguous_overlap_count, 1);
+        assert_eq!(categories[0].ambiguous_overlap_bytes, 400);
     }
 
     #[test]
@@ -670,7 +725,11 @@ mod tests {
 
         let report = resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
 
-        assert_eq!(report, OverlapReport::default());
+        assert_eq!(report.suppressed_count, 0);
+        assert_eq!(
+            report.ambiguous_bytes, 400,
+            "the pair is stated as possibly shared bytes"
+        );
         assert_eq!(categories[0].items.len(), 2);
         assert!(categories[0]
             .items

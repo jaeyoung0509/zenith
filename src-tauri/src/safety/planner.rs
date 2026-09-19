@@ -1,8 +1,9 @@
 use crate::models::{
     CleanStrategy, CleanupMode, CleanupUnitIdentity, DeletePlan, DeleteTarget, PathIdentity,
-    RiskSummary, RiskTier, ScanItem, ScanResult, Signature, ZenithError,
+    RiskSummary, RiskTier, ScanItem, ScanResult, Signature, UnitRelationship, ZenithError,
 };
 use crate::safety::{entry_kind_at, structured_state_at, Blacklist, SymlinkGuard, ToctouGuard};
+use crate::scanner::relationship::unit_relationship;
 use crate::signatures::SignatureRegistry;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -102,25 +103,38 @@ impl SafetyPlanner {
         // hand — must not produce a plan whose expected reclaim counts the same
         // bytes twice. The broader unit wins, exactly as it does in the scan's
         // accounting, and the plan says which unit was folded into which.
-        let identity = if environment.flavor().is_windows() {
-            PathIdentity::CaseInsensitive
-        } else {
-            PathIdentity::CaseSensitive
-        };
+        //
+        // Whether two units are one location is the same question the scan
+        // answered, and it is answered by the same function: stable filesystem
+        // identity first, path text as the conservative fallback. Deriving it
+        // from the OS family instead would let a plan disagree with the scan
+        // about a case-sensitive directory on a folding platform.
         let mut candidates: Vec<(usize, CleanupUnitIdentity, usize)> = items
             .iter()
             .enumerate()
             .filter(|(_, item)| item.is_selected && item.unit.is_declared())
             .map(|(index, item)| {
-                let key = item.unit_identity(identity);
+                let key = item.unit_identity(PathIdentity::CaseSensitive);
                 (key.components().count(), key, index)
             })
             .collect();
         candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-        let mut authorized: Vec<CleanupUnitIdentity> = Vec::new();
+        let mut authorized: Vec<usize> = Vec::new();
         let mut overlapped: HashSet<usize> = HashSet::new();
         for (_, key, index) in candidates {
-            if authorized.iter().any(|outer| key.is_within(outer)) {
+            let contained = authorized.iter().any(|outer| {
+                let outer_item = &items[*outer];
+                match unit_relationship(&items[index], outer_item) {
+                    UnitRelationship::Equivalent
+                    | UnitRelationship::EquivalentConflict
+                    | UnitRelationship::Contained
+                    | UnitRelationship::AuthorityConflict => true,
+                    UnitRelationship::Distinct => {
+                        key.is_within(&outer_item.unit_identity(PathIdentity::CaseSensitive))
+                    }
+                }
+            });
+            if contained {
                 overlapped.insert(index);
                 crate::diagnostics::log_error(
                     "cleanup",
@@ -130,7 +144,7 @@ impl SafetyPlanner {
                     ),
                 );
             } else {
-                authorized.push(key);
+                authorized.push(index);
             }
         }
 
@@ -585,6 +599,86 @@ mod tests {
             }
             other => panic!("the contained unit's refusal is reported, not skipped: {other:?}"),
         }
+    }
+
+    /// A plan folds only what the filesystem identified as one unit. Two
+    /// distinct directories that differ by name are two targets, and the
+    /// containment rule that does fold is the one the scan used, so a plan and
+    /// the scan cannot disagree about a case-sensitive volume (see
+    /// `scanner::relationship` for the identity-first rule itself).
+    #[test]
+    fn a_plan_keeps_distinct_units_distinct() {
+        use crate::models::{CleanStrategy, CleanupUnit, EntryKind, Signature};
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let first = fixture.path().join("Cache");
+        let second = fixture.path().join("Other");
+        std::fs::create_dir_all(&first).expect("fixture");
+        std::fs::create_dir_all(&second).expect("fixture");
+        std::fs::write(first.join("data.bin"), vec![1u8; 8_192]).expect("fixture");
+        std::fs::write(second.join("data.bin"), vec![2u8; 8_192]).expect("fixture");
+
+        let mut registry = SignatureRegistry::new();
+        for (id, name, path) in [
+            ("test.first", "First cache", first.clone()),
+            ("test.second", "Second cache", second.clone()),
+        ] {
+            registry.register(Signature {
+                id: id.into(),
+                name: name.into(),
+                category: Category::System,
+                risk: RiskTier::Safe,
+                strategy: CleanStrategy::DeleteContents,
+                paths: vec![path.to_string_lossy().into_owned()],
+                exclusions: vec![],
+                description: String::new(),
+                min_age_days: None,
+                include_prefixes: vec![],
+                exclude_prefixes: vec![],
+                intensive_only: false,
+                platforms: vec![],
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            });
+        }
+
+        let selected = |id: &str, signature: &str, name: &str, path: &std::path::Path| {
+            let mut item = ScanItem::mock(
+                id,
+                signature,
+                name,
+                Category::System,
+                RiskTier::Safe,
+                path.to_string_lossy(),
+                FileSize::new(8_192, Some(8_192)),
+                1,
+            );
+            item.unit = CleanupUnit::fixed_path(path.to_string_lossy());
+            item.entry_kind = EntryKind::Directory;
+            item.rederive_disposition();
+            item.is_selected = true;
+            item
+        };
+        let first_item = selected("first-item", "test.first", "First cache", &first);
+        let second_item = selected("second-item", "test.second", "Second cache", &second);
+
+        let plan = SafetyPlanner::create_plan(&[first_item, second_item], &registry)
+            .expect("two separate units are plannable");
+
+        assert_eq!(
+            plan.targets.len(),
+            2,
+            "separate locations are separate targets"
+        );
+        assert_eq!(plan.expected_reclaim_bytes, 16_384);
     }
 
     /// A namespace enumerated under a broad root names nobody in the catalog, so

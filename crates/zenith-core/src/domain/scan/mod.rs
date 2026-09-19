@@ -1020,6 +1020,19 @@ pub struct CategoryResult {
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub suppressed_overlap_bytes: u64,
+    /// Units that may be inside a broader unit's observation without proof.
+    ///
+    /// A partial walk cannot say which entries it measured and a gated
+    /// container must not absorb a running rule, so the pair stays as two
+    /// rows and the bytes are stated here: the observed union is between
+    /// `total_bytes - ambiguous_overlap_bytes` and `total_bytes`, rather than
+    /// a sum presented as exact.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub ambiguous_overlap_count: u64,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub ambiguous_overlap_bytes: u64,
 }
 
 impl CategoryResult {
@@ -1138,6 +1151,15 @@ pub struct ScanResult {
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub suppressed_overlap_bytes: u64,
+    /// Units that may be inside a broader unit's observation without proof:
+    /// `total_bytes` is an upper bound of the observed union, and the union is
+    /// at least `total_bytes - ambiguous_overlap_bytes`.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub ambiguous_overlap_count: u64,
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub ambiguous_overlap_bytes: u64,
 }
 
 impl ScanResult {
@@ -1221,6 +1243,8 @@ mod tests {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         };
         assert!(scan.is_fresh_at(1000));
         assert!(scan.is_fresh_at(1299));
@@ -1257,6 +1281,8 @@ mod tests {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         };
         // A partial scan must NEVER report Fresh, even within the TTL window
         assert!(!scan.is_fresh_at(1000));

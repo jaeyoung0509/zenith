@@ -101,6 +101,8 @@ mod tests {
             suppressed_duplicate_bytes: 0,
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }
     }
 

@@ -2,108 +2,32 @@ use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
-    resolve_unit_overlaps_with, Category, CategoryResult, EligibilitySummary, FileIdentity,
-    ObservationQuality, PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult, UnitRelationship,
+    resolve_unit_overlaps_with, Category, CategoryResult, EligibilitySummary, ObservationQuality,
+    PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult, UnitRelationship,
 };
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
-use std::ffi::OsString;
-use std::path::Path;
 use std::time::SystemTime;
 use uuid::Uuid;
 use zenith_platform::PlatformEnvironment;
 
+use crate::scanner::relationship::unit_relationship;
+
 pub struct ScanEngine;
 
-/// Resolve the actual directory entry for a spelling that reached `entity`.
-/// On a case-folding volume, `pip` can open an entry stored as `Pip`; on a
-/// case-sensitive volume both spellings may be separate hardlinks to one inode.
-fn actual_entry_name(path: &Path, entity: FileIdentity) -> Option<OsString> {
-    let requested = path.file_name()?;
-    let mut folded_match = None;
-    for entry in std::fs::read_dir(path.parent()?).ok()?.flatten() {
-        let name = entry.file_name();
-        if name != requested
-            && !name
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&requested.to_string_lossy())
-        {
-            continue;
-        }
-        let matches_entity = crate::safety::ToctouGuard::capture(&entry.path())
-            .is_some_and(|identity| identity.entity() == entity);
-        if !matches_entity {
-            continue;
-        }
-        if name == requested {
-            return Some(name);
-        }
-        if folded_match.is_some() {
-            return None;
-        }
-        folded_match = Some(name);
-    }
-    folded_match
-}
-
-fn same_directory_entry(first: &Path, second: &Path, entity: FileIdentity) -> bool {
-    let parents_match = first
-        .parent()
-        .and_then(crate::safety::ToctouGuard::capture)
-        .zip(
-            second
-                .parent()
-                .and_then(crate::safety::ToctouGuard::capture),
-        )
-        .is_some_and(|(left, right)| left.entity().same_entity(right.entity()));
-    parents_match
-        && actual_entry_name(first, entity)
-            .zip(actual_entry_name(second, entity))
-            .is_some_and(|(left, right)| left == right)
-}
-
-fn filesystem_relationship(candidate: &ScanItem, container: &ScanItem) -> Option<UnitRelationship> {
-    let candidate_path = Path::new(&candidate.unit.path);
-    let container_path = Path::new(&container.unit.path);
-    let candidate_identity = crate::safety::ToctouGuard::capture(candidate_path)?;
-    let container_identity = crate::safety::ToctouGuard::capture(container_path)?;
-    let candidate_entity = candidate_identity.entity();
-    let container_entity = container_identity.entity();
-    if candidate_entity.is_unknown() || container_entity.is_unknown() {
-        return None;
-    }
-    if candidate_entity.same_entity(container_entity)
-        && same_directory_entry(candidate_path, container_path, candidate_entity)
-    {
-        return Some(UnitRelationship::Equivalent);
-    }
-    if candidate_path.ancestors().skip(1).any(|ancestor| {
-        crate::safety::ToctouGuard::capture(ancestor)
-            .is_some_and(|identity| identity.entity().same_entity(container_entity))
-    }) {
-        return Some(UnitRelationship::Contained);
-    }
-    Some(UnitRelationship::Distinct)
-}
-
+/// The relationship two units have, together with the cleanup policy the scan
+/// can act on.
+///
+/// The structural answer comes from [`unit_relationship`], which the planner
+/// uses as well, so a plan and the scan it came from cannot disagree about
+/// whether two units are one location.
 fn scan_unit_relationship(
     candidate: &ScanItem,
     container: &ScanItem,
     registry: &SignatureRegistry,
 ) -> Option<UnitRelationship> {
-    let relation = filesystem_relationship(candidate, container).unwrap_or_else(|| {
-        let candidate_key = candidate.unit_identity(PathIdentity::CaseSensitive);
-        let container_key = container.unit_identity(PathIdentity::CaseSensitive);
-        if candidate_key == container_key {
-            UnitRelationship::Equivalent
-        } else if candidate_key.is_within(&container_key) {
-            UnitRelationship::Contained
-        } else {
-            UnitRelationship::Distinct
-        }
-    });
-    match relation {
+    match unit_relationship(candidate, container) {
         UnitRelationship::Equivalent => Some(
             if exact_authorities_can_fold(candidate, container, registry) {
                 UnitRelationship::Equivalent
@@ -354,6 +278,8 @@ impl CategoryAccumulator {
             // category as readily as by one beside it.
             suppressed_overlap_count: 0,
             suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }
     }
 }
@@ -522,6 +448,8 @@ impl ScanEngine {
         }
         let suppressed_overlap_count = overlap.suppressed_count;
         let suppressed_overlap_bytes = overlap.suppressed_bytes;
+        let ambiguous_overlap_count = overlap.ambiguous_count;
+        let ambiguous_overlap_bytes = overlap.ambiguous_bytes;
 
         // The per-category events carry the totals the resolution settled: a
         // category that folded an overlapping unit away reports what it now
@@ -581,6 +509,8 @@ impl ScanEngine {
             suppressed_duplicate_bytes,
             suppressed_overlap_count,
             suppressed_overlap_bytes,
+            ambiguous_overlap_count,
+            ambiguous_overlap_bytes,
         };
 
         on_event(ScanEvent::Finished {
@@ -593,14 +523,12 @@ impl ScanEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        aggregate_quality, filesystem_relationship, same_directory_entry, CategoryAccumulator,
-        ScanEngine,
-    };
+    use super::{aggregate_quality, CategoryAccumulator, ScanEngine};
     use crate::models::{
         Category, CleanStrategy, FileSize, ObservationQuality, PathIdentity, RiskTier, ScanEvent,
         ScanItem, Signature,
     };
+    use crate::scanner::relationship::{same_directory_entry, unit_relationship};
     use crate::signatures::SignatureRegistry;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1006,7 +934,7 @@ mod tests {
             &mut categories,
             &[],
             PathIdentity::CaseSensitive,
-            filesystem_relationship,
+            |candidate, container| Some(unit_relationship(candidate, container)),
         );
         assert_eq!(categories[0].items.len(), 2);
         assert_eq!(categories[0].suppressed_duplicate_count, 0);
@@ -1113,7 +1041,7 @@ mod tests {
             &mut categories,
             &[],
             PathIdentity::CaseSensitive,
-            filesystem_relationship,
+            |candidate, container| Some(unit_relationship(candidate, container)),
         );
         assert_eq!(categories[0].items.len(), 2);
         assert_eq!(categories[0].suppressed_duplicate_count, 0);
@@ -1155,7 +1083,7 @@ mod tests {
             &mut categories,
             &[],
             PathIdentity::CaseSensitive,
-            filesystem_relationship,
+            |candidate, container| Some(unit_relationship(candidate, container)),
         );
         let expected_units = if entity.same_entity(
             crate::safety::ToctouGuard::capture(&alternate)
