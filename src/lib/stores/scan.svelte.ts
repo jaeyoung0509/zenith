@@ -506,7 +506,7 @@ export class ScanStore {
     return this.cleanItems(this.lastScan.categories.flatMap((category) => category.items));
   }
 
-  async cleanItems(items: ScanItem[]): Promise<CleanResult | null> {
+  async cleanItems(items: ScanItem[], confirmed = false): Promise<CleanResult | null> {
     if (this.isCleaning || this.isScanning) return null;
     const refusal = refusalForPreview('Cleaning');
     if (refusal) {
@@ -539,7 +539,11 @@ export class ScanStore {
       if (this.isStale()) throw new Error('Scan expired. Scan again before cleaning.');
 
       // 2. Execute clean
-      const result = await tauriExecuteClean(plan, (event: CleanEvent) => {
+      if (plan.requires_confirmation && !confirmed) {
+        throw new Error('This cleanup requires explicit confirmation. Review the selected action before cleaning.');
+      }
+
+      const result = await tauriExecuteClean(plan, confirmed, (event: CleanEvent) => {
         switch (event.type) {
           case 'Started':
             this.cleanProgress = {
