@@ -55,12 +55,9 @@
 //! two for the 5000-byte one. That is what lets a single file be regenerated and
 //! diffed on both platform jobs.
 //!
-//! The counts assume the shared scan pool exists (`execution_budget::shared_scan_pool`),
-//! which is the production shape on any host with two usable workers. A
-//! single-worker host walks the same tree inline, and the inline walk counts one
-//! extra visit per non-root directory; `assert_pooled_walk` states that
-//! precondition instead of letting the comparison fail with an unexplained
-//! difference.
+//! Traversal counts are scheduler-independent: the pooled and inline walks
+//! count each filesystem entry once, so the committed baseline describes the
+//! tree rather than the number of workers available on the host.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -418,22 +415,6 @@ fn signature(
         consequence: String::new(),
         reclaimable_is_lower_bound: false,
     }
-}
-
-/// The counts the committed baseline states are the pooled walk's shape.
-///
-/// A host with one usable worker runs the walk inline, where every non-root
-/// directory is visited once more (the recursion counts the directory it is
-/// about to read). The precondition is asserted rather than silently compared,
-/// because a baseline that quietly describes a different walk is worse than a
-/// failure that names the reason.
-fn assert_pooled_walk() {
-    assert!(
-        zenith_lib::execution_budget::shared_scan_pool().is_some(),
-        "the committed baseline states the shared scan pool's walk shape; a \
-         single-worker host walks inline and counts one extra visit per non-root \
-         directory"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -857,7 +838,6 @@ fn export_scan_baseline() {
 /// fixture finished well inside its ceiling.
 #[test]
 fn scan_metrics_match_the_committed_baseline() {
-    assert_pooled_walk();
     let baseline = load_baseline();
     assert_eq!(
         baseline.schema, BASELINE_SCHEMA,
@@ -927,7 +907,6 @@ fn scan_metrics_match_the_committed_baseline() {
 /// runner.
 #[test]
 fn cancellation_latency_is_measured_from_the_first_candidate() {
-    assert_pooled_walk();
     let directory = tempfile::tempdir().expect("fixture directory");
     let anchor = directory.path().join("cancel-anchor");
     write_file(&anchor.join("anchor.bin"), 4_096);
@@ -1055,7 +1034,6 @@ impl CancellationProbe for Probe {
 fn inaccessible_directory_is_attempted_counted_and_reported() {
     use std::os::unix::fs::PermissionsExt;
 
-    assert_pooled_walk();
     let directory = tempfile::tempdir().expect("fixture directory");
     let root = directory.path().join("inaccessible");
     write_file(&root.join("readable.bin"), 4_096);
@@ -1130,7 +1108,6 @@ fn assert_fixture_shape_inaccessible(result: &ScanResult) {
 #[cfg(unix)]
 #[test]
 fn a_symlinked_directory_is_accounted_for_and_never_traversed() {
-    assert_pooled_walk();
     let outside = tempfile::tempdir().expect("outside directory");
     write_file(&outside.path().join("outside.bin"), 16_384);
     let directory = tempfile::tempdir().expect("fixture directory");
@@ -1173,8 +1150,8 @@ fn assert_fixture_shape_symlink(result: &ScanResult) {
         "only the root and its real child are read; the link's target is not"
     );
     assert_eq!(
-        result.metrics.visited_entries, 5,
-        "the link is an entry the walk looked at: root, real, its payload, and the link itself"
+        result.metrics.visited_entries, 4,
+        "the walk visits exactly root, real, its payload, and the link itself"
     );
     // The link contributes its own entry and no allocated bytes: APFS inlines a
     // link's target path and a Windows reparse point occupies nothing, so the
