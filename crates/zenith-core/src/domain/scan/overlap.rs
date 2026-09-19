@@ -47,8 +47,12 @@ pub struct CleanupOverlap {
     /// the current settings do run.
     #[serde(default)]
     pub gate: EligibilityGate,
-    /// A nested rule requires a different mutation authority, so the broader
-    /// filesystem item is inventory only and must never become a fallback.
+    /// This overlap prevents the broader item from authorizing generic cleanup.
+    ///
+    /// That can be an operation-authority disagreement, or unresolved coverage:
+    /// when a partial container and a complete nested observation may share
+    /// bytes, the broader item cannot independently claim those same bytes as
+    /// reclaimable.
     #[serde(default)]
     pub authority_conflict: bool,
     #[serde(with = "crate::ipc_numeric::u64")]
@@ -223,6 +227,7 @@ where
         let candidate = &categories[category_index].items[item_index];
         let mut conflict_target = None;
         let mut ambiguity_target = false;
+        let mut coverage_conflict_targets: Vec<(usize, usize)> = Vec::new();
         let suppression_target = retained
             .iter()
             .find_map(|(outer, outer_category, outer_item)| {
@@ -264,8 +269,13 @@ where
                         // Containment the resolution cannot fold: a partial walk
                         // cannot prove which entries it measured, and a gated
                         // container must not absorb a rule the settings do run.
-                        // The nested unit keeps its own row.
+                        // The nested unit keeps its own row. An active broader
+                        // item is blocked from cleanup because otherwise both
+                        // rows could claim the same reclaimable bytes.
                         ambiguity_target = true;
+                        if container.gate.is_open() {
+                            coverage_conflict_targets.push((*outer_category, *outer_item));
+                        }
                         None
                     }
                     UnitRelationship::Distinct => None,
@@ -292,6 +302,12 @@ where
                         category_index,
                         categories[category_index].items[item_index].observed_bytes(),
                     ));
+                }
+                for (outer_category, outer_item) in coverage_conflict_targets {
+                    let mut conflict =
+                        CleanupOverlap::of(&categories[category_index].items[item_index]);
+                    conflict.authority_conflict = true;
+                    authority_conflicts.push((outer_category, outer_item, conflict));
                 }
                 if let Some((outer_category, outer_item)) = conflict_target {
                     let mut conflict =
