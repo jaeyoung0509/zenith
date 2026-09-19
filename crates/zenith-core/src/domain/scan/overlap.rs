@@ -273,7 +273,7 @@ where
                         // item is blocked from cleanup because otherwise both
                         // rows could claim the same reclaimable bytes.
                         ambiguity_target = true;
-                        if container.gate.is_open() {
+                        if container.gate.is_open() && candidate.gate.is_open() {
                             coverage_conflict_targets.push((*outer_category, *outer_item));
                         }
                         None
