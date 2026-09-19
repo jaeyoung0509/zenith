@@ -60,11 +60,12 @@ pub async fn create_delete_plan(
 #[specta::specta]
 pub async fn execute_clean(
     plan_id: uuid::Uuid,
+    confirmed: bool,
     on_event: Channel<CleanEvent>,
     state: State<'_, DesktopState>,
 ) -> Result<CleanResult, String> {
     let progress: Arc<dyn CleanupProgressSink> = Arc::new(TauriCleanupProgress::new(on_event));
-    state.cleanup.execute_clean(plan_id, progress).await
+    state.cleanup.execute_clean(plan_id, confirmed, progress).await
 }
 
 #[tauri::command]
