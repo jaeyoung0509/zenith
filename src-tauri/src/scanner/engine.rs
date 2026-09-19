@@ -402,6 +402,10 @@ impl ScanEngine {
                         });
                     }
                 }
+                if cancellation.is_cancelled() {
+                    was_cancelled = true;
+                    break;
+                }
             }
 
             // 2. Typed container adapters can report cleanable or observation-only storage.
