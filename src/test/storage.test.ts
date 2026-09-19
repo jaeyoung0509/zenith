@@ -240,6 +240,8 @@ describe('StorageView CTA and responsive toolbar layout', () => {
         last_used_confidence: 'unknown' as const,
       },
       unit: { kind: 'provider_action' as const, root: 'C:\\', path: 'C:\\$Recycle.Bin' },
+      lifecycle_provider_action: true,
+      requires_confirmation: true,
       disposition: { eligibility: 'reviewable' as const, reason: null, cleanable_bytes: 4096 },
       is_selected: false,
       last_modified: null,
