@@ -2314,7 +2314,7 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
             .categories
             .iter()
             .flat_map(|category| category.items.iter())
-            .filter(|item| item.path.ends_with("Caches/Cursor"))
+            .filter(|item| item.path.replace('\\', "/").ends_with("Caches/Cursor"))
             .collect();
         assert_eq!(
             found.len(),
