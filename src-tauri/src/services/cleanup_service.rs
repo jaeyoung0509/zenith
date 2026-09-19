@@ -64,7 +64,7 @@ pub fn select_quick_clean_safe_candidates(
 /// unified security, validation, invalidation, and execution pipeline.
 #[derive(Debug)]
 enum CleanupIntent {
-    ReviewedSelection { plan_id: Uuid },
+    ReviewedSelection { plan_id: Uuid, confirmed: bool },
     QuickSafe,
 }
 
@@ -225,10 +225,15 @@ impl CleanupService {
     pub async fn execute_clean(
         &self,
         plan_id: Uuid,
+        confirmed: bool,
         progress: Arc<dyn CleanupProgressSink>,
     ) -> Result<CleanResult, String> {
-        self.execute_intent(CleanupIntent::ReviewedSelection { plan_id }, None, progress)
-            .await
+        self.execute_intent(
+            CleanupIntent::ReviewedSelection { plan_id, confirmed },
+            None,
+            progress,
+        )
+        .await
     }
 
     /// Executes Quick Clean for the Safe subset of a complete, current scan.
@@ -274,8 +279,14 @@ impl CleanupService {
                     let now = unix_timestamp();
 
                     let plan: DeletePlan = match intent {
-                        CleanupIntent::ReviewedSelection { plan_id } => {
+                        CleanupIntent::ReviewedSelection { plan_id, confirmed } => {
                             let plan = plan_store.take_valid(plan_id, now)?;
+                            if plan.requires_confirmation() && !confirmed {
+                                return Err(
+                                    "This cleanup includes an action that requires explicit confirmation. Review the plan and confirm it before cleaning."
+                                        .to_string(),
+                                );
+                            }
                             // Invalidate scan atomically so pre-cleanup inventory cannot be reused
                             scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
                             plan
@@ -328,6 +339,13 @@ impl CleanupService {
                                 &environment,
                             )
                             .map_err(|e| e.to_string())?;
+
+                            if plan.requires_confirmation() {
+                                return Err(
+                                    "Quick Clean cannot execute actions that require explicit confirmation."
+                                        .to_string(),
+                                );
+                            }
 
                             // Invalidate scan atomically
                             scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
@@ -589,7 +607,7 @@ mod tests {
             .expect("a reviewed item creates a plan");
         let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
 
-        let first = service.execute_clean(preview.id, progress.clone()).await;
+        let first = service.execute_clean(preview.id, false, progress.clone()).await;
         assert!(
             first.is_ok(),
             "the first execution of a plan runs: {:?}",
@@ -599,7 +617,7 @@ mod tests {
 
         // One-shot means the same plan ID cannot authorize a second mutation,
         // through this service or any other caller.
-        let replay = service.execute_clean(preview.id, progress).await;
+        let replay = service.execute_clean(preview.id, false, progress).await;
         let error = replay.expect_err("a consumed plan must be refused");
         assert!(
             error.contains("not found or already used"),
