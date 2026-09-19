@@ -6,6 +6,8 @@ import InlineNotice from '../lib/components/InlineNotice.svelte';
 import CleanupReviewDialog from '../lib/components/CleanupReviewDialog.svelte';
 import type { ScanItem } from '../lib/models/types';
 import { normalizeDashboardTab } from '../lib/utils/dashboardNavigation';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const item = {
   id: 'fixture', signature_id: 'fixture', name: 'Build cache', category: 'developer',
@@ -74,6 +76,16 @@ describe('redesign interaction semantics', () => {
     expect(body).toContain('Items move to the Recycle Bin and can be restored until it is emptied.');
     // Only the item that carries a consequence gets the meta line.
     expect(body.match(/text-meta/g)).toHaveLength(1);
+  });
+
+  it('routes category cleanup through review before executing selected items', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../routes/dashboard/CategoryDetailView.svelte', import.meta.url)),
+      'utf8'
+    );
+    expect(source).toContain('CleanupReviewDialog');
+    expect(source).toContain('confirmCleanup');
+    expect(source).not.toContain('function cleanSelected() {\n    scanStore.cleanItems(categoryResult.items)');
   });
 
   it('explains rebuild consequences and blocks execution after scan invalidation', () => {
