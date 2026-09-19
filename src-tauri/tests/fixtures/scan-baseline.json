@@ -12,7 +12,7 @@
       "directories_read": 33,
       "duration_ms_ceiling": 1250,
       "skipped_entries": 1,
-      "total_bytes": 4096,
+      "logical_bytes": 4096,
       "visited_entries": 36
     },
     "mixed_age": {
@@ -20,7 +20,7 @@
       "directories_read": 2,
       "duration_ms_ceiling": 3500,
       "skipped_entries": 0,
-      "total_bytes": 16384,
+      "logical_bytes": 16384,
       "visited_entries": 11
     },
     "mixed_size": {
@@ -28,7 +28,7 @@
       "directories_read": 2,
       "duration_ms_ceiling": 1250,
       "skipped_entries": 0,
-      "total_bytes": 3174400,
+      "logical_bytes": 3163827,
       "visited_entries": 9
     },
     "overlapping_roots": {
@@ -36,7 +36,7 @@
       "directories_read": 3,
       "duration_ms_ceiling": 1250,
       "skipped_entries": 0,
-      "total_bytes": 12288,
+      "logical_bytes": 12288,
       "visited_entries": 8
     },
     "wide": {
@@ -44,7 +44,7 @@
       "directories_read": 201,
       "duration_ms_ceiling": 2500,
       "skipped_entries": 0,
-      "total_bytes": 3276800,
+      "logical_bytes": 2560000,
       "visited_entries": 802
     }
   }

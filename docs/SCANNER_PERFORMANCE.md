@@ -116,21 +116,29 @@ compared against a known point rather than against a feeling.
 macOS, `cargo test -p zenith-desktop --test scan_benchmark -- --nocapture`:
 
 ```text
-fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  total_bytes  rss_growth_kib
-wide                        62      802          201          16           1        0      3276800             112
-deep                        55       36           33           2           1        1         4096               0
-mixed_size                  53        9            2           2           1        0      3174400              32
-mixed_age                  168       11            2           0           2        0        16384            6144
-overlapping_roots           53        8            3           2           1        0        12288               0
-inaccessible                83        4            2           2           1        1         4096   (unix only)  0
-symlink                     82        5            2           2           1        0         4096   (unix only)  0
-cancellation                55        3            1           1           1        0         4096    (cancelled)  0
+fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  logical_bytes  on-disk_bytes
+wide                        68      802          201          16           1        0        2560000         3276800
+deep                        59       36           33           2           1        1           4096            4096
+mixed_size                  57        9            2           2           1        0        3163827         3174400
+mixed_age                  174       11            2           0           2        0          16384           16384
+overlapping_roots           58        8            3           2           1        0          12288           12288
+inaccessible                97        4            2           2           1        1           4096            4096   (unix only)
+symlink                     96        5            2           2           1        0           4155            4096   (unix only)
+cancellation                60        3            1           1           1        0           4096            4096   (cancelled)
 ```
 
-`rss_growth_kib` is this process's approximate resident-set growth across the
-scan. It is reported and never asserted: the allocator decides when pages
-return to the operating system, so two identical runs disagree, and most of the
-growth belongs to building the fixture rather than to walking it.
+Two byte populations are reported, and only one of them is a committed fact:
+`logical_bytes` is a property of the tree and is identical on every machine,
+while the on-disk population is the platform's answer (APFS rounds each file up
+to a block; `GetCompressedFileSizeW` reports what a file actually occupies, and
+a small resident file is reported at its logical size). The benchmark commits
+the logical population and bounds the on-disk one per fixture.
+
+The rows also carry `rss_growth_kib`: this process's approximate resident-set
+growth across the scan. It is reported and never asserted — the allocator
+decides when pages return to the operating system, so two identical runs
+disagree, and most of the growth belongs to building the fixture rather than to
+walking it.
 
 The `wide` row reaches `peak_tasks` 16, which is the bound being exercised
 rather than trivially satisfied; the `cancellation` row shows the work actually

@@ -188,6 +188,7 @@ struct MetricsRow {
     peak_outstanding_directory_tasks: u64,
     candidate_count: u64,
     skipped_entries: u64,
+    logical_bytes: u64,
     total_bytes: u64,
     cancelled: bool,
     /// Approximate resident-set growth across the scan, in KiB.
@@ -200,8 +201,10 @@ struct MetricsRow {
     rss_growth_kib: i64,
 }
 
-/// The committed baseline: the deterministic facts per fixture, the traversal
-/// bounds they were measured under, and the duration ceilings.
+/// One fixture's committed facts. The byte fact is the logical population:
+/// on-disk bytes are the platform's answer — a filesystem rounds them its own
+/// way, and Windows reports what a file actually occupies — so they are bounded
+/// per fixture rather than pinned in a file two platforms share.
 ///
 /// Fields are declared in alphabetical order so the file reads the same way it
 /// is written and a hand edit lands where the generator would put it.
@@ -228,7 +231,7 @@ struct BaselineFixture {
     /// machine cannot turn a green suite red by being slower.
     duration_ms_ceiling: u64,
     skipped_entries: u64,
-    total_bytes: u64,
+    logical_bytes: u64,
     visited_entries: u64,
 }
 
@@ -244,6 +247,22 @@ fn committed_fixtures() -> Vec<Fixture> {
 }
 
 /// The number of retained candidates in a result, summed over its categories.
+/// The logical population of the scanned items: a property of the tree, not of
+/// the filesystem that holds it.
+fn logical_bytes(result: &ScanResult) -> u64 {
+    result
+        .categories
+        .iter()
+        .map(|category| {
+            category
+                .items
+                .iter()
+                .map(|item| item.size.logical)
+                .sum::<u64>()
+        })
+        .sum()
+}
+
 fn candidate_count(result: &ScanResult) -> u64 {
     result
         .categories
@@ -261,6 +280,7 @@ fn metrics_row(fixture: &str, result: &ScanResult, rss_growth_kib: i64) -> Metri
         peak_outstanding_directory_tasks: result.metrics.peak_outstanding_directory_tasks,
         candidate_count: candidate_count(result),
         skipped_entries: result.skipped_entry_count,
+        logical_bytes: logical_bytes(result),
         total_bytes: result.total_bytes,
         cancelled: result.cancelled,
         rss_growth_kib,
@@ -295,7 +315,7 @@ fn baseline_of(rows: &[(Fixture, ScanResult)]) -> Baseline {
                 directories_read: result.metrics.directories_read,
                 duration_ms_ceiling: fixture.ceiling_ms,
                 skipped_entries: result.skipped_entry_count,
-                total_bytes: result.total_bytes,
+                logical_bytes: logical_bytes(result),
                 visited_entries: result.metrics.visited_entries,
             },
         );
@@ -596,9 +616,13 @@ fn assert_fixture_shape(fixture: &Fixture, result: &ScanResult) {
                 "one root of one signature is one candidate"
             );
             assert_eq!(
-                result.total_bytes,
-                (WIDE_DIRECTORIES as u64) * (4_096 + 4_096 + 8_192),
-                "the observed total is the whole tree: half a block, a block, and two blocks per directory"
+                logical_bytes(result),
+                (WIDE_DIRECTORIES as u64) * (512 + 4_096 + 8_192),
+                "the logical population is the whole tree, exactly, on every filesystem"
+            );
+            assert!(
+                result.total_bytes >= logical_bytes(result),
+                "on-disk accounting never reports less than the logical population: {result:?}"
             );
         }
         "deep" => {
@@ -622,19 +646,27 @@ fn assert_fixture_shape(fixture: &Fixture, result: &ScanResult) {
                 "exactly the first directory beyond the limit is refused"
             );
             assert_eq!(
-                result.total_bytes, 4_096,
+                logical_bytes(result),
+                4_096,
                 "only the root file is counted: the 8192-byte file below the limit is not"
             );
+            assert!(result.total_bytes >= logical_bytes(result));
         }
         "mixed_size" => {
             let logical = 3 + 4_096 + 5_000 + 1_048_576 + 2_097_152 + 9_000;
-            let allocated = [3u64, 4_096, 5_000, 1_048_576, 2_097_152, 9_000]
-                .iter()
-                .map(|size| size.div_ceil(4_096) * 4_096)
-                .sum::<u64>();
+            // The logical population is a property of the fixture and is exact
+            // everywhere. The allocated one is the platform's answer — APFS
+            // rounds each file up to a block, and `GetCompressedFileSizeW`
+            // reports what a file actually occupies, which for a small resident
+            // file is its logical size — so it is bounded rather than pinned.
             assert_eq!(
-                result.total_bytes, allocated,
-                "the observed population is the allocated one"
+                logical_bytes(result),
+                logical,
+                "the logical population is the fixture's own bytes"
+            );
+            assert!(
+                result.total_bytes >= logical,
+                "on-disk accounting never reports less than the logical population: {result:?}"
             );
             let item = result
                 .categories
@@ -670,7 +702,12 @@ fn assert_fixture_shape(fixture: &Fixture, result: &ScanResult) {
                 .as_ref()
                 .expect("a namespace signature reports its stale entries");
             assert_eq!(stale.stale_file_count, 2, "both backdated files are stale");
-            assert_eq!(stale.stale_bytes, 8_192, "two whole blocks are stale");
+            // The stale amount is the platform's on-disk accounting, so it is
+            // bounded by the logical size of the two files rather than pinned.
+            assert!(
+                stale.stale_bytes >= 8_192,
+                "both backdated files are counted as stale: {stale:?}"
+            );
             let fresh = item("recent")
                 .stale
                 .as_ref()
@@ -710,9 +747,11 @@ fn assert_fixture_shape(fixture: &Fixture, result: &ScanResult) {
                 "the rule that did not count the bytes is named on the unit that did"
             );
             assert_eq!(
-                result.total_bytes, 12_288,
+                logical_bytes(result),
+                12_288,
                 "the nested file is counted once, through the broader unit"
             );
+            assert!(result.total_bytes >= logical_bytes(result));
         }
         other => panic!("fixture {other} has no stated shape"),
     }
@@ -780,8 +819,8 @@ fn assert_row_matches_baseline(baseline: &Baseline, row: &MetricsRow, fixture: &
         row.fixture
     );
     assert_eq!(
-        row.total_bytes, expected.total_bytes,
-        "{}: total_bytes moved",
+        row.logical_bytes, expected.logical_bytes,
+        "{}: logical_bytes moved",
         row.fixture
     );
     assert_eq!(
@@ -982,9 +1021,11 @@ fn cancellation_latency_is_measured_from_the_first_candidate() {
         "the signature behind the anchor was never scanned, so only the anchor reported a unit"
     );
     assert_eq!(
-        result.total_bytes, ANCHOR_BYTES,
+        logical_bytes(&result),
+        ANCHOR_BYTES,
         "only the anchor's bytes were observed; the wide tree contributed nothing"
     );
+    assert!(result.total_bytes >= ANCHOR_BYTES);
     assert!(
         latency_ms <= CANCELLATION_LATENCY_CEILING_MS,
         "{latency_ms} ms from the probe tripping to the scan returning is over the \
@@ -1074,7 +1115,8 @@ fn assert_fixture_shape_inaccessible(result: &ScanResult) {
         result.incomplete_reasons
     );
     assert_eq!(
-        result.total_bytes, 4_096,
+        logical_bytes(result),
+        4_096,
         "the bytes behind the locked directory are not claimed"
     );
 }
@@ -1134,8 +1176,16 @@ fn assert_fixture_shape_symlink(result: &ScanResult) {
         result.metrics.visited_entries, 5,
         "the link is an entry the walk looked at: root, real, its payload, and the link itself"
     );
+    // The link contributes its own entry and no allocated bytes: APFS inlines a
+    // link's target path and a Windows reparse point occupies nothing, so the
+    // on-disk population is exactly the real file's, while the bytes the link
+    // points at are never claimed.
     assert_eq!(
         result.total_bytes, 4_096,
-        "the link is accounted for as a link; the 16384 bytes outside the root are not claimed"
+        "the 16384 bytes behind the link are not claimed"
+    );
+    assert!(
+        logical_bytes(result) >= 4_096,
+        "the payload is counted beside whatever the link itself reports"
     );
 }
