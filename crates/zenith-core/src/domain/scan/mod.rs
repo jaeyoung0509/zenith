@@ -460,7 +460,9 @@ pub struct DispositionFacts<'a> {
     /// A provider action owns no host path, so the manual risk tier means
     /// something different for it: the unit is not generic cleanup's to remove,
     /// and it is still executable, through the one operation the catalog named.
-    pub provider_action: bool,
+    pub lifecycle_provider_action: bool,
+    /// Whether this action must be explicitly confirmed before execution.
+    pub requires_confirmation: bool,
     /// The strictest verdict another rule reached about the same location, and
     /// the rule that reached it.
     pub overlap: Option<(CleanupEligibility, &'a str, bool)>,
@@ -487,7 +489,8 @@ impl<'a> DispositionFacts<'a> {
             age: None,
             stale: None,
             structured_state: None,
-            provider_action: false,
+            lifecycle_provider_action: false,
+            requires_confirmation: false,
             overlap: None,
         }
     }
@@ -525,8 +528,13 @@ impl<'a> DispositionFacts<'a> {
 
     /// States that a reviewed provider, not generic cleanup, performs this
     /// unit's cleanup.
-    pub fn with_provider_action(mut self, provider_action: bool) -> Self {
-        self.provider_action = provider_action;
+    pub fn with_lifecycle_provider_action(mut self, lifecycle_provider_action: bool) -> Self {
+        self.lifecycle_provider_action = lifecycle_provider_action;
+        self
+    }
+
+    pub fn with_confirmation_requirement(mut self, requires_confirmation: bool) -> Self {
+        self.requires_confirmation = requires_confirmation;
         self
     }
 }
@@ -570,7 +578,8 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         age,
         stale,
         structured_state,
-        provider_action,
+        lifecycle_provider_action,
+        requires_confirmation,
         // The overlap verdict is applied by the caller, after these facts have
         // produced their own answer.
         overlap: _,
@@ -614,7 +623,7 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
     //    catalog named may, so it is offered for explicit selection with the
     //    reason that confirmation is what authorizes it.
     if risk == RiskTier::Manual {
-        if provider_action {
+        if lifecycle_provider_action {
             return CleanupDisposition::reviewable(
                 size.observed_bytes(),
                 incomplete_reason.map(Into::into).or_else(|| {
@@ -667,6 +676,21 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
 
     let observed = size.observed_bytes();
     let reclaimable = stale.map(|stale| stale.stale_bytes).unwrap_or(observed);
+
+    // 8. Actions requiring explicit confirmation are never automatic,
+    //    regardless of their risk tier. This prevents a future Safe provider
+    //    from entering Quick Clean merely because its bytes are reclaimable.
+    if requires_confirmation {
+        if observed == 0 {
+            return CleanupDisposition::blocked("No cleanable data found");
+        }
+        return CleanupDisposition::reviewable(
+            reclaimable,
+            incomplete_reason.map(Into::into).or_else(|| {
+                Some("This action requires explicit confirmation before it can run".to_string())
+            }),
+        );
+    }
 
     // 8. Tool-managed caches: provider policy decides, never AutoCleanable
     if cache_metadata.management_mode == CacheManagementMode::ToolManaged {
@@ -800,6 +824,14 @@ pub struct ScanItem {
     /// disposition keeps the unit selectable but never automatic.
     #[serde(default)]
     pub owner_running: bool,
+    /// Whether this unit is executed by the lifecycle-provider contract rather
+    /// than by a generic provider/external-command unit.
+    #[serde(default)]
+    pub lifecycle_provider_action: bool,
+    /// Whether execution requires an explicit confirmation token from the
+    /// reviewed UI path.
+    #[serde(default)]
+    pub requires_confirmation: bool,
     /// The other catalog rules that described the same location.
     ///
     /// Two rules can name one cache directory, or a broad rule can name a
@@ -869,7 +901,8 @@ impl ScanItem {
         .with_age(self.age.as_ref())
         .with_stale_entries(self.stale.as_ref())
         .with_structured_state(self.structured_state)
-        .with_provider_action(self.unit.kind == CleanupUnitKind::ProviderAction)
+        .with_lifecycle_provider_action(self.lifecycle_provider_action)
+        .with_confirmation_requirement(self.requires_confirmation)
         .with_overlap(overlap)
     }
 
@@ -953,6 +986,8 @@ impl ScanItem {
             stale: None,
             structured_state: None,
             owner_running: false,
+            lifecycle_provider_action: false,
+            requires_confirmation: false,
             overlaps: Vec::new(),
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
@@ -1519,7 +1554,7 @@ mod tests {
                 &size,
                 None,
             )
-            .with_provider_action(true),
+            .with_lifecycle_provider_action(true),
         );
         assert_eq!(d6b.eligibility, CleanupEligibility::Reviewable);
         assert_eq!(d6b.cleanable_bytes, Some(1000));
@@ -1546,6 +1581,7 @@ mod tests {
             1,
         );
         generic_provider.unit.kind = CleanupUnitKind::ProviderAction;
+        generic_provider.lifecycle_provider_action = false;
         generic_provider.rederive_disposition();
         assert_eq!(
             generic_provider.disposition.eligibility,
