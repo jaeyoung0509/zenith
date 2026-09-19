@@ -25,7 +25,10 @@ use serde::{Deserialize, Serialize};
 pub mod overlap;
 pub mod unit;
 
-pub use overlap::{resolve_unit_overlaps, CleanupOverlap, OverlapReport, OverlappedDiscovery};
+pub use overlap::{
+    resolve_unit_overlaps, resolve_unit_overlaps_with, CleanupOverlap, OverlapReport,
+    OverlappedDiscovery, UnitRelationship,
+};
 pub use unit::{
     AgeObservation, CleanupOwnership, CleanupUnit, CleanupUnitIdentity, CleanupUnitKind,
     EligibilityGate, OwnershipConfidence, PathIdentity, StaleEntryObservation,
@@ -453,7 +456,7 @@ pub struct DispositionFacts<'a> {
     pub structured_state: Option<StructuredStateKind>,
     /// The strictest verdict another rule reached about the same location, and
     /// the rule that reached it.
-    pub overlap: Option<(CleanupEligibility, &'a str)>,
+    pub overlap: Option<(CleanupEligibility, &'a str, bool)>,
 }
 
 impl<'a> DispositionFacts<'a> {
@@ -507,7 +510,7 @@ impl<'a> DispositionFacts<'a> {
     }
 
     /// States the strictest verdict another rule reached about this location.
-    pub fn with_overlap(mut self, overlap: Option<(CleanupEligibility, &'a str)>) -> Self {
+    pub fn with_overlap(mut self, overlap: Option<(CleanupEligibility, &'a str, bool)>) -> Self {
         self.overlap = overlap;
         self
     }
@@ -515,10 +518,12 @@ impl<'a> DispositionFacts<'a> {
 
 pub fn derive_cleanup_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
     let disposition = derive_own_disposition(facts);
-    let Some((verdict, source)) = facts.overlap else {
+    let Some((verdict, source, explain_equal)) = facts.overlap else {
         return disposition;
     };
-    if verdict.strictness() >= disposition.eligibility.strictness() {
+    if verdict.strictness() > disposition.eligibility.strictness()
+        || (verdict == disposition.eligibility && !explain_equal)
+    {
         return disposition;
     }
     // The item states the stricter verdict, and the reason names the rule that
@@ -800,13 +805,27 @@ impl ScanItem {
     ///
     /// The rules that described the same location are part of those facts: a
     /// unit another rule classifies more strictly is never made cleaner by the
-    /// fact that a second rule matched it.
+    /// fact that a second rule matched it. A rule whose scope is switched off
+    /// is the exception — it was discovered for visibility, so it cannot
+    /// withhold a permission the current settings grant.
     pub fn disposition_facts(&self) -> DispositionFacts<'_> {
         let overlap = self
             .overlaps
             .iter()
-            .map(|overlap| (overlap.eligibility, overlap.name.as_str()))
-            .min_by_key(|(eligibility, _)| eligibility.strictness());
+            .filter(|overlap| overlap.gate.is_open())
+            .map(|overlap| {
+                (
+                    if overlap.authority_conflict {
+                        CleanupEligibility::Blocked
+                    } else {
+                        overlap.eligibility
+                    },
+                    overlap.name.as_str(),
+                    overlap.authority_conflict
+                        || (overlap.risk == self.risk && self.risk != RiskTier::Safe),
+                )
+            })
+            .min_by_key(|(eligibility, _, _)| eligibility.strictness());
         DispositionFacts::new(
             self.risk,
             self.quality,

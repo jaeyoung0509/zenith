@@ -15,7 +15,7 @@ use zenith_lib::safety::{
     Blacklist, RevalidationOutcome, SafeTreeDeleter, SafetyPlanner, SafetyValidator, SymlinkGuard,
     ToctouGuard, ValidatedTarget,
 };
-use zenith_lib::scanner::SizeCalculator;
+use zenith_lib::scanner::{ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
 use zenith_platform::path_algebra::PathFlavor;
 use zenith_platform::paths::SimulatedPaths;
@@ -2262,6 +2262,110 @@ fn the_shipped_explorer_cache_entry_scans_and_plans() {
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].path, thumbcache);
     assert!(thumbcache.exists(), "planning does not mutate");
+}
+
+/// Two shipped rules can name one location with different operations:
+/// `ai.cursor.cache` deletes the whole cache, while the intensive
+/// `system.intensive.user_app_caches` removes only the entries older than seven
+/// days. The location is counted once, and neither rule's operation may
+/// authorize what the other refuses.
+#[test]
+fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() {
+    let fixture = tempdir().expect("fixture");
+    let caches = fixture.path().join("Caches");
+    let cursor = caches.join("Cursor");
+    fs::create_dir_all(&cursor).unwrap();
+    let stale = cursor.join("old.bin");
+    fs::write(&stale, vec![1u8; 8_192]).unwrap();
+    fs::write(cursor.join("recent.bin"), vec![2u8; 8_192]).unwrap();
+    age_entry(&stale, 30);
+
+    let shipped = SignatureRegistry::load_embedded().expect("catalog");
+    let mut cursor_rule = shipped
+        .get("ai.cursor.cache")
+        .cloned()
+        .expect("the Cursor cache entry is in the catalog");
+    cursor_rule.paths = vec![cursor.to_string_lossy().into_owned()];
+    let mut stale_rule = shipped
+        .get("system.intensive.user_app_caches")
+        .cloned()
+        .expect("the intensive cache entry is in the catalog");
+    stale_rule.paths = vec![caches.to_string_lossy().into_owned()];
+    // The accounting rule under test is not platform-specific.
+    stale_rule.platforms = vec![];
+
+    let mut registry = SignatureRegistry::new();
+    registry.register(cursor_rule);
+    registry.register(stale_rule);
+
+    let scan = |intensive: bool| {
+        ScanEngine::scan(
+            &registry,
+            Some(&[Category::Ai, Category::System]),
+            &[],
+            intensive,
+            &PlatformEnvironment::native(),
+            &zenith_lib::models::NeverCancelled,
+            |_| {},
+        )
+    };
+    let item_at_cursor = |result: &ScanResult| -> ScanItem {
+        let found: Vec<&ScanItem> = result
+            .categories
+            .iter()
+            .flat_map(|category| category.items.iter())
+            .filter(|item| item.path.ends_with("Caches/Cursor"))
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "one location is one unit however many rules name it: {found:?}"
+        );
+        found[0].clone()
+    };
+
+    // Intensive cleanup runs both rules. The wider operation (`delete_contents`
+    // with no age policy) may not be built out of a location another rule only
+    // authorizes entry by entry.
+    let intensive = scan(true);
+    let surviving = item_at_cursor(&intensive);
+    assert_eq!(
+        surviving.disposition.eligibility,
+        CleanupEligibility::Blocked,
+        "two rules with different operations leave the location unplanned: {:?}",
+        surviving.disposition
+    );
+    assert!(!surviving.is_selected);
+    assert_eq!(surviving.cleanable_bytes(), 0);
+    assert!(
+        surviving
+            .overlaps
+            .iter()
+            .any(|overlap| overlap.authority_conflict),
+        "the location states which rule it disagrees with: {:?}",
+        surviving.overlaps
+    );
+    assert!(
+        SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry).is_err(),
+        "a location blocked by an overlapping rule cannot be planned"
+    );
+    assert_eq!(
+        intensive.total_bytes,
+        surviving.observed_bytes(),
+        "the location is counted once, not once per rule"
+    );
+
+    // The scope that is switched off states nothing about the location: a
+    // standard scan still offers the cache the running rule authorizes.
+    let standard = scan(false);
+    let offered = item_at_cursor(&standard);
+    assert_eq!(
+        offered.disposition.eligibility,
+        CleanupEligibility::AutoCleanable,
+        "a gated rule cannot withhold another rule's permission: {:?}",
+        offered.disposition
+    );
+    assert!(offered.is_selected);
 }
 
 /// A cache namespace that is written to while it is being cleaned: the aged

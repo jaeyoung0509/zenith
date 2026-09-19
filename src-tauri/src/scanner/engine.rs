@@ -2,16 +2,14 @@ use crate::cache_providers::CacheProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
-    resolve_unit_overlaps, Category, CategoryResult, CleanupOverlap, CleanupUnit,
-    CleanupUnitIdentity, EligibilitySummary, FileIdentity, ObservationQuality, OverlappedDiscovery,
-    PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult,
+    resolve_unit_overlaps_with, Category, CategoryResult, EligibilitySummary, FileIdentity,
+    ObservationQuality, PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult, UnitRelationship,
 };
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
-use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 use uuid::Uuid;
 use zenith_platform::PlatformEnvironment;
@@ -63,6 +61,142 @@ fn same_directory_entry(first: &Path, second: &Path, entity: FileIdentity) -> bo
         && actual_entry_name(first, entity)
             .zip(actual_entry_name(second, entity))
             .is_some_and(|(left, right)| left == right)
+}
+
+fn filesystem_relationship(candidate: &ScanItem, container: &ScanItem) -> Option<UnitRelationship> {
+    let candidate_path = Path::new(&candidate.unit.path);
+    let container_path = Path::new(&container.unit.path);
+    let candidate_identity = crate::safety::ToctouGuard::capture(candidate_path)?;
+    let container_identity = crate::safety::ToctouGuard::capture(container_path)?;
+    let candidate_entity = candidate_identity.entity();
+    let container_entity = container_identity.entity();
+    if candidate_entity.is_unknown() || container_entity.is_unknown() {
+        return None;
+    }
+    if candidate_entity.same_entity(container_entity)
+        && same_directory_entry(candidate_path, container_path, candidate_entity)
+    {
+        return Some(UnitRelationship::Equivalent);
+    }
+    if candidate_path.ancestors().skip(1).any(|ancestor| {
+        crate::safety::ToctouGuard::capture(ancestor)
+            .is_some_and(|identity| identity.entity().same_entity(container_entity))
+    }) {
+        return Some(UnitRelationship::Contained);
+    }
+    Some(UnitRelationship::Distinct)
+}
+
+fn scan_unit_relationship(
+    candidate: &ScanItem,
+    container: &ScanItem,
+    registry: &SignatureRegistry,
+) -> Option<UnitRelationship> {
+    let relation = filesystem_relationship(candidate, container).unwrap_or_else(|| {
+        let candidate_key = candidate.unit_identity(PathIdentity::CaseSensitive);
+        let container_key = container.unit_identity(PathIdentity::CaseSensitive);
+        if candidate_key == container_key {
+            UnitRelationship::Equivalent
+        } else if candidate_key.is_within(&container_key) {
+            UnitRelationship::Contained
+        } else {
+            UnitRelationship::Distinct
+        }
+    });
+    match relation {
+        UnitRelationship::Equivalent => Some(
+            if exact_authorities_can_fold(candidate, container, registry) {
+                UnitRelationship::Equivalent
+            } else {
+                // One location through two rules that disagree about what may be
+                // done with it: the bytes are counted once and neither rule's
+                // operation decides for the other.
+                UnitRelationship::EquivalentConflict
+            },
+        ),
+        UnitRelationship::Contained => {
+            if containment_policies_are_compatible(candidate, container, registry) {
+                Some(UnitRelationship::Contained)
+            } else {
+                Some(UnitRelationship::AuthorityConflict)
+            }
+        }
+        other => Some(other),
+    }
+}
+
+fn exact_authorities_can_fold(
+    left: &ScanItem,
+    right: &ScanItem,
+    registry: &SignatureRegistry,
+) -> bool {
+    if left.signature_id == right.signature_id {
+        return true;
+    }
+    if left.risk == RiskTier::Manual || right.risk == RiskTier::Manual {
+        return true;
+    }
+    let left_specialized = !left.unit.kind.is_filesystem();
+    let right_specialized = !right.unit.kind.is_filesystem();
+    if left_specialized != right_specialized {
+        return true;
+    }
+    if left_specialized {
+        return false;
+    }
+    containment_policies_are_compatible(left, right, registry)
+}
+
+fn containment_policies_are_compatible(
+    nested: &ScanItem,
+    container: &ScanItem,
+    registry: &SignatureRegistry,
+) -> bool {
+    // A rule whose scope is switched off states nothing about what may be done
+    // here: it is discovered for visibility, so it cannot constrain a rule the
+    // current settings do run.
+    if !nested.gate.is_open() || !container.gate.is_open() {
+        return true;
+    }
+    if !nested.unit.kind.is_filesystem()
+        || !container.unit.kind.is_filesystem()
+        || nested.risk == RiskTier::Manual
+        || container.risk == RiskTier::Manual
+    {
+        return false;
+    }
+    if nested.signature_id == container.signature_id {
+        return true;
+    }
+    let (Some(nested_signature), Some(container_signature)) = (
+        registry.get(&nested.signature_id),
+        registry.get(&container.signature_id),
+    ) else {
+        return false;
+    };
+    nested_signature.strategy == container_signature.strategy
+        && nested_signature.management_mode == container_signature.management_mode
+        && nested_signature.min_age_days == container_signature.min_age_days
+        && same_string_set(
+            &nested_signature.exclusions,
+            &container_signature.exclusions,
+        )
+        && same_string_set(
+            &nested_signature.fail_if_running,
+            &container_signature.fail_if_running,
+        )
+        && nested_signature.ownership() == container_signature.ownership()
+}
+
+fn same_string_set(left: &[String], right: &[String]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left = left.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut right = right.iter().map(String::as_str).collect::<Vec<_>>();
+    left.sort_unstable();
+    right.sort_unstable();
+    left == right
 }
 
 fn aggregate_quality(
@@ -126,21 +260,12 @@ impl CategoryAccumulator {
     ///
     /// Returns the retained item so the caller can stream it to the frontend.
     ///
-    /// Two discovery rules can name the same location, and a scan that counted
-    /// it twice would report a total no user could reconcile with their disk.
-    /// The first unit wins — signatures are visited most-specific-first — and
-    /// the duplicate's bytes are recorded as suppressed rather than dropped.
-    /// The rule that lost is carried as provenance on the unit that counted the
-    /// bytes: its verdict still decides the surviving unit's eligibility, and
-    /// the interface can name the rule it came from.
-    fn push(
-        &mut self,
-        item: ScanItem,
-        identity: PathIdentity,
-        seen_units: &mut HashSet<CleanupUnitIdentity>,
-        seen_entities: &mut HashMap<FileIdentity, Vec<PathBuf>>,
-        overlapped: &mut Vec<OverlappedDiscovery>,
-    ) -> Option<&ScanItem> {
+    /// Duplicate and containment decisions require the complete scan: stable
+    /// filesystem identity, authority compatibility, and observation coverage
+    /// can all cross category boundaries. This accumulator therefore retains
+    /// every actionable discovery; the resolver makes the deterministic fold
+    /// after every category has finished.
+    fn push(&mut self, item: ScanItem) -> Option<&ScanItem> {
         let item = item.with_derived_disposition();
         let bytes = item.cleanable_bytes();
         let observed = item.observed_bytes();
@@ -149,59 +274,6 @@ impl CategoryAccumulator {
         let is_empty_fresh = item.quality == ObservationQuality::Fresh && observed == 0;
         if !item.exists || is_empty_fresh {
             return None;
-        }
-
-        // Text is a fallback for paths without a stable OS identity, and the
-        // stated filesystem decides whether that text folds case. Path syntax
-        // alone says nothing about the mounted volume's case behavior.
-        let unit = item.unit_identity(identity);
-        let entity = item
-            .unit
-            .kind
-            .is_filesystem()
-            .then(|| crate::safety::ToctouGuard::capture(Path::new(&item.unit.path)))
-            .flatten()
-            .map(|identity| identity.entity())
-            .filter(|entity| !entity.is_unknown());
-        let duplicate_of = if seen_units.contains(&unit) {
-            Some(unit.clone())
-        } else {
-            // The same object under another spelling: a hardlinked alias shares
-            // the inode, and a case-folding volume answers to either spelling of
-            // a name.
-            entity.and_then(|entity| {
-                seen_entities
-                    .get(&entity)?
-                    .iter()
-                    .find(|seen| same_directory_entry(seen, Path::new(&item.unit.path), entity))
-                    .map(|path| {
-                        CleanupUnit::fixed_path(path.to_string_lossy().into_owned())
-                            .identity(identity)
-                    })
-            })
-        };
-        if let Some(retained) = duplicate_of {
-            self.suppressed_duplicate_count += 1;
-            self.suppressed_duplicate_bytes += observed;
-            overlapped.push(OverlappedDiscovery {
-                retained,
-                overlap: CleanupOverlap::of(&item),
-            });
-            crate::diagnostics::log_error(
-                "scanner",
-                &format!(
-                    "Suppressed duplicate discovery of {} (already counted by another signature)",
-                    item.path
-                ),
-            );
-            return None;
-        }
-        seen_units.insert(unit);
-        if let Some(entity) = entity {
-            seen_entities
-                .entry(entity)
-                .or_default()
-                .push(PathBuf::from(&item.unit.path));
         }
 
         self.total_bytes += observed;
@@ -333,28 +405,10 @@ impl ScanEngine {
         let mut eligibility = EligibilitySummary::default();
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
-        // The scan states whether the filesystem it looked at folds case: a
-        // Windows volume folds by default and a POSIX one does not. Volume
-        // settings can differ from the platform default, so a path that exists
-        // is still decided by its stable filesystem identity; the stated fact
-        // is what text-only comparison uses.
-        let identity = if environment.flavor().is_windows() {
-            PathIdentity::CaseInsensitive
-        } else {
-            PathIdentity::CaseSensitive
-        };
-        // Discoveries that were dropped where they were found because the unit
-        // that counted them already existed. The pass after the scan folds them
-        // into that unit as provenance.
-        let mut overlapped: Vec<OverlappedDiscovery> = Vec::new();
-        // One identity set for the whole scan: a unit two signatures both found
-        // is counted once, whichever category it was found under.
-        let mut seen_units: HashSet<CleanupUnitIdentity> = HashSet::new();
         // One process-table pass for the whole scan: the scan asks which
         // application bundles are running, and every signature sees the same
         // answer.
         let running_apps = crate::applications::RunningApplications::probe();
-        let mut seen_entities: HashMap<FileIdentity, Vec<PathBuf>> = HashMap::new();
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
         let directory_pool = shared_scan_pool();
@@ -392,13 +446,7 @@ impl ScanEngine {
                     &running_apps,
                 );
                 for item in items {
-                    if let Some(retained) = accumulator.push(
-                        item,
-                        identity,
-                        &mut seen_units,
-                        &mut seen_entities,
-                        &mut overlapped,
-                    ) {
+                    if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -413,13 +461,7 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) = accumulator.push(
-                        item,
-                        identity,
-                        &mut seen_units,
-                        &mut seen_entities,
-                        &mut overlapped,
-                    ) {
+                    if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -437,13 +479,7 @@ impl ScanEngine {
                         was_cancelled = true;
                         break;
                     }
-                    if let Some(retained) = accumulator.push(
-                        item,
-                        identity,
-                        &mut seen_units,
-                        &mut seen_entities,
-                        &mut overlapped,
-                    ) {
+                    if let Some(retained) = accumulator.push(item) {
                         on_event(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
@@ -466,7 +502,12 @@ impl ScanEngine {
         // inside a broader one is that unit's provenance, not a second total,
         // and the broader unit can be in another category. The categories are
         // restated before any number derived from them is reported.
-        let overlap = resolve_unit_overlaps(&mut category_results, &overlapped, identity);
+        let overlap = resolve_unit_overlaps_with(
+            &mut category_results,
+            &[],
+            PathIdentity::CaseSensitive,
+            |candidate, container| scan_unit_relationship(candidate, container, registry),
+        );
         for category_result in &category_results {
             total_bytes += category_result.total_bytes;
             cleanable_bytes += category_result.cleanable_bytes;
@@ -552,13 +593,15 @@ impl ScanEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_quality, same_directory_entry, CategoryAccumulator, ScanEngine};
+    use super::{
+        aggregate_quality, filesystem_relationship, same_directory_entry, CategoryAccumulator,
+        ScanEngine,
+    };
     use crate::models::{
         Category, CleanStrategy, FileSize, ObservationQuality, PathIdentity, RiskTier, ScanEvent,
         ScanItem, Signature,
     };
     use crate::signatures::SignatureRegistry;
-    use std::collections::HashSet;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use zenith_platform::path_algebra::PathFlavor;
@@ -691,6 +734,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exact_provider_and_filesystem_duplicates_retain_provider_authority_in_either_order() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("provider-cache");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("data.bin"), vec![1u8; 4_096]).unwrap();
+
+        let filesystem = ScanItem::mock(
+            "filesystem",
+            "test.filesystem",
+            "Filesystem cache",
+            Category::Developer,
+            RiskTier::Safe,
+            path.to_string_lossy(),
+            FileSize::new(4_096, Some(4_096)),
+            1,
+        );
+        let mut provider = ScanItem::mock(
+            "provider",
+            "test.provider",
+            "Provider cache",
+            Category::Developer,
+            RiskTier::Rebuild,
+            path.to_string_lossy(),
+            FileSize::new(4_096, Some(4_096)),
+            1,
+        );
+        provider.unit.kind = crate::models::CleanupUnitKind::ProviderAction;
+
+        for items in [
+            vec![filesystem.clone(), provider.clone()],
+            vec![provider.clone(), filesystem.clone()],
+        ] {
+            let mut accumulator = CategoryAccumulator::new();
+            for item in items {
+                accumulator.push(item);
+            }
+            let mut categories = vec![accumulator.finalize(Category::Developer, None)];
+            crate::models::resolve_unit_overlaps(&mut categories, &[], PathIdentity::CaseSensitive);
+            assert_eq!(categories[0].items.len(), 1);
+            assert_eq!(categories[0].items[0].signature_id, "test.provider");
+        }
+    }
+
     /// A unit inside a broader one is that unit's bytes: the scan counts them
     /// once, keeps the narrower rule as provenance, and states how much was
     /// folded away.
@@ -806,8 +893,12 @@ mod tests {
             .iter()
             .find(|category| category.category == Category::Developer)
             .expect("the developer category is scanned");
-        assert_eq!(developer.items.len(), 1);
-        let surviving = &developer.items[0];
+        assert_eq!(developer.items.len(), 2);
+        let surviving = developer
+            .items
+            .iter()
+            .find(|item| item.signature_id == "test.broad")
+            .expect("the broader observation remains visible but blocked");
         assert_eq!(
             surviving.disposition.eligibility,
             crate::models::CleanupEligibility::Blocked,
@@ -816,15 +907,75 @@ mod tests {
         assert!(!surviving.is_selected);
         assert_eq!(developer.cleanable_bytes, 0);
         assert_eq!(
-            developer.total_bytes, 16_384,
-            "the bytes are still discovered and reported"
+            developer.total_bytes, 24_576,
+            "an unresolved authority conflict preserves both observations instead of claiming coverage"
         );
     }
 
-    /// Text identity follows the stated filesystem: a case variant is one unit
-    /// where the filesystem folds case, and two where it does not.
     #[test]
-    fn case_variant_units_follow_the_stated_filesystem() {
+    fn differing_process_guards_prevent_containment_from_merging_authority() {
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = fixture.path().join("Cache");
+        let child = parent.join("guarded");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(parent.join("data.bin"), vec![1u8; 8_192]).unwrap();
+        std::fs::write(child.join("guarded.bin"), vec![2u8; 8_192]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.guard.parent",
+            "Parent cache",
+            Category::Developer,
+            &parent,
+            vec![],
+            None,
+        ));
+        let mut guarded = signature(
+            "test.guard.child",
+            "Guarded cache",
+            Category::Developer,
+            &child,
+            vec![],
+            None,
+        );
+        guarded.fail_if_running = vec!["guarded-tool".into()];
+        registry.register(guarded);
+
+        let result = ScanEngine::scan(
+            &registry,
+            None,
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+        let developer = result
+            .categories
+            .iter()
+            .find(|category| category.category == Category::Developer)
+            .expect("the developer category is scanned");
+
+        assert_eq!(developer.items.len(), 2);
+        let parent = developer
+            .items
+            .iter()
+            .find(|item| item.signature_id == "test.guard.parent")
+            .expect("the broader observation remains visible");
+        assert_eq!(
+            parent.disposition.eligibility,
+            crate::models::CleanupEligibility::Blocked
+        );
+        assert!(parent
+            .overlaps
+            .iter()
+            .any(|overlap| overlap.authority_conflict));
+    }
+
+    /// When no filesystem object exists, text is a conservative case-sensitive
+    /// fallback rather than an OS-wide guess about the volume.
+    #[test]
+    fn unresolved_case_variant_units_remain_distinct() {
         let upper = ScanItem::mock(
             "case-upper",
             "test.case",
@@ -846,24 +997,19 @@ mod tests {
             1,
         );
 
-        for (identity, expected_items, expected_suppressed) in [
-            (PathIdentity::CaseInsensitive, 1, 1),
-            (PathIdentity::CaseSensitive, 2, 0),
-        ] {
-            let mut accumulator = CategoryAccumulator::new();
-            let mut paths = HashSet::new();
-            let mut entities = std::collections::HashMap::new();
-            let mut overlapped = Vec::new();
-            for item in [upper.clone(), lower.clone()] {
-                accumulator.push(item, identity, &mut paths, &mut entities, &mut overlapped);
-            }
-            assert_eq!(
-                accumulator.items.len(),
-                expected_items,
-                "identity {identity:?}"
-            );
-            assert_eq!(accumulator.suppressed_duplicate_count, expected_suppressed);
+        let mut accumulator = CategoryAccumulator::new();
+        for item in [upper, lower] {
+            accumulator.push(item);
         }
+        let mut categories = vec![accumulator.finalize(Category::Developer, None)];
+        crate::models::resolve_unit_overlaps_with(
+            &mut categories,
+            &[],
+            PathIdentity::CaseSensitive,
+            filesystem_relationship,
+        );
+        assert_eq!(categories[0].items.len(), 2);
+        assert_eq!(categories[0].suppressed_duplicate_count, 0);
     }
 
     /// Two scans of one filesystem state state the same totals in the same
@@ -948,8 +1094,6 @@ mod tests {
         std::fs::hard_link(&first, &alias).unwrap();
 
         let mut accumulator = CategoryAccumulator::new();
-        let mut paths = HashSet::new();
-        let mut entities = std::collections::HashMap::new();
         for (index, path) in [&first, &alias].iter().enumerate() {
             let mut item = ScanItem::mock(
                 format!("duplicate-{index}"),
@@ -962,16 +1106,17 @@ mod tests {
                 1,
             );
             item.entry_kind = crate::models::EntryKind::File;
-            accumulator.push(
-                item,
-                PathIdentity::CaseSensitive,
-                &mut paths,
-                &mut entities,
-                &mut Vec::new(),
-            );
+            accumulator.push(item);
         }
-        assert_eq!(accumulator.items.len(), 2);
-        assert_eq!(accumulator.suppressed_duplicate_count, 0);
+        let mut categories = vec![accumulator.finalize(Category::Developer, None)];
+        crate::models::resolve_unit_overlaps_with(
+            &mut categories,
+            &[],
+            PathIdentity::CaseSensitive,
+            filesystem_relationship,
+        );
+        assert_eq!(categories[0].items.len(), 2);
+        assert_eq!(categories[0].suppressed_duplicate_count, 0);
     }
 
     #[test]
@@ -992,8 +1137,6 @@ mod tests {
         }
 
         let mut accumulator = CategoryAccumulator::new();
-        let mut paths = HashSet::new();
-        let mut entities = std::collections::HashMap::new();
         for (index, path) in [&stored, &alternate].iter().enumerate() {
             let item = ScanItem::mock(
                 format!("case-{index}"),
@@ -1005,14 +1148,15 @@ mod tests {
                 FileSize::new(12, Some(12)),
                 1,
             );
-            accumulator.push(
-                item,
-                PathIdentity::CaseSensitive,
-                &mut paths,
-                &mut entities,
-                &mut Vec::new(),
-            );
+            accumulator.push(item);
         }
+        let mut categories = vec![accumulator.finalize(Category::Developer, None)];
+        crate::models::resolve_unit_overlaps_with(
+            &mut categories,
+            &[],
+            PathIdentity::CaseSensitive,
+            filesystem_relationship,
+        );
         let expected_units = if entity.same_entity(
             crate::safety::ToctouGuard::capture(&alternate)
                 .expect("alternate identity")
@@ -1022,7 +1166,7 @@ mod tests {
         } else {
             2
         };
-        assert_eq!(accumulator.items.len(), expected_units);
+        assert_eq!(categories[0].items.len(), expected_units);
     }
 
     /// The breakdown explains the total: every observed byte lands in exactly

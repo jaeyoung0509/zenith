@@ -13,7 +13,11 @@
 //! strictest rule that described the location, and the interface can say which
 //! rule imposed that verdict and how many bytes are accounted for this way.
 
-use super::{CategoryResult, CleanupEligibility, CleanupUnitIdentity, PathIdentity, ScanItem};
+use super::{
+    CacheManagementMode, CategoryResult, CleanupEligibility, CleanupUnitIdentity, CleanupUnitKind,
+    EligibilityGate, PathIdentity, ScanItem,
+};
+use crate::domain::RiskTier;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -28,6 +32,25 @@ pub struct CleanupOverlap {
     pub name: String,
     pub unit_path: String,
     pub eligibility: CleanupEligibility,
+    #[serde(default = "default_overlap_risk")]
+    pub risk: RiskTier,
+    #[serde(default)]
+    pub management_mode: CacheManagementMode,
+    #[serde(default)]
+    pub consequence: String,
+    #[serde(default)]
+    pub unit_kind: CleanupUnitKind,
+    /// The gate the other rule was discovered under.
+    ///
+    /// A rule whose scope is switched off is discovered for visibility, not for
+    /// authority: it must not withhold, downgrade, or constrain the rule that
+    /// the current settings do run.
+    #[serde(default)]
+    pub gate: EligibilityGate,
+    /// A nested rule requires a different mutation authority, so the broader
+    /// filesystem item is inventory only and must never become a fallback.
+    #[serde(default)]
+    pub authority_conflict: bool,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub observed_bytes: u64,
@@ -41,9 +64,19 @@ impl CleanupOverlap {
             name: item.name.clone(),
             unit_path: item.unit.path.clone(),
             eligibility: item.disposition.eligibility,
+            risk: item.risk,
+            management_mode: item.cache_metadata.management_mode,
+            consequence: item.cache_metadata.consequence.clone(),
+            unit_kind: item.unit.kind,
+            gate: item.gate,
+            authority_conflict: false,
             observed_bytes: item.observed_bytes(),
         }
     }
+}
+
+fn default_overlap_risk() -> RiskTier {
+    RiskTier::Safe
 }
 
 /// A discovery whose bytes a unit found earlier already counted.
@@ -61,6 +94,26 @@ pub struct OverlapReport {
     pub suppressed_bytes: u64,
 }
 
+/// The relationship established by the filesystem for two scanned units.
+/// `None` from the resolver callback means that textual identity is the only
+/// available evidence; an explicit `Distinct` always wins over text folding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitRelationship {
+    Distinct,
+    /// The same location.
+    Equivalent,
+    /// The same location through two rules that disagree about what may be done
+    /// with it. It is still one location, so its bytes are counted once, but
+    /// neither rule's operation may authorize the other's: the surviving item
+    /// states the conflict and is not cleanable.
+    EquivalentConflict,
+    /// One location inside another.
+    Contained,
+    /// A nested rule requires a different mutation authority, so the broader
+    /// filesystem item is inventory only and must never become a fallback.
+    AuthorityConflict,
+}
+
 /// Folds units that describe the same location into one accounting decision.
 ///
 /// `overlapped` carries the discoveries that were dropped where they were
@@ -73,94 +126,213 @@ pub struct OverlapReport {
 /// order the filesystem happened to answer in. Categories the resolution
 /// touched state their totals again from the items they still retain.
 ///
-/// The fold assumes a container's observation covers its own tree. A walk that
-/// deliberately skipped entries — a blacklisted child, a signature exclusion, a
-/// bundle, a depth cutoff — reports that on the item (`skipped_entry_count`,
-/// `quality`), and a subtree it did not measure is a subtree whose bytes this
-/// pass removes from the totals while the container's deletion also leaves them
-/// in place. The bytes are not lost from the answer: the folded unit keeps its
-/// own measurement in the container's provenance, so the location and its size
-/// stay readable.
+/// Containment is folded only when the container is a complete observation. A
+/// partial walk, a skipped entry, or an incomplete reason leaves the nested
+/// observation as its own item because path containment is not proof that the
+/// broader measurement included those bytes. A cleanup-authority conflict also
+/// keeps both observations and blocks the broader item from generic cleanup.
 pub fn resolve_unit_overlaps(
     categories: &mut [CategoryResult],
     overlapped: &[OverlappedDiscovery],
     identity: PathIdentity,
 ) -> OverlapReport {
+    resolve_unit_overlaps_with(categories, overlapped, identity, |_, _| None)
+}
+
+pub fn resolve_unit_overlaps_with<F>(
+    categories: &mut [CategoryResult],
+    overlapped: &[OverlappedDiscovery],
+    identity: PathIdentity,
+    relationship: F,
+) -> OverlapReport
+where
+    F: Fn(&ScanItem, &ScanItem) -> Option<UnitRelationship>,
+{
     let mut report = OverlapReport::default();
     let mut touched: HashSet<usize> = HashSet::new();
 
     for discovery in overlapped {
         if let Some((category, item)) = locate(categories, &discovery.retained, identity) {
-            categories[category].items[item]
-                .overlaps
-                .push(discovery.overlap.clone());
+            let retained = &mut categories[category].items[item];
+            retained.risk = retained.risk.max(discovery.overlap.risk);
+            retained.cache_metadata.management_mode = stricter_management_mode(
+                retained.cache_metadata.management_mode,
+                discovery.overlap.management_mode,
+            );
+            if discovery.overlap.risk == retained.risk && !discovery.overlap.consequence.is_empty()
+            {
+                retained.cache_metadata.consequence = discovery.overlap.consequence.clone();
+            }
+            retained.overlaps.push(discovery.overlap.clone());
             touched.insert(category);
         }
     }
 
-    let mut candidates: Vec<(usize, CleanupUnitIdentity, usize, usize)> = Vec::new();
+    let mut candidates: Vec<(usize, CleanupUnitIdentity, u8, usize, usize)> = Vec::new();
     for (category_index, category) in categories.iter().enumerate() {
         for (item_index, item) in category.items.iter().enumerate() {
             if !item.unit.is_declared() {
                 continue;
             }
             let key = item.unit_identity(identity);
-            candidates.push((key.components().count(), key, category_index, item_index));
+            candidates.push((
+                key.components().count(),
+                key,
+                retention_priority(item),
+                category_index,
+                item_index,
+            ));
         }
     }
-    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    candidates.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.1.cmp(&right.1))
+    });
 
     let mut retained: Vec<(CleanupUnitIdentity, usize, usize)> = Vec::new();
     let mut suppressed_keys: Vec<CleanupUnitIdentity> = Vec::new();
     // (suppressed category, suppressed item, container category, container item,
-    //  whether its bytes are already stated by a unit folded above it)
-    let mut suppressed: Vec<(usize, usize, usize, usize, bool)> = Vec::new();
-    for (_, key, category_index, item_index) in candidates {
+    //  whether its bytes are already stated by a unit folded above it,
+    //  whether this is an exact duplicate rather than containment,
+    //  whether the two rules disagree about the operation that may be run)
+    let mut suppressed: Vec<(usize, usize, usize, usize, bool, bool, bool)> = Vec::new();
+    let mut authority_conflicts: Vec<(usize, usize, CleanupOverlap)> = Vec::new();
+    for (_, key, _, category_index, item_index) in candidates {
         // Candidates are visited broadest-first, so a unit inside a unit that
         // was folded already is part of that unit's bytes: it is folded too,
         // but contributes them once.
         let already_counted = suppressed_keys.iter().any(|outer| key.is_within(outer));
-        // An identical key was resolved where the unit was discovered. What
-        // this pass adds is containment: a unit inside a broader one.
-        match retained.iter().find(|(outer, _, _)| key.is_within(outer)) {
-            Some((_, container_category, container_item)) => {
+        let candidate = &categories[category_index].items[item_index];
+        let mut conflict_target = None;
+        let suppression_target = retained
+            .iter()
+            .find_map(|(outer, outer_category, outer_item)| {
+                let container = &categories[*outer_category].items[*outer_item];
+                let relation = relationship(candidate, container).unwrap_or_else(|| {
+                    if key == *outer {
+                        UnitRelationship::Equivalent
+                    } else if key.is_within(outer) {
+                        UnitRelationship::Contained
+                    } else {
+                        UnitRelationship::Distinct
+                    }
+                });
+                match relation {
+                    UnitRelationship::Equivalent => {
+                        Some((*outer_category, *outer_item, true, false))
+                    }
+                    UnitRelationship::EquivalentConflict => {
+                        Some((*outer_category, *outer_item, true, true))
+                    }
+                    UnitRelationship::Contained if completely_observed(container) => {
+                        if containment_authority_is_compatible(container, candidate) {
+                            Some((*outer_category, *outer_item, false, false))
+                        } else {
+                            conflict_target = Some((*outer_category, *outer_item));
+                            None
+                        }
+                    }
+                    UnitRelationship::AuthorityConflict if completely_observed(container) => {
+                        conflict_target = Some((*outer_category, *outer_item));
+                        None
+                    }
+                    UnitRelationship::Distinct
+                    | UnitRelationship::Contained
+                    | UnitRelationship::AuthorityConflict => None,
+                }
+            });
+        match suppression_target {
+            Some((container_category, container_item, is_duplicate, is_conflict)) => {
                 suppressed.push((
                     category_index,
                     item_index,
-                    *container_category,
-                    *container_item,
+                    container_category,
+                    container_item,
                     already_counted,
+                    is_duplicate,
+                    is_conflict,
                 ));
                 if !already_counted {
                     suppressed_keys.push(key);
                 }
             }
-            None => retained.push((key, category_index, item_index)),
+            None => {
+                if let Some((outer_category, outer_item)) = conflict_target {
+                    let mut conflict =
+                        CleanupOverlap::of(&categories[category_index].items[item_index]);
+                    conflict.authority_conflict = true;
+                    authority_conflicts.push((outer_category, outer_item, conflict));
+                }
+                retained.push((key, category_index, item_index));
+            }
         }
     }
 
+    for (category_index, item_index, conflict) in authority_conflicts {
+        categories[category_index].items[item_index]
+            .overlaps
+            .push(conflict);
+        touched.insert(category_index);
+    }
+
     let mut removed: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (category_index, item_index, container_category, container_item, already_counted) in
-        suppressed
+    for (
+        category_index,
+        item_index,
+        container_category,
+        container_item,
+        already_counted,
+        is_duplicate,
+        is_conflict,
+    ) in suppressed
     {
         let bytes = categories[category_index].items[item_index].observed_bytes();
-        let entry = CleanupOverlap::of(&categories[category_index].items[item_index]);
+        let suppressed_risk = categories[category_index].items[item_index].risk;
+        let suppressed_management = categories[category_index].items[item_index]
+            .cache_metadata
+            .management_mode;
+        let suppressed_consequence = categories[category_index].items[item_index]
+            .cache_metadata
+            .consequence
+            .clone();
+        let mut entry = CleanupOverlap::of(&categories[category_index].items[item_index]);
+        entry.authority_conflict = is_conflict;
         // Anything already folded into the suppressed unit travels with it, so
         // provenance survives more than one level of nesting.
         let carried = std::mem::take(&mut categories[category_index].items[item_index].overlaps);
 
         let container = &mut categories[container_category].items[container_item];
+        let constrains = entry.gate.is_open();
         container.overlaps.push(entry);
         container.overlaps.extend(carried);
-        categories[container_category].suppressed_overlap_count += 1;
-        // A unit inside a unit that was folded already states the same bytes:
-        // the count says how many units were folded, and the byte total counts
-        // each location once so it can be reconciled against `total_bytes`.
-        if !already_counted {
-            categories[container_category].suppressed_overlap_bytes += bytes;
-            report.suppressed_bytes += bytes;
+        // A rule whose scope is switched off is recorded as provenance and
+        // nothing more: it is not authority over the location in this scan.
+        if constrains {
+            container.risk = container.risk.max(suppressed_risk);
+            container.cache_metadata.management_mode = stricter_management_mode(
+                container.cache_metadata.management_mode,
+                suppressed_management,
+            );
+            if suppressed_risk == container.risk && !suppressed_consequence.is_empty() {
+                container.cache_metadata.consequence = suppressed_consequence;
+            }
         }
-        report.suppressed_count += 1;
+        if is_duplicate {
+            categories[container_category].suppressed_duplicate_count += 1;
+            categories[container_category].suppressed_duplicate_bytes += bytes;
+        } else {
+            categories[container_category].suppressed_overlap_count += 1;
+            // A unit inside a unit that was folded already states the same bytes:
+            // the count says how many units were folded, and the byte total counts
+            // each location once so it can be reconciled against `total_bytes`.
+            if !already_counted {
+                categories[container_category].suppressed_overlap_bytes += bytes;
+                report.suppressed_bytes += bytes;
+            }
+            report.suppressed_count += 1;
+        }
         touched.insert(container_category);
         touched.insert(category_index);
         removed.entry(category_index).or_default().push(item_index);
@@ -190,6 +362,51 @@ pub fn resolve_unit_overlaps(
     }
 
     report
+}
+
+/// Lower values win when two rules name exactly the same unit. A rule that
+/// owns a specialized operation (or owns no generic operation at all) must be
+/// retained ahead of a filesystem rule, otherwise an accounting decision can
+/// silently replace provider authority with path authority.
+fn retention_priority(item: &ScanItem) -> u8 {
+    if item.risk == crate::domain::RiskTier::Manual {
+        return 0;
+    }
+    match item.unit.kind {
+        CleanupUnitKind::ProviderAction | CleanupUnitKind::ContainerResource => 1,
+        CleanupUnitKind::FixedPath
+        | CleanupUnitKind::ChildNamespace
+        | CleanupUnitKind::NamedSubtree => 2,
+    }
+}
+
+fn completely_observed(item: &ScanItem) -> bool {
+    item.quality == crate::domain::ObservationQuality::Fresh
+        && item.skipped_entry_count == 0
+        && item.incomplete_reason.is_none()
+}
+
+fn containment_authority_is_compatible(container: &ScanItem, nested: &ScanItem) -> bool {
+    container.unit.kind.is_filesystem()
+        && nested.unit.kind.is_filesystem()
+        && container.risk != RiskTier::Manual
+        && nested.risk != RiskTier::Manual
+}
+
+fn stricter_management_mode(
+    left: CacheManagementMode,
+    right: CacheManagementMode,
+) -> CacheManagementMode {
+    let rank = |mode| match mode {
+        CacheManagementMode::Zenith => 0,
+        CacheManagementMode::ToolManaged => 1,
+        CacheManagementMode::Advisory => 2,
+    };
+    if rank(right) > rank(left) {
+        right
+    } else {
+        left
+    }
 }
 
 /// The category and item a retained identity still names, if it survived.
@@ -364,6 +581,101 @@ mod tests {
             .as_deref()
             .is_some_and(|reason| reason.contains("system.child")));
         assert_eq!(categories[0].cleanable_bytes, 1_000);
+        assert_eq!(
+            surviving.risk,
+            RiskTier::Rebuild,
+            "the retained item exposes the effective risk, not only the folded eligibility"
+        );
+        assert_eq!(categories[0].safe_bytes, 0);
+        assert_eq!(categories[0].rebuild_bytes, 1_000);
+    }
+
+    #[test]
+    fn a_provider_authority_survives_an_exact_filesystem_overlap_in_either_order() {
+        let filesystem = item(
+            "system.filesystem",
+            "/Users/tester/Library/Cache",
+            1_000,
+            RiskTier::Safe,
+        );
+        let mut provider = item(
+            "system.provider",
+            "/Users/tester/Library/Cache",
+            1_000,
+            RiskTier::Rebuild,
+        );
+        provider.unit.kind = crate::domain::scan::CleanupUnitKind::ProviderAction;
+
+        for items in [
+            vec![filesystem.clone(), provider.clone()],
+            vec![provider.clone(), filesystem.clone()],
+        ] {
+            let mut categories = vec![category(items)];
+            resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
+
+            assert_eq!(categories[0].items.len(), 1);
+            let surviving = &categories[0].items[0];
+            assert_eq!(surviving.signature_id, "system.provider");
+            assert_eq!(
+                surviving.unit.kind,
+                crate::domain::scan::CleanupUnitKind::ProviderAction
+            );
+            assert_eq!(surviving.overlaps[0].signature_id, "system.filesystem");
+        }
+    }
+
+    #[test]
+    fn an_incomplete_container_does_not_suppress_a_complete_child_observation() {
+        let mut parent = item(
+            "system.parent",
+            "/Users/tester/Library/Cache",
+            600,
+            RiskTier::Safe,
+        );
+        parent.quality = ObservationQuality::Partial;
+        parent.skipped_entry_count = 1;
+        parent.incomplete_reason = Some("one subtree was not observed".into());
+        parent.rederive_disposition();
+        let child = item(
+            "system.child",
+            "/Users/tester/Library/Cache/nested",
+            400,
+            RiskTier::Safe,
+        );
+        let mut categories = vec![category(vec![parent, child])];
+
+        let report = resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
+
+        assert_eq!(report, OverlapReport::default());
+        assert_eq!(categories[0].items.len(), 2);
+        assert_eq!(categories[0].total_bytes, 1_000);
+    }
+
+    #[test]
+    fn a_filesystem_container_does_not_absorb_a_nested_provider_authority() {
+        let filesystem = item(
+            "system.filesystem",
+            "/Users/tester/Library/Cache",
+            1_000,
+            RiskTier::Safe,
+        );
+        let mut provider = item(
+            "system.provider",
+            "/Users/tester/Library/Cache/provider",
+            400,
+            RiskTier::Rebuild,
+        );
+        provider.unit.kind = CleanupUnitKind::ProviderAction;
+        let mut categories = vec![category(vec![filesystem, provider])];
+
+        let report = resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
+
+        assert_eq!(report, OverlapReport::default());
+        assert_eq!(categories[0].items.len(), 2);
+        assert!(categories[0]
+            .items
+            .iter()
+            .any(|item| item.unit.kind == CleanupUnitKind::ProviderAction));
     }
 
     /// A rule that refuses the location entirely carries to the container, so a
@@ -399,7 +711,12 @@ mod tests {
         assert_eq!(surviving.cleanable_bytes(), 0);
         assert!(!surviving.is_selected);
         assert_eq!(categories[0].cleanable_bytes, 0);
-        assert_eq!(categories[0].total_bytes, 1_000);
+        assert_eq!(categories[0].items.len(), 2);
+        assert_eq!(categories[0].total_bytes, 1_400);
+        assert!(surviving
+            .overlaps
+            .iter()
+            .any(|overlap| overlap.authority_conflict));
     }
 
     /// A duplicate that was dropped where it was found still names the rule that
@@ -435,6 +752,7 @@ mod tests {
         let surviving = &categories[0].items[0];
         assert_eq!(surviving.overlaps.len(), 1);
         assert_eq!(surviving.overlaps[0].signature_id, "system.second");
+        assert_eq!(surviving.risk, RiskTier::Rebuild);
         assert_eq!(
             surviving.disposition.eligibility,
             CleanupEligibility::Reviewable
@@ -455,7 +773,7 @@ mod tests {
             "system.leaf",
             "/Users/tester/Cache/middle/leaf",
             200,
-            RiskTier::Manual,
+            RiskTier::Rebuild,
         );
 
         let mut categories = vec![category(vec![leaf.clone(), middle, root])];
@@ -485,7 +803,7 @@ mod tests {
         );
         assert_eq!(
             surviving.disposition.eligibility,
-            CleanupEligibility::Blocked
+            CleanupEligibility::Reviewable
         );
     }
 
@@ -533,14 +851,64 @@ mod tests {
 
         let mut folding = vec![category(vec![stored.clone(), alias.clone()])];
         let report = resolve_unit_overlaps(&mut folding, &[], PathIdentity::CaseInsensitive);
-        assert_eq!(report.suppressed_count, 1);
+        assert_eq!(report, OverlapReport::default());
         assert_eq!(folding[0].items.len(), 1);
         assert_eq!(folding[0].total_bytes, 1_000);
+        assert_eq!(folding[0].suppressed_duplicate_count, 1);
 
         let mut sensitive = vec![category(vec![stored, alias])];
         let report = resolve_unit_overlaps(&mut sensitive, &[], PathIdentity::CaseSensitive);
         assert_eq!(report, OverlapReport::default());
         assert_eq!(sensitive[0].items.len(), 2);
         assert_eq!(sensitive[0].total_bytes, 2_000);
+    }
+
+    #[test]
+    fn stable_identity_can_keep_case_variants_distinct_on_a_folding_platform_default() {
+        let upper = item("system.upper", r"C:\work\Cache", 1_000, RiskTier::Safe);
+        let lower = item("system.lower", r"C:\work\cache", 2_000, RiskTier::Safe);
+        let mut categories = vec![category(vec![upper, lower])];
+
+        let report = resolve_unit_overlaps_with(
+            &mut categories,
+            &[],
+            PathIdentity::CaseInsensitive,
+            |_, _| Some(UnitRelationship::Distinct),
+        );
+
+        assert_eq!(report, OverlapReport::default());
+        assert_eq!(categories[0].items.len(), 2);
+        assert_eq!(categories[0].total_bytes, 3_000);
+    }
+
+    #[test]
+    fn stable_ancestor_identity_can_find_containment_across_case_variants() {
+        let parent = item(
+            "system.parent",
+            "/Volumes/Data/Cache",
+            1_000,
+            RiskTier::Safe,
+        );
+        let child = item(
+            "system.child",
+            "/volumes/data/cache/nested",
+            400,
+            RiskTier::Safe,
+        );
+        let mut categories = vec![category(vec![parent, child])];
+
+        let report = resolve_unit_overlaps_with(
+            &mut categories,
+            &[],
+            PathIdentity::CaseSensitive,
+            |candidate, outer| {
+                (candidate.signature_id == "system.child" && outer.signature_id == "system.parent")
+                    .then_some(UnitRelationship::Contained)
+            },
+        );
+
+        assert_eq!(report.suppressed_count, 1);
+        assert_eq!(categories[0].items.len(), 1);
+        assert_eq!(categories[0].total_bytes, 1_000);
     }
 }
