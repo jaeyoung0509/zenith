@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { CategoryResult, RiskTier } from '../../lib/models/types';
+  import type { CategoryResult, RiskTier, ScanItem } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import {
@@ -15,6 +15,7 @@
   import Button from '../../lib/components/Button.svelte';
   import ItemRow from '../../lib/components/ItemRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
+  import CleanupReviewDialog from '../../lib/components/CleanupReviewDialog.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -43,6 +44,7 @@
   let selectedRiskFilter = $state<RiskTier | 'all'>('all');
   let sortMode = $state<CleanupSortMode>('size');
   let showResultModal = $state(false);
+  let review = $state<{ scanId: string; items: ScanItem[] } | null>(null);
 
   let filteredItems = $derived.by(() => {
     return filterAndSortCleanupItems(
@@ -78,7 +80,20 @@
   }
 
   function cleanSelected() {
-    scanStore.cleanItems(categoryResult.items).then((result) => {
+    const scan = scanStore.lastScan;
+    if (!scan || !scanStore.canClean) return;
+    const items = categoryResult.items.filter(
+      (item) => scanStore.selectedMap[item.id] && isCleanable(item)
+    );
+    if (items.length === 0) return;
+    review = { scanId: scan.scan_id, items };
+  }
+
+  function confirmCleanup() {
+    if (!review || review.scanId !== scanStore.lastScan?.scan_id || !scanStore.canClean) return;
+    const items = review.items;
+    review = null;
+    scanStore.cleanItems(items, true).then((result) => {
       if (result) showResultModal = true;
     });
   }
@@ -300,6 +315,15 @@
     <div class="py-16 text-center text-xs text-muted-foreground">
       No items match your search or risk filter.
     </div>
+  {/if}
+
+  {#if review}
+    <CleanupReviewDialog
+      items={review.items}
+      disabled={review.scanId !== scanStore.lastScan?.scan_id || !scanStore.canClean}
+      onCancel={() => (review = null)}
+      onConfirm={confirmCleanup}
+    />
   {/if}
 
   {#if showResultModal && scanStore.lastCleanResult}
