@@ -563,9 +563,10 @@ describe('scan progress and cancellation', () => {
     await store.cancelScan();
     expect(tauriCancelScan).toHaveBeenCalledTimes(1);
 
-    // A stopped scan is incomplete, not failed: its result is reviewable and
-    // reads as a stop.
-    expect(store.canClean).toBe(true);
+    // A stopped scan is incomplete, not failed: keep its observations visible,
+    // but require a complete retry before those observations can authorize cleanup.
+    expect(store.canClean).toBe(false);
+    expect(store.selectedCount).toBe(0);
     expect(store.cancelledScanNotice).toContain('Scan stopped before it finished');
   });
 
