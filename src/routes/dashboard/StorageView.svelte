@@ -125,7 +125,7 @@
     queueMicrotask(() => restoreFocus());
     // Execute only the reviewed selection, even if another consumer selected
     // additional items while the review was open. Backend plans revalidate it.
-    scanStore.cleanItems(items).then((res) => {
+    scanStore.cleanItems(items, true).then((res) => {
       if (res) {
         showResultModal = true;
       } else {
