@@ -430,7 +430,7 @@ separate observations and fails closed on mutation:
 | identical identity | the most conservative cleanup authority wins deterministically; provider/container/manual authority cannot be replaced by a generic filesystem rule, and a compatible losing rule becomes provenance (`CleanupOverlap`) |
 | identical identity, incompatible policy | the location is still one row — the bytes are counted once — and neither rule's operation authorizes the other's: the surviving item states the conflict and is not cleanable |
 | a unit inside another | the broader unit keeps the bytes only when its observation is complete and both rules have compatible mutation policy; `suppressed_overlap_count/bytes` state what was folded |
-| incomplete coverage or incompatible authority | both observations remain visible, and an authority conflict blocks the broader filesystem item instead of turning a provider/manual rule into generic deletion permission |
+| incomplete coverage or incompatible authority | both observations remain visible and their bytes are stated as possibly shared (`ambiguous_overlap_count/bytes`): `total_bytes` is an upper bound of the observed union and the union is at least `total_bytes - ambiguous_overlap_bytes`, instead of a sum presented as exact. An authority conflict additionally blocks the broader filesystem item rather than turning a provider/manual rule into generic deletion permission |
 
 Provenance is not decoration: the surviving item exposes the strictest effective
 risk, management mode, consequence, and eligibility among the rules that were
@@ -439,11 +439,18 @@ same policy the planner sees. A rule that refuses (blocked, advisory, gated) or
 defers (recent, reviewable) a region withholds the compatible unit that contains
 it, and the reason names the rule it came from. A rule whose scope is switched
 off is the exception: it is discovered for visibility, so it is recorded as
-provenance and cannot withhold, downgrade, or constrain a rule the current
-settings do run. Containment is resolved over the whole result — broadest unit
-first, with authority and identity tie-breakers —
-rather than in discovery order. `SafetyPlanner` applies the same unit rule when
-it builds a plan, so a selection that names both a unit and something inside it
+provenance, cannot withhold, downgrade, or constrain a rule the current
+settings do run, and never takes the surviving row from the rule that is
+running. Containment is resolved over the whole result — broadest unit first,
+then a running rule before a gated one, then retention priority, then identity —
+rather than in discovery order.
+
+Whether two units are one location is a property of the filesystem, not of the
+OS family: `scanner::relationship` establishes it from stable identity (and the
+identities of the real ancestor entries) with path text as the conservative
+fallback. `SafetyPlanner` calls the same function, so a plan cannot disagree
+with the scan it came from about a case-sensitive directory on a folding
+platform, so a selection that names both a unit and something inside it
 authorizes the bytes once.
 
 Items also carry what the catalog knows about ownership (`owner` and how

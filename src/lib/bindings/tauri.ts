@@ -65,6 +65,13 @@ export const commands = {
 	/**  Units whose bytes a broader unit already accounts for. */
 	suppressed_overlap_count: number,
 	suppressed_overlap_bytes: number,
+	/**
+	 *  Units that may be inside a broader unit's observation without proof:
+	 *  `total_bytes` is an upper bound of the observed union, and the union is
+	 *  at least `total_bytes - ambiguous_overlap_bytes`.
+	 */
+	ambiguous_overlap_count: number,
+	ambiguous_overlap_bytes: number,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
@@ -767,6 +774,17 @@ export type CategoryResult_Deserialize = {
 	 */
 	suppressed_overlap_count?: number,
 	suppressed_overlap_bytes?: number,
+	/**
+	 *  Units that may be inside a broader unit's observation without proof.
+	 * 
+	 *  A partial walk cannot say which entries it measured and a gated
+	 *  container must not absorb a running rule, so the pair stays as two
+	 *  rows and the bytes are stated here: the observed union is between
+	 *  `total_bytes - ambiguous_overlap_bytes` and `total_bytes`, rather than
+	 *  a sum presented as exact.
+	 */
+	ambiguous_overlap_count?: number,
+	ambiguous_overlap_bytes?: number,
 };
 
 export type CategoryResult_Serialize = {
@@ -803,6 +821,17 @@ export type CategoryResult_Serialize = {
 	 */
 	suppressed_overlap_count: number,
 	suppressed_overlap_bytes: number,
+	/**
+	 *  Units that may be inside a broader unit's observation without proof.
+	 * 
+	 *  A partial walk cannot say which entries it measured and a gated
+	 *  container must not absorb a running rule, so the pair stays as two
+	 *  rows and the bytes are stated here: the observed union is between
+	 *  `total_bytes - ambiguous_overlap_bytes` and `total_bytes`, rather than
+	 *  a sum presented as exact.
+	 */
+	ambiguous_overlap_count: number,
+	ambiguous_overlap_bytes: number,
 };
 
 export type CleanEvent = CleanEvent_Serialize | CleanEvent_Deserialize;
@@ -2713,6 +2742,13 @@ export type ScanResult_Deserialize = {
 	/**  Units whose bytes a broader unit already accounts for. */
 	suppressed_overlap_count?: number,
 	suppressed_overlap_bytes?: number,
+	/**
+	 *  Units that may be inside a broader unit's observation without proof:
+	 *  `total_bytes` is an upper bound of the observed union, and the union is
+	 *  at least `total_bytes - ambiguous_overlap_bytes`.
+	 */
+	ambiguous_overlap_count?: number,
+	ambiguous_overlap_bytes?: number,
 };
 
 export type ScanResult_Serialize = {
@@ -2744,6 +2780,13 @@ export type ScanResult_Serialize = {
 	/**  Units whose bytes a broader unit already accounts for. */
 	suppressed_overlap_count: number,
 	suppressed_overlap_bytes: number,
+	/**
+	 *  Units that may be inside a broader unit's observation without proof:
+	 *  `total_bytes` is an upper bound of the observed union, and the union is
+	 *  at least `total_bytes - ambiguous_overlap_bytes`.
+	 */
+	ambiguous_overlap_count: number,
+	ambiguous_overlap_bytes: number,
 };
 
 export type SelectedApplication = {
