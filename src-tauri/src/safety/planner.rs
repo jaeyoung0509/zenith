@@ -446,6 +446,8 @@ mod tests {
             entry_kind: crate::models::EntryKind::File,
             gate: Default::default(),
             owner_running: false,
+            lifecycle_provider_action: false,
+            requires_confirmation: false,
             overlaps: Vec::new(),
             is_selected: true,
             last_modified: None,
