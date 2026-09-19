@@ -121,7 +121,7 @@ impl SafetyPlanner {
         candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         let mut authorized: Vec<usize> = Vec::new();
         let mut overlapped: HashSet<usize> = HashSet::new();
-        for (_, key, index) in candidates {
+        for (_, _key, index) in candidates {
             let contained = authorized.iter().any(|outer| {
                 let outer_item = &items[*outer];
                 match unit_relationship(&items[index], outer_item) {
@@ -129,9 +129,7 @@ impl SafetyPlanner {
                     | UnitRelationship::EquivalentConflict
                     | UnitRelationship::Contained
                     | UnitRelationship::AuthorityConflict => true,
-                    UnitRelationship::Distinct => {
-                        key.is_within(&outer_item.unit_identity(PathIdentity::CaseSensitive))
-                    }
+                    UnitRelationship::Distinct => false,
                 }
             });
             if contained {
