@@ -2040,6 +2040,10 @@ export type PlanPreview_Deserialize = {
 	targets: PlanTargetPreview_Deserialize[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Deserialize,
+	/**
+	 *  True when at least one target must be explicitly confirmed before the
+	 *  destructive command may execute this plan.
+	 */
 	requires_confirmation: boolean,
 	expires_at: number,
 	/**
@@ -2055,6 +2059,10 @@ export type PlanPreview_Serialize = {
 	targets: PlanTargetPreview_Serialize[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Serialize,
+	/**
+	 *  True when at least one target must be explicitly confirmed before the
+	 *  destructive command may execute this plan.
+	 */
 	requires_confirmation: boolean,
 	expires_at: number,
 	/**
@@ -2636,7 +2644,15 @@ export type ScanItem_Deserialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running?: boolean,
+	/**
+	 *  Whether this unit is executed by the lifecycle-provider contract rather
+	 *  than by a generic provider/external-command unit.
+	 */
 	lifecycle_provider_action?: boolean,
+	/**
+	 *  Whether execution requires an explicit confirmation token from the
+	 *  reviewed UI path.
+	 */
 	requires_confirmation?: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
@@ -2718,7 +2734,15 @@ export type ScanItem_Serialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running: boolean,
+	/**
+	 *  Whether this unit is executed by the lifecycle-provider contract rather
+	 *  than by a generic provider/external-command unit.
+	 */
 	lifecycle_provider_action: boolean,
+	/**
+	 *  Whether execution requires an explicit confirmation token from the
+	 *  reviewed UI path.
+	 */
 	requires_confirmation: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
