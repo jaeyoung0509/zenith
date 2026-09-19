@@ -738,6 +738,43 @@ mod tests {
     }
 
     #[test]
+    fn a_gated_nested_rule_does_not_block_an_active_incomplete_container() {
+        let mut parent = item(
+            "system.parent",
+            "/Users/tester/Library/Cache",
+            600,
+            RiskTier::Safe,
+        );
+        parent.quality = ObservationQuality::Partial;
+        parent.skipped_entry_count = 1;
+        parent.incomplete_reason = Some("one subtree was not observed".into());
+        parent.rederive_disposition();
+
+        let mut child = item(
+            "system.child",
+            "/Users/tester/Library/Cache/nested",
+            400,
+            RiskTier::Safe,
+        );
+        child.gate = crate::domain::scan::EligibilityGate::IntensiveDisabled;
+        child.rederive_disposition();
+
+        let mut categories = vec![category(vec![parent, child])];
+        resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
+
+        let parent = categories[0]
+            .items
+            .iter()
+            .find(|item| item.path == "/Users/tester/Library/Cache")
+            .expect("the parent remains visible");
+        assert_eq!(
+            parent.disposition.eligibility,
+            CleanupEligibility::Reviewable,
+            "a gated nested observation is provenance/accounting only and cannot withhold the active rule"
+        );
+    }
+
+    #[test]
     fn a_filesystem_container_does_not_absorb_a_nested_provider_authority() {
         let filesystem = item(
             "system.filesystem",
