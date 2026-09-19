@@ -193,11 +193,10 @@
             <p class="text-xs font-medium">{category.display_name}</p>
             <p class="mt-0.5 text-caption text-muted-foreground">{formatBytes(category.safe_bytes)} safe · {formatBytes(category.rebuild_bytes)} rebuild</p>
           </div>
-          {@const categoryRange = observedByteRange(category.total_bytes, category.ambiguous_overlap_bytes ?? 0)}
           <span class="font-mono text-xs font-semibold">
-            {categoryRange.isAmbiguous
-              ? `${formatBytes(categoryRange.lower)} – ${formatBytes(categoryRange.upper)}`
-              : formatBytes(categoryRange.upper)}
+            {(category.ambiguous_overlap_bytes ?? 0) > 0
+              ? `${formatBytes(observedByteRange(category.total_bytes, category.ambiguous_overlap_bytes ?? 0).lower)} – ${formatBytes(category.total_bytes)}`
+              : formatBytes(category.total_bytes)}
           </span>
         </button>
       {:else}
