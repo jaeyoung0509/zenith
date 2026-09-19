@@ -230,6 +230,20 @@ mod tests {
         assert!(registry.signal("third").is_some());
     }
 
+    /// TTL bounds abandoned bookkeeping, not a scan that is still running.
+    /// A long scan keeps a second strong reference through its probe, so even a
+    /// zero-second test TTL must not make Stop stop working.
+    #[test]
+    fn an_active_scan_remains_cancellable_after_the_registry_ttl() {
+        let registry = CancellationRegistry::new(0, 4);
+        let signal = Arc::new(AtomicBool::new(false));
+        registry.register("long-scan".to_string(), signal.clone());
+        let probe = ScanCancellation::new(signal);
+
+        assert!(registry.request("long-scan"));
+        assert!(probe.is_cancelled());
+    }
+
     /// An entry past its window is treated as gone, so a stale id cannot cancel
     /// a scan that happens to reuse it later.
     #[test]
