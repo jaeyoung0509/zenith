@@ -529,19 +529,57 @@ mod tests {
         );
     }
 
-    /// A probe that cannot run, has no adapter here, or finds nothing produces
-    /// no item — and a provider the build does not implement is refused rather
-    /// than silently skipped.
+    /// A provider that requires confirmation can never become an automatic
+    /// cleanup merely because its catalog risk is Safe.
     #[test]
-    fn a_probe_that_finds_nothing_offers_nothing() {
+    fn a_confirmation_required_provider_is_reviewable_even_at_safe_risk() {
+        let mut signature = catalog_signature();
+        signature.risk = RiskTier::Safe;
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature);
+        let providers = LifecycleProviderRegistry::new(vec![
+            StatedProvider::holding(2_048, 2).shared(),
+        ]);
+
+        let items = discover(&registry, &providers);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].disposition.eligibility,
+            crate::models::CleanupEligibility::Reviewable
+        );
+        assert!(!items[0].is_selected);
+    }
+
+    /// A probe that cannot run stays visible as a blocked observation. An
+    /// unreadable store is not the same thing as an empty store.
+    #[test]
+    fn a_blocked_probe_remains_visible_with_its_reason() {
         let unreadable = StatedProvider::holding(0, 0).with_probe(ProviderProbe::refused(
             ProviderStatus::Blocked,
             "the store is unreadable",
         ));
         let (registry, providers) =
             catalog(LifecycleProviderRegistry::new(vec![unreadable.shared()]));
-        assert!(discover(&registry, &providers).is_empty());
 
+        let items = discover(&registry, &providers);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].disposition.eligibility,
+            crate::models::CleanupEligibility::Blocked
+        );
+        assert_eq!(
+            items[0].incomplete_reason.as_deref(),
+            Some("the store is unreadable")
+        );
+    }
+
+    /// A probe that cannot run, has no adapter here, or finds nothing produces
+    /// no item — and a provider the build does not implement is refused rather
+    /// than silently skipped.
+    #[test]
+    fn a_probe_that_finds_nothing_offers_nothing() {
         let empty = StatedProvider::holding(0, 0);
         let (registry, providers) = catalog(LifecycleProviderRegistry::new(vec![empty.shared()]));
         assert!(discover(&registry, &providers).is_empty());
