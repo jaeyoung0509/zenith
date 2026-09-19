@@ -76,7 +76,7 @@ fn validated_filesystem_target(
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&target, environment) {
@@ -108,7 +108,7 @@ fn present_filesystem_target_without_identity_fails_closed() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
@@ -955,7 +955,7 @@ fn recursive_delete_refuses_a_unit_with_nested_protected_state() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
     match SafetyValidator::revalidate(&target, &environment) {
         RevalidationOutcome::Skipped(result) => {
@@ -1937,7 +1937,7 @@ fn a_target_outside_its_authorizing_unit_is_refused() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
     target.identity = ToctouGuard::capture(&outside);
 
@@ -1987,7 +1987,7 @@ fn structured_state_is_refused_by_the_execution_guard() {
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
             provider_id: None,
-        requires_confirmation: false,
+            requires_confirmation: false,
         };
 
         match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
@@ -2606,7 +2606,7 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
             provider_id: None,
-        requires_confirmation: false,
+            requires_confirmation: false,
         }],
         expected_reclaim_bytes: 4,
         risk: zenith_lib::models::RiskSummary::default(),
@@ -2715,7 +2715,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
             provider_id: None,
-        requires_confirmation: false,
+            requires_confirmation: false,
         }],
         expected_reclaim_bytes: 16,
         risk: zenith_lib::models::RiskSummary::default(),
@@ -2790,7 +2790,7 @@ fn a_file_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2838,7 +2838,7 @@ fn a_directory_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2884,7 +2884,7 @@ fn a_target_that_changed_kind_between_scan_and_clean_is_skipped() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2922,7 +2922,7 @@ fn stale_cleanup_requires_identity_at_revalidation() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2978,7 +2978,7 @@ fn stale_cleanup_allows_mtime_change_with_same_entity() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -3021,7 +3021,7 @@ fn stale_cleanup_refuses_replaced_directory_at_revalidation() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -3071,7 +3071,7 @@ fn stale_cleanup_refuses_incomplete_directory_tree_at_revalidation() {
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
         provider_id: None,
-    requires_confirmation: false,
+        requires_confirmation: false,
     };
 
     let outcome = SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native());
