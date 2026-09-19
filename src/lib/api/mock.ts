@@ -1231,10 +1231,12 @@ export const mockApi = {
       targets: items.map((i) => ({
         item_id: i.id,
         name: i.name,
+        requires_confirmation: i.requires_confirmation ?? false,
         expected_bytes: bytesFor(i),
         risk: i.risk,
       })),
       expected_reclaim_bytes: items.reduce((acc, i) => acc + bytesFor(i), 0),
+      requires_confirmation: items.some((i) => i.requires_confirmation ?? false),
       risk: {
         safe_count: items.filter((i) => i.risk === 'safe').length,
         rebuild_count: items.filter((i) => i.risk === 'rebuild').length,
@@ -1257,8 +1259,12 @@ export const mockApi = {
 
   async executeClean(
     plan: PlanPreview,
+    confirmed: boolean,
     onEvent: (event: CleanEvent) => void
   ): Promise<CleanResult> {
+    if (plan.requires_confirmation && !confirmed) {
+      throw new Error('This cleanup requires explicit confirmation');
+    }
     return new Promise((resolve) => {
       onEvent({
         type: 'Started',
