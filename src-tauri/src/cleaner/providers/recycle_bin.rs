@@ -306,6 +306,22 @@ mod tests {
             .detail
             .as_deref()
             .is_some_and(|detail| detail.contains("1024")));
+
+        let errored_after_partial = Arc::new(
+            MockRecycleBinBackend::holding(4_096, 2).with_empty_error(
+                RecycleBinError::Failed("shell returned an error".to_string()),
+                1_024,
+            ),
+        );
+        let provider = provider_over(errored_after_partial);
+        let outcome = provider.execute(&environment());
+        assert_eq!(outcome.status, ProviderStatus::PartiallyCleaned);
+        assert_eq!(outcome.reclaimed_bytes, 4_096 - 1_024);
+        assert_eq!(outcome.remaining_bytes, Some(1_024));
+        assert!(outcome
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("shell returned an error")));
     }
 
     /// A refused action claims nothing: the bytes it could not remove are not
