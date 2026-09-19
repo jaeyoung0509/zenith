@@ -59,9 +59,7 @@ impl CancellationRegistry {
     pub fn register(&self, scan_id: String, signal: Arc<AtomicBool>) {
         let now = unix_timestamp();
         let mut entries = self.lock();
-        entries.retain(|_, entry| {
-            zenith_core::domain::is_within_window(entry.created_at, now, self.ttl_secs)
-        });
+        entries.retain(|_, entry| !self.is_abandoned(entry, now));
         if entries.len() >= self.capacity {
             // Ordered by age and then by id: two scans registered in the same
             // second must not make eviction depend on map iteration order.
@@ -93,9 +91,7 @@ impl CancellationRegistry {
     pub fn signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
         let now = unix_timestamp();
         let mut entries = self.lock();
-        entries.retain(|_, entry| {
-            zenith_core::domain::is_within_window(entry.created_at, now, self.ttl_secs)
-        });
+        entries.retain(|_, entry| !self.is_abandoned(entry, now));
         entries.get(scan_id).map(|entry| entry.signal.clone())
     }
 
@@ -112,6 +108,14 @@ impl CancellationRegistry {
             }
             None => false,
         }
+    }
+
+    /// TTL expires only abandoned bookkeeping. While a scan is running its
+    /// worker/probe owns another Arc to the same signal, so age alone must not
+    /// make a still-running scan impossible to stop.
+    fn is_abandoned(&self, entry: &CancellationEntry, now: u64) -> bool {
+        !zenith_core::domain::is_within_window(entry.created_at, now, self.ttl_secs)
+            && Arc::strong_count(&entry.signal) == 1
     }
 
     /// Recovers a poisoned lock: the entries are disposable, and losing them
@@ -251,7 +255,7 @@ mod tests {
         let registry = CancellationRegistry::new(0, 4);
         let signal = Arc::new(AtomicBool::new(false));
         registry.register("scan-4".to_string(), signal.clone());
+        drop(signal);
         assert!(!registry.request("scan-4"));
-        assert!(!signal.load(std::sync::atomic::Ordering::SeqCst));
     }
 }
