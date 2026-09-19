@@ -155,6 +155,11 @@ they do not replace the manual matrix above for real-machine behavior.
    - What has *not* changed: no Windows-owned maintenance store (`SoftwareDistribution`, `%SYSTEMROOT%\Temp`, WSL virtual disks) is a generic delete target. Those are inventory-only (`risk = "manual"`), and reclaiming them needs the owning tool's own operation.
    - The Recycle Bin is no longer inventory-only: it is the first lifecycle-aware provider (`system.windows.recycle_bin` → `windows.recycle_bin`), and it is emptied through `SHEmptyRecycleBin` rather than by deleting `$Recycle.Bin`. Its probe, refusal, partial, and verification paths are unit-tested through a recording backend, the Windows backend is compiled for the Windows target in CI, and both the review dialog and the scan item state the consequence before anything runs. Nothing here has been validated on a real Windows 11 machine yet — the fixtures are simulated, and the live Recycle Bin call is exercised only by running the application on Windows.
 
+5. **Cleanup around locked files (Windows semantics of a partial run):**
+   - A sharing violation on one entry is a retried-then-reported outcome, not the end of the directory: the walker removes what it can, skips the entry it could not, and the item is reported as partially cleaned with the locked remainder named and its bytes excluded from the reclaim total.
+   - Transient locks are retried with backoff before being reported, so a file another process releases within a moment does not become a permanent failure.
+   - Windows-gated tests (`windows_sharing_violation_retry_and_reporting`, `windows_sharing_violation_retries_transient_lock`) hold a real exclusive handle and assert both halves: the removable sibling and nested directory are gone, the locked file stays with a sharing-violation reason, and the reclaimed amount states what was removed beside it.
+
 Microsoft references: [Known Folders](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders),
 [user profiles](https://learn.microsoft.com/en-us/windows/win32/shell/about-user-profiles),
 [power request lifecycle](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-powersetrequest).
