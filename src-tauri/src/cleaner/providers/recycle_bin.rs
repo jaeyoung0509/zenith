@@ -143,6 +143,15 @@ impl LifecycleProvider for WindowsRecycleBinProvider {
                             after.bytes
                         ),
                     ),
+                    Err(error) if reclaimed > 0 => ProviderOutcome::partially_cleaned(
+                        reclaimed,
+                        Some(after.bytes),
+                        format!(
+                            "{} {} bytes remain in the Recycle Bin after partial progress.",
+                            error.describe(),
+                            after.bytes
+                        ),
+                    ),
                     Err(error) => ProviderOutcome::refused(
                         ProviderStatus::Failed,
                         format!(
