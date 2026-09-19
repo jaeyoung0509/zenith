@@ -1049,8 +1049,12 @@ export type CleanupOverlap_Deserialize = {
 	 */
 	gate?: EligibilityGate,
 	/**
-	 *  A nested rule requires a different mutation authority, so the broader
-	 *  filesystem item is inventory only and must never become a fallback.
+	 *  This overlap prevents the broader item from authorizing generic cleanup.
+	 * 
+	 *  That can be an operation-authority disagreement, or unresolved coverage:
+	 *  when a partial container and a complete nested observation may share
+	 *  bytes, the broader item cannot independently claim those same bytes as
+	 *  reclaimable.
 	 */
 	authority_conflict?: boolean,
 	observed_bytes: number,
@@ -1081,8 +1085,12 @@ export type CleanupOverlap_Serialize = {
 	 */
 	gate: EligibilityGate,
 	/**
-	 *  A nested rule requires a different mutation authority, so the broader
-	 *  filesystem item is inventory only and must never become a fallback.
+	 *  This overlap prevents the broader item from authorizing generic cleanup.
+	 * 
+	 *  That can be an operation-authority disagreement, or unresolved coverage:
+	 *  when a partial container and a complete nested observation may share
+	 *  bytes, the broader item cannot independently claim those same bytes as
+	 *  reclaimable.
 	 */
 	authority_conflict: boolean,
 	observed_bytes: number,
