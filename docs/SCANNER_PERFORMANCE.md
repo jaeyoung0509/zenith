@@ -28,6 +28,8 @@ bound in one path and miss it in another.
 The benchmark asserts the bound as a measurement: for every fixture the run
 reports `peak_outstanding_directory_tasks <= max_concurrent_directory_reads`,
 and the wide fixture reaches the bound rather than trivially satisfying it.
+The inline and pooled schedulers are also required to report the same traversal
+facts; scheduling changes execution, not the meaning of `visited_entries`.
 
 ### Determinism
 
@@ -65,9 +67,10 @@ per-category item counts arrive with `CategoryFinished`.
 `cancel_scan(scan_id)` sets the signal the scan registered under the id its
 `Started` event carried. The probe is consulted at every category, signature,
 directory, and entry boundary, so a cancel stops the walk at the next boundary
-and the partial result says so. The registry that owns those signals has a TTL
-and a hard entry cap, and entries are removed on success, on cancellation, and
-on error (`services::CancellationRegistry`).
+and the partial result says so. The registry that owns those signals has a TTL for abandoned bookkeeping and a
+hard entry cap. A still-running scan keeps another reference to its signal, so
+age alone cannot make its Stop control expire; entries are removed on success,
+on cancellation, and on error (`services::CancellationRegistry`).
 
 Cancellation latency — the time from the request to the scan returning — is
 measured by the benchmark (`cancellation_latency_is_measured_from_the_first_candidate`),
@@ -117,26 +120,26 @@ macOS, `cargo test -p zenith-desktop --test scan_benchmark -- --nocapture`:
 
 ```text
 fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  logical_bytes  on-disk_bytes
-wide                        68      802          201          16           1        0        2560000         3276800
-deep                        59       36           33           2           1        1           4096            4096
-mixed_size                  57        9            2           2           1        0        3163827         3174400
-mixed_age                  174       11            2           0           2        0          16384           16384
-overlapping_roots           58        8            3           2           1        0          12288           12288
-inaccessible                97        4            2           2           1        1           4096            4096   (unix only)
-symlink                     96        5            2           2           1        0           4155            4096   (unix only)
-cancellation                60        3            1           1           1        0           4096            4096   (cancelled)
+wide                        68      801          201          16           1        0        2560000         3276800
+deep                        59       35           33           2           1        1           4096            4096
+mixed_size                  57        8            2           2           1        0        3163827         3174400
+mixed_age                  174        7            3           0           2        0          16384           16384
+overlapping_roots           58        6            3           2           1        0          12288           12288
+inaccessible                97        3            2           2           1        1           4096            4096   (unix only)
+symlink                     96        4            2           2           1        0           4155            4096   (unix only)
+cancellation                60        2            1           1           1        0           4096            4096   (cancelled)
 ```
 
 Windows, from the `Rust Checks (Windows x64)` job's log (the same command):
 
 ```text
 fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  logical_bytes  on-disk_bytes
-wide                       316      802          201          16           1        0        2560000         2560000
-deep                        16       36           33           3           1        1           4096            4096
-mixed_size                   2        9            2           2           1        0        3163827         3163827
-mixed_age                  239       11            2           0           2        0          16384           16384
-overlapping_roots            2        8            3           2           1        0          12288           12288
-cancellation                 1        3            1           1           1        0           4096            4096   (cancelled)
+wide                       316      801          201          16           1        0        2560000         2560000
+deep                        16       35           33           3           1        1           4096            4096
+mixed_size                   2        8            2           2           1        0        3163827         3163827
+mixed_age                  239        7            3           0           2        0          16384           16384
+overlapping_roots            2        6            3           2           1        0          12288           12288
+cancellation                 1        2            1           1           1        0           4096            4096   (cancelled)
 ```
 
 The Windows row is where the two byte populations differ from macOS: the
