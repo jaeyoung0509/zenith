@@ -164,6 +164,7 @@ impl<'a> ProviderCleanup<'a> {
 #[derive(Debug)]
 pub struct LifecycleProviderCleanup<'a> {
     provider_id: &'a str,
+requires_confirmation: false,
 }
 
 impl<'a> LifecycleProviderCleanup<'a> {
@@ -196,6 +197,7 @@ mod tests {
             owner: crate::domain::scan::CleanupOwnership::unknown(),
             process_guard: crate::domain::cleanup::RunningProcessPolicy::none(),
             provider_id: None,
+        requires_confirmation: false,
         }
     }
 
