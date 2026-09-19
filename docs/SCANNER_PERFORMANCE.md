@@ -111,7 +111,7 @@ compared against a known point rather than against a feeling.
 | Machine | OS build | Date | Zenith | Baseline |
 |---|---|---|---|---|
 | MacBook Air (Apple M1, 8 cores) | macOS 27.0 (26A428), Darwin 27.0.0 | 2026-09-19 | 0.3.36 | the table below |
-| GitHub `windows-latest` runner | printed by the `Rust Checks (Windows x64)` job (`--nocapture`) | first run of this branch | 0.3.36 | the job's log for this branch |
+| GitHub `windows-latest` runner (Windows Server, x86_64) | as reported by the runner | 2026-09-19 | 0.3.36 | the table below |
 
 macOS, `cargo test -p zenith-desktop --test scan_benchmark -- --nocapture`:
 
@@ -126,6 +126,29 @@ inaccessible                97        4            2           2           1    
 symlink                     96        5            2           2           1        0           4155            4096   (unix only)
 cancellation                60        3            1           1           1        0           4096            4096   (cancelled)
 ```
+
+Windows, from the `Rust Checks (Windows x64)` job's log (the same command):
+
+```text
+fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  logical_bytes  on-disk_bytes
+wide                       316      802          201          16           1        0        2560000         2560000
+deep                        16       36           33           3           1        1           4096            4096
+mixed_size                   2        9            2           2           1        0        3163827         3163827
+mixed_age                  239       11            2           0           2        0          16384           16384
+overlapping_roots            2        8            3           2           1        0          12288           12288
+cancellation                 1        3            1           1           1        0           4096            4096   (cancelled)
+```
+
+The Windows row is where the two byte populations differ from macOS: the
+on-disk population equals the logical one, because `GetCompressedFileSizeW`
+reports what a file actually occupies and a small resident file occupies its
+logical size. Same fixtures, same counts, same candidates — a different
+platform's answer to "how many bytes are on disk".
+
+The same job ran the Windows-gated traversal tests, which is the evidence the
+junction rule rests on: `a_junction_inside_a_candidate_is_never_traversed` and
+`a_junction_root_is_refused_rather_than_walked` both pass on a real Windows
+runner.
 
 Two byte populations are reported, and only one of them is a committed fact:
 `logical_bytes` is a property of the tree and is identical on every machine,
