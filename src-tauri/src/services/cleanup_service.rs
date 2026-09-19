@@ -587,13 +587,7 @@ mod tests {
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
-        let items = providers.scan_items(
-            &registry,
-            Category::System,
-            false,
-            &[],
-            &env,
-        );
+        let items = providers.scan_items(&registry, Category::System, false, &[], &env);
         assert_eq!(items.len(), 1);
         assert!(items[0].requires_confirmation);
         assert_eq!(
@@ -710,7 +704,9 @@ mod tests {
             .expect("a reviewed item creates a plan");
         let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
 
-        let first = service.execute_clean(preview.id, false, progress.clone()).await;
+        let first = service
+            .execute_clean(preview.id, false, progress.clone())
+            .await;
         assert!(
             first.is_ok(),
             "the first execution of a plan runs: {:?}",
