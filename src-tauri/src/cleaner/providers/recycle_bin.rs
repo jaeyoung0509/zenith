@@ -316,12 +316,11 @@ mod tests {
             .as_deref()
             .is_some_and(|detail| detail.contains("1024")));
 
-        let errored_after_partial = Arc::new(
-            MockRecycleBinBackend::holding(4_096, 2).with_empty_error(
+        let errored_after_partial =
+            Arc::new(MockRecycleBinBackend::holding(4_096, 2).with_empty_error(
                 RecycleBinError::Failed("shell returned an error".to_string()),
                 1_024,
-            ),
-        );
+            ));
         let provider = provider_over(errored_after_partial);
         let outcome = provider.execute(&environment());
         assert_eq!(outcome.status, ProviderStatus::PartiallyCleaned);
