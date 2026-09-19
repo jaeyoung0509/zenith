@@ -557,9 +557,8 @@ mod tests {
         signature.risk = RiskTier::Safe;
         let mut registry = SignatureRegistry::new();
         registry.register(signature);
-        let providers = LifecycleProviderRegistry::new(vec![
-            StatedProvider::holding(2_048, 2).shared(),
-        ]);
+        let providers =
+            LifecycleProviderRegistry::new(vec![StatedProvider::holding(2_048, 2).shared()]);
 
         let items = discover(&registry, &providers);
 
