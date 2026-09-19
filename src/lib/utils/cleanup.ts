@@ -56,7 +56,7 @@ export function isAutoCleanable(item: ScanItem): boolean {
 
 /** Whether a reviewed lifecycle provider runs this item's cleanup instead of generic deletion. */
 export function isProviderBacked(item: ScanItem): boolean {
-  return item.unit?.kind === 'provider_action';
+  return item.lifecycle_provider_action === true;
 }
 
 /**
