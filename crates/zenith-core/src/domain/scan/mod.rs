@@ -1532,6 +1532,26 @@ mod tests {
             "the reason states what authorizes the action: {d6b:?}"
         );
 
+        // 6c. A generic ProviderAction unit kind is not itself lifecycle-provider
+        //     authority. Existing external-command providers use the same unit
+        //     kind and must not make Manual cleanup executable by accident.
+        let mut generic_provider = ScanItem::mock(
+            "generic-provider",
+            "dev.external",
+            "External provider",
+            Category::Developer,
+            RiskTier::Manual,
+            "provider://external",
+            size,
+            1,
+        );
+        generic_provider.unit.kind = CleanupUnitKind::ProviderAction;
+        generic_provider.rederive_disposition();
+        assert_eq!(
+            generic_provider.disposition.eligibility,
+            CleanupEligibility::Blocked
+        );
+
         // 7. Safe + Fresh + ToolManaged => Reviewable (provider decides, never AutoCleanable)
         let d7 = derive_cleanup_disposition(DispositionFacts::new(
             RiskTier::Safe,
