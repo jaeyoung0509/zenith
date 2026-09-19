@@ -790,7 +790,7 @@ impl DirectoryScanner {
             Ok(entries) => {
                 context.counters.directory_read();
                 entries
-            },
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return vec![],
             Err(err) => {
                 return vec![Self::unavailable_aged_item(
