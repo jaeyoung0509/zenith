@@ -16,7 +16,17 @@ afterEach(() => {
   scanStore.isScanning = false;
   scanStore.isCleaning = false;
   scanStore.lastScanTrigger = null;
+  scanStore.scanId = null;
+  scanStore.currentRoot = null;
+  scanStore.foundItemCount = 0;
+  scanStore.isCancelling = false;
+  scanStore.error = null;
 });
+
+/** The Stop control's own tag, so only its disabled state is asserted. */
+function stopControl(body: string): string {
+  return body.match(/<button[^>]*aria-label="Stop scan"[^>]*>/)?.[0] ?? '';
+}
 
 describe('StorageView CTA and responsive toolbar layout', () => {
   beforeEach(() => {
@@ -24,6 +34,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     scanStore.selectedMap = {};
     scanStore.isScanning = false;
     scanStore.isCleaning = false;
+    scanStore.error = null;
   });
 
   it('renders "Review cleanup" for safe-only selections without duplicating byte count in CTA text', () => {
@@ -282,6 +293,98 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       ?.find(button => button.includes('Review cleanup'));
     expect(action).toBeDefined();
     expect(action).not.toContain('disabled=""');
+  });
+
+  it('reads a stopped scan as a stop rather than a completed or failed one', () => {
+    platformCapabilitiesStore.reset();
+    scanStore.error = null;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    scanStore.lastScan = {
+      scan_id: 'scan-cancelled',
+      valid_for_seconds: 300,
+      started_at: nowSeconds - 5,
+      finished_at: nowSeconds,
+      categories: [],
+      total_bytes: 0,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+      quality: 'partial',
+      incomplete_reasons: ['Scan was cancelled before completion'],
+      cancelled: true,
+    };
+
+    const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+
+    expect(rendered.body).toContain('Scan stopped before it finished');
+    expect(rendered.body).toContain('locations it had not reached were not inspected');
+    expect(rendered.body).toContain('Scan was cancelled before completion');
+    expect(rendered.body).toContain('Nothing was removed, and scanning again is safe');
+    // It must not claim the scan completed, and it must not read as a failure.
+    expect(rendered.body).not.toContain('Partial scan completed');
+    expect(rendered.body).not.toContain('bg-destructive/15');
+  });
+
+  it('reads a stopped scan as a stop in the category detail notice too', () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const category: CategoryResult = {
+      category: 'developer',
+      display_name: 'Developer',
+      items: [],
+      total_bytes: 0,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+    };
+    const stopped = {
+      scan_id: 'scan-cancelled-detail',
+      valid_for_seconds: 300,
+      started_at: nowSeconds - 5,
+      finished_at: nowSeconds,
+      categories: [category],
+      total_bytes: 0,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+      quality: 'partial' as const,
+      incomplete_reasons: ['Scan was cancelled before completion'],
+      cancelled: true,
+    };
+    scanStore.lastScan = stopped;
+
+    const rendered = render(CategoryDetailView, {
+      props: { categoryResult: category, onBack: vi.fn(), onNavigateTab: vi.fn() },
+    });
+
+    expect(rendered.body).toContain('Scan stopped before it finished');
+    expect(rendered.body).toContain('Nothing was removed, and scanning again is safe');
+    expect(rendered.body).not.toContain('Partial scan completed');
+
+    // A partial scan that ran to the end keeps its own copy.
+    scanStore.lastScan = { ...stopped, cancelled: false };
+    const partial = render(CategoryDetailView, {
+      props: { categoryResult: category, onBack: vi.fn(), onNavigateTab: vi.fn() },
+    });
+    expect(partial.body).toContain('Partial scan completed');
+    expect(partial.body).not.toContain('Scan stopped before it finished');
+  });
+
+  it('shows the root it is reading, what it has found, and a Stop control while scanning', () => {
+    scanStore.isScanning = true;
+    scanStore.currentRoot = { name: 'Cursor Editor Cache', path: '/Users/dev/Library/Caches/Cursor' };
+    scanStore.foundItemCount = 3;
+
+    const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+    expect(rendered.body).toContain('Reading Cursor Editor Cache');
+    expect(rendered.body).toContain('/Users/dev/Library/Caches/Cursor');
+    expect(rendered.body).toContain('3 items found so far');
+    expect(stopControl(rendered.body)).not.toContain('disabled=""');
+
+    // A stop already requested cannot be sent twice.
+    scanStore.isCancelling = true;
+    const stopping = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+    expect(stopping.body).toContain('Stopping…');
+    expect(stopControl(stopping.body)).toContain('disabled=""');
   });
 
   it('uses the header scan control as the only freshness status UI', () => {

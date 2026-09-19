@@ -36,6 +36,15 @@ export const commands = {
 	getAiControlGitDiff: (projectId: string) => typedError<string, string>(__TAURI_INVOKE("get_ai_control_git_diff", { projectId })),
 	connectOpenrouterOauth: () => typedError<null, string>(__TAURI_INVOKE("connect_openrouter_oauth")),
 	startScan: (onEvent: Channel<ScanEvent_Deserialize>, categories: Category[] | null) => typedError<ScanResult_Serialize, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
+	/**
+	 *  Requests cancellation of the scan that reports `scan_id`.
+	 * 
+	 *  The id is the one the scan's `Started` event carried, so the interface
+	 *  cancels the scan it is watching rather than one it guesses at. A scan that
+	 *  already finished is not an error: the result is what states whether it was
+	 *  cancelled.
+	 */
+	cancelScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_scan", { scanId })),
 	getLastScan: () => __TAURI_INVOKE<{
 	scan_id: string,
 	/**  Backend-owned lifetime of a cleanup observation, not a deletion lease. */
@@ -72,6 +81,17 @@ export const commands = {
 	 */
 	ambiguous_overlap_count: number,
 	ambiguous_overlap_bytes: number,
+	/**
+	 *  Whether this scan stopped because it was cancelled.
+	 * 
+	 *  A cancelled scan is incomplete for a stated reason, and the interface
+	 *  must be able to say *which* reason without reading prose: a user who
+	 *  pressed Stop sees a cancelled scan, not a scan that failed. Every other
+	 *  incompleteness leaves this `false` and keeps its own reason.
+	 */
+	cancelled: boolean,
+	/**  What the scan observed about its own work. */
+	metrics: ScanMetrics_Serialize,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
@@ -2573,7 +2593,18 @@ export type ScanEvent = ScanEvent_Serialize | ScanEvent_Deserialize;
  *  discovers to save a `memcpy` on a value that is never stored in a
  *  collection.
  */
-export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; scan_id?: never };
+export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; signature_id?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | 
+/**
+ *  One root of one signature is about to be read.
+ * 
+ *  Progress, not a result: a scan spends most of its time inside a single
+ *  root, so naming the root is what lets the interface say where the scan
+ *  is rather than only that it is running. No byte total is claimed here —
+ *  the root's measurement arrives with the items it produced.
+ */
+({ type: "RootStarted"; category: Category; signature_id: string; name: string; 
+/**  The resolved root, as the walker reads it. */
+root: string }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Deserialize }) & { bytes?: never; category?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "Finished"; result: ScanResult_Deserialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; root?: never; scan_id?: never; signature_id?: never };
 
 /**
  *  A scan's progress, streamed one event at a time.
@@ -2583,7 +2614,18 @@ export type ScanEvent_Deserialize = ({ type: "Started"; scan_id: string }) & { b
  *  discovers to save a `memcpy` on a value that is never stored in a
  *  collection.
  */
-export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; result?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; result?: never; scan_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; scan_id?: never };
+export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; signature_id?: never } | ({ type: "CategoryStarted"; category: Category }) & { bytes?: never; item?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | 
+/**
+ *  One root of one signature is about to be read.
+ * 
+ *  Progress, not a result: a scan spends most of its time inside a single
+ *  root, so naming the root is what lets the interface say where the scan
+ *  is rather than only that it is running. No byte total is claimed here —
+ *  the root's measurement arrives with the items it produced.
+ */
+({ type: "RootStarted"; category: Category; signature_id: string; name: string; 
+/**  The resolved root, as the walker reads it. */
+root: string }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; root?: never; scan_id?: never; signature_id?: never };
 
 export type ScanItem = ScanItem_Serialize | ScanItem_Deserialize;
 
@@ -2767,6 +2809,95 @@ export type ScanItem_Serialize = {
 	skipped_entry_count: number,
 };
 
+/**
+ *  What one scan observed about the work it did.
+ * 
+ *  These are the numbers a benchmark compares and a user can be shown; they are
+ *  measurements of the run, not estimates of the machine. Item counts and bytes
+ *  stay on the result — this carries only what the result did not already
+ *  state.
+ * 
+ *  Two of the fields describe the tree and repeat exactly across scans
+ *  (`visited_entries`, `directories_read`); two describe one run and are
+ *  reported because a bound is only real if it is measured (`duration_ms`,
+ *  `peak_outstanding_directory_tasks`).
+ */
+export type ScanMetrics = ScanMetrics_Serialize | ScanMetrics_Deserialize;
+
+/**
+ *  What one scan observed about the work it did.
+ * 
+ *  These are the numbers a benchmark compares and a user can be shown; they are
+ *  measurements of the run, not estimates of the machine. Item counts and bytes
+ *  stay on the result — this carries only what the result did not already
+ *  state.
+ * 
+ *  Two of the fields describe the tree and repeat exactly across scans
+ *  (`visited_entries`, `directories_read`); two describe one run and are
+ *  reported because a bound is only real if it is measured (`duration_ms`,
+ *  `peak_outstanding_directory_tasks`).
+ */
+export type ScanMetrics_Deserialize = {
+	/**  Wall-clock duration of the scan. */
+	duration_ms: number,
+	/**
+	 *  Entries the traversal visited and accounted for.
+	 * 
+	 *  Counted where the walk actually looks at an entry: a file it measured, a
+	 *  directory it read, or an entry it refused or could not read. A scan that
+	 *  silently stopped visiting entries therefore cannot look like one that
+	 *  visited fewer.
+	 */
+	visited_entries: number,
+	/**  Directories whose contents were read. */
+	directories_read: number,
+	/**
+	 *  The highest number of directory tasks that were outstanding at once.
+	 * 
+	 *  Reported so the traversal's stated bound is a measurement rather than a
+	 *  claim: a run whose peak exceeds the bound is a bug the interface shows
+	 *  instead of a property the reader has to trust.
+	 */
+	peak_outstanding_directory_tasks: number,
+};
+
+/**
+ *  What one scan observed about the work it did.
+ * 
+ *  These are the numbers a benchmark compares and a user can be shown; they are
+ *  measurements of the run, not estimates of the machine. Item counts and bytes
+ *  stay on the result — this carries only what the result did not already
+ *  state.
+ * 
+ *  Two of the fields describe the tree and repeat exactly across scans
+ *  (`visited_entries`, `directories_read`); two describe one run and are
+ *  reported because a bound is only real if it is measured (`duration_ms`,
+ *  `peak_outstanding_directory_tasks`).
+ */
+export type ScanMetrics_Serialize = {
+	/**  Wall-clock duration of the scan. */
+	duration_ms: number,
+	/**
+	 *  Entries the traversal visited and accounted for.
+	 * 
+	 *  Counted where the walk actually looks at an entry: a file it measured, a
+	 *  directory it read, or an entry it refused or could not read. A scan that
+	 *  silently stopped visiting entries therefore cannot look like one that
+	 *  visited fewer.
+	 */
+	visited_entries: number,
+	/**  Directories whose contents were read. */
+	directories_read: number,
+	/**
+	 *  The highest number of directory tasks that were outstanding at once.
+	 * 
+	 *  Reported so the traversal's stated bound is a measurement rather than a
+	 *  claim: a run whose peak exceeds the bound is a bug the interface shows
+	 *  instead of a property the reader has to trust.
+	 */
+	peak_outstanding_directory_tasks: number,
+};
+
 export type ScanResult = ScanResult_Serialize | ScanResult_Deserialize;
 
 export type ScanResult_Deserialize = {
@@ -2805,6 +2936,17 @@ export type ScanResult_Deserialize = {
 	 */
 	ambiguous_overlap_count?: number,
 	ambiguous_overlap_bytes?: number,
+	/**
+	 *  Whether this scan stopped because it was cancelled.
+	 * 
+	 *  A cancelled scan is incomplete for a stated reason, and the interface
+	 *  must be able to say *which* reason without reading prose: a user who
+	 *  pressed Stop sees a cancelled scan, not a scan that failed. Every other
+	 *  incompleteness leaves this `false` and keeps its own reason.
+	 */
+	cancelled?: boolean,
+	/**  What the scan observed about its own work. */
+	metrics?: ScanMetrics_Deserialize,
 };
 
 export type ScanResult_Serialize = {
@@ -2843,6 +2985,17 @@ export type ScanResult_Serialize = {
 	 */
 	ambiguous_overlap_count: number,
 	ambiguous_overlap_bytes: number,
+	/**
+	 *  Whether this scan stopped because it was cancelled.
+	 * 
+	 *  A cancelled scan is incomplete for a stated reason, and the interface
+	 *  must be able to say *which* reason without reading prose: a user who
+	 *  pressed Stop sees a cancelled scan, not a scan that failed. Every other
+	 *  incompleteness leaves this `false` and keeps its own reason.
+	 */
+	cancelled: boolean,
+	/**  What the scan observed about its own work. */
+	metrics: ScanMetrics_Serialize,
 };
 
 export type SelectedApplication = {

@@ -1023,6 +1023,58 @@ mod tests {
         }
     }
 
+    /// The stores Windows itself maintains are never generic delete targets:
+    /// every entry that names a path under the installation root is
+    /// observation-only, and the one Windows-owned store Zenith may act on is
+    /// reached through the provider the catalog names rather than through a
+    /// path. This is the #230 boundary, pinned as a class so a future entry
+    /// cannot quietly turn update payloads or kernel dumps into deletable
+    /// paths.
+    #[test]
+    fn no_deletable_entry_names_an_os_owned_maintenance_store() {
+        let registry = SignatureRegistry::load_embedded_catalog().expect("catalog");
+
+        let mut named_roots = 0;
+        for signature in registry.all() {
+            if !signature
+                .paths
+                .iter()
+                .any(|pattern| pattern.contains("${SYSTEM_ROOT}"))
+            {
+                continue;
+            }
+            named_roots += 1;
+            assert_eq!(
+                signature.strategy,
+                CleanStrategy::Manual,
+                "{} names a store Windows maintains and must not delete it",
+                signature.id
+            );
+            assert_eq!(signature.risk, RiskTier::Manual, "{}", signature.id);
+        }
+        assert!(
+            named_roots > 0,
+            "the installation root's stores are still reported, so their bytes are not invisible"
+        );
+
+        // The Recycle Bin is the one Windows-owned store that is executable,
+        // and only through the lifecycle provider it names: no path, a manual
+        // tier, and an id the manifest lint checks against this build.
+        let recycle_bin = registry
+            .get("system.windows.recycle_bin")
+            .expect("the Recycle Bin entry is in the catalog");
+        assert_eq!(recycle_bin.strategy, CleanStrategy::LifecycleProvider);
+        assert_eq!(
+            recycle_bin.provider_id.as_deref(),
+            Some("windows.recycle_bin")
+        );
+        assert_eq!(recycle_bin.risk, RiskTier::Manual);
+        assert!(
+            recycle_bin.paths.is_empty(),
+            "a provider action owns no host path"
+        );
+    }
+
     /// Every shipped entry satisfies the catalog schema, and the granularity it
     /// implies matches the strategy it declares. A manifest that contradicts
     /// itself fails the load instead of reaching a scan.

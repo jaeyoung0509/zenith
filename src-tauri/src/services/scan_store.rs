@@ -82,6 +82,8 @@ mod tests {
 
     fn make_test_scan(scan_id: &str, finished_at: u64) -> ScanResult {
         ScanResult {
+            cancelled: false,
+            metrics: Default::default(),
             scan_id: scan_id.to_string(),
             valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
             started_at: finished_at.saturating_sub(5),

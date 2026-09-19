@@ -1,9 +1,13 @@
+use super::observation::{
+    NoRootProgress, ScanLimits, SignatureScan, TraversalCounters, WalkContext,
+};
 use crate::models::{
     classify_structured_state, derive_cleanup_disposition, AgeObservation, CacheSizeSemantics,
     CancellationProbe, CleanupEligibility, CleanupOwnership, CleanupUnit, DispositionFacts,
     EligibilityGate, EntryKind, FileSize, ObservationQuality, PathFacts, ScanItem, Signature,
     StaleEntryObservation, StructuredStateKind,
 };
+use crate::safety::SymlinkGuard;
 use crate::scanner::{PathMeasurement, SizeCalculator};
 use crate::signatures::SignatureLoader;
 use rayon::ThreadPool;
@@ -91,46 +95,59 @@ impl DirectoryScanner {
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
     ) -> Vec<ScanItem> {
-        Self::scan_signature_with_pool(
-            signature,
-            None,
+        // A walk nobody is watching: default bounds, counters nobody reads, no
+        // progress listener. It behaves exactly like a watched walk.
+        let counters = TraversalCounters::default();
+        let context = WalkContext::new(
             environment,
             cancellation,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
+        );
+        Self::scan_signature_with_context(
+            signature,
+            None,
+            &context,
             EligibilityGate::Open,
             &crate::applications::RunningApplications::default(),
         )
+        .items
     }
 
-    pub fn scan_signature_with_pool(
+    pub fn scan_signature_with_context(
         signature: &Signature,
         pool: Option<&ThreadPool>,
-        environment: &PlatformEnvironment,
-        cancellation: &dyn CancellationProbe,
+        context: &WalkContext<'_>,
         gate: EligibilityGate,
         running_apps: &crate::applications::RunningApplications,
-    ) -> Vec<ScanItem> {
+    ) -> SignatureScan {
         let mut items = Vec::new();
+        let mut scanned_roots = Vec::new();
 
         // If signature has no explicit file paths (e.g. Docker commands), return early or handle in Docker adapter
         if signature.paths.is_empty() {
-            return items;
+            return SignatureScan::new(items);
         }
 
         let unit_is_root = !signature.unit_kind().is_enumerated_child();
 
         for (idx, pattern) in signature.paths.iter().enumerate() {
-            let Some(path_buf) = SignatureLoader::expand_path(pattern, environment) else {
+            if context.cancellation.is_cancelled() {
+                break;
+            }
+            let Some(path_buf) = SignatureLoader::expand_path(pattern, context.environment) else {
                 continue;
             };
 
-            let (roots, failures) = Self::signature_roots(&path_buf, environment);
+            let (roots, failures) = Self::signature_roots(&path_buf, context.environment);
 
             for (fail_idx, failure) in failures.iter().enumerate() {
                 let reason = format!(
                     "Could not inspect {}: {}",
                     failure.path.display(),
                     zenith_platform::environment::describe_access_refusal(
-                        environment,
+                        context.environment,
                         &failure.path,
                         &failure.error,
                     )
@@ -151,16 +168,26 @@ impl DirectoryScanner {
             // decides another. A pattern with no selector yields exactly one
             // root and keeps its historical identity.
             for root in roots {
+                if context.cancellation.is_cancelled() {
+                    break;
+                }
                 let root_path = root.path.clone();
+                // The root is reported before it is read: a scan spends its
+                // time inside one root, so this is what lets the interface say
+                // where it is rather than only that it is running.
+                context.progress.root_started(signature, &root_path);
+                if context.cancellation.is_cancelled() {
+                    break;
+                }
+                scanned_roots.push(root_path.clone());
                 if let Some(min_age_days) = signature.min_age_days {
                     if !unit_is_root {
                         items.extend(Self::scan_aged_children(
-                            environment,
+                            context,
                             signature,
                             &root_path,
                             idx,
                             min_age_days,
-                            cancellation,
                             gate,
                             root.key.as_deref(),
                             running_apps,
@@ -168,7 +195,7 @@ impl DirectoryScanner {
                         continue;
                     }
                     items.push(Self::scan_aged_unit(
-                        environment,
+                        context,
                         signature,
                         &root_path,
                         idx,
@@ -184,8 +211,7 @@ impl DirectoryScanner {
                     &root_path,
                     idx,
                     pool,
-                    environment,
-                    cancellation,
+                    context,
                     gate,
                     root.key.as_deref(),
                 ) {
@@ -203,7 +229,10 @@ impl DirectoryScanner {
             item.is_selected = item.is_pre_selectable();
         }
 
-        items
+        SignatureScan {
+            items,
+            roots: scanned_roots,
+        }
     }
 
     /// The concrete roots one pattern authorizes, alongside any branches that
@@ -283,19 +312,22 @@ impl DirectoryScanner {
         path_buf: &std::path::Path,
         idx: usize,
         pool: Option<&ThreadPool>,
-        environment: &PlatformEnvironment,
-        cancellation: &dyn CancellationProbe,
+        context: &WalkContext<'_>,
         gate: EligibilityGate,
         root_key: Option<&str>,
     ) -> Option<ScanItem> {
-        // `Path::exists()` collapses every metadata error into `false`.
-        // Keep permission and I/O failures observable instead of treating
-        // a configured path as if it simply did not exist.
+        let environment = context.environment;
+        // A symlink, junction, or mount point is a boundary, not a target: the
+        // guard classifies the reparse tag, so a cloud placeholder stays an
+        // ordinary entry while an indirection is refused. `Path::exists()`
+        // collapses every metadata error into `false`, so permission and I/O
+        // failures stay observable instead of reading as an absent path.
+        let is_link = SymlinkGuard::is_symlink(path_buf);
         let (exists, measurement, facts) = match fs::symlink_metadata(path_buf) {
-            Ok(metadata) if metadata.file_type().is_symlink() => (
+            Ok(_) if is_link => (
                 true,
                 PathMeasurement::unavailable(format!(
-                    "Configured path {} is a symlink; cleanup is blocked",
+                    "Configured path {} is a link, junction, or mount point; cleanup is blocked",
                     path_buf.display()
                 )),
                 None,
@@ -308,8 +340,10 @@ impl DirectoryScanner {
                         path_buf,
                         &signature.exclusions,
                         pool,
-                        environment,
-                        cancellation,
+                        context.environment,
+                        context.cancellation,
+                        context.limits,
+                        context.counters,
                     ),
                     Some(facts),
                 )
@@ -456,7 +490,7 @@ impl DirectoryScanner {
     /// aged-child rule cannot cover: the root is the unit, not its children.
     #[allow(clippy::too_many_arguments)]
     fn scan_aged_unit(
-        environment: &PlatformEnvironment,
+        context: &WalkContext<'_>,
         signature: &Signature,
         path_buf: &std::path::Path,
         idx: usize,
@@ -464,9 +498,11 @@ impl DirectoryScanner {
         gate: EligibilityGate,
         root_key: Option<&str>,
     ) -> ScanItem {
+        let environment = context.environment;
+        let is_link = SymlinkGuard::is_symlink(path_buf);
         let stats = fs::symlink_metadata(path_buf);
         let stats = match stats {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(_) if is_link => {
                 return Self::unavailable_aged_item(
                     signature,
                     path_buf,
@@ -477,22 +513,14 @@ impl DirectoryScanner {
                     None,
                     1,
                     format!(
-                        "Configured path {} is a symlink; cleanup is blocked",
+                        "Configured path {} is a link, junction, or mount point; cleanup is blocked",
                         path_buf.display()
                     ),
                     gate,
                     false,
                 );
             }
-            Ok(_) => Self::measure_tree_stats(
-                environment,
-                path_buf,
-                &signature.exclusions,
-                0,
-                32,
-                &crate::models::NeverCancelled,
-                None,
-            ),
+            Ok(_) => Self::measure_tree_stats(context, path_buf, &signature.exclusions, 0, None),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return Self::unavailable_aged_item(
                     signature,
@@ -682,16 +710,23 @@ impl DirectoryScanner {
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn scan_aged_children(
-        environment: &PlatformEnvironment,
+        context: &WalkContext<'_>,
         signature: &Signature,
         root: &std::path::Path,
         path_index: usize,
         min_age_days: u32,
-        cancellation: &dyn CancellationProbe,
         gate: EligibilityGate,
         root_key: Option<&str>,
         running_apps: &crate::applications::RunningApplications,
     ) -> Vec<ScanItem> {
+        let environment = context.environment;
+        if context.cancellation.is_cancelled() {
+            return Vec::new();
+        }
+        // This function reads the namespace root directly. Count that root here
+        // instead of in the generic signature loop so every filesystem entry is
+        // represented exactly once in traversal metrics.
+        context.counters.visit_entry();
         // A signature that removes stale entries ages each entry of a namespace;
         // every other aged signature removes a child whole and ages that child's
         // whole tree. The strategy is the difference, and it decides which
@@ -699,8 +734,9 @@ impl DirectoryScanner {
         let stale_policy = (signature.strategy
             == crate::models::CleanStrategy::DeleteStaleContents)
             .then(|| crate::safety::StaleEntryPolicy::from_days(min_age_days));
+        let root_is_link = SymlinkGuard::is_symlink(root);
         match fs::symlink_metadata(root) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(_) if root_is_link => {
                 return vec![Self::unavailable_aged_item(
                     signature,
                     root,
@@ -714,7 +750,7 @@ impl DirectoryScanner {
                     None,
                     1,
                     format!(
-                        "Configured path {} is a symlink; cleanup is blocked",
+                        "Configured path {} is a link, junction, or mount point; cleanup is blocked",
                         root.display()
                     ),
                     gate,
@@ -751,7 +787,10 @@ impl DirectoryScanner {
             }
         }
         let entries = match fs::read_dir(root) {
-            Ok(entries) => entries,
+            Ok(entries) => {
+                context.counters.directory_read();
+                entries
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return vec![],
             Err(err) => {
                 return vec![Self::unavailable_aged_item(
@@ -791,6 +830,9 @@ impl DirectoryScanner {
         let mut entry_failure = None;
 
         for entry in entries {
+            if context.cancellation.is_cancelled() {
+                break;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
@@ -814,8 +856,9 @@ impl DirectoryScanner {
             {
                 continue;
             }
+            let child_is_link = SymlinkGuard::is_symlink(&path);
             let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
+                Ok(_) if child_is_link => {
                     items.push(Self::unavailable_aged_item(
                         signature,
                         &path,
@@ -826,7 +869,7 @@ impl DirectoryScanner {
                         None,
                         1,
                         format!(
-                            "Candidate {} is a symlink; cleanup is blocked",
+                            "Candidate {} is a link, junction, or mount point; cleanup is blocked",
                             path.display()
                         ),
                         gate,
@@ -877,15 +920,8 @@ impl DirectoryScanner {
             };
 
             // Single-pass fail-closed tree measurement
-            let stats = Self::measure_tree_stats(
-                environment,
-                &path,
-                &signature.exclusions,
-                0,
-                32,
-                cancellation,
-                stale_policy,
-            );
+            let stats =
+                Self::measure_tree_stats(context, &path, &signature.exclusions, 0, stale_policy);
             // An incomplete tree cannot prove the candidate's newest timestamp,
             // so retain it for observability but block cleanup.
             if !stats.complete {
@@ -1177,14 +1213,15 @@ impl DirectoryScanner {
     /// Measures directory statistics (size, count, newest mtime) in a single recursive pass.
     /// Marks complete = false if any error, symlink escape, or depth cutoff occurs.
     pub fn measure_tree_stats(
-        environment: &PlatformEnvironment,
+        context: &WalkContext<'_>,
         path: &Path,
         exclusions: &[String],
         current_depth: usize,
-        max_depth: usize,
-        cancellation: &dyn CancellationProbe,
         stale_policy: Option<crate::safety::StaleEntryPolicy>,
     ) -> TreeStats {
+        let environment = context.environment;
+        let cancellation = context.cancellation;
+        let max_depth = context.limits.max_depth;
         let mut stats = TreeStats {
             stale_bytes: 0,
             stale_file_count: 0,
@@ -1197,6 +1234,15 @@ impl DirectoryScanner {
             skipped_entries: 0,
         };
 
+        if cancellation.is_cancelled() {
+            stats.complete = false;
+            stats.skipped_entries = 1;
+            stats.incomplete_reason =
+                Some(format!("Scan cancelled while measuring {}", path.display()));
+            return stats;
+        }
+
+        context.counters.visit_entry();
         if current_depth > max_depth {
             stats.complete = false;
             stats.skipped_entries += 1;
@@ -1248,7 +1294,10 @@ impl DirectoryScanner {
             });
         }
 
-        if meta.file_type().is_symlink() || meta.is_file() {
+        // The walk refuses an indirection and accounts for the link itself;
+        // `SymlinkGuard` is the same classifier size.rs uses, so a junction is
+        // a boundary in both walks rather than only in one.
+        if SymlinkGuard::is_symlink(path) || meta.is_file() {
             let len = meta.len();
             stats.logical = len;
             #[cfg(unix)]
@@ -1292,6 +1341,7 @@ impl DirectoryScanner {
             return stats;
         }
 
+        context.counters.directory_read();
         let entries = match fs::read_dir(path) {
             Ok(e) => e,
             Err(err) => {
@@ -1360,12 +1410,10 @@ impl DirectoryScanner {
             }
 
             let sub_stats = Self::measure_tree_stats(
-                environment,
+                context,
                 &child_path,
                 exclusions,
                 current_depth + 1,
-                max_depth,
-                cancellation,
                 stale_policy,
             );
             if !sub_stats.complete {
@@ -1451,6 +1499,23 @@ mod tests {
 
     /// A shared helper for the aged-child fixtures: an empty root, plus the
     /// signature shape every aged test needs.
+    /// A walk context for a test that states its own environment: default
+    /// bounds, counters nobody reads, no progress listener, and no
+    /// cancellation — the same shape production builds, minus the reporting.
+    fn test_context<'a>(
+        environment: &'a PlatformEnvironment,
+    ) -> super::super::observation::WalkContext<'a> {
+        static COUNTERS: super::super::observation::TraversalCounters =
+            super::super::observation::TraversalCounters::new();
+        super::super::observation::WalkContext::new(
+            environment,
+            &crate::models::NeverCancelled,
+            super::super::observation::ScanLimits::default(),
+            &COUNTERS,
+            &super::super::observation::NoRootProgress,
+        )
+    }
+
     fn child_signature(root: &std::path::Path, min_age_days: u32) -> Signature {
         Signature {
             id: "system.test.aged".into(),
@@ -1509,6 +1574,40 @@ mod tests {
             .open(path)
             .expect("open fixture entry");
         entry.set_modified(when).expect("backdate fixture entry");
+    }
+
+    #[test]
+    fn aged_tree_measurement_honors_cancellation_before_reading_a_file() {
+        struct AlwaysCancelled;
+
+        impl crate::models::CancellationProbe for AlwaysCancelled {
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let file = fixture.path().join("payload.bin");
+        std::fs::write(&file, vec![1u8; 4_096]).unwrap();
+        let environment = environment();
+        let counters = super::super::observation::TraversalCounters::default();
+        let context = super::super::observation::WalkContext::new(
+            &environment,
+            &AlwaysCancelled,
+            super::super::observation::ScanLimits::default(),
+            &counters,
+            &super::super::observation::NoRootProgress,
+        );
+
+        let stats = DirectoryScanner::measure_tree_stats(&context, &file, &[], 0, None);
+
+        assert!(!stats.complete);
+        assert_eq!(stats.logical, 0);
+        assert_eq!(stats.file_count, 0);
+        assert!(stats
+            .incomplete_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("cancelled")));
     }
 
     /// One recently written child must not hide its stale sibling, and it must
@@ -1713,7 +1812,7 @@ mod tests {
                 .disposition
                 .reason
                 .as_deref()
-                .is_some_and(|reason| reason.contains("symlink")));
+                .is_some_and(|reason| reason.contains("cleanup is blocked")));
             assert!(!linked_item.is_selected);
         }
     }
@@ -1786,15 +1885,15 @@ mod tests {
         signature.intensive_only = true;
         signature.discovery = crate::models::DiscoveryScope::Always;
 
-        let gated = DirectoryScanner::scan_signature_with_pool(
+        let gated = DirectoryScanner::scan_signature_with_context(
             &signature,
             None,
-            &environment(),
-            &NeverCancelled,
+            &test_context(&environment()),
             crate::models::EligibilityGate::IntensiveCleanupDisabled,
             &crate::applications::RunningApplications::default(),
         );
         let item = gated
+            .items
             .iter()
             .find(|item| item.name == "third.party")
             .expect("the gated signature is still discovered");
@@ -1987,7 +2086,7 @@ mod tests {
             assert!(symlink
                 .incomplete_reason
                 .as_deref()
-                .is_some_and(|reason| reason.contains("symlink")));
+                .is_some_and(|reason| reason.contains("cleanup is blocked")));
         }
     }
 
@@ -2012,15 +2111,8 @@ mod tests {
         std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
 
         let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
-        let stats = DirectoryScanner::measure_tree_stats(
-            &windows,
-            &candidate,
-            &[],
-            0,
-            32,
-            &NeverCancelled,
-            None,
-        );
+        let stats =
+            DirectoryScanner::measure_tree_stats(&test_context(&windows), &candidate, &[], 0, None);
 
         assert_eq!(stats.file_count, 1);
         assert_eq!(stats.logical, 4_096);
@@ -2035,15 +2127,8 @@ mod tests {
         );
 
         let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
-        let stats = DirectoryScanner::measure_tree_stats(
-            &posix,
-            &candidate,
-            &[],
-            0,
-            32,
-            &NeverCancelled,
-            None,
-        );
+        let stats =
+            DirectoryScanner::measure_tree_stats(&test_context(&posix), &candidate, &[], 0, None);
         assert_eq!(stats.skipped_entries, 1, "only `.git` is a POSIX boundary");
         assert_eq!(
             stats.logical,
@@ -2137,25 +2222,136 @@ mod tests {
 
         // The guard must also fail closed at delete-time TOCTOU re-verification.
         let stats = DirectoryScanner::measure_tree_stats(
-            &environment(),
+            &test_context(&environment()),
             &nested,
             &[],
             0,
-            32,
-            &NeverCancelled,
             None,
         );
         assert!(!stats.complete);
         let mixed_case_stats = DirectoryScanner::measure_tree_stats(
-            &environment(),
+            &test_context(&environment()),
             &mixed_case,
             &[],
             0,
-            32,
-            &NeverCancelled,
             None,
         );
         assert!(!mixed_case_stats.complete);
+    }
+
+    /// Creates a directory junction at `link` pointing at `target`.
+    ///
+    /// A junction is the Windows reparse point a test can create without
+    /// elevation (`mklink /J`), which is why it is the boundary this suite
+    /// exercises: it is representative of the mount points and junctions a
+    /// user's profile actually contains.
+    #[cfg(windows)]
+    fn create_junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output();
+        matches!(output, Ok(output) if output.status.success())
+    }
+
+    /// A junction inside a candidate tree is a boundary: the walk accounts for
+    /// the link and never counts, or descends into, the tree it points at.
+    ///
+    /// This is the Windows half of the traversal contract — on POSIX the same
+    /// rule is covered by the symlink fixtures — and it is the reason the
+    /// walker asks `SymlinkGuard` rather than `file_type().is_symlink()`: a
+    /// junction is a directory to `std` and an indirection to Windows.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_inside_a_candidate_is_never_traversed() {
+        let fixture = tempfile::tempdir().unwrap();
+        let outside = fixture.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("payload.bin"), vec![7u8; 64 * 1024]).unwrap();
+
+        let candidate = fixture.path().join("candidate");
+        std::fs::create_dir(&candidate).unwrap();
+        std::fs::write(candidate.join("own.bin"), vec![3u8; 4_096]).unwrap();
+        let link = candidate.join("linked-outside");
+        assert!(
+            create_junction(&link, &outside),
+            "the test needs a junction to state the boundary it asserts"
+        );
+
+        let stats = DirectoryScanner::measure_tree_stats(
+            &test_context(&environment()),
+            &candidate,
+            &[],
+            0,
+            None,
+        );
+
+        assert!(
+            stats.complete,
+            "a junction is a deliberate boundary, not a read failure: {:?}",
+            stats.incomplete_reason
+        );
+        assert_eq!(
+            stats.logical, 4_096,
+            "the tree the junction points at is never counted as this unit's bytes"
+        );
+
+        // The scan reports the same candidate: its own bytes, never the
+        // outside tree's.
+        let signature = child_signature(fixture.path(), 7);
+        let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
+        let item = items
+            .iter()
+            .find(|item| item.path == candidate.to_string_lossy())
+            .expect("the candidate is discovered");
+        assert!(
+            item.size.reclaimable() < 64 * 1024,
+            "an outside tree behind a junction must not inflate the candidate: {item:?}"
+        );
+    }
+
+    /// A configured root that is itself an indirection is refused, not walked.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_root_is_refused_rather_than_walked() {
+        let fixture = tempfile::tempdir().unwrap();
+        let target = fixture.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("payload.bin"), vec![5u8; 8_192]).unwrap();
+        let link = fixture.path().join("linked-root");
+        assert!(
+            create_junction(&link, &target),
+            "the test needs a junction to state the refusal it asserts"
+        );
+
+        let mut signature = child_signature(fixture.path(), 0);
+        signature.strategy = crate::models::CleanStrategy::DeleteDirectory;
+        signature.min_age_days = None;
+        signature.paths = vec![link.to_string_lossy().into_owned()];
+
+        let scanned = DirectoryScanner::scan_signature_with_context(
+            &signature,
+            None,
+            &test_context(&environment()),
+            crate::models::EligibilityGate::Open,
+            &crate::applications::RunningApplications::default(),
+        );
+        let item = scanned
+            .items
+            .iter()
+            .find(|item| item.path == link.to_string_lossy())
+            .expect("the refused root is still reported");
+        assert!(
+            !item.is_selected && item.cleanable_bytes() == 0,
+            "a junction root is never a cleanup target: {item:?}"
+        );
+        assert!(
+            item.incomplete_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("junction") || reason.contains("mount point")),
+            "the refusal states what the root is: {item:?}"
+        );
     }
 
     /// An excluded namespace is dropped regardless of the case it happens to

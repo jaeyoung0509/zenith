@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use zenith_platform::PlatformEnvironment;
 
+use super::cancellation::CancellationRegistry;
 use super::plan_store::{PlanLifecycle, PlanStore};
 use super::progress::{DeveloperArtifactScanSink, LargeFileScanSink};
 use crate::applications::{AppInspectionRecord, AppInventory, ApplicationScanner};
@@ -46,14 +47,6 @@ use crate::operation_gate::StorageOperationGate;
 use crate::trash_manager::{TrashExecutor, TrashPlan, TrashPlanner};
 
 const INVENTORY_TTL_SECS: u64 = 15 * 60;
-const CANCELLATION_TTL_SECS: u64 = 15 * 60;
-const MAX_ACTIVE_CANCELLATIONS: usize = 64;
-
-#[derive(Clone)]
-struct CancellationEntry {
-    signal: Arc<AtomicBool>,
-    created_at: u64,
-}
 
 /// The reviewed-storage workflows' ephemeral state.
 ///
@@ -62,9 +55,9 @@ struct CancellationEntry {
 /// registry behind the lifecycle.
 struct StorageWorkflowState {
     large_file_inventory: Mutex<Option<LargeFileInventory>>,
-    large_file_cancel: Mutex<HashMap<String, CancellationEntry>>,
+    large_file_cancel: CancellationRegistry,
     developer_artifact_inventory: Mutex<Option<DeveloperArtifactInventory>>,
-    developer_artifact_cancel: Mutex<HashMap<String, CancellationEntry>>,
+    developer_artifact_cancel: CancellationRegistry,
     app_inventory: Mutex<Option<AppInventory>>,
     app_inspection: Mutex<Option<AppInspectionRecord>>,
     /// Reviewed Trash plans, bounded and expiring exactly like cleanup plans.
@@ -76,9 +69,9 @@ impl Default for StorageWorkflowState {
     fn default() -> Self {
         Self {
             large_file_inventory: Mutex::new(None),
-            large_file_cancel: Mutex::new(HashMap::new()),
+            large_file_cancel: CancellationRegistry::for_scans(),
             developer_artifact_inventory: Mutex::new(None),
-            developer_artifact_cancel: Mutex::new(HashMap::new()),
+            developer_artifact_cancel: CancellationRegistry::for_scans(),
             app_inventory: Mutex::new(None),
             app_inspection: Mutex::new(None),
             trash_plans: PlanStore::new(PlanLifecycle::trash()),
@@ -666,79 +659,28 @@ fn execute_trash_plan_in_gate(
 
 impl StorageWorkflowState {
     fn register_large_file_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
-        store_cancellation(&self.large_file_cancel, scan_id, signal);
+        self.large_file_cancel.register(scan_id, signal);
     }
 
     fn register_developer_artifact_cancel(&self, scan_id: String, signal: Arc<AtomicBool>) {
-        store_cancellation(&self.developer_artifact_cancel, scan_id, signal);
+        self.developer_artifact_cancel.register(scan_id, signal);
     }
 
     fn remove_large_file_cancel(&self, scan_id: &str) {
-        remove_cancellation(&self.large_file_cancel, scan_id);
+        self.large_file_cancel.remove(scan_id);
     }
 
     fn remove_developer_artifact_cancel(&self, scan_id: &str) {
-        remove_cancellation(&self.developer_artifact_cancel, scan_id);
+        self.developer_artifact_cancel.remove(scan_id);
     }
 
     fn large_file_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
-        cancellation_signal(&self.large_file_cancel, scan_id)
+        self.large_file_cancel.signal(scan_id)
     }
 
     fn developer_artifact_cancel_signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
-        cancellation_signal(&self.developer_artifact_cancel, scan_id)
+        self.developer_artifact_cancel.signal(scan_id)
     }
-}
-
-fn store_cancellation(
-    store: &Mutex<HashMap<String, CancellationEntry>>,
-    scan_id: String,
-    signal: Arc<AtomicBool>,
-) {
-    let now = unix_timestamp();
-    let mut entries = store
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    entries.retain(|_, entry| {
-        zenith_core::domain::is_within_window(entry.created_at, now, CANCELLATION_TTL_SECS)
-    });
-    if entries.len() >= MAX_ACTIVE_CANCELLATIONS {
-        if let Some(oldest_id) = entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.created_at)
-            .map(|(id, _)| id.clone())
-        {
-            entries.remove(&oldest_id);
-        }
-    }
-    entries.insert(
-        scan_id,
-        CancellationEntry {
-            signal,
-            created_at: now,
-        },
-    );
-}
-
-fn remove_cancellation(store: &Mutex<HashMap<String, CancellationEntry>>, scan_id: &str) {
-    store
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(scan_id);
-}
-
-fn cancellation_signal(
-    store: &Mutex<HashMap<String, CancellationEntry>>,
-    scan_id: &str,
-) -> Option<Arc<AtomicBool>> {
-    let now = unix_timestamp();
-    let mut entries = store
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    entries.retain(|_, entry| {
-        zenith_core::domain::is_within_window(entry.created_at, now, CANCELLATION_TTL_SECS)
-    });
-    entries.get(scan_id).map(|entry| entry.signal.clone())
 }
 
 fn unix_timestamp() -> u64 {
@@ -757,73 +699,27 @@ mod tests {
     use std::time::Duration;
     use zenith_platform::path_algebra::PathFlavor;
 
+    /// The storage workflow's side of cancellation: the handle a scan
+    /// registers is the one its cancel reaches, and removing it ends that.
+    /// The registry's own bounds (TTL, cap, recovery) are tested where the type
+    /// lives, in `services::cancellation`.
     #[test]
-    fn a_cancellation_registry_is_bounded_and_evicts_the_oldest() {
-        let state = StorageWorkflowState::default();
-        let now = unix_timestamp();
-        {
-            let mut entries = state
-                .large_file_cancel
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            for index in 0..MAX_ACTIVE_CANCELLATIONS {
-                entries.insert(
-                    format!("scan-{index}"),
-                    CancellationEntry {
-                        signal: Arc::new(AtomicBool::new(false)),
-                        // Distinct, fresh, with `scan-0` the oldest.
-                        created_at: now - (MAX_ACTIVE_CANCELLATIONS as u64 - index as u64),
-                    },
-                );
-            }
-        }
-
-        // One more registration over the cap evicts the oldest handle, so a
-        // scan flood cannot grow the registry without bound.
-        let newest = "scan-newest".to_string();
-        state.register_large_file_cancel(newest.clone(), Arc::new(AtomicBool::new(false)));
-
-        assert_eq!(
-            state
-                .large_file_cancel
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .len(),
-            MAX_ACTIVE_CANCELLATIONS
-        );
-        assert!(
-            state.large_file_cancel_signal("scan-0").is_none(),
-            "the oldest handle is the one evicted"
-        );
-        assert!(state.large_file_cancel_signal(&newest).is_some());
-
-        state.remove_large_file_cancel(&newest);
-        assert!(
-            state.large_file_cancel_signal(&newest).is_none(),
-            "a finished scan's handle is removed, not left to expire"
-        );
-    }
-
-    #[test]
-    fn a_cancellation_handle_does_not_survive_its_window() {
+    fn a_registered_scan_cancel_reaches_the_signal_it_registered() {
         let state = StorageWorkflowState::default();
         let signal = Arc::new(AtomicBool::new(false));
-        state
-            .large_file_cancel
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(
-                "stale".to_string(),
-                CancellationEntry {
-                    signal: signal.clone(),
-                    created_at: unix_timestamp().saturating_sub(CANCELLATION_TTL_SECS),
-                },
-            );
+        state.register_large_file_cancel("scan-1".to_string(), signal.clone());
 
-        // A handle at exactly its TTL boundary is expired: cancelling through a
-        // stale id must not reach a scan that is no longer running.
-        assert!(state.large_file_cancel_signal("stale").is_none());
-        assert!(!signal.load(Ordering::Relaxed));
+        let reached = state
+            .large_file_cancel_signal("scan-1")
+            .expect("the registered handle is reachable");
+        reached.store(true, Ordering::Relaxed);
+        assert!(signal.load(Ordering::Relaxed));
+
+        state.remove_large_file_cancel("scan-1");
+        assert!(
+            state.large_file_cancel_signal("scan-1").is_none(),
+            "a finished scan's handle is removed, not left to expire"
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@ fn main() {
         "get_ai_control_git_diff",
         "connect_openrouter_oauth",
         "start_scan",
+        "cancel_scan",
         "get_last_scan",
         "create_delete_plan",
         "execute_clean",

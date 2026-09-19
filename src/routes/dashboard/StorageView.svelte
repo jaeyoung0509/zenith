@@ -40,6 +40,7 @@
     FolderSearch,
     FileSearch,
     AppWindow,
+    Square,
   } from '@lucide/svelte';
 
   interface Props {
@@ -366,6 +367,40 @@
       </SelectionToolbar>
     </Card>
 
+    <!-- Scan Progress -->
+    {#if scanStore.isScanning}
+      <Card class="p-4 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
+        <div class="flex items-start justify-between gap-3" role="status" aria-live="polite">
+          <div class="min-w-0 flex-1 space-y-1">
+            <span class="text-xs font-medium text-foreground flex items-center gap-2">
+              <LoadingSpinner size={13} />
+              <span>{scanStore.currentRoot ? `Reading ${scanStore.currentRoot.name}` : 'Scanning…'}</span>
+            </span>
+            {#if scanStore.currentRoot}
+              <p class="font-mono text-caption text-muted-foreground truncate" title={scanStore.currentRoot.path}>
+                {scanStore.currentRoot.path}
+              </p>
+            {/if}
+            <p class="text-meta text-muted-foreground">
+              {scanStore.foundItemCount} {scanStore.foundItemCount === 1 ? 'item' : 'items'} found so far
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={scanStore.isCancelling}
+            onclick={() => void scanStore.cancelScan()}
+            ariaLabel="Stop scan"
+            title="Stop scan"
+            class="gap-1.5 shrink-0"
+          >
+            <Square size={12} />
+            <span>{scanStore.isCancelling ? 'Stopping…' : 'Stop'}</span>
+          </Button>
+        </div>
+      </Card>
+    {/if}
+
     <!-- Cleaning In Progress Bar -->
     {#if scanStore.isCleaning}
       <Card class="p-4 bg-secondary/60 border-primary/40 shadow-sm transition-all duration-200">
@@ -396,7 +431,11 @@
     {#if scanStore.freshness === 'partial'}
       <div role="status" class="p-3.5 rounded-xl bg-warning/10 border border-warning/30 text-warning flex items-center gap-2.5 text-xs">
         <AlertCircle size={16} class="shrink-0" />
-        <span>Partial scan completed. Some locations could not be fully inspected. Values marked ≥ are lower bounds; ranges are shown where observations may overlap. Incomplete items cannot be auto-cleaned.</span>
+        {#if scanStore.cancelledScanNotice}
+          <span>{scanStore.cancelledScanNotice}</span>
+        {:else}
+          <span>Partial scan completed. Some locations could not be fully inspected. Values marked ≥ are lower bounds; ranges are shown where observations may overlap. Incomplete items cannot be auto-cleaned.</span>
+        {/if}
       </div>
     {/if}
 
