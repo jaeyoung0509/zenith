@@ -10,6 +10,7 @@
     tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import { formatBytes } from '../../lib/utils/format';
+  import { observedByteRange } from '../../lib/utils/cleanup';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
@@ -28,6 +29,12 @@
   let revealError = $state<string | null>(null);
 
   let primary = $derived(volumes.find((volume) => volume.is_primary) ?? volumes[0]);
+  let scanObservedRange = $derived(
+    observedByteRange(
+      scanStore.lastScan?.total_bytes ?? 0,
+      scanStore.lastScan?.ambiguous_overlap_bytes ?? 0
+    )
+  );
   let opportunities = $derived.by(() =>
     (scanStore.lastScan?.categories ?? [])
       .filter((category) => category.total_bytes > 0)
@@ -170,12 +177,12 @@
         <p class="mt-0.5 text-caption text-muted-foreground">Largest detected categories first</p>
       </div>
       <span class="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-        <span>{formatBytes(scanStore.lastScan?.total_bytes ?? 0)} detected</span>
+        <span>{scanObservedRange.isAmbiguous ? `${formatBytes(scanObservedRange.lower)} – ${formatBytes(scanObservedRange.upper)} observed` : `${formatBytes(scanObservedRange.upper)} detected`}</span>
         {#if notCleanableBytes > 0}
           <span
             class="text-caption"
             title="Discovered bytes Zenith will not remove with the current settings"
-          >· {formatBytes(notCleanableBytes)} not cleanable</span>
+          >· {scanObservedRange.isAmbiguous ? 'up to ' : ''}{formatBytes(notCleanableBytes)} not cleanable</span>
         {/if}
       </span>
     </div>
@@ -186,7 +193,12 @@
             <p class="text-xs font-medium">{category.display_name}</p>
             <p class="mt-0.5 text-caption text-muted-foreground">{formatBytes(category.safe_bytes)} safe · {formatBytes(category.rebuild_bytes)} rebuild</p>
           </div>
-          <span class="font-mono text-xs font-semibold">{formatBytes(category.total_bytes)}</span>
+          {@const categoryRange = observedByteRange(category.total_bytes, category.ambiguous_overlap_bytes ?? 0)}
+          <span class="font-mono text-xs font-semibold">
+            {categoryRange.isAmbiguous
+              ? `${formatBytes(categoryRange.lower)} – ${formatBytes(categoryRange.upper)}`
+              : formatBytes(categoryRange.upper)}
+          </span>
         </button>
       {:else}
         <div class="px-4 py-8 text-center text-xs text-muted-foreground">Run a storage scan to find cleanup opportunities.</div>
