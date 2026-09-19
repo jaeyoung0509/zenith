@@ -704,6 +704,21 @@ mod tests {
         assert_eq!(categories[0].total_bytes, 1_000);
         assert_eq!(categories[0].ambiguous_overlap_count, 1);
         assert_eq!(categories[0].ambiguous_overlap_bytes, 400);
+
+        let parent = categories[0]
+            .items
+            .iter()
+            .find(|item| item.path == "/Users/tester/Library/Cache")
+            .expect("the incomplete container remains visible");
+        assert_eq!(
+            parent.disposition.eligibility,
+            CleanupEligibility::Blocked,
+            "an unresolved observed overlap cannot leave the broader target independently cleanable"
+        );
+        assert_eq!(
+            categories[0].cleanable_bytes, 400,
+            "the ambiguous parent and child cannot both contribute reclaimable bytes"
+        );
     }
 
     #[test]
