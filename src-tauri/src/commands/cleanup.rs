@@ -65,7 +65,10 @@ pub async fn execute_clean(
     state: State<'_, DesktopState>,
 ) -> Result<CleanResult, String> {
     let progress: Arc<dyn CleanupProgressSink> = Arc::new(TauriCleanupProgress::new(on_event));
-    state.cleanup.execute_clean(plan_id, confirmed, progress).await
+    state
+        .cleanup
+        .execute_clean(plan_id, confirmed, progress)
+        .await
 }
 
 #[tauri::command]
