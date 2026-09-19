@@ -133,6 +133,9 @@ impl DirectoryScanner {
         let unit_is_root = !signature.unit_kind().is_enumerated_child();
 
         for (idx, pattern) in signature.paths.iter().enumerate() {
+            if context.cancellation.is_cancelled() {
+                break;
+            }
             let Some(path_buf) = SignatureLoader::expand_path(pattern, context.environment) else {
                 continue;
             };
@@ -165,13 +168,18 @@ impl DirectoryScanner {
             // decides another. A pattern with no selector yields exactly one
             // root and keeps its historical identity.
             for root in roots {
+                if context.cancellation.is_cancelled() {
+                    break;
+                }
                 let root_path = root.path.clone();
                 // The root is reported before it is read: a scan spends its
                 // time inside one root, so this is what lets the interface say
                 // where it is rather than only that it is running.
                 context.progress.root_started(signature, &root_path);
+                if context.cancellation.is_cancelled() {
+                    break;
+                }
                 scanned_roots.push(root_path.clone());
-                context.counters.visit_entry();
                 if let Some(min_age_days) = signature.min_age_days {
                     if !unit_is_root {
                         items.extend(Self::scan_aged_children(
@@ -712,6 +720,13 @@ impl DirectoryScanner {
         running_apps: &crate::applications::RunningApplications,
     ) -> Vec<ScanItem> {
         let environment = context.environment;
+        if context.cancellation.is_cancelled() {
+            return Vec::new();
+        }
+        // This function reads the namespace root directly. Count that root here
+        // instead of in the generic signature loop so every filesystem entry is
+        // represented exactly once in traversal metrics.
+        context.counters.visit_entry();
         // A signature that removes stale entries ages each entry of a namespace;
         // every other aged signature removes a child whole and ages that child's
         // whole tree. The strategy is the difference, and it decides which
@@ -812,6 +827,9 @@ impl DirectoryScanner {
         let mut entry_failure = None;
 
         for entry in entries {
+            if context.cancellation.is_cancelled() {
+                break;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
@@ -1213,6 +1231,16 @@ impl DirectoryScanner {
             skipped_entries: 0,
         };
 
+        if cancellation.is_cancelled() {
+            stats.complete = false;
+            stats.skipped_entries = 1;
+            stats.incomplete_reason = Some(format!(
+                "Scan cancelled while measuring {}",
+                path.display()
+            ));
+            return stats;
+        }
+
         context.counters.visit_entry();
         if current_depth > max_depth {
             stats.complete = false;
@@ -1332,7 +1360,6 @@ impl DirectoryScanner {
         };
 
         for entry in entries {
-            context.counters.visit_entry();
             if cancellation.is_cancelled() {
                 stats.complete = false;
                 stats.skipped_entries += 1;
