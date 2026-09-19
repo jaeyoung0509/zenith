@@ -157,6 +157,8 @@ impl DeletePlan {
     /// Whether any target in this plan requires an explicit confirmation token
     /// at the destructive boundary.
     pub fn requires_confirmation(&self) -> bool {
-        self.targets.iter().any(|target| target.requires_confirmation)
+        self.targets
+            .iter()
+            .any(|target| target.requires_confirmation)
     }
 }
