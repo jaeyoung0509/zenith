@@ -7,9 +7,9 @@
 //!
 //! Two properties make this a boundary rather than a map:
 //!
-//! * **bounded life** — an entry expires after a stated window and the registry
-//!   evicts the oldest one at its cap, so a scan that never reports back cannot
-//!   leak a handle;
+//! * **bounded abandoned life** — an entry whose scan no longer owns the signal
+//!   expires after a stated window, while an active scan remains cancellable;
+//!   the registry also evicts the oldest entry at its hard cap;
 //! * **one signal per id** — registering an id again replaces the signal, which
 //!   is what a retried scan needs, and the probe a scan holds reads the same
 //!   flag the registry stored, so a cancel is never lost to a lookup failure.
@@ -20,7 +20,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::models::CancellationProbe;
 
-/// How long a registered scan may be cancelled after it starts.
+/// How long abandoned cancellation bookkeeping is retained.
+///
+/// Active scans keep another strong reference to their signal and therefore do
+/// not lose their Stop handle merely because this window elapsed.
 pub const DEFAULT_CANCELLATION_TTL_SECS: u64 = 15 * 60;
 /// How many scans one workflow may have in flight before the oldest is dropped.
 pub const DEFAULT_MAX_ACTIVE_CANCELLATIONS: usize = 64;
@@ -87,7 +90,8 @@ impl CancellationRegistry {
         self.lock().remove(scan_id);
     }
 
-    /// The signal registered for one id, when the entry is still live.
+    /// The signal registered for one id while the scan is active or its
+    /// abandoned bookkeeping is still within the retention window.
     pub fn signal(&self, scan_id: &str) -> Option<Arc<AtomicBool>> {
         let now = unix_timestamp();
         let mut entries = self.lock();
@@ -248,8 +252,8 @@ mod tests {
         assert!(probe.is_cancelled());
     }
 
-    /// An entry past its window is treated as gone, so a stale id cannot cancel
-    /// a scan that happens to reuse it later.
+    /// Abandoned bookkeeping past its window is treated as gone, so a stale id
+    /// cannot cancel a scan that happens to reuse it later.
     #[test]
     fn an_expired_entry_is_no_longer_cancellable() {
         let registry = CancellationRegistry::new(0, 4);
