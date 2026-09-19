@@ -72,6 +72,15 @@ pub struct OverlapReport {
 /// which unit keeps the bytes is a property of the units rather than of the
 /// order the filesystem happened to answer in. Categories the resolution
 /// touched state their totals again from the items they still retain.
+///
+/// The fold assumes a container's observation covers its own tree. A walk that
+/// deliberately skipped entries — a blacklisted child, a signature exclusion, a
+/// bundle, a depth cutoff — reports that on the item (`skipped_entry_count`,
+/// `quality`), and a subtree it did not measure is a subtree whose bytes this
+/// pass removes from the totals while the container's deletion also leaves them
+/// in place. The bytes are not lost from the answer: the folded unit keeps its
+/// own measurement in the container's provenance, so the location and its size
+/// stay readable.
 pub fn resolve_unit_overlaps(
     categories: &mut [CategoryResult],
     overlapped: &[OverlappedDiscovery],
@@ -102,9 +111,15 @@ pub fn resolve_unit_overlaps(
     candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
     let mut retained: Vec<(CleanupUnitIdentity, usize, usize)> = Vec::new();
-    // (suppressed category, suppressed item, container category, container item)
-    let mut suppressed: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut suppressed_keys: Vec<CleanupUnitIdentity> = Vec::new();
+    // (suppressed category, suppressed item, container category, container item,
+    //  whether its bytes are already stated by a unit folded above it)
+    let mut suppressed: Vec<(usize, usize, usize, usize, bool)> = Vec::new();
     for (_, key, category_index, item_index) in candidates {
+        // Candidates are visited broadest-first, so a unit inside a unit that
+        // was folded already is part of that unit's bytes: it is folded too,
+        // but contributes them once.
+        let already_counted = suppressed_keys.iter().any(|outer| key.is_within(outer));
         // An identical key was resolved where the unit was discovered. What
         // this pass adds is containment: a unit inside a broader one.
         match retained.iter().find(|(outer, _, _)| key.is_within(outer)) {
@@ -114,14 +129,20 @@ pub fn resolve_unit_overlaps(
                     item_index,
                     *container_category,
                     *container_item,
+                    already_counted,
                 ));
+                if !already_counted {
+                    suppressed_keys.push(key);
+                }
             }
             None => retained.push((key, category_index, item_index)),
         }
     }
 
     let mut removed: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (category_index, item_index, container_category, container_item) in suppressed {
+    for (category_index, item_index, container_category, container_item, already_counted) in
+        suppressed
+    {
         let bytes = categories[category_index].items[item_index].observed_bytes();
         let entry = CleanupOverlap::of(&categories[category_index].items[item_index]);
         // Anything already folded into the suppressed unit travels with it, so
@@ -132,10 +153,14 @@ pub fn resolve_unit_overlaps(
         container.overlaps.push(entry);
         container.overlaps.extend(carried);
         categories[container_category].suppressed_overlap_count += 1;
-        categories[container_category].suppressed_overlap_bytes += bytes;
-
+        // A unit inside a unit that was folded already states the same bytes:
+        // the count says how many units were folded, and the byte total counts
+        // each location once so it can be reconciled against `total_bytes`.
+        if !already_counted {
+            categories[container_category].suppressed_overlap_bytes += bytes;
+            report.suppressed_bytes += bytes;
+        }
         report.suppressed_count += 1;
-        report.suppressed_bytes += bytes;
         touched.insert(container_category);
         touched.insert(category_index);
         removed.entry(category_index).or_default().push(item_index);
@@ -434,10 +459,19 @@ mod tests {
         );
 
         let mut categories = vec![category(vec![leaf.clone(), middle, root])];
-        resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
+        let report = resolve_unit_overlaps(&mut categories, &[], SENSITIVE);
 
         assert_eq!(categories[0].items.len(), 1);
         assert_eq!(categories[0].total_bytes, 2_000);
+        assert_eq!(
+            report.suppressed_count, 2,
+            "both rules that lost their own item are counted"
+        );
+        assert_eq!(
+            report.suppressed_bytes, 800,
+            "the bytes are stated once, by the outermost unit that was folded"
+        );
+        assert_eq!(categories[0].suppressed_overlap_bytes, 800);
         let surviving = &categories[0].items[0];
         let signatures: Vec<&str> = surviving
             .overlaps

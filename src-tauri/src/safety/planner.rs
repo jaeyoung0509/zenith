@@ -136,7 +136,7 @@ impl SafetyPlanner {
 
         for (index, item) in items.iter().enumerate() {
             // Only consider selected items
-            if !item.is_selected || overlapped.contains(&index) {
+            if !item.is_selected {
                 continue;
             }
 
@@ -292,6 +292,14 @@ impl SafetyPlanner {
                         )));
                     }
                 }
+            }
+
+            // A unit inside a unit this plan already authorizes is that unit's
+            // bytes: the plan authorizes the location once. The item is skipped
+            // only here, after every refusal above has run, so an unplannable
+            // item still fails the plan instead of disappearing from it.
+            if overlapped.contains(&index) {
+                continue;
             }
 
             let bytes = item.cleanable_bytes();
@@ -488,6 +496,95 @@ mod tests {
             plan.expected_reclaim_bytes, 16_384,
             "the expectation counts the broader unit's bytes once"
         );
+    }
+
+    /// A unit inside another selected unit is skipped only after every refusal
+    /// has run: an unplannable item fails the plan instead of quietly leaving
+    /// it, even when the broader unit would have covered its bytes.
+    #[test]
+    fn an_unplannable_contained_item_still_fails_the_plan() {
+        use crate::models::{CleanStrategy, CleanupUnit, EntryKind, Signature};
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let parent = fixture.path().join("Cache");
+        let child = parent.join("nested");
+        std::fs::create_dir_all(&child).expect("fixture");
+        std::fs::write(parent.join("data.bin"), vec![1u8; 8_192]).expect("fixture");
+        std::fs::write(child.join("state.bin"), vec![2u8; 8_192]).expect("fixture");
+
+        let mut registry = SignatureRegistry::new();
+        for (id, name, path) in [
+            ("test.parent", "Parent cache", parent.clone()),
+            ("test.child", "Nested cache", child.clone()),
+        ] {
+            registry.register(Signature {
+                id: id.into(),
+                name: name.into(),
+                category: Category::System,
+                risk: RiskTier::Safe,
+                strategy: CleanStrategy::DeleteDirectory,
+                paths: vec![path.to_string_lossy().into_owned()],
+                exclusions: vec![],
+                description: String::new(),
+                min_age_days: None,
+                include_prefixes: vec![],
+                exclude_prefixes: vec![],
+                intensive_only: false,
+                platforms: vec![],
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            });
+        }
+
+        let mut parent_item = ScanItem::mock(
+            "parent-item",
+            "test.parent",
+            "Parent cache",
+            Category::System,
+            RiskTier::Safe,
+            parent.to_string_lossy(),
+            FileSize::new(16_384, Some(16_384)),
+            1,
+        );
+        parent_item.unit = CleanupUnit::fixed_path(parent.to_string_lossy());
+        parent_item.entry_kind = EntryKind::Directory;
+        parent_item.rederive_disposition();
+        parent_item.is_selected = true;
+
+        // A manual-risk item inside the parent: the scan's own accounting would
+        // have folded its verdict into the parent, but a hand-built selection
+        // can still present the pair, and the refusal must win.
+        let mut child_item = ScanItem::mock(
+            "child-item",
+            "test.child",
+            "Nested cache",
+            Category::System,
+            RiskTier::Manual,
+            child.to_string_lossy(),
+            FileSize::new(8_192, Some(8_192)),
+            1,
+        );
+        child_item.unit = CleanupUnit::fixed_path(child.to_string_lossy());
+        child_item.entry_kind = EntryKind::Directory;
+        child_item.rederive_disposition();
+        child_item.is_selected = true;
+
+        let result = SafetyPlanner::create_plan(&[child_item, parent_item], &registry);
+
+        match &result {
+            Err(ZenithError::UnsupportedManualOperation(name)) => {
+                assert_eq!(name, "Nested cache");
+            }
+            other => panic!("the contained unit's refusal is reported, not skipped: {other:?}"),
+        }
     }
 
     /// A namespace enumerated under a broad root names nobody in the catalog, so
