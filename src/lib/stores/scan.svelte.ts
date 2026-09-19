@@ -15,7 +15,7 @@ import {
   tauriQuickCleanSafe,
   tauriScan,
 } from '../utils/tauri';
-import { cleanableBytes, isAutoCleanable, isCleanable } from '../utils/cleanup';
+import { cleanableBytes, isActionable, isAutoCleanable, isCleanable, isProviderBacked } from '../utils/cleanup';
 
 /** How the in-flight (or most recent) scan was started. Drives auto-refresh copy. */
 export type ScanTrigger = 'auto' | 'manual';
@@ -195,8 +195,16 @@ export class ScanStore {
               rebuildSelectedBytes += bytes;
               reclaimableBytes += bytes;
             } else if (item.risk === 'manual') {
-              manualSelectedBytes += bytes;
-              manualSelectedCount++;
+              // A provider-backed manual item is reclaimed by its reviewed
+              // provider, so it is reclaimable through the submission path and
+              // must not read as a blocking manual selection. Manual items
+              // without a provider stay outside the reclaimable total.
+              if (isProviderBacked(item)) {
+                reclaimableBytes += bytes;
+              } else {
+                manualSelectedBytes += bytes;
+                manualSelectedCount++;
+              }
             }
           }
         }
@@ -310,7 +318,7 @@ export class ScanStore {
     for (const item of cat.items) {
       if (select) {
         if (isCleanable(item)) this.selectedMap[item.id] = true;
-      } else if (item.risk !== 'manual') {
+      } else if (isActionable(item)) {
         this.selectedMap[item.id] = false;
       }
     }
@@ -498,7 +506,7 @@ export class ScanStore {
     return this.cleanItems(this.lastScan.categories.flatMap((category) => category.items));
   }
 
-  async cleanItems(items: ScanItem[]): Promise<CleanResult | null> {
+  async cleanItems(items: ScanItem[], confirmed = false): Promise<CleanResult | null> {
     if (this.isCleaning || this.isScanning) return null;
     const refusal = refusalForPreview('Cleaning');
     if (refusal) {
@@ -511,7 +519,7 @@ export class ScanStore {
       return null;
     }
     const selectedItems = items
-      .filter((item) => this.selectedMap[item.id] && item.risk !== 'manual')
+      .filter((item) => this.selectedMap[item.id] && isActionable(item))
       .map((item) => ({ ...item, is_selected: true }));
 
     if (selectedItems.length === 0) {
@@ -531,7 +539,11 @@ export class ScanStore {
       if (this.isStale()) throw new Error('Scan expired. Scan again before cleaning.');
 
       // 2. Execute clean
-      const result = await tauriExecuteClean(plan, (event: CleanEvent) => {
+      if (plan.requires_confirmation && !confirmed) {
+        throw new Error('This cleanup requires explicit confirmation. Review the selected action before cleaning.');
+      }
+
+      const result = await tauriExecuteClean(plan, confirmed, (event: CleanEvent) => {
         switch (event.type) {
           case 'Started':
             this.cleanProgress = {

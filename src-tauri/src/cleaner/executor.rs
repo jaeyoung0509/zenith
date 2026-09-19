@@ -7,6 +7,7 @@ use crate::models::{
 };
 use crate::safety::SafeTreeDeleter;
 use std::time::SystemTime;
+use zenith_core::domain::cleanup::{ProviderOutcome, ProviderStatus};
 use zenith_platform::PlatformEnvironment;
 
 pub struct CleanExecutor;
@@ -77,6 +78,74 @@ fn count_incomplete_items(items: &[CleanItemResult]) -> (u64, u64, u64) {
     )
 }
 
+/// Maps a provider's verified outcome onto the result of one target.
+///
+/// The provider's own status decides the shape, and nothing here can reach a
+/// deletion primitive: a provider action that failed is reported as failed.
+/// The reclaimed amount is the provider's measurement, never the plan's
+/// estimate, and a refusal states zero rather than the bytes it could not
+/// remove.
+fn provider_result(target: &DeleteTarget, outcome: ProviderOutcome) -> CleanItemResult {
+    let detail = outcome.detail.clone();
+    match outcome.status {
+        ProviderStatus::Cleaned => item_result(
+            target,
+            CleanStatus::Success,
+            None,
+            outcome.reclaimed_bytes,
+            detail,
+        ),
+        ProviderStatus::PartiallyCleaned => item_result(
+            target,
+            CleanStatus::Partial,
+            None,
+            outcome.reclaimed_bytes,
+            detail,
+        ),
+        // The build has no adapter for the action the catalog named, so this
+        // is not a failure the user can retry into existence.
+        ProviderStatus::Unsupported => item_result(
+            target,
+            CleanStatus::Failed,
+            Some(CleanFailureReason::ProviderUnavailable),
+            0,
+            Some(detail.unwrap_or_else(|| {
+                "No provider adapter for this action is available on this platform".to_string()
+            })),
+        ),
+        // A prerequisite that does not hold, a store that cannot be read, and a
+        // failed action are one answer to the user: the action did not
+        // complete, and the provider's own words say why.
+        ProviderStatus::PrerequisiteNotMet | ProviderStatus::Blocked | ProviderStatus::Failed => {
+            item_result(
+                target,
+                CleanStatus::Failed,
+                Some(CleanFailureReason::ProviderRefused),
+                0,
+                Some(detail.unwrap_or_else(|| {
+                    format!(
+                        "The provider reported its action {}",
+                        outcome.status.display_name()
+                    )
+                })),
+            )
+        }
+        // An outcome that is still a probe state means the provider never
+        // answered for the action; reporting it as anything but a refusal
+        // would claim a result nobody observed.
+        ProviderStatus::Ready => item_result(
+            target,
+            CleanStatus::Failed,
+            Some(CleanFailureReason::ProviderRefused),
+            0,
+            Some(
+                "The provider did not report an outcome for the action it was asked to perform"
+                    .to_string(),
+            ),
+        ),
+    }
+}
+
 impl CleanExecutor {
     /// Executes a verified DeletePlan safely and securely, emitting streaming CleanEvents.
     ///
@@ -86,6 +155,7 @@ impl CleanExecutor {
     pub fn execute<F>(
         plan: DeletePlan,
         environment: &PlatformEnvironment,
+        providers: &crate::cleaner::LifecycleProviderRegistry,
         mut on_event: F,
     ) -> CleanResult
     where
@@ -121,7 +191,7 @@ impl CleanExecutor {
             // build a Preview or Trash plan without passing through the current
             // service, so only the implemented deletion mode may reach an adapter.
             let result = if plan.mode == CleanupMode::PermanentDelete {
-                Self::clean_target(target, environment)
+                Self::clean_target(target, environment, providers)
             } else {
                 item_result(
                     target,
@@ -193,10 +263,15 @@ impl CleanExecutor {
         clean_result
     }
 
-    fn clean_target(target: &DeleteTarget, environment: &PlatformEnvironment) -> CleanItemResult {
+    fn clean_target(
+        target: &DeleteTarget,
+        environment: &PlatformEnvironment,
+        providers: &crate::cleaner::LifecycleProviderRegistry,
+    ) -> CleanItemResult {
         // The classification decides what the target authorizes: a container
         // prune runs through the runtime's own CLI, a provider prune runs
-        // through the tool's own fixed arguments, and only a filesystem
+        // through the tool's own fixed arguments, a lifecycle provider action
+        // runs through the provider the catalog named, and only a filesystem
         // operation can reach a deletion primitive with `target.path`.
         let Some(operation) = CleanupOperation::of(target) else {
             return item_result(
@@ -204,7 +279,10 @@ impl CleanExecutor {
                 CleanStatus::Failed,
                 Some(CleanFailureReason::Unknown),
                 0,
-                Some("Manual cleanup requires a dedicated adapter".to_string()),
+                Some(
+                    "The planned target authorizes no operation this executor implements; refusing to mutate"
+                        .to_string(),
+                ),
             );
         };
 
@@ -281,6 +359,9 @@ impl CleanExecutor {
                     ),
                 }
             }
+            CleanupOperation::LifecycleProvider(action) => {
+                provider_result(target, providers.execute(&action, environment))
+            }
             CleanupOperation::Filesystem(_) => Self::clean_filesystem_target(target, environment),
         }
     }
@@ -322,7 +403,10 @@ impl CleanExecutor {
             // of these strategies, and `ValidatedTarget` carries the planned
             // strategy unchanged, so no other arm is reachable. Refusing
             // explicitly keeps a future strategy from silently deleting.
-            CleanStrategy::ExternalCommand | CleanStrategy::DockerPrune | CleanStrategy::Manual => {
+            CleanStrategy::ExternalCommand
+            | CleanStrategy::DockerPrune
+            | CleanStrategy::LifecycleProvider
+            | CleanStrategy::Manual => {
                 return item_result(
                     target,
                     CleanStatus::Failed,
@@ -525,6 +609,8 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: None,
+                requires_confirmation: false,
             }],
             expected_reclaim_bytes: 1_048_576,
             risk: crate::models::RiskSummary::default(),
@@ -532,7 +618,12 @@ mod tests {
             mode: CleanupMode::PermanentDelete,
         };
 
-        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
 
         let item = &result.items[0];
         assert_eq!(item.status, CleanStatus::Success);
@@ -588,6 +679,8 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: None,
+                requires_confirmation: false,
             }],
             expected_reclaim_bytes: 4096,
             risk: crate::models::RiskSummary::default(),
@@ -595,7 +688,12 @@ mod tests {
             mode: CleanupMode::PermanentDelete,
         };
 
-        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
 
         assert_eq!(result.items.len(), 1);
         assert!(!removable.exists(), "the deletable sibling must be gone");
@@ -735,6 +833,8 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: None,
+                requires_confirmation: false,
             }],
             expected_reclaim_bytes: 4096,
             risk: crate::models::RiskSummary::default(),
@@ -763,6 +863,8 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: None,
+                requires_confirmation: false,
             }],
             expected_reclaim_bytes: 4096,
             risk: crate::models::RiskSummary::default(),
@@ -785,7 +887,12 @@ mod tests {
         let environment =
             PlatformEnvironment::simulated(zenith_platform::path_algebra::PathFlavor::current());
 
-        let result = CleanExecutor::execute(plan, &environment, |_| {});
+        let result = CleanExecutor::execute(
+            plan,
+            &environment,
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
 
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].status, CleanStatus::Failed);
@@ -812,7 +919,12 @@ mod tests {
         let plan = volatile_plan(&target_dir, true);
         std::fs::remove_dir_all(&target_dir).unwrap();
 
-        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
         assert_eq!(result.failed_count, 0);
         assert_eq!(result.partial_count, 0);
         assert_eq!(result.skipped_count, 1);
@@ -837,7 +949,12 @@ mod tests {
         let plan = volatile_plan(&target_file, false);
         std::fs::remove_file(&target_file).unwrap();
 
-        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
         assert_eq!(result.failed_count, 0);
         assert_eq!(result.skipped_count, 1);
         let item = &result.items[0];
@@ -863,7 +980,12 @@ mod tests {
         std::fs::remove_file(&target).unwrap();
         std::fs::write(&target, b"v2 replaced contents").unwrap();
 
-        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
         assert_eq!(result.failed_count, 0);
         assert_eq!(result.skipped_count, 1);
         let item = &result.items[0];
@@ -874,5 +996,152 @@ mod tests {
             Some(CleanFailureReason::ChangedSinceScan)
         );
         assert!(target.exists(), "the replacement must not be deleted");
+    }
+
+    /// A plan whose single target is a lifecycle provider action, naming the
+    /// provider the catalog declared.
+    fn lifecycle_plan(provider_id: &str, pseudo_path: &str, expected_bytes: u64) -> DeletePlan {
+        DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-lifecycle".to_string(),
+            targets: vec![DeleteTarget {
+                item_id: "lifecycle-target".to_string(),
+                signature_id: "test.stated.store".to_string(),
+                name: "Stated store".to_string(),
+                path: std::path::PathBuf::from(pseudo_path),
+                strategy: CleanStrategy::LifecycleProvider,
+                expected_bytes,
+                risk: crate::models::RiskTier::Manual,
+                identity: None,
+                exclusions: Vec::new(),
+                min_age_days: None,
+                unit: crate::models::CleanupUnit::new(
+                    crate::models::CleanupUnitKind::ProviderAction,
+                    pseudo_path,
+                    pseudo_path,
+                ),
+                target_kind: crate::models::EntryKind::Other,
+                owner: crate::models::CleanupOwnership::unknown(),
+                process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: Some(provider_id.to_string()),
+                requires_confirmation: true,
+            }],
+            expected_reclaim_bytes: expected_bytes,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+            mode: CleanupMode::PermanentDelete,
+        }
+    }
+
+    /// The provider's measurement is what the run reports, and the plan's
+    /// estimate stays a separate field — the same contract a filesystem target
+    /// answers to.
+    #[test]
+    fn a_lifecycle_action_reports_the_providers_measurement_not_the_estimate() {
+        use crate::cleaner::providers::test_support::StatedProvider;
+
+        let provider = StatedProvider::holding(3_000, 4).with_outcome(
+            zenith_core::domain::cleanup::ProviderOutcome::cleaned(2_500, Some(500)),
+        );
+        let providers = crate::cleaner::LifecycleProviderRegistry::new(vec![provider.shared()]);
+
+        let result = CleanExecutor::execute(
+            lifecycle_plan("test.stated", "stated-store://all-volumes", 9_999),
+            &PlatformEnvironment::native(),
+            &providers,
+            |_| {},
+        );
+
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Success);
+        assert_eq!(
+            item.estimated_bytes, 9_999,
+            "the estimate is what the plan authorized"
+        );
+        assert_eq!(
+            item.bytes_reclaimed, 2_500,
+            "the reclaimed amount is what the provider verified"
+        );
+        assert_eq!(result.total_reclaimed_bytes, 2_500);
+        assert_eq!(result.failed_count, 0);
+    }
+
+    /// A provider that refuses leaves the reviewed path untouched: the
+    /// pseudo-location a provider target carries is never deletion authority,
+    /// so a refused action cannot degrade into a filesystem delete.
+    #[test]
+    fn a_refused_lifecycle_action_never_falls_through_to_filesystem_deletion() {
+        use crate::cleaner::providers::test_support::{refusing_provider, StatedProvider};
+        use zenith_core::domain::cleanup::{ProviderOutcome, ProviderStatus};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let reviewed = fixture.path().join("stated-store");
+        std::fs::create_dir_all(&reviewed).unwrap();
+        std::fs::write(reviewed.join("payload.bin"), vec![3u8; 128]).unwrap();
+
+        // The plan carries a real directory as its pseudo location, which is
+        // exactly the shape that must never become deletion authority.
+        let real_path = reviewed.to_string_lossy().to_string();
+        let providers = crate::cleaner::LifecycleProviderRegistry::new(vec![refusing_provider(
+            ProviderStatus::PrerequisiteNotMet,
+            "the owning service is still running",
+        )]);
+
+        let result = CleanExecutor::execute(
+            lifecycle_plan("test.stated", &real_path, 1_024),
+            &PlatformEnvironment::native(),
+            &providers,
+            |_| {},
+        );
+
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Failed);
+        assert_eq!(
+            item.failure_reason,
+            Some(CleanFailureReason::ProviderRefused)
+        );
+        assert_eq!(item.bytes_reclaimed, 0);
+        assert_eq!(result.total_reclaimed_bytes, 0);
+        assert!(
+            reviewed.join("payload.bin").is_file(),
+            "a refused provider action must leave the reviewed path untouched"
+        );
+
+        // An action nothing implements is its own answer: the user cannot
+        // retry it into existence, and it says so.
+        let empty = crate::cleaner::LifecycleProviderRegistry::new(Vec::new());
+        let result = CleanExecutor::execute(
+            lifecycle_plan("test.missing", &real_path, 1_024),
+            &PlatformEnvironment::native(),
+            &empty,
+            |_| {},
+        );
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Failed);
+        assert_eq!(
+            item.failure_reason,
+            Some(CleanFailureReason::ProviderUnavailable)
+        );
+        assert!(
+            reviewed.join("payload.bin").is_file(),
+            "an unimplemented provider action deletes nothing"
+        );
+
+        // A partial outcome keeps `success` and reports the remainder.
+        let partial = StatedProvider::holding(4_000, 2).with_outcome(
+            ProviderOutcome::partially_cleaned(3_000, Some(1_000), "1000 bytes remain"),
+        );
+        let providers = crate::cleaner::LifecycleProviderRegistry::new(vec![partial.shared()]);
+        let result = CleanExecutor::execute(
+            lifecycle_plan("test.stated", &real_path, 4_000),
+            &PlatformEnvironment::native(),
+            &providers,
+            |_| {},
+        );
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Partial);
+        assert!(item.success);
+        assert_eq!(item.bytes_reclaimed, 3_000);
+        assert_eq!(result.partial_count, 1);
     }
 }

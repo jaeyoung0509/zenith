@@ -89,6 +89,7 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -139,6 +140,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -158,6 +160,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
 
     let result = ScanEngine::scan(
         &registry,
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         Some(&[Category::System]),
         &[],
         false,
@@ -173,6 +176,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
     let excluded = vec!["large".to_string()];
     let filtered = ScanEngine::scan(
         &registry,
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         Some(&[Category::System]),
         &excluded,
         false,

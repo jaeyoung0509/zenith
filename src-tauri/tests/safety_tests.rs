@@ -75,6 +75,8 @@ fn validated_filesystem_target(
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&target, environment) {
@@ -105,6 +107,8 @@ fn present_filesystem_target_without_identity_fails_closed() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
@@ -521,6 +525,7 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -541,7 +546,12 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets.len(), 1);
 
-    let clean_res = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+    let clean_res = CleanExecutor::execute(
+        plan,
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert_eq!(clean_res.items.len(), 1);
     assert!(clean_res.items[0].success);
 
@@ -782,6 +792,7 @@ fn manual_strategy_never_enters_generic_cleaner() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -872,6 +883,7 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         intensive_only: false,
         platforms: vec![],
         provider: "test".into(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -898,7 +910,12 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         .ownership();
     item.is_selected = true;
     let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
-    let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+    let result = CleanExecutor::execute(
+        plan,
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert!(!result.items[0].success);
     assert_eq!(
         result.items[0].failure_reason,
@@ -937,6 +954,8 @@ fn recursive_delete_refuses_a_unit_with_nested_protected_state() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
     match SafetyValidator::revalidate(&target, &environment) {
         RevalidationOutcome::Skipped(result) => {
@@ -1120,6 +1139,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -1144,7 +1164,12 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
     let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
     assert_eq!(plan.targets[0].min_age_days, Some(3));
 
-    let clean_res = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+    let clean_res = CleanExecutor::execute(
+        plan,
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert_eq!(clean_res.items.len(), 1);
     assert_eq!(
         clean_res.items[0].status,
@@ -1467,6 +1492,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        lifecycle_provider_action: false,
+        requires_confirmation: false,
         overlaps: Vec::new(),
         is_selected: partial_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
@@ -1509,6 +1536,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        lifecycle_provider_action: false,
+        requires_confirmation: false,
         overlaps: Vec::new(),
         is_selected: unavailable_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
@@ -1768,6 +1797,8 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             owner_running: false,
+            lifecycle_provider_action: false,
+            requires_confirmation: false,
             overlaps: Vec::new(),
             is_selected: disposition.eligibility == CleanupEligibility::AutoCleanable,
             last_modified: None,
@@ -1823,6 +1854,7 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -1845,7 +1877,12 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
 
     let plan = SafetyPlanner::create_plan(std::slice::from_ref(&item), &registry)
         .expect("the first plan is authorized");
-    let first = CleanExecutor::execute(plan.clone(), &PlatformEnvironment::native(), |_| {});
+    let first = CleanExecutor::execute(
+        plan.clone(),
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert_eq!(
         first.items[0].status,
         zenith_lib::models::CleanStatus::Success
@@ -1855,7 +1892,12 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
     // Something else now sits where the plan's target used to be.
     fs::write(&payload, b"second generation").unwrap();
 
-    let second = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+    let second = CleanExecutor::execute(
+        plan,
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert_eq!(
         second.items[0].status,
         zenith_lib::models::CleanStatus::Skipped
@@ -1894,6 +1936,8 @@ fn a_target_outside_its_authorizing_unit_is_refused() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
     target.identity = ToctouGuard::capture(&outside);
 
@@ -1942,6 +1986,8 @@ fn structured_state_is_refused_by_the_execution_guard() {
             target_kind: EntryKind::File,
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
+            provider_id: None,
+            requires_confirmation: false,
         };
 
         match SafetyValidator::revalidate(&target, &PlatformEnvironment::native()) {
@@ -1994,6 +2040,7 @@ fn the_planner_refuses_a_structured_target() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -2088,6 +2135,7 @@ fn an_unreadable_root_is_reported_with_its_reason() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -2159,6 +2207,7 @@ fn a_running_owner_keeps_its_cache_out_of_the_default_selection() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -2325,6 +2374,7 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
         let scan = |intensive: bool| {
             ScanEngine::scan(
                 &registry,
+                &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
                 Some(&order),
                 &[],
                 intensive,
@@ -2444,6 +2494,7 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -2484,7 +2535,12 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
     selected.is_selected = true;
     let plan = SafetyPlanner::create_plan(&[selected], &registry).expect("plan");
     assert_eq!(plan.expected_reclaim_bytes, cleanable);
-    let result = CleanExecutor::execute(plan.clone(), &PlatformEnvironment::native(), |_| {});
+    let result = CleanExecutor::execute(
+        plan.clone(),
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
 
     assert!(!old_blob.exists(), "the aged entry is removed");
     assert!(
@@ -2510,7 +2566,12 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
     assert_eq!(result.failed_count, 0);
 
     // A second run has nothing left that satisfies the policy.
-    let again = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+    let again = CleanExecutor::execute(
+        plan,
+        &PlatformEnvironment::native(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert_eq!(
         again.items[0].status,
         zenith_lib::models::CleanStatus::Skipped
@@ -2544,6 +2605,8 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
             target_kind: EntryKind::Directory,
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
+            provider_id: None,
+            requires_confirmation: false,
         }],
         expected_reclaim_bytes: 4,
         risk: zenith_lib::models::RiskSummary::default(),
@@ -2564,7 +2627,12 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
     for mode in [CleanupMode::Preview, CleanupMode::Trash] {
         let mut refused_plan = plan.clone();
         refused_plan.mode = mode;
-        let result = CleanExecutor::execute(refused_plan, &native_environment(), |_| {});
+        let result = CleanExecutor::execute(
+            refused_plan,
+            &native_environment(),
+            &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            |_| {},
+        );
         assert_eq!(result.failed_count, 1, "{mode:?} must be refused");
         assert_eq!(result.total_reclaimed_bytes, 0);
         assert!(
@@ -2605,6 +2673,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         priority: 0,
         fail_if_running: Vec::new(),
         provider: String::new(),
+        provider_id: None,
         management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
@@ -2645,6 +2714,8 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
             target_kind: EntryKind::Directory,
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
+            provider_id: None,
+            requires_confirmation: false,
         }],
         expected_reclaim_bytes: 16,
         risk: zenith_lib::models::RiskSummary::default(),
@@ -2652,7 +2723,12 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         mode: CleanupMode::PermanentDelete,
     };
 
-    let result = CleanExecutor::execute(plan, &native_environment(), |_| {});
+    let result = CleanExecutor::execute(
+        plan,
+        &native_environment(),
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
     assert_eq!(result.skipped_count, 1);
     assert_eq!(
         result.items[0].failure_reason,
@@ -2713,6 +2789,8 @@ fn a_file_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
         target_kind: EntryKind::File,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2759,6 +2837,8 @@ fn a_directory_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2803,6 +2883,8 @@ fn a_target_that_changed_kind_between_scan_and_clean_is_skipped() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2839,6 +2921,8 @@ fn stale_cleanup_requires_identity_at_revalidation() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2893,6 +2977,8 @@ fn stale_cleanup_allows_mtime_change_with_same_entity() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2934,6 +3020,8 @@ fn stale_cleanup_refuses_replaced_directory_at_revalidation() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     match SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native()) {
@@ -2982,6 +3070,8 @@ fn stale_cleanup_refuses_incomplete_directory_tree_at_revalidation() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        provider_id: None,
+        requires_confirmation: false,
     };
 
     let outcome = SafetyValidator::revalidate(&plan_target, &PlatformEnvironment::native());
@@ -3195,6 +3285,8 @@ fn test_nested_protected_app_bundle_fails_closed() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        lifecycle_provider_action: false,
+        requires_confirmation: false,
         overlaps: Vec::new(),
         is_selected: false,
         last_modified: None,

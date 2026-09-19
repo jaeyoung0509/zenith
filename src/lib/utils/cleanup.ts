@@ -54,6 +54,23 @@ export function isAutoCleanable(item: ScanItem): boolean {
   return item.disposition?.eligibility === 'auto_cleanable' && cleanableBytes(item) > 0;
 }
 
+/** Whether a reviewed lifecycle provider runs this item's cleanup instead of generic deletion. */
+export function isProviderBacked(item: ScanItem): boolean {
+  return item.lifecycle_provider_action === true;
+}
+
+/**
+ * Whether the submission path may hand this item to cleanup.
+ *
+ * The manual tier is refused generic cleanup because those items name a
+ * management action Zenith does not own. A provider-backed manual item is the
+ * one exception: its signature names the operation that will run, so the
+ * reviewed provider performs it like any other cleanable row.
+ */
+export function isActionable(item: ScanItem): boolean {
+  return isCleanable(item) && (item.risk !== 'manual' || isProviderBacked(item));
+}
+
 /** Whether the item is explicitly blocked from generic cleanup (e.g. nested .app, inaccessible). */
 export function isBlocked(item: ScanItem): boolean {
   return !item.disposition || item.disposition.eligibility === 'blocked';

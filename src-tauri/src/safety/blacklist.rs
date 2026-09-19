@@ -808,6 +808,23 @@ mod tests {
         allowed(r"D:\Users\me\projects\..\projects\repo");
     }
 
+    /// The shell's own Recycle Bin store is refused on every volume: the only
+    /// supported way to reclaim its space is the interface that maintains its
+    /// index, which is never a filesystem delete.
+    #[test]
+    fn the_recycle_bin_store_is_denied_whatever_its_spelling() {
+        for path in [
+            r"C:\$Recycle.Bin",
+            r"D:\$Recycle.Bin\S-1-5-21-1",
+            r"Z:\$RECYCLE.BIN\S-1-5-21-1\$R1234.txt",
+            r"D:\RECYCLER",
+        ] {
+            assert_eq!(denied(path), "Recycle Bin store", "path {path}");
+        }
+        // The same name below the drive root is an ordinary directory.
+        allowed(r"D:\Users\me\projects\$Recycle.Bin");
+    }
+
     #[test]
     fn home_app_data_and_sensitive_directories_are_denied() {
         assert_eq!(denied(r"D:\Users\me"), "user home");

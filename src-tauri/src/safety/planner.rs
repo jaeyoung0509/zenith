@@ -152,9 +152,12 @@ impl SafetyPlanner {
                 continue;
             }
 
-            // Read-only adapter observations do not need a registry signature, but they must
-            // always fail before any generic filesystem planning is attempted.
-            if item.risk == RiskTier::Manual {
+            // Read-only adapter observations do not need a registry signature,
+            // but they must always fail before any generic filesystem planning
+            // is attempted. The one exception is a provider action: it owns no
+            // host path either, and the signature below must still declare the
+            // provider operation before it is allowed through.
+            if item.risk == RiskTier::Manual && !item.lifecycle_provider_action {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
@@ -197,6 +200,41 @@ impl SafetyPlanner {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
+            // A manual-tier item that claims a provider unit is executable only
+            // when the catalog entry declares the provider action: a discovery
+            // rule cannot carry the tier past the refusal above on its own.
+            let provider_action = signature.strategy == CleanStrategy::LifecycleProvider;
+            if item.lifecycle_provider_action != provider_action {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' disagrees with the catalog about whether a lifecycle provider owns its cleanup; scan again",
+                    item.name
+                )));
+            }
+            if item.risk == RiskTier::Manual && !provider_action {
+                return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
+            }
+
+            // A provider action is dispatched by the id the catalog named, so a
+            // plan that cannot name one describes a target nothing can carry
+            // out. It is refused here rather than discovered at execution time.
+            let provider_id = if provider_action {
+                match signature
+                    .provider_id
+                    .as_deref()
+                    .filter(|provider_id| !provider_id.trim().is_empty())
+                {
+                    Some(provider_id) => Some(provider_id.to_string()),
+                    None => {
+                        return Err(ZenithError::InvalidPlan(format!(
+                            "Item '{}' is a lifecycle provider action whose signature names no provider; scan again",
+                            item.name
+                        )))
+                    }
+                }
+            } else {
+                None
+            };
+
             // The unit granularity the item claims must be the granularity the
             // signature declares, so a discovery rule cannot widen what a
             // signature authorizes.
@@ -224,9 +262,19 @@ impl SafetyPlanner {
             let strategy = signature.strategy;
             let mut identity = None;
 
-            if strategy == CleanStrategy::DockerPrune {
-                // DockerPrune uses pseudo paths (e.g. docker://images/dangling) and dedicated Docker CLI adapters.
-                // It does not operate on arbitrary host filesystem paths.
+            // A provider action is not a filesystem operation at all: it owns
+            // no host path, so the pseudo location carries no deletion
+            // authority, and the checks below — which exist to authorize a
+            // path — do not apply to it. The provider re-derives its own state
+            // at execution time instead.
+            if matches!(
+                strategy,
+                CleanStrategy::DockerPrune | CleanStrategy::LifecycleProvider
+            ) {
+                // DockerPrune uses pseudo paths (e.g. docker://images/dangling)
+                // and dedicated Docker CLI adapters; a lifecycle provider uses
+                // the stable location its own implementation declares. Neither
+                // operates on a host filesystem path.
             } else {
                 // Filesystem strategies: DeleteContents, DeleteDirectory, ExternalCommand
                 if !signature.paths.is_empty() {
@@ -333,6 +381,8 @@ impl SafetyPlanner {
                 target_kind: item.entry_kind,
                 owner: item.ownership.clone(),
                 process_guard: signature.process_guard(),
+                provider_id: provider_id.clone(),
+                requires_confirmation: item.requires_confirmation,
             });
         }
 
@@ -396,6 +446,8 @@ mod tests {
             entry_kind: crate::models::EntryKind::File,
             gate: Default::default(),
             owner_running: false,
+            lifecycle_provider_action: false,
+            requires_confirmation: false,
             overlaps: Vec::new(),
             is_selected: true,
             last_modified: None,
@@ -411,6 +463,101 @@ mod tests {
             Err(ZenithError::UnsupportedManualOperation(name))
                 if name == "OrbStack VM Storage"
         ));
+    }
+
+    /// A provider-backed unit is plannable by explicit selection, and the plan
+    /// names the one operation that carries it out. The manual tier still
+    /// refuses everything generic: a unit that claims a provider without a
+    /// catalog entry declaring one is refused, and so is a lifecycle signature
+    /// that names no provider at all.
+    #[test]
+    fn a_provider_backed_unit_plans_through_the_provider_the_catalog_named() {
+        use crate::cleaner::LifecycleProviderRegistry;
+        use crate::models::{CleanStrategy, Signature};
+        use zenith_platform::path_algebra::PathFlavor;
+        use zenith_platform::PlatformEnvironment;
+
+        fn provider_signature(provider_id: Option<&str>) -> Signature {
+            Signature {
+                id: "test.stated.store".to_string(),
+                name: "Stated Store".to_string(),
+                category: Category::System,
+                risk: RiskTier::Manual,
+                strategy: CleanStrategy::LifecycleProvider,
+                paths: Vec::new(),
+                exclusions: vec![],
+                description: String::new(),
+                min_age_days: None,
+                include_prefixes: vec![],
+                exclude_prefixes: vec![],
+                intensive_only: false,
+                platforms: vec![],
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                provider_id: provider_id.map(str::to_string),
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            }
+        }
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let providers = LifecycleProviderRegistry::new(vec![
+            crate::cleaner::providers::test_support::StatedProvider::holding(2_048, 2).shared(),
+        ]);
+        let mut registry = SignatureRegistry::new();
+        registry.register(provider_signature(Some("test.stated")));
+
+        let items = providers.scan_items(&registry, Category::System, false, &[], &environment);
+        let mut item = items
+            .into_iter()
+            .next()
+            .expect("the provider offers a candidate");
+        assert!(
+            !item.is_selected,
+            "the scan offers a provider action without pre-selecting it"
+        );
+        item.is_selected = true;
+
+        let plan = SafetyPlanner::create_plan(&[item.clone()], &registry)
+            .expect("an explicitly selected provider action is plannable");
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].strategy, CleanStrategy::LifecycleProvider);
+        assert_eq!(plan.targets[0].provider_id.as_deref(), Some("test.stated"));
+        assert_eq!(
+            plan.targets[0].unit.kind,
+            crate::models::CleanupUnitKind::ProviderAction
+        );
+        assert_eq!(plan.expected_reclaim_bytes, 2_048);
+
+        // The catalog entry is the authority: the same item under a signature
+        // that does not declare the provider operation is refused.
+        let mut filesystem_registry = SignatureRegistry::new();
+        let mut filesystem_signature = provider_signature(Some("test.stated"));
+        filesystem_signature.strategy = CleanStrategy::DeleteContents;
+        filesystem_signature.risk = RiskTier::Manual;
+        filesystem_registry.register(filesystem_signature);
+        let refused = SafetyPlanner::create_plan(&[item.clone()], &filesystem_registry);
+        assert!(
+            matches!(&refused, Err(ZenithError::InvalidPlan(message)) if message.contains("disagrees with the catalog")),
+            "a manual unit cannot claim lifecycle-provider authority the catalog does not declare: {refused:?}"
+        );
+
+        // A catalog entry that names no provider describes an action nothing
+        // can carry out, so the plan refuses it rather than leaving a target
+        // the executor would have to guess about.
+        let mut unnamed_registry = SignatureRegistry::new();
+        unnamed_registry.register(provider_signature(None));
+        let refused = SafetyPlanner::create_plan(&[item], &unnamed_registry);
+        assert!(
+            matches!(&refused, Err(ZenithError::InvalidPlan(message)) if message.contains("names no provider")),
+            "a lifecycle signature without a provider id cannot be planned: {refused:?}"
+        );
     }
 
     /// A plan authorizes each location once: a unit inside another selected
@@ -461,6 +608,7 @@ mod tests {
                 priority: 0,
                 fail_if_running: Vec::new(),
                 provider: String::new(),
+                provider_id: None,
                 management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
@@ -549,6 +697,7 @@ mod tests {
                 priority: 0,
                 fail_if_running: Vec::new(),
                 provider: String::new(),
+                provider_id: None,
                 management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
@@ -641,6 +790,7 @@ mod tests {
                 priority: 0,
                 fail_if_running: Vec::new(),
                 provider: String::new(),
+                provider_id: None,
                 management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
@@ -707,6 +857,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),

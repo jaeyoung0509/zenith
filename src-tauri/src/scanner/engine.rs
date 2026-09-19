@@ -1,4 +1,5 @@
 use crate::cache_providers::CacheProviderRegistry;
+use crate::cleaner::LifecycleProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
@@ -290,8 +291,15 @@ impl ScanEngine {
     /// The environment is threaded explicitly: signature paths, size
     /// exclusions, and external provider caches all resolve through it, so a
     /// scan cannot silently fall back to the running process's own profile.
+    /// Lifecycle providers are threaded the same way: which providers exist is
+    /// decided by the caller that owns them, not by the scan.
+    /// The request's own facts are passed explicitly rather than bundled: each
+    /// one is a decision the caller owns, and a struct would only move the same
+    /// list one call site away.
+    #[allow(clippy::too_many_arguments)]
     pub fn scan<F>(
         registry: &SignatureRegistry,
+        lifecycle_providers: &LifecycleProviderRegistry,
         categories_filter: Option<&[Category]>,
         excluded_signatures: &[String],
         intensive_cleanup: bool,
@@ -395,7 +403,30 @@ impl ScanEngine {
                 }
             }
 
-            // 3. Typed container adapters can report cleanable or observation-only storage.
+            // 3. Lifecycle providers own stores no path-shaped rule may touch.
+            //    Their candidates are discovered here — in the category their
+            //    catalog entry declares — and are never auto-selected.
+            if !was_cancelled {
+                for item in lifecycle_providers.scan_items(
+                    registry,
+                    category,
+                    intensive_cleanup,
+                    excluded_signatures,
+                    environment,
+                ) {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
+                    if let Some(retained) = accumulator.push(item) {
+                        on_event(ScanEvent::ItemFound {
+                            item: retained.clone(),
+                        });
+                    }
+                }
+            }
+
+            // 4. Typed container adapters can report cleanable or observation-only storage.
             if !was_cancelled && category == Category::Container {
                 let adapter_items = DockerAdapter::scan_items(environment)
                     .into_iter()
@@ -524,6 +555,7 @@ impl ScanEngine {
 #[cfg(test)]
 mod tests {
     use super::{aggregate_quality, CategoryAccumulator, ScanEngine};
+    use crate::cleaner::LifecycleProviderRegistry;
     use crate::models::{
         Category, CleanStrategy, FileSize, ObservationQuality, PathIdentity, RiskTier, ScanEvent,
         ScanItem, Signature,
@@ -573,11 +605,69 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
             reclaimable_is_lower_bound: false,
         }
+    }
+
+    /// A lifecycle provider's candidate reaches the scan through the category
+    /// its catalog entry declares: discovered with the provider's own
+    /// measurement, offered for explicit selection, and never pre-selected —
+    /// while nothing about the underlying store becomes generically deletable.
+    #[test]
+    fn a_lifecycle_provider_candidate_is_discovered_and_never_pre_selected() {
+        use crate::cleaner::providers::test_support::StatedProvider;
+        use crate::models::{CleanupUnitKind, PlatformKind};
+
+        let mut registry = SignatureRegistry::new();
+        let mut entry = signature(
+            "test.stated.store",
+            "Stated Store",
+            Category::System,
+            Path::new("/unused"),
+            vec![],
+            None,
+        );
+        entry.risk = RiskTier::Manual;
+        entry.strategy = CleanStrategy::LifecycleProvider;
+        entry.provider_id = Some("test.stated".to_string());
+        entry.platforms = vec![PlatformKind::current()];
+        entry.paths = Vec::new();
+        registry.register(entry);
+
+        let providers =
+            LifecycleProviderRegistry::new(vec![StatedProvider::holding(6_000, 3).shared()]);
+        let result = ScanEngine::scan(
+            &registry,
+            &providers,
+            Some(&[Category::System]),
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        let items = &result.categories[0].items;
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "test.stated.store");
+        assert_eq!(item.unit.kind, CleanupUnitKind::ProviderAction);
+        assert_eq!(item.size.observed_bytes(), 6_000);
+        assert_eq!(item.file_count, 3);
+        assert!(item.disposition.is_cleanable());
+        assert!(
+            !item.is_selected,
+            "a scan never pre-selects a provider action"
+        );
+        assert_eq!(result.total_bytes, 6_000);
+        assert_eq!(
+            result.cleanable_bytes, 6_000,
+            "the bytes are cleanable, through the provider that reported them"
+        );
     }
 
     /// Three entries a measurement must not account for: the named exclusion,
@@ -622,6 +712,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -740,6 +831,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -808,6 +900,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -871,6 +964,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -973,6 +1067,7 @@ mod tests {
         let scan = || {
             ScanEngine::scan(
                 &registry,
+                &LifecycleProviderRegistry::new(Vec::new()),
                 None,
                 &[],
                 false,
@@ -1130,6 +1225,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1227,6 +1323,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1311,6 +1408,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1393,6 +1491,7 @@ mod tests {
         let mut events = Vec::new();
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             Some(&[Category::System]),
             &[],
             false,
@@ -1489,6 +1588,7 @@ mod tests {
 
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1553,6 +1653,7 @@ mod tests {
         };
         let result = ScanEngine::scan(
             &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::plan_store::PlanStore;
 use super::scan_service::ScanService;
 use super::scan_store::ScanStore;
-use crate::cleaner::CleanExecutor;
+use crate::cleaner::{CleanExecutor, LifecycleProviderRegistry};
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
     CleanEvent, CleanResult, CleanStrategy, CleanupEligibility, CleanupProgressSink, DeletePlan,
@@ -64,7 +64,7 @@ pub fn select_quick_clean_safe_candidates(
 /// unified security, validation, invalidation, and execution pipeline.
 #[derive(Debug)]
 enum CleanupIntent {
-    ReviewedSelection { plan_id: Uuid },
+    ReviewedSelection { plan_id: Uuid, confirmed: bool },
     QuickSafe,
 }
 
@@ -81,6 +81,7 @@ pub struct CleanupService {
     environment: Arc<PlatformEnvironment>,
     registry: Arc<SignatureRegistry>,
     docker_status_cache: Arc<DockerStatusCache>,
+    lifecycle_providers: Arc<LifecycleProviderRegistry>,
     platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
 }
 
@@ -95,6 +96,7 @@ impl CleanupService {
         environment: Arc<PlatformEnvironment>,
         registry: Arc<SignatureRegistry>,
         docker_status_cache: Arc<DockerStatusCache>,
+        lifecycle_providers: Arc<LifecycleProviderRegistry>,
         platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
     ) -> Self {
         Self {
@@ -106,6 +108,7 @@ impl CleanupService {
             environment,
             registry,
             docker_status_cache,
+            lifecycle_providers,
             platform_capabilities,
         }
     }
@@ -222,10 +225,15 @@ impl CleanupService {
     pub async fn execute_clean(
         &self,
         plan_id: Uuid,
+        confirmed: bool,
         progress: Arc<dyn CleanupProgressSink>,
     ) -> Result<CleanResult, String> {
-        self.execute_intent(CleanupIntent::ReviewedSelection { plan_id }, None, progress)
-            .await
+        self.execute_intent(
+            CleanupIntent::ReviewedSelection { plan_id, confirmed },
+            None,
+            progress,
+        )
+        .await
     }
 
     /// Executes Quick Clean for the Safe subset of a complete, current scan.
@@ -263,6 +271,7 @@ impl CleanupService {
         let environment = self.environment.clone();
         let registry = self.registry.clone();
         let docker_status_cache = self.docker_status_cache.clone();
+        let lifecycle_providers = self.lifecycle_providers.clone();
 
         crate::blocking::run_blocking(
             move || -> Result<CleanResult, String> {
@@ -270,8 +279,14 @@ impl CleanupService {
                     let now = unix_timestamp();
 
                     let plan: DeletePlan = match intent {
-                        CleanupIntent::ReviewedSelection { plan_id } => {
+                        CleanupIntent::ReviewedSelection { plan_id, confirmed } => {
                             let plan = plan_store.take_valid(plan_id, now)?;
+                            if plan.requires_confirmation() && !confirmed {
+                                return Err(
+                                    "This cleanup includes an action that requires explicit confirmation. Review the plan and confirm it before cleaning."
+                                        .to_string(),
+                                );
+                            }
                             // Invalidate scan atomically so pre-cleanup inventory cannot be reused
                             scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
                             plan
@@ -325,6 +340,13 @@ impl CleanupService {
                             )
                             .map_err(|e| e.to_string())?;
 
+                            if plan.requires_confirmation() {
+                                return Err(
+                                    "Quick Clean cannot execute actions that require explicit confirmation."
+                                        .to_string(),
+                                );
+                            }
+
                             // Invalidate scan atomically
                             scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
                             plan
@@ -354,6 +376,7 @@ impl CleanupService {
                     Ok(CleanExecutor::execute(
                         plan,
                         &environment,
+                        &lifecycle_providers,
                         move |event: CleanEvent| {
                             progress.emit(event);
                         },
@@ -469,7 +492,11 @@ mod tests {
     async fn cleanup_service_plan_and_execution_lifecycle() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
@@ -486,6 +513,7 @@ mod tests {
             env,
             registry,
             docker_cache,
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             capabilities,
         );
 
@@ -501,6 +529,103 @@ mod tests {
             .create_delete_plan("scan_123".to_string(), vec!["unknown".to_string()])
             .await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_confirmation_required_provider_cannot_execute_without_confirmation() {
+        use crate::cleaner::providers::test_support::StatedProvider;
+
+        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let mut registry = SignatureRegistry::new();
+        registry.register(Signature {
+            id: "test.stated.store".to_string(),
+            name: "Stated Store".to_string(),
+            category: Category::System,
+            risk: RiskTier::Manual,
+            strategy: CleanStrategy::LifecycleProvider,
+            paths: Vec::new(),
+            exclusions: Vec::new(),
+            description: "A provider-owned store.".to_string(),
+            min_age_days: None,
+            include_prefixes: Vec::new(),
+            exclude_prefixes: Vec::new(),
+            intensive_only: false,
+            platforms: vec![crate::models::PlatformKind::current()],
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
+            provider: "Stated Owner".to_string(),
+            provider_id: Some("test.stated".to_string()),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        });
+        let registry = Arc::new(registry);
+        let providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(vec![
+            StatedProvider::holding(2_048, 1).shared(),
+        ]));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            providers.clone(),
+            env.clone(),
+        ));
+        let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
+        let scan_store = Arc::new(ScanStore::new());
+        let service = CleanupService::new(
+            scan_service,
+            plan_store,
+            scan_store.clone(),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            env.clone(),
+            registry.clone(),
+            Arc::new(DockerStatusCache::new()),
+            providers.clone(),
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        );
+
+        let items = providers.scan_items(&registry, Category::System, false, &[], &env);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].requires_confirmation);
+        assert_eq!(
+            items[0].disposition.eligibility,
+            crate::models::CleanupEligibility::Reviewable
+        );
+        scan_store.set(make_test_scan(items));
+
+        let preview = service
+            .create_delete_plan(
+                "scan_123".to_string(),
+                vec!["test.stated.store".to_string()],
+            )
+            .await
+            .expect("provider selection creates a plan");
+        assert!(preview.requires_confirmation);
+        assert!(preview.targets[0].requires_confirmation);
+
+        let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
+        let refused = service
+            .execute_clean(preview.id, false, progress.clone())
+            .await
+            .expect_err("confirmation-required plan must fail closed");
+        assert!(refused.contains("explicit confirmation"), "{refused}");
+
+        let confirmed_preview = service
+            .create_delete_plan(
+                "scan_123".to_string(),
+                vec!["test.stated.store".to_string()],
+            )
+            .await
+            .expect("the unconfirmed refusal leaves the scan available for review");
+        let result = service
+            .execute_clean(confirmed_preview.id, true, progress)
+            .await
+            .expect("a confirmed provider action executes");
+        assert_eq!(result.failed_count, 0);
+        assert_eq!(result.total_reclaimed_bytes, 2_048);
     }
 
     #[tokio::test]
@@ -531,6 +656,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
@@ -539,7 +665,11 @@ mod tests {
         });
         let registry = Arc::new(registry);
 
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let service = CleanupService::new(
@@ -551,6 +681,7 @@ mod tests {
             env,
             registry,
             Arc::new(DockerStatusCache::new()),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -573,7 +704,9 @@ mod tests {
             .expect("a reviewed item creates a plan");
         let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
 
-        let first = service.execute_clean(preview.id, progress.clone()).await;
+        let first = service
+            .execute_clean(preview.id, false, progress.clone())
+            .await;
         assert!(
             first.is_ok(),
             "the first execution of a plan runs: {:?}",
@@ -583,7 +716,7 @@ mod tests {
 
         // One-shot means the same plan ID cannot authorize a second mutation,
         // through this service or any other caller.
-        let replay = service.execute_clean(preview.id, progress).await;
+        let replay = service.execute_clean(preview.id, false, progress).await;
         let error = replay.expect_err("a consumed plan must be refused");
         assert!(
             error.contains("not found or already used"),
@@ -619,6 +752,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
@@ -627,7 +761,11 @@ mod tests {
         });
         let registry = Arc::new(registry);
 
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let service = CleanupService::new(
@@ -639,6 +777,7 @@ mod tests {
             env,
             registry,
             Arc::new(DockerStatusCache::new()),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -680,7 +819,11 @@ mod tests {
     async fn quick_clean_safe_handles_empty_candidates_gracefully() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
@@ -697,6 +840,7 @@ mod tests {
             env,
             registry,
             docker_cache,
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             capabilities,
         );
 

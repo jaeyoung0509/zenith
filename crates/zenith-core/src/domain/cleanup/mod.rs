@@ -8,12 +8,15 @@
 
 pub mod operation;
 pub mod plan;
+pub mod provider;
 pub mod strategy;
 pub mod structured;
 
 pub use operation::{
-    CleanupOperation, ContainerCleanup, FilesystemCleanup, FilesystemMutation, ProviderCleanup,
+    CleanupOperation, ContainerCleanup, FilesystemCleanup, FilesystemMutation,
+    LifecycleProviderCleanup, ProviderCleanup,
 };
 pub use plan::{CleanupMode, DeletePlan, DeleteTarget, RunningProcessPolicy};
+pub use provider::{ProviderOutcome, ProviderProbe, ProviderStatus};
 pub use strategy::CleanStrategy;
 pub use structured::{classify_structured_state, EntryKind, PathFacts, StructuredStateKind};

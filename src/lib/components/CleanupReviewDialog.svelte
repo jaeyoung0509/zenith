@@ -63,7 +63,12 @@
   <ul class="my-4 divide-y divide-border">
     {#each items as item (item.id)}
       <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-        <span class="min-w-0 break-words">{item.name}</span>
+        <div class="min-w-0 break-words">
+          <span>{item.name}</span>
+          {#if item.cache_metadata?.consequence}
+            <span class="mt-0.5 block text-meta text-muted-foreground">{item.cache_metadata.consequence}</span>
+          {/if}
+        </div>
         <span class="flex items-center gap-2"><RiskBadge risk={item.risk} /><span class="font-mono whitespace-nowrap">{formatBytes(item.size.allocated ?? item.size.logical)}</span></span>
       </li>
     {/each}

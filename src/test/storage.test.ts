@@ -220,6 +220,70 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).toContain('Manual items require their dedicated management action');
   });
 
+  it('keeps the review action enabled for a selected provider-backed manual item', () => {
+    const providerItem = {
+      id: 'windows.recycle_bin',
+      signature_id: 'windows.recycle_bin',
+      name: 'Recycle Bin',
+      category: 'system' as const,
+      risk: 'manual' as const,
+      path: 'C:\\$Recycle.Bin',
+      size: { logical: 4096, allocated: 4096 },
+      file_count: 3,
+      description: 'Windows Recycle Bin',
+      cache_metadata: {
+        provider: 'Windows',
+        management_mode: 'tool_managed' as const,
+        artifact_kind: 'temporary' as const,
+        consequence: 'Items move to the Recycle Bin and can be restored until it is emptied.',
+        size_semantics: 'physical_reclaimable' as const,
+        last_used_confidence: 'unknown' as const,
+      },
+      unit: { kind: 'provider_action' as const, root: 'C:\\', path: 'C:\\$Recycle.Bin' },
+      lifecycle_provider_action: true,
+      requires_confirmation: true,
+      disposition: { eligibility: 'reviewable' as const, reason: null, cleanable_bytes: 4096 },
+      is_selected: false,
+      last_modified: null,
+      exists: true,
+      quality: 'fresh' as const,
+    };
+    const category: CategoryResult = {
+      category: 'system',
+      display_name: 'System',
+      items: [providerItem],
+      total_bytes: 4096,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: 4096,
+    };
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    scanStore.lastScan = {
+      scan_id: 'scan-provider-action',
+      valid_for_seconds: 300,
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
+      categories: [category],
+      total_bytes: 4096,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: 4096,
+      quality: 'fresh',
+      incomplete_reasons: [],
+    };
+    scanStore.selectedMap = { 'windows.recycle_bin': true };
+    scanStore.updateFreshness(); // The app's freshness tick, so the frozen clock matches the scan
+
+    const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+
+    expect(rendered.body).not.toContain('Manual items require their dedicated management action');
+    const action = rendered.body
+      .match(/<button[^>]*>[\s\S]*?<\/button>/g)
+      ?.find(button => button.includes('Review cleanup'));
+    expect(action).toBeDefined();
+    expect(action).not.toContain('disabled=""');
+  });
+
   it('uses the header scan control as the only freshness status UI', () => {
     scanStore.isScanning = true;
     scanStore.lastScanTrigger = 'auto';

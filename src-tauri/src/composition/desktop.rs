@@ -86,8 +86,14 @@ pub fn desktop_state_with_catalog(
         platform_capabilities.clone(),
     ));
 
+    // The reviewed lifecycle providers are built once here and shared by the
+    // scan (which probes for candidates) and the executor (which performs the
+    // reviewed action), so the two cannot disagree about which exist.
+    let lifecycle_providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::native());
+
     let scan_service = Arc::new(crate::services::ScanService::new(
         registry.clone(),
+        lifecycle_providers.clone(),
         environment.clone(),
     ));
     let plan_store = Arc::new(crate::services::PlanStore::new(
@@ -103,6 +109,7 @@ pub fn desktop_state_with_catalog(
         environment.clone(),
         registry.clone(),
         docker_status.clone(),
+        lifecycle_providers.clone(),
         platform_capabilities.clone(),
     ));
 

@@ -123,6 +123,15 @@ pub struct DeleteTarget {
     pub owner: CleanupOwnership,
     /// Executables whose running state refuses this cleanup.
     pub process_guard: RunningProcessPolicy,
+    /// The lifecycle provider the catalog named for this target's action.
+    ///
+    /// `None` for every strategy that does not run through one, and for a plan
+    /// that names none at all — execution refuses a lifecycle target whose
+    /// provider id is absent rather than picking an implementation.
+    pub provider_id: Option<String>,
+    /// Whether this target's provider contract requires explicit user
+    /// confirmation before execution.
+    pub requires_confirmation: bool,
 }
 
 /// Backend-private authorization state for one cleanup run.
@@ -142,4 +151,14 @@ pub struct DeletePlan {
     pub created_at: u64,
     /// What this plan authorizes; the executor refuses a non-mutating mode.
     pub mode: CleanupMode,
+}
+
+impl DeletePlan {
+    /// Whether any target in this plan requires an explicit confirmation token
+    /// at the destructive boundary.
+    pub fn requires_confirmation(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.requires_confirmation)
+    }
 }

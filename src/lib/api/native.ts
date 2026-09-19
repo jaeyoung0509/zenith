@@ -174,13 +174,14 @@ export const nativeApi = {
 
   async executeClean(
     plan: PlanPreview,
+    confirmed: boolean,
     onEvent: (event: CleanEvent) => void
   ): Promise<CleanResult> {
     const channel = new Channel<CleanEvent>();
     channel.onmessage = (event) => {
       onEvent(event);
     };
-    return await unwrap(commands.executeClean(plan.id, channel));
+    return await unwrap(commands.executeClean(plan.id, confirmed, channel));
   },
 
   async quickCleanSafe(

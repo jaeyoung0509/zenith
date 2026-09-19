@@ -6,6 +6,8 @@ import InlineNotice from '../lib/components/InlineNotice.svelte';
 import CleanupReviewDialog from '../lib/components/CleanupReviewDialog.svelte';
 import type { ScanItem } from '../lib/models/types';
 import { normalizeDashboardTab } from '../lib/utils/dashboardNavigation';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const item = {
   id: 'fixture', signature_id: 'fixture', name: 'Build cache', category: 'developer',
@@ -49,6 +51,41 @@ describe('redesign interaction semantics', () => {
   it('announces informational notices politely and errors urgently', () => {
     expect(render(InlineNotice, { props: { message: 'Refresh complete' } }).body).toContain('role="status"');
     expect(render(InlineNotice, { props: { variant: 'error', message: 'Refresh failed' } }).body).toContain('role="alert"');
+  });
+
+  it('shows the backend consequence statement verbatim for each item that carries one', () => {
+    const providerItem = {
+      ...item,
+      id: 'windows.recycle_bin',
+      signature_id: 'windows.recycle_bin',
+      name: 'Recycle Bin',
+      risk: 'manual',
+      cache_metadata: {
+        provider: 'Windows',
+        management_mode: 'tool_managed',
+        artifact_kind: 'temporary',
+        consequence: 'Items move to the Recycle Bin and can be restored until it is emptied.',
+        size_semantics: 'physical_reclaimable',
+        last_used_confidence: 'unknown',
+      },
+    } as ScanItem;
+    const { body } = render(CleanupReviewDialog, { props: {
+      items: [item, providerItem], onCancel: () => {}, onConfirm: () => {},
+    } });
+    // The item's own consequence line, not a paraphrased warning.
+    expect(body).toContain('Items move to the Recycle Bin and can be restored until it is emptied.');
+    // Only the item that carries a consequence gets the meta line.
+    expect(body.match(/text-meta/g)).toHaveLength(1);
+  });
+
+  it('routes category cleanup through review before executing selected items', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../routes/dashboard/CategoryDetailView.svelte', import.meta.url)),
+      'utf8'
+    );
+    expect(source).toContain('CleanupReviewDialog');
+    expect(source).toContain('confirmCleanup');
+    expect(source).not.toContain('function cleanSelected() {\n    scanStore.cleanItems(categoryResult.items)');
   });
 
   it('explains rebuild consequences and blocks execution after scan invalidation', () => {

@@ -9,10 +9,11 @@
 //!
 //! This module makes the distinction structural instead of leaving it to the
 //! order of a match. [`FilesystemCleanup`] is the only variant that names a
-//! path as mutation authority; the container and provider variants carry the
-//! signature ID — and, for a provider, the reviewed location purely as a
-//! staleness assertion — so a pseudo path such as `docker://images` cannot
-//! reach a filesystem primitive by being classified with the wrong strategy.
+//! path as mutation authority; the container, provider, and lifecycle-provider
+//! variants carry the signature ID — and, for a tool-owned provider, the
+//! reviewed location purely as a staleness assertion — so a pseudo path such
+//! as `docker://images` cannot reach a filesystem primitive by being classified
+//! with the wrong strategy.
 //!
 //! [`DeleteTarget`]: super::DeleteTarget
 
@@ -31,6 +32,7 @@ pub enum CleanupOperation<'a> {
     Filesystem(FilesystemCleanup<'a>),
     Container(ContainerCleanup<'a>),
     Provider(ProviderCleanup<'a>),
+    LifecycleProvider(LifecycleProviderCleanup<'a>),
 }
 
 impl<'a> CleanupOperation<'a> {
@@ -59,6 +61,12 @@ impl<'a> CleanupOperation<'a> {
                 signature_id: &target.signature_id,
                 expected_location: &target.path,
             })),
+            // The catalog names the provider, so a plan that names none
+            // authorizes nothing: `None` refuses the target instead of letting
+            // it reach a mutation that no reviewed implementation describes.
+            CleanStrategy::LifecycleProvider => target.provider_id.as_deref().map(|provider_id| {
+                Self::LifecycleProvider(LifecycleProviderCleanup { provider_id })
+            }),
             CleanStrategy::Manual => None,
         }
     }
@@ -146,6 +154,25 @@ impl<'a> ProviderCleanup<'a> {
     }
 }
 
+/// A lifecycle-aware provider action.
+///
+/// No path travels with this operation at all: the provider owns the resource
+/// (a system store, a per-volume container, an application's own database) and
+/// re-derives its state when it runs. What the plan authorizes is therefore one
+/// named provider and nothing else — the id is the dispatch value, and a plan
+/// that names no provider authorizes nothing.
+#[derive(Debug)]
+pub struct LifecycleProviderCleanup<'a> {
+    provider_id: &'a str,
+}
+
+impl<'a> LifecycleProviderCleanup<'a> {
+    /// The reviewed provider the catalog named for this action.
+    pub fn provider_id(&self) -> &'a str {
+        self.provider_id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CleanupOperation, FilesystemMutation};
@@ -168,6 +195,8 @@ mod tests {
             target_kind: crate::domain::cleanup::EntryKind::Directory,
             owner: crate::domain::scan::CleanupOwnership::unknown(),
             process_guard: crate::domain::cleanup::RunningProcessPolicy::none(),
+            provider_id: None,
+            requires_confirmation: false,
         }
     }
 
@@ -214,5 +243,27 @@ mod tests {
     #[test]
     fn manual_is_not_a_generic_operation() {
         assert!(CleanupOperation::of(&target(CleanStrategy::Manual)).is_none());
+    }
+
+    /// A lifecycle provider action carries no path as authority — the plan's
+    /// pseudo location never reaches it — and the provider the catalog named is
+    /// the one thing execution may dispatch on.
+    #[test]
+    fn a_lifecycle_action_carries_the_provider_the_catalog_named() {
+        let mut named = target(CleanStrategy::LifecycleProvider);
+        named.provider_id = Some("test.recycle_bin".to_string());
+        named.path = std::path::PathBuf::from("recycle-bin://all-volumes");
+
+        match CleanupOperation::of(&named).expect("a named provider action is an operation") {
+            CleanupOperation::LifecycleProvider(action) => {
+                assert_eq!(action.provider_id(), "test.recycle_bin");
+            }
+            other => panic!("expected a lifecycle provider action, got {other:?}"),
+        }
+
+        // A lifecycle target that names no provider authorizes nothing: the
+        // executor refuses it instead of guessing an implementation.
+        let unnamed = target(CleanStrategy::LifecycleProvider);
+        assert!(CleanupOperation::of(&unnamed).is_none());
     }
 }

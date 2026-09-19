@@ -74,9 +74,11 @@ it authorizes (`CleanupOperation::of`). Only the filesystem operation names a
 path as mutation authority and only it can reach the tree deleter; a container
 prune asks the runtime to prune what the runtime owns, and a provider prune asks
 the tool to invalidate its own cache with fixed arguments, using the planned
-location only to detect that the cache moved. A `Manual` resource classifies to
-no operation and is refused, so there is no strategy-shaped fallback into a
-filesystem mutation.
+location only to detect that the cache moved. A lifecycle provider action
+dispatches to the reviewed provider the catalog named and carries no path at
+all: the provider re-derives its own state, acts, and verifies. A `Manual`
+resource classifies to no operation and is refused, so there is no
+strategy-shaped fallback into a filesystem mutation.
 
 The tree deleter walks bottom-up without following symlinks. It unlinks a
 symlink itself, preserves blacklisted or excluded descendants, and removes a
@@ -594,6 +596,34 @@ datasets, optimized engines, performance databases, prompt/session state, and
 mixed runtime roots remain out of generic deletion. Allocated bytes for shared,
 hard-linked, cloned, sparse, or deduplicated stores are labeled as a lower
 bound rather than promised reclaimed space.
+
+## Lifecycle-aware providers
+
+Storage the operating system or an application owns is not made deletable by
+being discovered. A target whose signature declares a lifecycle provider is
+executed by that provider alone: it reads the store through the owner's own
+interface, re-derives its prerequisites immediately before acting, and reports
+what verification observed afterwards. The statuses it may return are fixed —
+ready, prerequisite not met, blocked, unsupported, partially cleaned, cleaned,
+failed — and only a verified clean run is a success. A provider that is refused,
+blocked, or unable to verify reports zero reclaimed bytes; it never degrades
+into a recursive delete, and it cannot, because the operation it classifies into
+carries no path.
+
+A provider-backed item is offered for explicit selection only: it is never
+pre-selected and never part of Quick Clean, and both the scan item and the
+review dialog state the consequence before the action runs. The manifest lint
+refuses a catalog entry naming a provider the build does not implement, so a
+signature cannot describe an action nothing performs.
+
+The Recycle Bin is the first provider. Zenith reads and empties it through the
+shell's `SHQueryRecycleBin` / `SHEmptyRecycleBin` interface and verifies by
+re-reading the reported size. Every per-volume Recycle Bin directory
+(`$Recycle.Bin`, and the legacy `RECYCLER` / `RECYCLED` names) is a protected
+root, so no manifest can name one as a generic delete target even in a future
+catalog. Windows-owned maintenance stores (Windows Update payloads, the
+delivery-optimization cache, WSL and Docker virtual disks) remain inventory-only
+until each has its own adapter.
 
 ## Regression tests
 

@@ -74,7 +74,7 @@ export const commands = {
 	ambiguous_overlap_bytes: number,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
-	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
+	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
 	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
 	terminateMemoryGroup: (leaseId: string, mode: MemoryTerminationMode) => typedError<MemoryTerminationResult, string>(__TAURI_INVOKE("terminate_memory_group", { leaseId, mode })),
@@ -851,7 +851,18 @@ export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "n
  *  The target is now a link, a reparse point, a junction, or a mount
  *  boundary: traversal and deletion stop there.
  */
-"safety_boundary" | "external_command_failed" | "unknown";
+"safety_boundary" | "external_command_failed" | 
+/**
+ *  A reviewed lifecycle provider was named for the target, and this build
+ *  has no adapter that can perform its action here.
+ */
+"provider_unavailable" | 
+/**
+ *  The provider ran (or re-checked itself) and did not reach the state its
+ *  action promises. Its own message states which prerequisite or refusal
+ *  applied.
+ */
+"provider_refused" | "unknown";
 
 export type CleanItemResult = CleanItemResult_Serialize | CleanItemResult_Deserialize;
 
@@ -938,7 +949,11 @@ export type CleanResult_Serialize = {
 };
 
 export type CleanStatus = 
-/**  The target's postcondition holds because this run removed it. */
+/**
+ *  The target's postcondition holds: this run removed what the plan
+ *  authorized, or a provider it ran through verified that the state the
+ *  action promises already held.
+ */
 "success" | 
 /**
  *  The target was not removed, and nothing about it was wrong: it was
@@ -1131,8 +1146,9 @@ export type CleanupUnitKind =
 /**  A named disposable subtree inside an application-owned directory. */
 "named_subtree" | 
 /**
- *  No host path: a provider CLI invalidates its own cache with fixed
- *  arguments, and the path is only a staleness assertion.
+ *  No host path: a reviewed provider performs the operation through its own
+ *  interface, and any path the item carries is a staleness assertion rather
+ *  than deletion authority.
  */
 "provider_action" | 
 /**  No host path: a container runtime prunes the resources it owns. */
@@ -2024,6 +2040,11 @@ export type PlanPreview_Deserialize = {
 	targets: PlanTargetPreview_Deserialize[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Deserialize,
+	/**
+	 *  True when at least one target must be explicitly confirmed before the
+	 *  destructive command may execute this plan.
+	 */
+	requires_confirmation: boolean,
 	expires_at: number,
 	/**
 	 *  What executing this plan would do, stated rather than implied: a
@@ -2038,6 +2059,11 @@ export type PlanPreview_Serialize = {
 	targets: PlanTargetPreview_Serialize[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Serialize,
+	/**
+	 *  True when at least one target must be explicitly confirmed before the
+	 *  destructive command may execute this plan.
+	 */
+	requires_confirmation: boolean,
 	expires_at: number,
 	/**
 	 *  What executing this plan would do, stated rather than implied: a
@@ -2052,6 +2078,7 @@ export type PlanTargetPreview = PlanTargetPreview_Serialize | PlanTargetPreview_
 export type PlanTargetPreview_Deserialize = {
 	item_id: string,
 	name: string,
+	requires_confirmation: boolean,
 	expected_bytes: number,
 	risk: RiskTier,
 };
@@ -2059,6 +2086,7 @@ export type PlanTargetPreview_Deserialize = {
 export type PlanTargetPreview_Serialize = {
 	item_id: string,
 	name: string,
+	requires_confirmation: boolean,
 	expected_bytes: number,
 	risk: RiskTier,
 };
@@ -2617,6 +2645,16 @@ export type ScanItem_Deserialize = {
 	 */
 	owner_running?: boolean,
 	/**
+	 *  Whether this unit is executed by the lifecycle-provider contract rather
+	 *  than by a generic provider/external-command unit.
+	 */
+	lifecycle_provider_action?: boolean,
+	/**
+	 *  Whether execution requires an explicit confirmation token from the
+	 *  reviewed UI path.
+	 */
+	requires_confirmation?: boolean,
+	/**
 	 *  The other catalog rules that described the same location.
 	 * 
 	 *  Two rules can name one cache directory, or a broad rule can name a
@@ -2696,6 +2734,16 @@ export type ScanItem_Serialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running: boolean,
+	/**
+	 *  Whether this unit is executed by the lifecycle-provider contract rather
+	 *  than by a generic provider/external-command unit.
+	 */
+	lifecycle_provider_action: boolean,
+	/**
+	 *  Whether execution requires an explicit confirmation token from the
+	 *  reviewed UI path.
+	 */
+	requires_confirmation: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
 	 * 

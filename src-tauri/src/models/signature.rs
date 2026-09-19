@@ -49,6 +49,14 @@ pub struct Signature {
     pub platforms: Vec<PlatformKind>,
     #[serde(default)]
     pub provider: String,
+    /// The lifecycle provider that performs this signature's action.
+    ///
+    /// Declared only by a signature whose strategy is
+    /// [`CleanStrategy::LifecycleProvider`]: the provider is the operation, and
+    /// the catalog names it so a manifest cannot reach a code path the catalog
+    /// never named. Empty for every other strategy.
+    #[serde(default)]
+    pub provider_id: Option<String>,
     #[serde(default)]
     pub management_mode: CacheManagementMode,
     #[serde(default)]
@@ -131,7 +139,9 @@ impl Signature {
         }
         match self.strategy {
             CleanStrategy::DockerPrune => CleanupUnitKind::ContainerResource,
-            CleanStrategy::ExternalCommand => CleanupUnitKind::ProviderAction,
+            CleanStrategy::ExternalCommand | CleanStrategy::LifecycleProvider => {
+                CleanupUnitKind::ProviderAction
+            }
             CleanStrategy::Manual => CleanupUnitKind::FixedPath,
             CleanStrategy::DeleteContents
             | CleanStrategy::DeleteDirectory
@@ -150,7 +160,9 @@ impl Signature {
     fn strategy_unit_kind(&self) -> CleanupUnitKind {
         match self.strategy {
             CleanStrategy::DockerPrune => CleanupUnitKind::ContainerResource,
-            CleanStrategy::ExternalCommand => CleanupUnitKind::ProviderAction,
+            CleanStrategy::ExternalCommand | CleanStrategy::LifecycleProvider => {
+                CleanupUnitKind::ProviderAction
+            }
             CleanStrategy::Manual => CleanupUnitKind::FixedPath,
             CleanStrategy::DeleteContents
             | CleanStrategy::DeleteDirectory
@@ -288,6 +300,40 @@ impl Signature {
                 return invalid(format!(
                     "`fail_if_running` entry `{executable}` is a path, not an executable name"
                 ));
+            }
+        }
+
+        // A provider action is exactly one reviewed operation, and the catalog
+        // is where that operation is named. Declaring the id without the
+        // strategy (or the strategy without an id) describes a target whose
+        // carrying-out would have to be guessed, so both are refused.
+        let names_a_provider = self
+            .provider_id
+            .as_deref()
+            .is_some_and(|provider_id| !provider_id.trim().is_empty());
+        match self.strategy {
+            CleanStrategy::LifecycleProvider => {
+                if !names_a_provider {
+                    return invalid(
+                        "a lifecycle provider action must name the provider that performs it \
+                         (`provider_id`)"
+                            .to_string(),
+                    );
+                }
+                if self.platforms.is_empty() {
+                    return invalid(
+                        "a lifecycle provider action must declare the platforms it runs on"
+                            .to_string(),
+                    );
+                }
+            }
+            _ => {
+                if self.provider_id.is_some() {
+                    return invalid(format!(
+                        "`provider_id` is declared but strategy {:?} is not a lifecycle provider action",
+                        self.strategy
+                    ));
+                }
             }
         }
 

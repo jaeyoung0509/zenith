@@ -29,7 +29,7 @@
     result.items.filter((i) => i.status !== 'skipped' && i.success && i.status === 'partial')
   );
   let fullSuccessItems = $derived(
-    result.items.filter((i) => i.success && i.status === 'success' && !i.error_message)
+    result.items.filter((i) => i.success && i.status === 'success')
   );
   // The backend counts every target it could not fully clean, so the summary
   // reports its verdict instead of re-deriving one from the item list.
@@ -242,11 +242,18 @@
       <div class="space-y-1.5 max-h-40 overflow-y-auto scroll-stable">
         <span class="text-xs font-medium text-muted-foreground">Cleaned Items ({fullSuccessItems.length})</span>
         {#each fullSuccessItems as item}
-          <div class="flex items-center justify-between py-1 text-xs border-b border-border/40 last:border-0">
-            <span class="truncate text-foreground max-w-[240px]">{item.name}</span>
-            <span class="font-mono text-muted-foreground">
-              {formatBytes(item.bytes_reclaimed)}
-            </span>
+          <div class="py-1 text-xs border-b border-border/40 last:border-0">
+            <div class="flex items-center justify-between">
+              <span class="truncate text-foreground max-w-[240px]">{item.name}</span>
+              <span class="font-mono text-muted-foreground">
+                {formatBytes(item.bytes_reclaimed)}
+              </span>
+            </div>
+            {#if item.error_message}
+              <!-- A run that verified the target was already in the state the
+                   action promises carries its note here rather than nowhere. -->
+              <div class="text-meta text-muted-foreground mt-0.5">{item.error_message}</div>
+            {/if}
           </div>
         {/each}
       </div>

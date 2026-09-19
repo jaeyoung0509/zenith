@@ -3,10 +3,12 @@ import type { ScanItem, ZenithSettings } from '../lib/models/types';
 import {
   cleanableBytes,
   filterAndSortCleanupItems,
+  isActionable,
   isAutoCleanable,
   isBlocked,
   isAdvisory,
   isCleanable,
+  isProviderBacked,
   observedBytes,
   presentedItems,
   reclaimableBytes,
@@ -491,6 +493,61 @@ describe('scanStore selectionSummary', () => {
     expect(scanStore.selectionSummary.reclaimableBytes).toBe(2000);
     expect(scanStore.selectionSummary.selectedCount).toBe(2);
   });
+
+  it('reports a selected provider-backed manual item as reclaimable, not as a blocking manual selection', () => {
+    const mockScan = {
+      scan_id: 'summary-provider-1',
+      valid_for_seconds: 300,
+      started_at: 1000,
+      created_at: 1000,
+      finished_at: 1005,
+      total_bytes: 3048,
+      safe_bytes: 1000,
+      rebuild_bytes: 0,
+      manual_bytes: 2048,
+      quality: 'fresh' as const,
+      incomplete_reasons: [],
+      categories: [
+        {
+          category: 'system' as const,
+          display_name: 'System',
+          total_bytes: 3048,
+          safe_bytes: 1000,
+          rebuild_bytes: 0,
+          manual_bytes: 2048,
+          quality: 'fresh' as const,
+          items: [
+            item({ id: 'cache', category: 'system', size: { logical: 1000, allocated: 1000 } }),
+            item({
+              id: 'windows.recycle_bin',
+              category: 'system',
+              name: 'Recycle Bin',
+              risk: 'manual',
+              size: { logical: 2048, allocated: 2048 },
+              unit: { kind: 'provider_action', root: '', path: '' },
+              lifecycle_provider_action: true,
+              requires_confirmation: true,
+              disposition: { eligibility: 'reviewable', cleanable_bytes: 2048, reason: null },
+            }),
+            item({ id: 'manual-resource', category: 'system', risk: 'manual', size: { logical: 100, allocated: 100 } }),
+          ],
+        },
+      ],
+    };
+
+    scanStore.lastScan = mockScan;
+    scanStore.selectedMap = {
+      'cache': true,
+      'windows.recycle_bin': true,
+      'manual-resource': true,
+    };
+
+    const summary = scanStore.selectionSummary;
+    expect(summary.selectedCount).toBe(3);
+    expect(summary.reclaimableBytes).toBe(3048); // safe cache + the provider's own bytes
+    expect(summary.manualSelectedCount).toBe(1); // only the providerless manual item gates the action
+    expect(summary.manualSelectedBytes).toBe(0); // a blocked manual resource carries no cleanable bytes
+  });
 });
 
 describe('cleanup disposition authority & byte semantics', () => {
@@ -618,6 +675,56 @@ describe('cleanup disposition authority & byte semantics', () => {
     expect(cleanableBytes(oversized)).toBe(100);
     expect(cleanableBytes(blockedWithBytes)).toBe(0);
     expect(isCleanable(blockedWithBytes)).toBe(false);
+  });
+
+  it('submits a provider-backed manual item and refuses a manual tier without a provider', () => {
+    const providerAction = {
+      kind: 'provider_action',
+      root: '',
+      path: '',
+    } as const;
+
+    const recycleBin = item({
+      id: 'windows.recycle_bin',
+      name: 'Recycle Bin',
+      risk: 'manual',
+      size: { logical: 2048, allocated: 2048 },
+      unit: providerAction,
+      lifecycle_provider_action: true,
+      requires_confirmation: true,
+      disposition: { eligibility: 'reviewable', cleanable_bytes: 2048, reason: null },
+    });
+    expect(isProviderBacked(recycleBin)).toBe(true);
+    expect(isCleanable(recycleBin)).toBe(true);
+    expect(isActionable(recycleBin)).toBe(true);
+
+    // The tier alone refuses generic cleanup, even when the backend calls the
+    // item reviewable.
+    const plainManual = item({
+      id: 'plain-manual',
+      risk: 'manual',
+      size: { logical: 1000, allocated: 1000 },
+      disposition: { eligibility: 'reviewable', cleanable_bytes: 1000, reason: null },
+    });
+    expect(isProviderBacked(plainManual)).toBe(false);
+    expect(isCleanable(plainManual)).toBe(true);
+    expect(isActionable(plainManual)).toBe(false);
+
+    // A provider action the backend did not make cleanable stays refused.
+    const blockedProvider = item({
+      id: 'blocked-provider',
+      risk: 'manual',
+      size: { logical: 2048, allocated: 2048 },
+      unit: providerAction,
+      lifecycle_provider_action: true,
+      requires_confirmation: true,
+      disposition: { eligibility: 'blocked', cleanable_bytes: null, reason: 'Provider unavailable' },
+    });
+    expect(isProviderBacked(blockedProvider)).toBe(true);
+    expect(isActionable(blockedProvider)).toBe(false);
+
+    const safeItem = item({ id: 'safe', size: { logical: 512, allocated: 512 } });
+    expect(isActionable(safeItem)).toBe(true);
   });
 });
 

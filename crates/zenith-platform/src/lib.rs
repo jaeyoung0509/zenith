@@ -41,11 +41,11 @@ pub mod file_ops;
 pub mod path_algebra;
 pub mod paths;
 pub mod process;
+pub mod recycle_bin;
 pub mod selector;
 pub mod subprocess;
 pub mod system_actions;
 pub mod trash;
-
 pub use capabilities::NativePlatformCapabilities;
 pub use description::{
     EnvironmentFixture, EnvironmentShape, KnownFolder, PlatformEnvironment, ProfileShape,
@@ -55,6 +55,10 @@ pub use environment::{RuntimeEnvironment, SecurityPolicyState};
 pub use path_algebra::PathFlavor;
 pub use paths::{NativePlatformPaths, PlatformPathsProvider};
 pub use process::{request_graceful_stop, terminate_process, GracefulStopOutcome, TerminationMode};
+pub use recycle_bin::{
+    MockRecycleBinBackend, NativeRecycleBinBackend, RecycleBinBackend, RecycleBinError,
+    RecycleBinObservation,
+};
 pub use selector::{
     validate_pattern_syntax, PathSelector, SelectionFailure, SelectionOutcome, SelectorComponent,
     SelectorError, SELECTOR_MATCH_LIMIT,

@@ -560,6 +560,28 @@ fn audit_signature(
         }
     }
 
+    // A provider action is carried out by the implementation the manifest
+    // names, so a catalog entry that names one this build does not have is a
+    // target nothing can complete. The check reads the same registry the scan
+    // and the executor dispatch through, so the two cannot drift apart.
+    if let Some(provider_id) = signature
+        .provider_id
+        .as_deref()
+        .filter(|provider_id| !provider_id.trim().is_empty())
+    {
+        let implemented = crate::cleaner::LifecycleProviderRegistry::native().implemented_ids();
+        if !implemented.contains(&provider_id) {
+            findings.push(finding(
+                signature,
+                None,
+                format!(
+                    "names lifecycle provider `{provider_id}`, which this build does not implement (implemented: {})",
+                    implemented.join(", ")
+                ),
+            ));
+        }
+    }
+
     findings
 }
 
@@ -866,6 +888,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
@@ -1027,6 +1050,22 @@ mod tests {
                     "{} is performed by its provider",
                     signature.id
                 ),
+                CleanStrategy::LifecycleProvider => {
+                    assert_eq!(
+                        kind,
+                        CleanupUnitKind::ProviderAction,
+                        "{} is performed by the lifecycle provider it names",
+                        signature.id
+                    );
+                    assert!(
+                        signature
+                            .provider_id
+                            .as_deref()
+                            .is_some_and(|provider_id| !provider_id.trim().is_empty()),
+                        "{} names the provider that performs its action",
+                        signature.id
+                    );
+                }
                 CleanStrategy::DeleteContents
                 | CleanStrategy::DeleteDirectory
                 | CleanStrategy::DeleteStaleContents => {
@@ -1079,6 +1118,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),

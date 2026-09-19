@@ -1,7 +1,7 @@
 {
   "name": "zenith",
   "private": true,
-  "version": "0.3.33",
+  "version": "0.3.34",
   "license": "MIT",
   "repository": "https://github.com/jaeyoung0509/zenith",
   "type": "module",
