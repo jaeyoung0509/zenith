@@ -771,7 +771,10 @@ impl SizeCalculator {
         cancellation: &dyn CancellationProbe,
         counters: &TraversalCounters,
     ) -> PathMeasurement {
-        counters.visit_entry();
+        // The root is counted by measure_path_with_pool, and every recursive
+        // child directory is counted by its parent's entry loop before descent.
+        // Counting again here makes visited_entries depend on whether the
+        // scheduler used the pooled or inline walk.
         if cancellation.is_cancelled() {
             return PathMeasurement::incomplete(
                 FileSize::default(),
