@@ -123,6 +123,12 @@ pub struct DeleteTarget {
     pub owner: CleanupOwnership,
     /// Executables whose running state refuses this cleanup.
     pub process_guard: RunningProcessPolicy,
+    /// The lifecycle provider the catalog named for this target's action.
+    ///
+    /// `None` for every strategy that does not run through one, and for a plan
+    /// that names none at all — execution refuses a lifecycle target whose
+    /// provider id is absent rather than picking an implementation.
+    pub provider_id: Option<String>,
 }
 
 /// Backend-private authorization state for one cleanup run.

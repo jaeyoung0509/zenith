@@ -91,6 +91,13 @@ pub enum ProtectedRoot {
     ProgramData,
     /// `<drive>:\Users` itself (descendants remain cleanable).
     UsersRoot,
+    /// A per-volume Recycle Bin directory (`$Recycle.Bin`, and the legacy
+    /// `RECYCLER` / `RECYCLED` names the shell uses on non-NTFS volumes).
+    ///
+    /// The shell owns the bin and keeps its own index inside it: reclaiming
+    /// the space means emptying the bin through the interface that maintains
+    /// that index, never deleting the directory or walking it.
+    RecycleBinStore,
     /// A component directly under a drive root that may be an 8.3 alias of a
     /// protected directory. The alias cannot be resolved without the volume, so
     /// the whole subtree is refused rather than assumed safe.
@@ -107,6 +114,7 @@ impl ProtectedRoot {
             Self::ProgramFilesX86 => "Program Files (x86)",
             Self::ProgramData => "ProgramData",
             Self::UsersRoot => "users root",
+            Self::RecycleBinStore => "Recycle Bin store",
             Self::ShortNameAlias => "unresolvable 8.3 short name under a drive root",
         }
     }
@@ -700,6 +708,16 @@ pub fn protected_root(path: &str, flavor: PathFlavor) -> Option<ProtectedRoot> {
         Some(ProtectedRoot::ProgramData)
     } else if first.eq_ignore_ascii_case("Users") && tail_is_only_component {
         Some(ProtectedRoot::UsersRoot)
+    } else if first.eq_ignore_ascii_case("$Recycle.Bin")
+        || first.eq_ignore_ascii_case("RECYCLER")
+        || first.eq_ignore_ascii_case("RECYCLED")
+    {
+        // Every volume carries its own bin, and the shell is the only
+        // component that may empty it: the directory holds the shell's index
+        // of what it holds, so a generic delete would corrupt the bin rather
+        // than reclaim the space. The legacy names cover the volumes whose
+        // filesystem has no `$Recycle.Bin` directory.
+        Some(ProtectedRoot::RecycleBinStore)
     } else {
         None
     };
@@ -894,6 +912,31 @@ mod tests {
             Some(ProtectedRoot::UsersRoot)
         );
         assert_eq!(protected_root(r"C:\Users\me", W), None);
+    }
+
+    /// The Recycle Bin directory is refused on every volume and in every
+    /// spelling the shell uses, because the only supported way to reclaim its
+    /// space is the interface that maintains its index.
+    #[test]
+    fn the_recycle_bin_store_is_protected_on_every_volume() {
+        for path in [
+            r"C:\$Recycle.Bin",
+            r"D:\$RECYCLE.BIN\S-1-5-21-1",
+            r"E:\$recycle.bin\S-1-5-21-1\$R123",
+            r"D:\RECYCLER\S-1-5-21-1",
+            r"D:\RECYCLED",
+        ] {
+            assert_eq!(
+                protected_root(path, W),
+                Some(ProtectedRoot::RecycleBinStore),
+                "{path} must be refused as the shell's own store"
+            );
+        }
+        assert_eq!(
+            protected_root(r"C:\Users\me\$Recycle.Bin", W),
+            None,
+            "a directory that merely shares the name below the drive root is not the shell's own bin"
+        );
     }
 
     #[test]

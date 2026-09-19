@@ -38,8 +38,9 @@ pub enum CleanupUnitKind {
     ChildNamespace,
     /// A named disposable subtree inside an application-owned directory.
     NamedSubtree,
-    /// No host path: a provider CLI invalidates its own cache with fixed
-    /// arguments, and the path is only a staleness assertion.
+    /// No host path: a reviewed provider performs the operation through its own
+    /// interface, and any path the item carries is a staleness assertion rather
+    /// than deletion authority.
     ProviderAction,
     /// No host path: a container runtime prunes the resources it owns.
     ContainerResource,

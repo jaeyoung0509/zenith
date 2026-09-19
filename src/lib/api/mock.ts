@@ -1038,6 +1038,14 @@ export const mockApi = {
             size: { logical: 2.1 * 1024 * 1024 * 1024, allocated: 2.1 * 1024 * 1024 * 1024 },
             file_count: 3200,
             description: 'V8 code cache and GPU shader cache',
+            // The listed row carries what the progress event carried: the real
+            // scan result states the same facts the streamed item did, and the
+            // preview must not be a thinner shape than the backend's.
+            cache_metadata: { provider: 'Cursor', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
+            unit: { kind: 'fixed_path', root: '~/Library/Caches/Cursor', path: '~/Library/Caches/Cursor' },
+            ownership: { owner: 'Cursor', confidence: 'declared' },
+            entry_kind: 'directory',
+            gate: 'open',
             disposition: {
               eligibility: 'auto_cleanable',
               cleanable_bytes: 2.1 * 1024 * 1024 * 1024,
@@ -1058,6 +1066,11 @@ export const mockApi = {
             size: { logical: 1.1 * 1024 * 1024 * 1024, allocated: 1.1 * 1024 * 1024 * 1024 },
             file_count: 140,
             description: 'Session diagnostic logs',
+            cache_metadata: { provider: 'Claude Code', management_mode: 'zenith', artifact_kind: 'log', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
+            unit: { kind: 'fixed_path', root: '~/.claude/logs', path: '~/.claude/logs' },
+            ownership: { owner: 'Claude Code', confidence: 'declared' },
+            entry_kind: 'directory',
+            gate: 'open',
             disposition: {
               eligibility: 'auto_cleanable',
               cleanable_bytes: 1.1 * 1024 * 1024 * 1024,
@@ -1080,6 +1093,11 @@ export const mockApi = {
             size: { logical: 3.1 * 1024 * 1024 * 1024, allocated: 3.1 * 1024 * 1024 * 1024 },
             file_count: 12000,
             description: 'Compiled packages cache',
+            cache_metadata: { provider: 'Go', management_mode: 'zenith', artifact_kind: 'build_artifact', consequence: 'Packages will compile again.', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
+            unit: { kind: 'fixed_path', root: '~/Library/Caches/go-build', path: '~/Library/Caches/go-build' },
+            ownership: { owner: 'Go toolchain', confidence: 'declared' },
+            entry_kind: 'directory',
+            gate: 'open',
             disposition: {
               eligibility: 'auto_cleanable',
               cleanable_bytes: 3.1 * 1024 * 1024 * 1024,
@@ -1100,6 +1118,11 @@ export const mockApi = {
             size: { logical: 2.0 * 1024 * 1024 * 1024, allocated: 2.0 * 1024 * 1024 * 1024 },
             file_count: 850,
             description: 'Downloaded crates archive',
+            cache_metadata: { provider: 'Cargo', management_mode: 'zenith', artifact_kind: 'download_cache', consequence: 'Crates will download again.', size_semantics: 'physical_reclaimable', last_used_confidence: 'unknown' },
+            unit: { kind: 'fixed_path', root: '~/.cargo/registry/cache', path: '~/.cargo/registry/cache' },
+            ownership: { owner: 'Cargo', confidence: 'declared' },
+            entry_kind: 'directory',
+            gate: 'open',
             disposition: {
               eligibility: 'reviewable',
               cleanable_bytes: 2.0 * 1024 * 1024 * 1024,

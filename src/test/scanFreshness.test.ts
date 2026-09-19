@@ -159,6 +159,57 @@ describe('cleanup freshness and recovery', () => {
     expect(store.error).toContain('expired');
   });
 
+  it('submits a provider-backed manual item while a providerless manual item stays refused', async () => {
+    const scan = fixture('provider', Math.floor(Date.now() / 1000));
+    const safe = scan.categories[0].items[0];
+    scan.categories[0].items = [
+      safe,
+      {
+        ...safe,
+        id: 'manual-resource',
+        signature_id: 'sig.manual',
+        name: 'Manual Resource',
+        risk: 'manual',
+        size: { logical: 1000, allocated: 1000 },
+        disposition: { eligibility: 'blocked', reason: 'Manual cleanup only', cleanable_bytes: null },
+      },
+      {
+        ...safe,
+        id: 'windows.recycle_bin',
+        signature_id: 'windows.recycle_bin',
+        name: 'Recycle Bin',
+        risk: 'manual',
+        size: { logical: 2000, allocated: 2000 },
+        unit: { kind: 'provider_action', root: '', path: '' },
+        disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 2000 },
+      },
+    ];
+    vi.mocked(tauriGetLastScan).mockResolvedValue(scan);
+    const store = new ScanStore();
+    await store.init();
+    store.selectedMap = { 'provider-item': true, 'manual-resource': true, 'windows.recycle_bin': true };
+
+    // The provider's own bytes are reclaimable, so selecting it never reads as
+    // a blocking manual selection.
+    expect(store.selectionSummary.selectedCount).toBe(3);
+    expect(store.selectionSummary.reclaimableBytes).toBe(2010);
+    expect(store.selectionSummary.manualSelectedCount).toBe(1);
+
+    vi.mocked(tauriCreatePlan).mockResolvedValue({
+      id: 'plan', targets: [], expected_reclaim_bytes: 2010, expires_at: 1600, mode: 'permanent_delete',
+      risk: { safe_count: 1, rebuild_count: 0, manual_count: 1, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 2000 },
+    });
+    vi.mocked(tauriExecuteClean).mockResolvedValue({
+      plan_id: 'plan', started_at: 1000, finished_at: 1001, items: [], total_reclaimed_bytes: 0,
+    } as never);
+    vi.mocked(tauriScan).mockResolvedValue(fixture('after', Math.floor(Date.now() / 1000)));
+
+    await expect(store.cleanSelected()).resolves.not.toBeNull();
+
+    const [, submitted] = vi.mocked(tauriCreatePlan).mock.calls[0];
+    expect(submitted.map((entry) => entry.id)).toEqual(['provider-item', 'windows.recycle_bin']);
+  });
+
   it.each(['Selected target no longer exists', 'Permission denied', 'Delete plan expired'])('provides a non-destructive recovery for %s', async (message) => {
     const store = await loaded();
     vi.mocked(tauriCreatePlan).mockRejectedValue(new Error(message));

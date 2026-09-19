@@ -381,6 +381,18 @@ include_prefixes = ["thumbcache_", "iconcache_"]
 description = "Explorer's thumbnail and icon caches, which Windows rebuilds on demand. Only the cache files are in scope: the Explorer directory also holds the shell's own state."
 
 [[signatures]]
+id = "system.windows.recycle_bin"
+name = "Recycle Bin"
+category = "system"
+risk = "manual"
+strategy = "lifecycle_provider"
+provider_id = "windows.recycle_bin"
+provider = "Windows Shell"
+owner = "Windows Shell"
+platforms = ["windows"]
+description = "What has been moved to the Recycle Bin and still occupies disk space until it is permanently deleted. Zenith reads the size and empties the bin through the shell's own interface only: `$Recycle.Bin` is the shell's own bookkeeping, so it is never walked or deleted directly. Emptying cannot be undone, so the action is never pre-selected, and the consequence is stated before it runs."
+
+[[signatures]]
 id = "system.advisory.windows_store_state"
 name = "Package Persistent State"
 category = "system"

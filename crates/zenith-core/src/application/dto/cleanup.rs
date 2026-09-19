@@ -80,6 +80,13 @@ pub enum CleanFailureReason {
     /// boundary: traversal and deletion stop there.
     SafetyBoundary,
     ExternalCommandFailed,
+    /// A reviewed lifecycle provider was named for the target, and this build
+    /// has no adapter that can perform its action here.
+    ProviderUnavailable,
+    /// The provider ran (or re-checked itself) and did not reach the state its
+    /// action promises. Its own message states which prerequisite or refusal
+    /// applied.
+    ProviderRefused,
     Unknown,
 }
 
@@ -125,6 +132,18 @@ impl CleanFailureReason {
                     target_name
                 )
             }
+            CleanFailureReason::ProviderUnavailable => {
+                format!(
+                    "{} is cleaned through a dedicated provider, and no provider adapter for it is available on this platform.",
+                    target_name
+                )
+            }
+            CleanFailureReason::ProviderRefused => {
+                format!(
+                    "The dedicated provider for {} did not complete its action.",
+                    target_name
+                )
+            }
             CleanFailureReason::Unknown => {
                 format!(
                     "An unexpected error occurred while cleaning {}.",
@@ -138,7 +157,9 @@ impl CleanFailureReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanStatus {
-    /// The target's postcondition holds because this run removed it.
+    /// The target's postcondition holds: this run removed what the plan
+    /// authorized, or a provider it ran through verified that the state the
+    /// action promises already held.
     Success,
     /// The target was not removed, and nothing about it was wrong: it was
     /// already gone (a replayed plan, or a target another process removed),

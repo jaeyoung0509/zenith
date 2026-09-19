@@ -851,7 +851,18 @@ export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "n
  *  The target is now a link, a reparse point, a junction, or a mount
  *  boundary: traversal and deletion stop there.
  */
-"safety_boundary" | "external_command_failed" | "unknown";
+"safety_boundary" | "external_command_failed" | 
+/**
+ *  A reviewed lifecycle provider was named for the target, and this build
+ *  has no adapter that can perform its action here.
+ */
+"provider_unavailable" | 
+/**
+ *  The provider ran (or re-checked itself) and did not reach the state its
+ *  action promises. Its own message states which prerequisite or refusal
+ *  applied.
+ */
+"provider_refused" | "unknown";
 
 export type CleanItemResult = CleanItemResult_Serialize | CleanItemResult_Deserialize;
 
@@ -938,7 +949,11 @@ export type CleanResult_Serialize = {
 };
 
 export type CleanStatus = 
-/**  The target's postcondition holds because this run removed it. */
+/**
+ *  The target's postcondition holds: this run removed what the plan
+ *  authorized, or a provider it ran through verified that the state the
+ *  action promises already held.
+ */
 "success" | 
 /**
  *  The target was not removed, and nothing about it was wrong: it was
@@ -1131,8 +1146,9 @@ export type CleanupUnitKind =
 /**  A named disposable subtree inside an application-owned directory. */
 "named_subtree" | 
 /**
- *  No host path: a provider CLI invalidates its own cache with fixed
- *  arguments, and the path is only a staleness assertion.
+ *  No host path: a reviewed provider performs the operation through its own
+ *  interface, and any path the item carries is a staleness assertion rather
+ *  than deletion authority.
  */
 "provider_action" | 
 /**  No host path: a container runtime prunes the resources it owns. */

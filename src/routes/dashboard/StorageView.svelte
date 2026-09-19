@@ -28,6 +28,7 @@
   import ApplicationsView from './ApplicationsView.svelte';
   import DiskView from './DiskView.svelte';
   import { restoreFocus } from '../../lib/utils/focus';
+  import { isActionable } from '../../lib/utils/cleanup';
   import {
     RotateCw,
     Trash2,
@@ -110,7 +111,7 @@
     review = {
       scanId: scan.scan_id,
       items: scan.categories.flatMap(category => category.items)
-        .filter(item => scanStore.selectedMap[item.id] && item.risk !== 'manual'),
+        .filter(item => scanStore.selectedMap[item.id] && isActionable(item)),
     };
   }
 
@@ -335,7 +336,7 @@
       <!-- Shared Action Toolbar -->
       <SelectionToolbar
         selectedCount={scanStore.selectedCount}
-        selectedBytes={safeSelectedBytes + rebuildSelectedBytes + manualSelectedBytes}
+        selectedBytes={scanStore.reclaimableBytes + manualSelectedBytes}
         safeBytes={safeSelectedBytes}
         rebuildBytes={rebuildSelectedBytes}
         manualBytes={manualSelectedBytes}

@@ -18,5 +18,14 @@ pub enum CleanStrategy {
     DeleteStaleContents,
     ExternalCommand,
     DockerPrune,
+    /// A reviewed lifecycle-aware provider performs the operation through the
+    /// interface the owning system or application provides.
+    ///
+    /// The unit owns no host path: the provider re-derives its own state at
+    /// execution time, states its prerequisites itself, and verifies its own
+    /// postcondition. Unlike [`Self::Manual`] the action is executable — but
+    /// only by the provider the catalog named, never by a filesystem
+    /// primitive.
+    LifecycleProvider,
     Manual,
 }

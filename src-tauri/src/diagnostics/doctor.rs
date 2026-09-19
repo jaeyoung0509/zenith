@@ -624,6 +624,7 @@ const WINDOWS_PROTECTED_SAMPLES: &[(&str, &str)] = &[
     (r"C:\Windows", r"D:\Windows"),
     (r"C:\Program Files", r"E:\Program Files"),
     (r"\\?\C:\ProgramData", r"F:\ProgramData"),
+    (r"C:\$Recycle.Bin", r"D:\$Recycle.Bin\S-1-5-21-1"),
 ];
 
 /// Component-boundary containment: the boolean is the expectation.

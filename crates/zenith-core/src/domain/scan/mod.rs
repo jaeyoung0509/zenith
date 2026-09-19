@@ -454,6 +454,13 @@ pub struct DispositionFacts<'a> {
     pub stale: Option<&'a StaleEntryObservation>,
     /// The structured state the path was classified as, when it is one.
     pub structured_state: Option<StructuredStateKind>,
+    /// Whether a reviewed provider — not generic cleanup — performs this
+    /// unit's cleanup.
+    ///
+    /// A provider action owns no host path, so the manual risk tier means
+    /// something different for it: the unit is not generic cleanup's to remove,
+    /// and it is still executable, through the one operation the catalog named.
+    pub provider_action: bool,
     /// The strictest verdict another rule reached about the same location, and
     /// the rule that reached it.
     pub overlap: Option<(CleanupEligibility, &'a str, bool)>,
@@ -480,6 +487,7 @@ impl<'a> DispositionFacts<'a> {
             age: None,
             stale: None,
             structured_state: None,
+            provider_action: false,
             overlap: None,
         }
     }
@@ -512,6 +520,13 @@ impl<'a> DispositionFacts<'a> {
     /// States the strictest verdict another rule reached about this location.
     pub fn with_overlap(mut self, overlap: Option<(CleanupEligibility, &'a str, bool)>) -> Self {
         self.overlap = overlap;
+        self
+    }
+
+    /// States that a reviewed provider, not generic cleanup, performs this
+    /// unit's cleanup.
+    pub fn with_provider_action(mut self, provider_action: bool) -> Self {
+        self.provider_action = provider_action;
         self
     }
 }
@@ -555,6 +570,7 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         age,
         stale,
         structured_state,
+        provider_action,
         // The overlap verdict is applied by the caller, after these facts have
         // produced their own answer.
         overlap: _,
@@ -592,8 +608,23 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         );
     }
 
-    // 5. Manual risk tiers cannot be cleaned generically
+    // 5. Manual risk tiers cannot be cleaned generically. A unit a reviewed
+    //    provider performs is the exception the tier describes rather than
+    //    forbids: nothing generic may touch it, and the one operation the
+    //    catalog named may, so it is offered for explicit selection with the
+    //    reason that confirmation is what authorizes it.
     if risk == RiskTier::Manual {
+        if provider_action {
+            return CleanupDisposition::reviewable(
+                size.observed_bytes(),
+                incomplete_reason.map(Into::into).or_else(|| {
+                    Some(
+                        "A dedicated provider performs this cleanup and runs only on explicit confirmation"
+                            .to_string(),
+                    )
+                }),
+            );
+        }
         return CleanupDisposition::blocked(
             incomplete_reason.unwrap_or("Manual cleanup only; generic cleanup is unsupported"),
         );
@@ -838,6 +869,7 @@ impl ScanItem {
         .with_age(self.age.as_ref())
         .with_stale_entries(self.stale.as_ref())
         .with_structured_state(self.structured_state)
+        .with_provider_action(self.unit.kind == CleanupUnitKind::ProviderAction)
         .with_overlap(overlap)
     }
 
@@ -1475,6 +1507,30 @@ mod tests {
         assert_eq!(d6.eligibility, CleanupEligibility::Blocked);
         assert_eq!(d6.cleanable_bytes, None);
         assert!(!d6.is_cleanable());
+
+        // 6b. The same manual tier with a reviewed provider action behind it is
+        //     offered for explicit selection: nothing generic may touch the
+        //     unit, and the operation the catalog named may.
+        let d6b = derive_cleanup_disposition(
+            DispositionFacts::new(
+                RiskTier::Manual,
+                ObservationQuality::Fresh,
+                &zenith_meta,
+                &size,
+                None,
+            )
+            .with_provider_action(true),
+        );
+        assert_eq!(d6b.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(d6b.cleanable_bytes, Some(1000));
+        assert!(d6b.is_cleanable());
+        assert!(!d6b.eligibility.is_auto_cleanable());
+        assert!(
+            d6b.reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("explicit confirmation")),
+            "the reason states what authorizes the action: {d6b:?}"
+        );
 
         // 7. Safe + Fresh + ToolManaged => Reviewable (provider decides, never AutoCleanable)
         let d7 = derive_cleanup_disposition(DispositionFacts::new(

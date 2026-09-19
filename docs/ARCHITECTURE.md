@@ -333,22 +333,27 @@ DeleteTarget.strategy
         |
         v
   CleanupOperation::of
-   /        |         \
-Filesystem Container  Provider
-   |          |          |
-   |          |          +-- the tool prunes its own cache with fixed
-   |          |              arguments; the planned location is only a
-   |          |              staleness assertion
-   |          +------------- the container runtime prunes what it owns;
-   |                        a `docker://` pseudo path carries no authority
-   +------------------------ revalidate, then delete through the safety
-                            layer's validated authority
+   /        |              \
+Filesystem Container  Provider / LifecycleProvider
+   |          |              |
+   |          |              +-- the tool prunes its own cache with fixed
+   |          |                  arguments (or, for a lifecycle provider,
+   |          |                  the reviewed provider it names performs the
+   |          |                  action through the interface that owns the
+   |          |                  store); any planned location is only a
+   |          |                  staleness assertion
+   |          +----------------- the container runtime prunes what it owns;
+   |                            a `docker://` pseudo path carries no authority
+   +-------------------------- revalidate, then delete through the safety
+                              layer's validated authority
 ```
 
 Only the `Filesystem` operation names a path as mutation authority, and it is
 the only one whose strategy can reach `SafeTreeDeleter`. A `Manual` target
 classifies to no operation at all and is refused rather than falling back to a
-filesystem mutation.
+filesystem mutation — unless the catalog declares the lifecycle provider that
+performs its action, which is the one manual-tier unit that is executable and
+the only one that is offered for explicit selection.
 
 Generic cleanup supports only signature-scoped `Safe` and explicitly selected
 `Rebuild` targets. `Manual` resources are rejected and must use a domain adapter.
@@ -942,3 +947,40 @@ one opaque plan flow, but `external_command` dispatches only to a registered
 provider; it is never an alias for recursive deletion. Provider discovery and
 mutation use backend-owned fixed argv and fresh cache-path validation. A failed
 or missing CLI degrades locally and does not fail unrelated signatures.
+
+### Lifecycle-aware providers
+
+Some reclaimable storage is not a directory under a reviewed root: it is a store
+an operating system, a shell, or an application owns, and reclaiming it means
+asking that owner to do it. Those units use `strategy = "lifecycle_provider"`,
+which names the provider (`provider_id`) instead of a path, and they are
+discovered by the provider registry rather than by the signature walker:
+
+```text
+probe()    -> read the store, or state why it cannot be read
+execute()  -> re-derive the provider's own prerequisites, act, verify
+result     -> the provider's status and its verified reclaimed amount
+```
+
+The catalog entry owns the name, category, risk tier, owner, and description;
+the implementation owns the consequence text, the location it covers, and
+whether explicit confirmation is required. A provider that is unavailable,
+blocked, or refused reports its own status and reclaims nothing: it cannot fall
+back to a filesystem delete, because its target classifies to an operation that
+carries no path. The manifest lint refuses a catalog entry naming a provider the
+build does not implement.
+
+A provider action is one bounded call into an interface that owns its own state,
+so cancellation is the reviewed plan's lifecycle rather than a channel inside
+the action: the plan is one-shot and TTL-bounded, and a plan that was cancelled,
+expired, or already consumed never reaches the provider.
+
+The first — and so far only — implementation is the Windows Recycle Bin
+(`windows.recycle_bin`), which reads the size through `SHQueryRecycleBin` and
+empties the bin through `SHEmptyRecycleBin`, verifying by re-reading rather than
+by trusting the call's return code. Per-volume Recycle Bin directories are a
+protected root, so no signature can ever name one as a generic delete target.
+Windows Update payloads, the delivery-optimization cache, and WSL/Docker virtual
+disks stay inventory-only until each has its own adapter: they need a service
+stopped, a compaction lifecycle, or per-product awareness that no shell call
+provides.

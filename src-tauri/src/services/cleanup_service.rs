@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::plan_store::PlanStore;
 use super::scan_service::ScanService;
 use super::scan_store::ScanStore;
-use crate::cleaner::CleanExecutor;
+use crate::cleaner::{CleanExecutor, LifecycleProviderRegistry};
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
     CleanEvent, CleanResult, CleanStrategy, CleanupEligibility, CleanupProgressSink, DeletePlan,
@@ -81,6 +81,7 @@ pub struct CleanupService {
     environment: Arc<PlatformEnvironment>,
     registry: Arc<SignatureRegistry>,
     docker_status_cache: Arc<DockerStatusCache>,
+    lifecycle_providers: Arc<LifecycleProviderRegistry>,
     platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
 }
 
@@ -95,6 +96,7 @@ impl CleanupService {
         environment: Arc<PlatformEnvironment>,
         registry: Arc<SignatureRegistry>,
         docker_status_cache: Arc<DockerStatusCache>,
+        lifecycle_providers: Arc<LifecycleProviderRegistry>,
         platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
     ) -> Self {
         Self {
@@ -106,6 +108,7 @@ impl CleanupService {
             environment,
             registry,
             docker_status_cache,
+            lifecycle_providers,
             platform_capabilities,
         }
     }
@@ -263,6 +266,7 @@ impl CleanupService {
         let environment = self.environment.clone();
         let registry = self.registry.clone();
         let docker_status_cache = self.docker_status_cache.clone();
+        let lifecycle_providers = self.lifecycle_providers.clone();
 
         crate::blocking::run_blocking(
             move || -> Result<CleanResult, String> {
@@ -354,6 +358,7 @@ impl CleanupService {
                     Ok(CleanExecutor::execute(
                         plan,
                         &environment,
+                        &lifecycle_providers,
                         move |event: CleanEvent| {
                             progress.emit(event);
                         },
@@ -469,7 +474,11 @@ mod tests {
     async fn cleanup_service_plan_and_execution_lifecycle() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
@@ -486,6 +495,7 @@ mod tests {
             env,
             registry,
             docker_cache,
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             capabilities,
         );
 
@@ -531,6 +541,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
@@ -539,7 +550,11 @@ mod tests {
         });
         let registry = Arc::new(registry);
 
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let service = CleanupService::new(
@@ -551,6 +566,7 @@ mod tests {
             env,
             registry,
             Arc::new(DockerStatusCache::new()),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -619,6 +635,7 @@ mod tests {
             priority: 0,
             fail_if_running: Vec::new(),
             provider: String::new(),
+            provider_id: None,
             management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
@@ -627,7 +644,11 @@ mod tests {
         });
         let registry = Arc::new(registry);
 
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let service = CleanupService::new(
@@ -639,6 +660,7 @@ mod tests {
             env,
             registry,
             Arc::new(DockerStatusCache::new()),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -680,7 +702,11 @@ mod tests {
     async fn quick_clean_safe_handles_empty_candidates_gracefully() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
-        let scan_service = Arc::new(ScanService::new(registry.clone(), env.clone()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            env.clone(),
+        ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
         let scan_store = Arc::new(ScanStore::new());
         let operation_gate = StorageOperationGate::default();
@@ -697,6 +723,7 @@ mod tests {
             env,
             registry,
             docker_cache,
+            Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             capabilities,
         );
 
