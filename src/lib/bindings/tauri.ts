@@ -74,7 +74,7 @@ export const commands = {
 	ambiguous_overlap_bytes: number,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
-	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
+	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
 	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
 	terminateMemoryGroup: (leaseId: string, mode: MemoryTerminationMode) => typedError<MemoryTerminationResult, string>(__TAURI_INVOKE("terminate_memory_group", { leaseId, mode })),
@@ -2040,6 +2040,7 @@ export type PlanPreview_Deserialize = {
 	targets: PlanTargetPreview_Deserialize[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Deserialize,
+	requires_confirmation: boolean,
 	expires_at: number,
 	/**
 	 *  What executing this plan would do, stated rather than implied: a
@@ -2054,6 +2055,7 @@ export type PlanPreview_Serialize = {
 	targets: PlanTargetPreview_Serialize[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Serialize,
+	requires_confirmation: boolean,
 	expires_at: number,
 	/**
 	 *  What executing this plan would do, stated rather than implied: a
@@ -2068,6 +2070,7 @@ export type PlanTargetPreview = PlanTargetPreview_Serialize | PlanTargetPreview_
 export type PlanTargetPreview_Deserialize = {
 	item_id: string,
 	name: string,
+	requires_confirmation: boolean,
 	expected_bytes: number,
 	risk: RiskTier,
 };
@@ -2075,6 +2078,7 @@ export type PlanTargetPreview_Deserialize = {
 export type PlanTargetPreview_Serialize = {
 	item_id: string,
 	name: string,
+	requires_confirmation: boolean,
 	expected_bytes: number,
 	risk: RiskTier,
 };
@@ -2632,6 +2636,8 @@ export type ScanItem_Deserialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running?: boolean,
+	lifecycle_provider_action?: boolean,
+	requires_confirmation?: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
 	 * 
@@ -2712,6 +2718,8 @@ export type ScanItem_Serialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running: boolean,
+	lifecycle_provider_action: boolean,
+	requires_confirmation: boolean,
 	/**
 	 *  The other catalog rules that described the same location.
 	 * 
