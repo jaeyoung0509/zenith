@@ -532,6 +532,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_confirmation_required_provider_cannot_execute_without_confirmation() {
+        use crate::cleaner::providers::test_support::StatedProvider;
+
+        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let mut registry = SignatureRegistry::new();
+        registry.register(Signature {
+            id: "test.stated.store".to_string(),
+            name: "Stated Store".to_string(),
+            category: Category::System,
+            risk: RiskTier::Manual,
+            strategy: CleanStrategy::LifecycleProvider,
+            paths: Vec::new(),
+            exclusions: Vec::new(),
+            description: "A provider-owned store.".to_string(),
+            min_age_days: None,
+            include_prefixes: Vec::new(),
+            exclude_prefixes: Vec::new(),
+            intensive_only: false,
+            platforms: vec![crate::models::PlatformKind::current()],
+            discovery: Default::default(),
+            unit: None,
+            owner: String::new(),
+            priority: 0,
+            fail_if_running: Vec::new(),
+            provider: "Stated Owner".to_string(),
+            provider_id: Some("test.stated".to_string()),
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+        });
+        let registry = Arc::new(registry);
+        let providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(vec![
+            StatedProvider::holding(2_048, 1).shared(),
+        ]));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            providers.clone(),
+            env.clone(),
+        ));
+        let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
+        let scan_store = Arc::new(ScanStore::new());
+        let service = CleanupService::new(
+            scan_service,
+            plan_store,
+            scan_store.clone(),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            env.clone(),
+            registry.clone(),
+            Arc::new(DockerStatusCache::new()),
+            providers.clone(),
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        );
+
+        let items = providers.scan_items(
+            &registry,
+            Category::System,
+            false,
+            &[],
+            &env,
+        );
+        assert_eq!(items.len(), 1);
+        assert!(items[0].requires_confirmation);
+        assert_eq!(
+            items[0].disposition.eligibility,
+            crate::models::CleanupEligibility::Reviewable
+        );
+        scan_store.set(make_test_scan(items));
+
+        let preview = service
+            .create_delete_plan(
+                "scan_123".to_string(),
+                vec!["test.stated.store".to_string()],
+            )
+            .await
+            .expect("provider selection creates a plan");
+        assert!(preview.requires_confirmation);
+        assert!(preview.targets[0].requires_confirmation);
+
+        let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
+        let refused = service
+            .execute_clean(preview.id, false, progress.clone())
+            .await
+            .expect_err("confirmation-required plan must fail closed");
+        assert!(refused.contains("explicit confirmation"), "{refused}");
+
+        let confirmed_preview = service
+            .create_delete_plan(
+                "scan_123".to_string(),
+                vec!["test.stated.store".to_string()],
+            )
+            .await
+            .expect("the unconfirmed refusal leaves the scan available for review");
+        let result = service
+            .execute_clean(confirmed_preview.id, true, progress)
+            .await
+            .expect("a confirmed provider action executes");
+        assert_eq!(result.failed_count, 0);
+        assert_eq!(result.total_reclaimed_bytes, 2_048);
+    }
+
+    #[tokio::test]
     async fn a_consumed_plan_cannot_be_replayed_through_the_service() {
         let fixture = tempfile::tempdir().unwrap();
         let cache = fixture.path().join("fixture-cache");
