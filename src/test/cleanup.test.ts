@@ -525,6 +525,8 @@ describe('scanStore selectionSummary', () => {
               risk: 'manual',
               size: { logical: 2048, allocated: 2048 },
               unit: { kind: 'provider_action', root: '', path: '' },
+              lifecycle_provider_action: true,
+              requires_confirmation: true,
               disposition: { eligibility: 'reviewable', cleanable_bytes: 2048, reason: null },
             }),
             item({ id: 'manual-resource', category: 'system', risk: 'manual', size: { logical: 100, allocated: 100 } }),
@@ -688,6 +690,8 @@ describe('cleanup disposition authority & byte semantics', () => {
       risk: 'manual',
       size: { logical: 2048, allocated: 2048 },
       unit: providerAction,
+      lifecycle_provider_action: true,
+      requires_confirmation: true,
       disposition: { eligibility: 'reviewable', cleanable_bytes: 2048, reason: null },
     });
     expect(isProviderBacked(recycleBin)).toBe(true);
@@ -712,6 +716,8 @@ describe('cleanup disposition authority & byte semantics', () => {
       risk: 'manual',
       size: { logical: 2048, allocated: 2048 },
       unit: providerAction,
+      lifecycle_provider_action: true,
+      requires_confirmation: true,
       disposition: { eligibility: 'blocked', cleanable_bytes: null, reason: 'Provider unavailable' },
     });
     expect(isProviderBacked(blockedProvider)).toBe(true);
