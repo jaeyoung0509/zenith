@@ -157,9 +157,7 @@ impl SafetyPlanner {
             // is attempted. The one exception is a provider action: it owns no
             // host path either, and the signature below must still declare the
             // provider operation before it is allowed through.
-            if item.risk == RiskTier::Manual
-                && item.unit.kind != crate::models::CleanupUnitKind::ProviderAction
-            {
+            if item.risk == RiskTier::Manual && !item.lifecycle_provider_action {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
 
@@ -206,6 +204,12 @@ impl SafetyPlanner {
             // when the catalog entry declares the provider action: a discovery
             // rule cannot carry the tier past the refusal above on its own.
             let provider_action = signature.strategy == CleanStrategy::LifecycleProvider;
+            if item.lifecycle_provider_action != provider_action {
+                return Err(ZenithError::InvalidPlan(format!(
+                    "Item '{}' disagrees with the catalog about whether a lifecycle provider owns its cleanup; scan again",
+                    item.name
+                )));
+            }
             if item.risk == RiskTier::Manual && !provider_action {
                 return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
             }
@@ -378,6 +382,7 @@ impl SafetyPlanner {
                 owner: item.ownership.clone(),
                 process_guard: signature.process_guard(),
                 provider_id: provider_id.clone(),
+                requires_confirmation: item.requires_confirmation,
             });
         }
 
