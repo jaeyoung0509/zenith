@@ -38,7 +38,9 @@ use crate::models::{
 use crate::signatures::SignatureRegistry;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use zenith_core::domain::cleanup::{LifecycleProviderCleanup, ProviderOutcome, ProviderProbe};
+use zenith_core::domain::cleanup::{
+    LifecycleProviderCleanup, ProviderOutcome, ProviderProbe, ProviderStatus,
+};
 use zenith_platform::PlatformEnvironment;
 
 /// One reviewed provider of a lifecycle-aware cleanup action.
@@ -163,7 +165,10 @@ impl LifecycleProviderRegistry {
                 continue;
             }
             let probe = provider.probe(environment);
-            if !probe.has_reclaimable_bytes() {
+            if probe.status == ProviderStatus::Ready && !probe.has_reclaimable_bytes() {
+                continue;
+            }
+            if probe.status == ProviderStatus::Unsupported {
                 crate::diagnostics::log_error(
                     "cleanup",
                     &format!(
@@ -172,7 +177,7 @@ impl LifecycleProviderRegistry {
                         probe
                             .detail
                             .as_deref()
-                            .unwrap_or("nothing to reclaim was found")
+                            .unwrap_or("the provider is unavailable on this platform")
                     ),
                 );
                 continue;
@@ -224,6 +229,18 @@ impl LifecycleProviderRegistry {
     ) -> ScanItem {
         let location = provider.location();
         let size = FileSize::new(probe.estimated_bytes, Some(probe.estimated_bytes));
+        let quality = if probe.status == ProviderStatus::Ready {
+            ObservationQuality::Fresh
+        } else {
+            ObservationQuality::Unavailable
+        };
+        let incomplete_reason = (!probe.status.is_ready())
+            .then(|| {
+                probe
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| probe.status.display_name().to_string())
+            });
         let mut cache_metadata = signature.cache_metadata();
         cache_metadata.consequence = provider.consequence().to_string();
         cache_metadata.size_semantics =
@@ -235,13 +252,14 @@ impl LifecycleProviderRegistry {
         let disposition = derive_cleanup_disposition(
             DispositionFacts::new(
                 signature.risk,
-                ObservationQuality::Fresh,
+                quality,
                 &cache_metadata,
                 &size,
-                None,
+                incomplete_reason.as_deref(),
             )
             .with_gate(gate)
-            .with_provider_action(true),
+            .with_lifecycle_provider_action(true)
+            .with_confirmation_requirement(provider.requires_confirmation()),
         );
         let is_selected = disposition.eligibility.is_auto_cleanable();
         ScanItem {
@@ -270,12 +288,14 @@ impl LifecycleProviderRegistry {
             entry_kind: EntryKind::Other,
             gate,
             owner_running: false,
+            lifecycle_provider_action: true,
+            requires_confirmation: provider.requires_confirmation(),
             overlaps: Vec::new(),
             is_selected,
             last_modified: None,
             exists: true,
-            quality: ObservationQuality::Fresh,
-            incomplete_reason: None,
+            quality,
+            incomplete_reason,
             skipped_entry_count: 0,
         }
     }
