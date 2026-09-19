@@ -62,6 +62,9 @@ export const commands = {
 	/**  Units suppressed as duplicates of an already-counted unit. */
 	suppressed_duplicate_count: number,
 	suppressed_duplicate_bytes: number,
+	/**  Units whose bytes a broader unit already accounts for. */
+	suppressed_overlap_count: number,
+	suppressed_overlap_bytes: number,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, onEvent })),
@@ -758,6 +761,12 @@ export type CategoryResult_Deserialize = {
 	 */
 	suppressed_duplicate_count?: number,
 	suppressed_duplicate_bytes?: number,
+	/**
+	 *  Units inside a broader unit this category reported, so their bytes are
+	 *  already in `total_bytes` and are not counted a second time.
+	 */
+	suppressed_overlap_count?: number,
+	suppressed_overlap_bytes?: number,
 };
 
 export type CategoryResult_Serialize = {
@@ -788,6 +797,12 @@ export type CategoryResult_Serialize = {
 	 */
 	suppressed_duplicate_count: number,
 	suppressed_duplicate_bytes: number,
+	/**
+	 *  Units inside a broader unit this category reported, so their bytes are
+	 *  already in `total_bytes` and are not counted a second time.
+	 */
+	suppressed_overlap_count: number,
+	suppressed_overlap_bytes: number,
 };
 
 export type CleanEvent = CleanEvent_Serialize | CleanEvent_Deserialize;
@@ -970,6 +985,45 @@ export type CleanupMode =
 "permanent_delete" | 
 /**  Targets are moved to the platform's recoverable location. */
 "trash";
+
+/**
+ *  One other catalog rule that named the same location.
+ * 
+ *  The entry is provenance, not a second target: its bytes are already counted
+ *  by the unit that carries it, and its verdict is what the container's
+ *  disposition is re-derived with.
+ */
+export type CleanupOverlap = CleanupOverlap_Serialize | CleanupOverlap_Deserialize;
+
+/**
+ *  One other catalog rule that named the same location.
+ * 
+ *  The entry is provenance, not a second target: its bytes are already counted
+ *  by the unit that carries it, and its verdict is what the container's
+ *  disposition is re-derived with.
+ */
+export type CleanupOverlap_Deserialize = {
+	signature_id: string,
+	name: string,
+	unit_path: string,
+	eligibility: CleanupEligibility,
+	observed_bytes: number,
+};
+
+/**
+ *  One other catalog rule that named the same location.
+ * 
+ *  The entry is provenance, not a second target: its bytes are already counted
+ *  by the unit that carries it, and its verdict is what the container's
+ *  disposition is re-derived with.
+ */
+export type CleanupOverlap_Serialize = {
+	signature_id: string,
+	name: string,
+	unit_path: string,
+	eligibility: CleanupEligibility,
+	observed_bytes: number,
+};
 
 export type CleanupOwnership = {
 	owner: string,
@@ -2491,6 +2545,16 @@ export type ScanItem_Deserialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running?: boolean,
+	/**
+	 *  The other catalog rules that described the same location.
+	 * 
+	 *  Two rules can name one cache directory, or a broad rule can name a
+	 *  directory that contains a unit a narrower rule enumerated. The bytes are
+	 *  counted once — by this item — and the rules that did not count them are
+	 *  carried here, so the strictest verdict still applies and the interface
+	 *  can say which rule imposed it.
+	 */
+	overlaps?: CleanupOverlap_Deserialize[],
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -2561,6 +2625,16 @@ export type ScanItem_Serialize = {
 	 *  disposition keeps the unit selectable but never automatic.
 	 */
 	owner_running: boolean,
+	/**
+	 *  The other catalog rules that described the same location.
+	 * 
+	 *  Two rules can name one cache directory, or a broad rule can name a
+	 *  directory that contains a unit a narrower rule enumerated. The bytes are
+	 *  counted once — by this item — and the rules that did not count them are
+	 *  carried here, so the strictest verdict still applies and the interface
+	 *  can say which rule imposed it.
+	 */
+	overlaps: CleanupOverlap_Serialize[],
 	is_selected: boolean,
 	last_modified: number | null,
 	exists: boolean,
@@ -2602,6 +2676,9 @@ export type ScanResult_Deserialize = {
 	/**  Units suppressed as duplicates of an already-counted unit. */
 	suppressed_duplicate_count?: number,
 	suppressed_duplicate_bytes?: number,
+	/**  Units whose bytes a broader unit already accounts for. */
+	suppressed_overlap_count?: number,
+	suppressed_overlap_bytes?: number,
 };
 
 export type ScanResult_Serialize = {
@@ -2630,6 +2707,9 @@ export type ScanResult_Serialize = {
 	/**  Units suppressed as duplicates of an already-counted unit. */
 	suppressed_duplicate_count: number,
 	suppressed_duplicate_bytes: number,
+	/**  Units whose bytes a broader unit already accounts for. */
+	suppressed_overlap_count: number,
+	suppressed_overlap_bytes: number,
 };
 
 export type SelectedApplication = {

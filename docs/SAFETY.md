@@ -57,6 +57,11 @@ A generic target is executable only when all of the following hold:
 9. It is not structured state, and it is not reached through a link, junction,
    reparse point, or mount boundary.
 10. Every traversed entry passes blacklist and signature-exclusion checks.
+11. It is not inside a unit the same plan already authorizes, and no other rule
+    that described the location reached a stricter verdict: overlapping rules
+    are one accounting decision, the broader unit keeps the bytes, and the
+    strictest verdict among them decides whether those bytes may be cleaned
+    (see [ARCHITECTURE.md](ARCHITECTURE.md#discovery-eligibility-and-cleanup-units)).
 
 Before any of that runs, the executor classifies the target into the operation
 it authorizes (`CleanupOperation::of`). Only the filesystem operation names a

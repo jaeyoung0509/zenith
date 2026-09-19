@@ -415,9 +415,29 @@ packaged application, and every Electron cache subtree without listing the
 [SAFETY.md](SAFETY.md#selectors) for the grammar and the bounds.
 A unit declares the root it was found under, so the planner and the execution
 guard can re-assert containment, and it normalizes to an identity that folds
-case only on a filesystem that does. Two signatures that name the same location
-therefore produce one unit: the first one wins, the duplicate is counted once,
-and the suppressed bytes are reported instead of silently dropped.
+case only on a filesystem that does. The stated `PathFlavor` decides that: a
+Windows scan folds case in text, a POSIX scan does not, and a path that exists
+is decided by its stable filesystem identity either way.
+
+**Accounting counts each location once.** Two signatures that name the same
+location produce one unit, and a unit inside a broader one is the broader unit's
+bytes:
+
+| overlap | what happens |
+| --- | --- |
+| identical identity | the first rule keeps the bytes; the second becomes provenance (`CleanupOverlap`) on the surviving item, and `suppressed_duplicate_count/bytes` state how much was folded away |
+| a unit inside another | the broader unit keeps the bytes and reports the contained unit as provenance; the contained item is not reported separately, and `suppressed_overlap_count/bytes` state what it held |
+
+Provenance is not decoration: the surviving item's disposition is re-derived
+with the strictest verdict among the rules that described the location, so a
+second rule can never make a location more deletable than the first. A rule that
+refuses (blocked, advisory, gated) or defers (recent, reviewable) a region
+therefore withholds the unit that contains it, and the reason names the rule it
+came from. Containment is resolved over the whole result — broadest unit first,
+ties by identity — rather than in discovery order, so the same filesystem
+snapshot produces the same totals and the same item set. `SafetyPlanner` applies
+the same rule when it builds a plan, so a selection that names both a unit and
+something inside it authorizes the bytes once.
 
 Items also carry what the catalog knows about ownership (`owner` and how
 strongly it is known), the age policy's verdict, and the structured-state

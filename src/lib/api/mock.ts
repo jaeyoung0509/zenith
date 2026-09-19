@@ -1010,6 +1010,8 @@ export const mockApi = {
           eligibility: eligibilityFor(systemItems),
           suppressed_duplicate_count: 0,
           suppressed_duplicate_bytes: 0,
+          suppressed_overlap_count: 0,
+          suppressed_overlap_bytes: 0,
         };
 
         onEvent({ type: 'CategoryStarted', category: 'system' });
@@ -1123,6 +1125,8 @@ export const mockApi = {
             eligibility: eligibilityFor(aiItems),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
           },
           {
             category: 'developer',
@@ -1139,6 +1143,8 @@ export const mockApi = {
             eligibility: eligibilityFor(developerItems),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
           },
           systemCategory,
         ];
@@ -1169,6 +1175,8 @@ export const mockApi = {
           ),
           suppressed_duplicate_count: 0,
           suppressed_duplicate_bytes: 0,
+          suppressed_overlap_count: 0,
+          suppressed_overlap_bytes: 0,
         };
 
         lastMockScan = result;
