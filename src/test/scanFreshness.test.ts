@@ -181,6 +181,8 @@ describe('cleanup freshness and recovery', () => {
         risk: 'manual',
         size: { logical: 2000, allocated: 2000 },
         unit: { kind: 'provider_action', root: '', path: '' },
+        lifecycle_provider_action: true,
+        requires_confirmation: true,
         disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 2000 },
       },
     ];
@@ -196,7 +198,7 @@ describe('cleanup freshness and recovery', () => {
     expect(store.selectionSummary.manualSelectedCount).toBe(1);
 
     vi.mocked(tauriCreatePlan).mockResolvedValue({
-      id: 'plan', targets: [], expected_reclaim_bytes: 2010, requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete',
+      id: 'plan', targets: [], expected_reclaim_bytes: 2010, requires_confirmation: true, expires_at: 1600, mode: 'permanent_delete',
       risk: { safe_count: 1, rebuild_count: 0, manual_count: 1, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 2000 },
     });
     vi.mocked(tauriExecuteClean).mockResolvedValue({
@@ -204,7 +206,7 @@ describe('cleanup freshness and recovery', () => {
     } as never);
     vi.mocked(tauriScan).mockResolvedValue(fixture('after', Math.floor(Date.now() / 1000)));
 
-    await expect(store.cleanSelected()).resolves.not.toBeNull();
+    await expect(store.cleanItems(scan.categories[0].items, true)).resolves.not.toBeNull();
 
     const [, submitted] = vi.mocked(tauriCreatePlan).mock.calls[0];
     expect(submitted.map((entry) => entry.id)).toEqual(['provider-item', 'windows.recycle_bin']);
