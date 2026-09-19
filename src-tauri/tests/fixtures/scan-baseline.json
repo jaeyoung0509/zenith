@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "generator": "src-tauri/tests/scan_benchmark.rs",
+  "note": "Deterministic scan facts per fixture. Regenerate with `cargo test -p zenith-desktop --test scan_benchmark -- --ignored export_scan_baseline`. Timing measurements are deliberately absent; `duration_ms_ceiling` is a bound.",
+  "bounds": {
+    "max_concurrent_directory_reads": 16,
+    "max_depth": 32
+  },
+  "fixtures": {
+    "deep": {
+      "candidate_count": 1,
+      "directories_read": 33,
+      "duration_ms_ceiling": 1250,
+      "skipped_entries": 1,
+      "total_bytes": 4096,
+      "visited_entries": 36
+    },
+    "mixed_age": {
+      "candidate_count": 2,
+      "directories_read": 2,
+      "duration_ms_ceiling": 3500,
+      "skipped_entries": 0,
+      "total_bytes": 16384,
+      "visited_entries": 11
+    },
+    "mixed_size": {
+      "candidate_count": 1,
+      "directories_read": 2,
+      "duration_ms_ceiling": 1250,
+      "skipped_entries": 0,
+      "total_bytes": 3174400,
+      "visited_entries": 9
+    },
+    "overlapping_roots": {
+      "candidate_count": 1,
+      "directories_read": 3,
+      "duration_ms_ceiling": 1250,
+      "skipped_entries": 0,
+      "total_bytes": 12288,
+      "visited_entries": 8
+    },
+    "wide": {
+      "candidate_count": 1,
+      "directories_read": 201,
+      "duration_ms_ceiling": 2500,
+      "skipped_entries": 0,
+      "total_bytes": 3276800,
+      "visited_entries": 802
+    }
+  }
+}

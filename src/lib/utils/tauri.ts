@@ -153,6 +153,11 @@ export function tauriScan(
   return api.startScan(onEvent, categories);
 }
 
+/** Stops the scan that reported `scanId`; the scan's own result states the outcome. */
+export function tauriCancelScan(scanId: string): Promise<void> {
+  return api.cancelScan(scanId);
+}
+
 export function tauriGetLastScan(): Promise<ScanResult | null> {
   return api.getLastScan();
 }

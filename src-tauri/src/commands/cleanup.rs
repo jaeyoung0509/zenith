@@ -37,6 +37,18 @@ pub async fn start_scan(
     state.cleanup.start_scan(request, progress).await
 }
 
+/// Requests cancellation of the scan that reports `scan_id`.
+///
+/// The id is the one the scan's `Started` event carried, so the interface
+/// cancels the scan it is watching rather than one it guesses at. A scan that
+/// already finished is not an error: the result is what states whether it was
+/// cancelled.
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_scan(scan_id: String, state: State<'_, DesktopState>) -> Result<(), String> {
+    state.cleanup.cancel_scan(&scan_id)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn get_last_scan(state: State<'_, DesktopState>) -> Option<ScanResult> {

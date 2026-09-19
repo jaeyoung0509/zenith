@@ -160,6 +160,29 @@ they do not replace the manual matrix above for real-machine behavior.
    - Transient locks are retried with backoff before being reported, so a file another process releases within a moment does not become a permanent failure.
    - Windows-gated tests (`windows_sharing_violation_retry_and_reporting`, `windows_sharing_violation_retries_transient_lock`) hold a real exclusive handle and assert both halves: the removable sibling and nested directory are gone, the locked file stays with a sharing-violation reason, and the reclaimed amount states what was removed beside it.
 
+6. **Reparse points and junctions are traversal boundaries (#224):**
+   - Every walk classifies an entry through one predicate (`SymlinkGuard::is_symlink`): a symbolic link, directory junction, or mount point is refused and accounted for itself, while cloud placeholders, deduplication, and WOF-compressed entries stay ordinary entries. The walker now uses that same predicate the size measurement already used, so a junction is a boundary in both rather than in one of them.
+   - Windows-gated tests create a real junction with `mklink /J` and assert that a junction inside a candidate is never counted or descended into, and that a configured root which is itself a junction is refused with its reason rather than walked.
+   - The benchmark refuses to follow links on every platform: the `symlink` fixture points a link at an outside tree and asserts the outside bytes are never claimed.
+
+7. **Scanner runtime contract (#227):** see [SCANNER_PERFORMANCE.md](SCANNER_PERFORMANCE.md) for the traversal bounds, the metrics a scan reports, cancellation, and the committed benchmark baseline. The `Rust Checks (Windows x64)` job regenerates and diffs that baseline and prints this machine's metrics table, so the Windows baseline is captured on a real Windows runner rather than on a simulated environment.
+
+## What still needs a real supported Windows 11 machine
+
+The items below are stated as a checklist because CI cannot answer them: a
+runner is a real machine but not a user's machine, and none of it has been run
+on a supported Windows 11 desktop yet.
+
+| Check | How to run it | Not yet done |
+|---|---|---|
+| Recycle Bin probe reports the real bin size and empty state | Scan on Windows; compare with Explorer's "Recycle Bin" properties | yes |
+| Emptying the Recycle Bin through the provider | Select the item, review, confirm; confirm with Explorer that the bin is empty | yes |
+| Junction inside a candidate tree is not traversed | Create `mklink /J` inside a scanned cache root; the reported bytes must exclude the target | yes |
+| Locked file in a cache directory | Hold a handle on one file, clean the directory, confirm the rest is reclaimed and the locked file is reported | yes |
+| Sparse or compressed file accounting | Compare `size.allocated` against Explorer's "Size on disk" for a compressed file | yes |
+| Packaged app `TempState` is offered, `LocalState` is not | Scan and inspect the two entries' eligibility | yes |
+| Non-default profile root (relocated `%LOCALAPPDATA%`) | Scan with a redirected profile and confirm the catalog resolves through the stated environment | yes |
+
 Microsoft references: [Known Folders](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders),
 [user profiles](https://learn.microsoft.com/en-us/windows/win32/shell/about-user-profiles),
 [power request lifecycle](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-powersetrequest).

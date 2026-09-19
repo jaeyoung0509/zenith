@@ -159,6 +159,10 @@ export const nativeApi = {
     return await unwrap(commands.startScan(channel, categories ?? null));
   },
 
+  async cancelScan(scanId: string): Promise<void> {
+    await unwrap(commands.cancelScan(scanId));
+  },
+
   async getLastScan(): Promise<ScanResult | null> {
     return await commands.getLastScan();
   },

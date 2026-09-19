@@ -24,6 +24,19 @@ pub enum ScanEvent {
     CategoryStarted {
         category: Category,
     },
+    /// One root of one signature is about to be read.
+    ///
+    /// Progress, not a result: a scan spends most of its time inside a single
+    /// root, so naming the root is what lets the interface say where the scan
+    /// is rather than only that it is running. No byte total is claimed here —
+    /// the root's measurement arrives with the items it produced.
+    RootStarted {
+        category: Category,
+        signature_id: String,
+        name: String,
+        /// The resolved root, as the walker reads it.
+        root: String,
+    },
     ItemFound {
         item: ScanItem,
     },

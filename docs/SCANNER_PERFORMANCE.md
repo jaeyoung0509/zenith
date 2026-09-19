@@ -1,0 +1,146 @@
+# Scanner performance and validation
+
+What the cleanup scan is allowed to do, what it reports about what it did, and
+how a regression is detected. The contract here is enforced by tests in
+`src-tauri/src/scanner` and by the benchmark in
+`src-tauri/tests/scan_benchmark.rs`; the platform-specific validation lives in
+[WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md) and [SAFETY.md](SAFETY.md).
+
+## Traversal bounds
+
+Every walk runs under one stated set of limits
+(`scanner/observation.rs`, `ScanLimits::default`):
+
+| Bound | Value | What it bounds |
+|---|---|---|
+| `max_depth` | 32 | Directory levels below a root. A deeper entry is counted and reported as the reason a measurement is incomplete — never silently skipped. |
+| `max_concurrent_directory_reads` | 16 | Directory tasks a walk may keep outstanding at once. |
+
+The work executes on one process-wide, explicitly bounded Rayon pool
+(`execution_budget::shared_scan_pool`, at most four workers, capped by the
+machine's performance cores on macOS). The limits above bound the *queue*, not
+the threads: past `max_concurrent_directory_reads` the walk descends inline on
+the worker that is already running, so a tree of a million directories is work
+for four threads rather than a queue of a million tasks. Both numbers are
+stated once and threaded through `WalkContext`, so a walk cannot pick up the
+bound in one path and miss it in another.
+
+The benchmark asserts the bound as a measurement: for every fixture the run
+reports `peak_outstanding_directory_tasks <= max_concurrent_directory_reads`,
+and the wide fixture reaches the bound rather than trivially satisfying it.
+
+### Determinism
+
+Two scans of one tree state the same items in the same order, with the same
+bytes, the same skipped counts, and the same incomplete reason. Reasons are
+chosen by the walk's own order — shallowest failure first, then path, then
+message — rather than by whichever worker finished first
+(`scanner/size.rs`, `FailureRecord`), so a parallel walk and a sequential walk
+of the same tree report identical results.
+
+## What a scan reports
+
+`ScanResult.metrics` (`ScanMetrics`) carries the run's own measurements:
+
+| Field | Repeats across scans? | Meaning |
+|---|---|---|
+| `visited_entries` | yes | Files and directories the traversal looked at, including the ones it refused. |
+| `directories_read` | yes | Directories whose contents were read. |
+| `duration_ms` | no | Wall-clock duration of this run. |
+| `peak_outstanding_directory_tasks` | no | The highest number of directory tasks this run kept outstanding. |
+
+`ScanResult.cancelled` states whether the run stopped because it was cancelled;
+a cancelled scan is `quality: partial` with a stated reason, and the flag is
+what lets the interface say *which* kind of incompleteness it is.
+
+### Progress
+
+`ScanEvent::RootStarted { category, signature_id, name, root }` is emitted once
+per root, before the walk reads it. A scan spends most of its time inside one
+root, so naming the root is what lets the interface show where a long scan is;
+per-category item counts arrive with `CategoryFinished`.
+
+### Cancellation
+
+`cancel_scan(scan_id)` sets the signal the scan registered under the id its
+`Started` event carried. The probe is consulted at every category, signature,
+directory, and entry boundary, so a cancel stops the walk at the next boundary
+and the partial result says so. The registry that owns those signals has a TTL
+and a hard entry cap, and entries are removed on success, on cancellation, and
+on error (`services::CancellationRegistry`).
+
+Cancellation latency — the time from the request to the scan returning — is
+measured by the benchmark (`cancellation_latency_is_measured_from_the_first_candidate`),
+which also asserts the work actually stopped: the cancelled run reads fewer
+directories than the fixture contains and never produces the later candidates.
+
+## Benchmark and regression guard
+
+```bash
+# Run the harness and print this machine's metrics table.
+cargo test -p zenith-desktop --test scan_benchmark -- --nocapture
+
+# Regenerate the committed baseline after adding or changing a fixture.
+cargo test -p zenith-desktop --test scan_benchmark -- --ignored --exact export_scan_baseline
+```
+
+`src-tauri/tests/fixtures/scan-baseline.json` holds the deterministic facts per
+fixture — visited entries, directories read, candidate count, skipped entries,
+allocated bytes — plus the stated bounds and a generous duration ceiling. CI
+regenerates the file on both platform jobs and fails on a diff, exactly like the
+TypeScript bindings; the same jobs print the metrics table so a real-machine
+baseline can be read out of a log.
+
+A regression is therefore caught two ways: a **count** that moves (exact
+comparison — a scanner that walks more or less than it did is a defect, not a
+slow run) and a **duration** that exceeds its ceiling (a bound with at least an
+order of magnitude of headroom, because CI runners are shared and slower than a
+developer machine). Timings are deliberately not compared byte-for-byte.
+
+Fixtures currently covered: `wide` (200 directories), `deep` (past the depth
+limit), `mixed_size` (3 B to 2 MiB), `mixed_age` (stale and fresh siblings),
+`overlapping_roots` (one location, two rules), plus unix-only `inaccessible`
+and `symlink` fixtures that are asserted by their own tests.
+
+## Recorded real-machine baselines
+
+Counts are properties of the fixtures and are identical on every machine; the
+numbers below are what the machines measured, recorded so a future run can be
+compared against a known point rather than against a feeling.
+
+| Machine | OS build | Date | Zenith | Baseline |
+|---|---|---|---|---|
+| MacBook Air (Apple M1, 8 cores) | macOS 27.0 (26A428), Darwin 27.0.0 | 2026-09-19 | 0.3.36 | the table below |
+| GitHub `windows-latest` runner | printed by the `Rust Checks (Windows x64)` job (`--nocapture`) | first run of this branch | 0.3.36 | the job's log for this branch |
+
+macOS, `cargo test -p zenith-desktop --test scan_benchmark -- --nocapture`:
+
+```text
+fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  total_bytes  rss_growth_kib
+wide                        62      802          201          16           1        0      3276800             112
+deep                        55       36           33           2           1        1         4096               0
+mixed_size                  53        9            2           2           1        0      3174400              32
+mixed_age                  168       11            2           0           2        0        16384            6144
+overlapping_roots           53        8            3           2           1        0        12288               0
+inaccessible                83        4            2           2           1        1         4096   (unix only)  0
+symlink                     82        5            2           2           1        0         4096   (unix only)  0
+cancellation                55        3            1           1           1        0         4096    (cancelled)  0
+```
+
+`rss_growth_kib` is this process's approximate resident-set growth across the
+scan. It is reported and never asserted: the allocator decides when pages
+return to the operating system, so two identical runs disagree, and most of the
+growth belongs to building the fixture rather than to walking it.
+
+The `wide` row reaches `peak_tasks` 16, which is the bound being exercised
+rather than trivially satisfied; the `cancellation` row shows the work actually
+stopped (one directory read, no later candidate) and the result states
+`cancelled: true`.
+
+## Windows-specific behaviour
+
+Reparse points, junctions, locked files, and sparse/compressed accounting are
+stated in [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md); the traversal rule is
+that the walk uses one classifier (`SymlinkGuard`) for links and reparse points
+in every walk, so a junction is a boundary in the walker and in the size
+measurement alike rather than only in one of them.

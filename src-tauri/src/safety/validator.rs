@@ -483,13 +483,19 @@ impl SafetyValidator {
                 // deletion is allowed, so it runs to completion.
                 let stale_policy = (target.strategy == CleanStrategy::DeleteStaleContents)
                     .then(|| crate::safety::StaleEntryPolicy::from_days(days));
-                let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+                let counters = crate::scanner::TraversalCounters::default();
+                let context = crate::scanner::WalkContext::new(
                     environment,
+                    &crate::models::NeverCancelled,
+                    crate::scanner::ScanLimits::default(),
+                    &counters,
+                    &crate::scanner::NoRootProgress,
+                );
+                let stats = crate::scanner::DirectoryScanner::measure_tree_stats(
+                    &context,
                     path,
                     &target.exclusions,
                     0,
-                    32,
-                    &crate::models::NeverCancelled,
                     stale_policy,
                 );
                 if !stats.complete {

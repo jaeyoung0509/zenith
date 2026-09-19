@@ -1,3 +1,4 @@
+use super::observation::{ScanLimits, TraversalCounters};
 use crate::models::{CancellationProbe, FileSize, NeverCancelled};
 use crate::safety::{Blacklist, SymlinkGuard};
 use rayon::{Scope, ThreadPool};
@@ -162,6 +163,85 @@ fn cancelled_measurement_reason(dir: &Path) -> String {
     format!("Scan cancelled while measuring {}", dir.display())
 }
 
+/// One reason a walk did not account for an entry.
+///
+/// The parallel walk can hit several failures at once, so the reason a scan
+/// reports is chosen by the walk's own order — shallowest first, then path,
+/// then message — instead of by whichever worker happened to finish first. Two
+/// scans of one tree therefore state the same reason, which is what makes a
+/// repeat-scan comparison meaningful.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FailureRecord {
+    depth: usize,
+    path: String,
+    message: String,
+}
+
+impl FailureRecord {
+    fn new(depth: usize, path: &Path, message: String) -> Self {
+        Self {
+            depth,
+            path: path.to_string_lossy().into_owned(),
+            message,
+        }
+    }
+
+    fn ranked(&self) -> (usize, &str, &str) {
+        (self.depth, self.path.as_str(), self.message.as_str())
+    }
+
+    fn earlier_than(&self, other: &Self) -> bool {
+        self.ranked() < other.ranked()
+    }
+}
+
+/// The shared accumulators of one parallel measurement.
+///
+/// Bundled so the task body takes one reference per concern rather than eleven
+/// positional arguments, and so a counter cannot be wired into the queued path
+/// and forgotten in the inline one.
+struct MeasurementState<'scope> {
+    logical: &'scope AtomicU64,
+    allocated: &'scope AtomicU64,
+    file_count: &'scope AtomicUsize,
+    complete: &'scope AtomicBool,
+    skipped: &'scope AtomicU64,
+    reason: &'scope Mutex<Option<FailureRecord>>,
+    counters: &'scope TraversalCounters,
+    in_flight: &'scope AtomicUsize,
+}
+
+impl MeasurementState<'_> {
+    /// Records a failure, keeping the walk's own ordering.
+    fn note_reason(&self, record: FailureRecord) {
+        let mut slot = self
+            .reason
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let replace = match slot.as_ref() {
+            None => true,
+            Some(current) => record.earlier_than(current),
+        };
+        if replace {
+            *slot = Some(record);
+        }
+    }
+
+    /// Records one entry the walk could not account for, and why.
+    ///
+    /// Failures are counted here rather than in the per-directory locals: a
+    /// failure can end a directory before its local counters are folded, so the
+    /// shared counter is the one place where every failure is counted exactly
+    /// once. Deliberate skips (an exclusion, a blacklist match) are different:
+    /// they are not failures, and they are counted locally by the directory
+    /// that observed them.
+    fn fail(&self, record: FailureRecord) {
+        self.complete.store(false, Ordering::Relaxed);
+        self.skipped.fetch_add(1, Ordering::Relaxed);
+        self.note_reason(record);
+    }
+}
+
 pub struct SizeCalculator;
 
 impl SizeCalculator {
@@ -179,6 +259,31 @@ impl SizeCalculator {
         Self::measure_path_full_with_cancellation(path, exclusions, environment, &NeverCancelled)
     }
 
+    /// [`Self::measure_path_full`] under stated bounds, with the caller's
+    /// traversal counters.
+    ///
+    /// A caller that measures a path outside a scan passes
+    /// `&TraversalCounters::default()`: the walk behaves identically, and the
+    /// counts land somewhere nobody reads instead of in a scan's metrics.
+    pub fn measure_path_bounded<P: AsRef<Path>>(
+        path: P,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+    ) -> PathMeasurement {
+        Self::measure_path_with_pool(
+            path,
+            exclusions,
+            None,
+            environment,
+            cancellation,
+            limits,
+            counters,
+        )
+    }
+
     /// [`Self::measure_path_full`] with the caller's cancellation contract.
     ///
     /// A scan that was cancelled mid-tree returns an incomplete measurement:
@@ -191,7 +296,15 @@ impl SizeCalculator {
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
     ) -> PathMeasurement {
-        Self::measure_path_with_pool(path, exclusions, None, environment, cancellation)
+        Self::measure_path_with_pool(
+            path,
+            exclusions,
+            None,
+            environment,
+            cancellation,
+            ScanLimits::default(),
+            &TraversalCounters::default(),
+        )
     }
 
     /// Measures a path and records an incomplete observation in the log.
@@ -223,14 +336,18 @@ impl SizeCalculator {
         measurement
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn measure_path_with_pool<P: AsRef<Path>>(
         path: P,
         exclusions: &[String],
         pool: Option<&ThreadPool>,
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
     ) -> PathMeasurement {
         let path = path.as_ref();
+        counters.visit_entry();
         // Check if path is in blacklist
         if Blacklist::is_blacklisted_with(path, environment) {
             return PathMeasurement::incomplete(
@@ -274,20 +391,41 @@ impl SizeCalculator {
                     pool,
                     environment,
                     cancellation,
+                    limits,
+                    counters,
                 );
             }
-            return Self::measure_dir_recursive(path, exclusions, 0, 32, environment, cancellation);
+            return Self::measure_dir_recursive(
+                path,
+                exclusions,
+                0,
+                limits.max_depth,
+                environment,
+                cancellation,
+                counters,
+            );
         }
 
         PathMeasurement::complete(FileSize::default(), 0)
     }
 
+    /// Measures a directory tree on the shared pool.
+    ///
+    /// The walk is bounded twice over: by `limits.max_depth` (how deep it may
+    /// descend) and by `limits.max_concurrent_directory_reads` (how many
+    /// directory tasks may be outstanding at once). Past the second bound the
+    /// walk descends inline on the worker that is already running, so a tree of
+    /// a million directories becomes work for four threads rather than a queue
+    /// of a million tasks.
+    #[allow(clippy::too_many_arguments)]
     fn measure_dir_parallel(
         path: &Path,
         exclusions: &[String],
         pool: &ThreadPool,
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
     ) -> PathMeasurement {
         let logical = AtomicU64::new(0);
         let allocated = AtomicU64::new(0);
@@ -295,27 +433,37 @@ impl SizeCalculator {
         let complete = AtomicBool::new(true);
         let skipped = AtomicU64::new(0);
         let reason = Mutex::new(None);
+        let in_flight = AtomicUsize::new(0);
+
+        let state = MeasurementState {
+            logical: &logical,
+            allocated: &allocated,
+            file_count: &file_count,
+            complete: &complete,
+            skipped: &skipped,
+            reason: &reason,
+            counters,
+            in_flight: &in_flight,
+        };
 
         pool.scope(|scope| {
-            Self::spawn_dir_measurement(
+            Self::dispatch_directory(
                 scope,
                 path.to_path_buf(),
-                exclusions,
                 0,
-                32,
-                &logical,
-                &allocated,
-                &file_count,
-                &complete,
-                &skipped,
-                &reason,
+                exclusions,
+                limits,
+                &state,
                 environment,
                 cancellation,
             );
         });
 
         let is_complete = complete.load(Ordering::Relaxed);
-        let incomplete_reason = reason.into_inner().unwrap_or_default();
+        let incomplete_reason = reason
+            .into_inner()
+            .unwrap_or_default()
+            .map(|recorded: FailureRecord| recorded.message);
         PathMeasurement {
             size: FileSize::new(
                 logical.load(Ordering::Relaxed),
@@ -328,219 +476,270 @@ impl SizeCalculator {
         }
     }
 
+    /// Runs a directory measurement now, or queues it when the walk is below its
+    /// stated number of outstanding tasks.
+    ///
+    /// The permit is released when the task finishes, so the bound counts work
+    /// that has been accepted and not yet completed rather than work that was
+    /// merely requested.
     #[allow(clippy::too_many_arguments)]
-    fn spawn_dir_measurement<'scope>(
+    fn dispatch_directory<'scope>(
         scope: &Scope<'scope>,
         dir: PathBuf,
+        depth: usize,
         exclusions: &'scope [String],
-        current_depth: usize,
-        max_depth: usize,
-        logical: &'scope AtomicU64,
-        allocated: &'scope AtomicU64,
-        file_count: &'scope AtomicUsize,
-        complete: &'scope AtomicBool,
-        skipped: &'scope AtomicU64,
-        reason: &'scope Mutex<Option<String>>,
+        limits: ScanLimits,
+        state: &'scope MeasurementState<'scope>,
         environment: &'scope PlatformEnvironment,
         cancellation: &'scope dyn CancellationProbe,
     ) {
-        scope.spawn(move |scope| {
-            // A cancelled scan stops at the next directory boundary: the bytes
-            // already observed are kept and reported as an incomplete
-            // measurement rather than silently becoming a smaller total.
+        let outstanding = state.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
+        if outstanding <= limits.max_concurrent_directory_reads {
+            // Only accepted work is counted: an inline descent is not work
+            // waiting for a worker, so the peak states how much queued work the
+            // walk held rather than how deep it recursed.
+            state
+                .counters
+                .observe_outstanding_directory_tasks(outstanding as u64);
+            scope.spawn(move |scope| {
+                Self::measure_directory(
+                    scope,
+                    &dir,
+                    depth,
+                    exclusions,
+                    limits,
+                    state,
+                    environment,
+                    cancellation,
+                );
+                state.in_flight.fetch_sub(1, Ordering::AcqRel);
+            });
+            return;
+        }
+        // At the bound: descend on the worker that is already running instead of
+        // growing the queue. The depth-first fallback is what keeps retained
+        // work proportional to the bound rather than to the tree.
+        state.in_flight.fetch_sub(1, Ordering::AcqRel);
+        Self::measure_directory(
+            scope,
+            &dir,
+            depth,
+            exclusions,
+            limits,
+            state,
+            environment,
+            cancellation,
+        );
+    }
+
+    /// Reads one directory and accounts for everything in it.
+    #[allow(clippy::too_many_arguments)]
+    fn measure_directory<'scope>(
+        scope: &Scope<'scope>,
+        dir: &Path,
+        depth: usize,
+        exclusions: &'scope [String],
+        limits: ScanLimits,
+        state: &'scope MeasurementState<'scope>,
+        environment: &'scope PlatformEnvironment,
+        cancellation: &'scope dyn CancellationProbe,
+    ) {
+        // A cancelled scan stops at the next directory boundary: the bytes
+        // already observed are kept and reported as an incomplete measurement
+        // rather than silently becoming a smaller total.
+        if cancellation.is_cancelled() {
+            state.fail(FailureRecord::new(
+                depth,
+                dir,
+                cancelled_measurement_reason(dir),
+            ));
+            return;
+        }
+        if depth > limits.max_depth {
+            state.fail(FailureRecord::new(
+                depth,
+                dir,
+                format!(
+                    "Directory depth limit of {} exceeded at {}",
+                    limits.max_depth,
+                    dir.display()
+                ),
+            ));
+            return;
+        }
+
+        state.counters.directory_read();
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                state.fail(FailureRecord::new(
+                    depth,
+                    dir,
+                    format!("Failed to read directory {}: {}", dir.display(), err),
+                ));
+                return;
+            }
+        };
+
+        // Aggregate files locally and synchronize only once per directory.
+        let mut local_logical = 0u64;
+        let mut local_allocated = 0u64;
+        let mut local_file_count = 0usize;
+        let mut local_skipped = 0u64;
+        let mut local_visits = 0u64;
+
+        for entry in entries {
             if cancellation.is_cancelled() {
-                complete.store(false, Ordering::Relaxed);
-                skipped.fetch_add(1, Ordering::Relaxed);
-                let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                if r.is_none() {
-                    *r = Some(cancelled_measurement_reason(&dir));
-                }
-                return;
+                state.fail(FailureRecord::new(
+                    depth,
+                    dir,
+                    cancelled_measurement_reason(dir),
+                ));
+                break;
             }
-            if current_depth > max_depth {
-                complete.store(false, Ordering::Relaxed);
-                skipped.fetch_add(1, Ordering::Relaxed);
-                let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                if r.is_none() {
-                    *r = Some(format!(
-                        "Directory depth limit of {} exceeded at {}",
-                        max_depth,
-                        dir.display()
-                    ));
-                }
-                return;
-            }
-            let entries = match fs::read_dir(&dir) {
-                Ok(entries) => entries,
+            local_visits += 1;
+            let ent = match entry {
+                Ok(entry) => entry,
                 Err(err) => {
-                    complete.store(false, Ordering::Relaxed);
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                    if r.is_none() {
-                        *r = Some(format!(
-                            "Failed to read directory {}: {}",
+                    state.fail(FailureRecord::new(
+                        depth,
+                        dir,
+                        format!(
+                            "Failed to read directory entry in {}: {}",
                             dir.display(),
                             err
-                        ));
-                    }
-                    return;
+                        ),
+                    ));
+                    continue;
                 }
             };
-
-            // Aggregate files locally and synchronize only once per directory.
-            let mut local_logical = 0u64;
-            let mut local_allocated = 0u64;
-            let mut local_file_count = 0usize;
-            let mut local_skipped = 0u64;
-
-            for entry in entries {
-                let ent = match entry {
-                    Ok(e) => e,
-                    Err(err) => {
-                        complete.store(false, Ordering::Relaxed);
-                        local_skipped += 1;
-                        let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                        if r.is_none() {
-                            *r = Some(format!(
-                                "Failed to read directory entry in {}: {}",
-                                dir.display(),
-                                err
-                            ));
-                        }
-                        continue;
-                    }
-                };
-                let child_path = ent.path();
-                if Self::is_excluded(&child_path, exclusions, environment)
-                    || Blacklist::is_blacklisted_with(&child_path, environment)
-                {
-                    local_skipped += 1;
-                    continue;
-                }
-
-                // Never follow symlinked directories; account only for the link.
-                if SymlinkGuard::is_symlink(&child_path) {
-                    match fs::symlink_metadata(&child_path) {
-                        Ok(meta) => {
-                            let len = meta.len();
-                            local_logical += len;
-                            #[cfg(unix)]
-                            {
-                                local_allocated += meta.blocks() * 512;
-                            }
-                            #[cfg(windows)]
-                            {
-                                local_allocated += get_allocated_size(&child_path).unwrap_or(len);
-                            }
-                            #[cfg(not(any(unix, windows)))]
-                            {
-                                local_allocated += len;
-                            }
-                            local_file_count += 1;
-                        }
-                        Err(err) => {
-                            complete.store(false, Ordering::Relaxed);
-                            local_skipped += 1;
-                            let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                            if r.is_none() {
-                                *r = Some(format!(
-                                    "Failed to read symlink metadata for {}: {}",
-                                    child_path.display(),
-                                    err
-                                ));
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                match fs::symlink_metadata(&child_path) {
-                    Ok(meta) => {
-                        if meta.is_dir()
-                            && child_path
-                                .extension()
-                                .and_then(|ext| ext.to_str())
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
-                        {
-                            complete.store(false, Ordering::Relaxed);
-                            local_skipped += 1;
-                            let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                            if r.is_none() {
-                                *r = Some(format!(
-                                    "Protected application bundle encountered in {}",
-                                    child_path.display()
-                                ));
-                            }
-                            continue;
-                        }
-
-                        if meta.is_file() {
-                            let len = meta.len();
-                            local_logical += len;
-                            #[cfg(unix)]
-                            {
-                                local_allocated += meta.blocks() * 512;
-                            }
-                            #[cfg(windows)]
-                            {
-                                local_allocated += get_allocated_size(&child_path).unwrap_or(len);
-                            }
-                            #[cfg(not(any(unix, windows)))]
-                            {
-                                local_allocated += len;
-                            }
-                            local_file_count += 1;
-                        } else if meta.is_dir() {
-                            if current_depth < max_depth {
-                                Self::spawn_dir_measurement(
-                                    scope,
-                                    child_path,
-                                    exclusions,
-                                    current_depth + 1,
-                                    max_depth,
-                                    logical,
-                                    allocated,
-                                    file_count,
-                                    complete,
-                                    skipped,
-                                    reason,
-                                    environment,
-                                    cancellation,
-                                );
-                            } else {
-                                complete.store(false, Ordering::Relaxed);
-                                local_skipped += 1;
-                                let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                                if r.is_none() {
-                                    *r = Some(format!(
-                                        "Directory depth limit of {} exceeded at {}",
-                                        max_depth,
-                                        child_path.display()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        complete.store(false, Ordering::Relaxed);
-                        local_skipped += 1;
-                        let mut r = reason.lock().unwrap_or_else(|p| p.into_inner());
-                        if r.is_none() {
-                            *r = Some(format!(
-                                "Failed to read metadata for {}: {}",
-                                child_path.display(),
-                                err
-                            ));
-                        }
-                    }
-                }
+            let child_path = ent.path();
+            if Self::is_excluded(&child_path, exclusions, environment)
+                || Blacklist::is_blacklisted_with(&child_path, environment)
+            {
+                local_skipped += 1;
+                continue;
             }
 
-            logical.fetch_add(local_logical, Ordering::Relaxed);
-            allocated.fetch_add(local_allocated, Ordering::Relaxed);
-            file_count.fetch_add(local_file_count, Ordering::Relaxed);
-            skipped.fetch_add(local_skipped, Ordering::Relaxed);
-        });
+            // Never follow a link or a reparse point; account only for the link
+            // itself, including a dangling one.
+            if SymlinkGuard::is_symlink(&child_path) {
+                match fs::symlink_metadata(&child_path) {
+                    Ok(meta) => {
+                        let len = meta.len();
+                        local_logical += len;
+                        #[cfg(unix)]
+                        {
+                            local_allocated += meta.blocks() * 512;
+                        }
+                        #[cfg(windows)]
+                        {
+                            local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        }
+                        #[cfg(not(any(unix, windows)))]
+                        {
+                            local_allocated += len;
+                        }
+                        local_file_count += 1;
+                    }
+                    Err(err) => {
+                        state.fail(FailureRecord::new(
+                            depth,
+                            &child_path,
+                            format!(
+                                "Failed to read symlink metadata for {}: {}",
+                                child_path.display(),
+                                err
+                            ),
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            match fs::symlink_metadata(&child_path) {
+                Ok(meta) => {
+                    if meta.is_dir()
+                        && child_path
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+                    {
+                        state.fail(FailureRecord::new(
+                            depth,
+                            &child_path,
+                            format!(
+                                "Protected application bundle encountered in {}",
+                                child_path.display()
+                            ),
+                        ));
+                        continue;
+                    }
+
+                    if meta.is_file() {
+                        let len = meta.len();
+                        local_logical += len;
+                        #[cfg(unix)]
+                        {
+                            local_allocated += meta.blocks() * 512;
+                        }
+                        #[cfg(windows)]
+                        {
+                            local_allocated += get_allocated_size(&child_path).unwrap_or(len);
+                        }
+                        #[cfg(not(any(unix, windows)))]
+                        {
+                            local_allocated += len;
+                        }
+                        local_file_count += 1;
+                    } else if meta.is_dir() {
+                        if depth < limits.max_depth {
+                            Self::dispatch_directory(
+                                scope,
+                                child_path,
+                                depth + 1,
+                                exclusions,
+                                limits,
+                                state,
+                                environment,
+                                cancellation,
+                            );
+                        } else {
+                            state.fail(FailureRecord::new(
+                                depth,
+                                &child_path,
+                                format!(
+                                    "Directory depth limit of {} exceeded at {}",
+                                    limits.max_depth,
+                                    child_path.display()
+                                ),
+                            ));
+                        }
+                    }
+                }
+                Err(err) => {
+                    state.fail(FailureRecord::new(
+                        depth,
+                        &child_path,
+                        format!(
+                            "Failed to read metadata for {}: {}",
+                            child_path.display(),
+                            err
+                        ),
+                    ));
+                }
+            }
+        }
+
+        state.counters.visit_entries(local_visits);
+        state.logical.fetch_add(local_logical, Ordering::Relaxed);
+        state
+            .allocated
+            .fetch_add(local_allocated, Ordering::Relaxed);
+        state
+            .file_count
+            .fetch_add(local_file_count, Ordering::Relaxed);
+        state.skipped.fetch_add(local_skipped, Ordering::Relaxed);
     }
 
     fn is_excluded(
@@ -570,7 +769,9 @@ impl SizeCalculator {
         max_depth: usize,
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
+        counters: &TraversalCounters,
     ) -> PathMeasurement {
+        counters.visit_entry();
         if cancellation.is_cancelled() {
             return PathMeasurement::incomplete(
                 FileSize::default(),
@@ -599,6 +800,7 @@ impl SizeCalculator {
         let mut incomplete_reason: Option<String> = None;
         let mut skipped_entries = 0u64;
 
+        counters.directory_read();
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(err) => {
@@ -622,6 +824,7 @@ impl SizeCalculator {
                 }
                 break;
             }
+            counters.visit_entry();
             let ent = match entry {
                 Ok(e) => e,
                 Err(err) => {
@@ -728,6 +931,7 @@ impl SizeCalculator {
                             max_depth,
                             environment,
                             cancellation,
+                            counters,
                         );
                         total_logical += sub.size.logical;
                         total_allocated += sub.size.allocated.unwrap_or(sub.size.logical);
@@ -872,12 +1076,15 @@ mod tests {
         let exclusions = vec!["excluded".to_string()];
         let sequential = SizeCalculator::measure_path_full(root.path(), &exclusions, &environment);
         let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        let counters = crate::scanner::TraversalCounters::default();
         let parallel = SizeCalculator::measure_path_with_pool(
             root.path(),
             &exclusions,
             Some(&pool),
             &environment,
             &NeverCancelled,
+            crate::scanner::ScanLimits::default(),
+            &counters,
         );
 
         assert_eq!(parallel, sequential);
@@ -1072,5 +1279,117 @@ mod tests {
             literal.file_count, 1,
             "the literal profile spelling excludes `~/Downloads/keep`"
         );
+    }
+
+    /// A wide tree is measured within the traversal's stated bound, and the
+    /// bound changes only how the work is scheduled, never what it counts.
+    #[test]
+    fn a_wide_tree_stays_within_the_stated_directory_task_bound() {
+        const DIRECTORIES: usize = 48;
+        const FILES_PER_DIRECTORY: usize = 3;
+
+        let root = tempfile::tempdir().unwrap();
+        for directory in 0..DIRECTORIES {
+            let path = root.path().join(format!("cache-{directory:03}"));
+            std::fs::create_dir(&path).unwrap();
+            for file in 0..FILES_PER_DIRECTORY {
+                std::fs::write(path.join(format!("entry-{file}.bin")), vec![1u8; 1_024]).unwrap();
+            }
+        }
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+
+        // One outstanding directory task is the smallest bound that still makes
+        // progress, so the peak it reports is exact rather than a race.
+        let single = crate::scanner::TraversalCounters::default();
+        let serial = SizeCalculator::measure_path_with_pool(
+            root.path(),
+            &[],
+            Some(&pool),
+            &environment,
+            &NeverCancelled,
+            crate::scanner::ScanLimits::bounded(8, 1),
+            &single,
+        );
+        assert!(serial.complete);
+        assert_eq!(single.peak_outstanding_directory_tasks(), 1);
+        assert_eq!(
+            single.directories_read(),
+            (DIRECTORIES + 1) as u64,
+            "the root and every child directory are read exactly once"
+        );
+        assert_eq!(
+            single.visited_entries(),
+            (DIRECTORIES + DIRECTORIES * FILES_PER_DIRECTORY + 1) as u64,
+            "each directory entry is visited once, plus the root itself"
+        );
+
+        // A wider bound may fan out, and it never exceeds the number it states.
+        let fanned = crate::scanner::TraversalCounters::default();
+        let parallel = SizeCalculator::measure_path_with_pool(
+            root.path(),
+            &[],
+            Some(&pool),
+            &environment,
+            &NeverCancelled,
+            crate::scanner::ScanLimits::bounded(8, 4),
+            &fanned,
+        );
+        assert!(
+            fanned.peak_outstanding_directory_tasks() <= 4,
+            "the walk never keeps more directory tasks outstanding than it states: {}",
+            fanned.peak_outstanding_directory_tasks()
+        );
+
+        assert_eq!(serial.size, parallel.size);
+        assert_eq!(serial.file_count, parallel.file_count);
+        assert_eq!(serial.skipped_entries, parallel.skipped_entries);
+        assert_eq!(serial.complete, parallel.complete);
+    }
+
+    /// A tree deeper than the stated limit reports what it did not take rather
+    /// than quietly measuring less, and it reports the same reason whichever
+    /// walk runs it.
+    #[test]
+    fn a_tree_deeper_than_the_limit_is_reported_not_silently_skipped() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("shallow.bin"), vec![1u8; 1_024]).unwrap();
+        let mut nested = root.path().to_path_buf();
+        for level in 0..5 {
+            nested.push(format!("level-{level}"));
+        }
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("deep.bin"), vec![2u8; 2_048]).unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        for pool in [
+            None,
+            Some(ThreadPoolBuilder::new().num_threads(4).build().unwrap()),
+        ] {
+            let counters = crate::scanner::TraversalCounters::default();
+            let measurement = SizeCalculator::measure_path_with_pool(
+                root.path(),
+                &[],
+                pool.as_ref(),
+                &environment,
+                &NeverCancelled,
+                crate::scanner::ScanLimits::bounded(2, 4),
+                &counters,
+            );
+            assert!(!measurement.complete);
+            assert_eq!(
+                measurement.file_count, 1,
+                "only the file inside the stated depth is measured"
+            );
+            assert!(measurement.skipped_entries >= 1);
+            assert!(
+                measurement
+                    .incomplete_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("depth limit")),
+                "the reason names the limit: {:?}",
+                measurement.incomplete_reason
+            );
+        }
     }
 }

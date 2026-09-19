@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use uuid::Uuid;
 
+use super::cancellation::{CancellationRegistry, ScanCancellation};
 use super::plan_store::PlanStore;
 use super::scan_service::ScanService;
 use super::scan_store::ScanStore;
@@ -9,7 +10,7 @@ use crate::cleaner::{CleanExecutor, LifecycleProviderRegistry};
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
     CleanEvent, CleanResult, CleanStrategy, CleanupEligibility, CleanupProgressSink, DeletePlan,
-    ObservationQuality, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature,
+    ObservationQuality, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature, ScanEvent,
     ScanProgressSink, ScanRequest, ScanResult, ZenithSettings,
 };
 use crate::operation_gate::StorageOperationGate;
@@ -82,6 +83,9 @@ pub struct CleanupService {
     registry: Arc<SignatureRegistry>,
     docker_status_cache: Arc<DockerStatusCache>,
     lifecycle_providers: Arc<LifecycleProviderRegistry>,
+    /// The cancellation handles of the scans this service is running, keyed by
+    /// the id each scan reports so `cancel_scan` can reach one in flight.
+    scan_cancellations: Arc<CancellationRegistry>,
     platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
 }
 
@@ -109,6 +113,7 @@ impl CleanupService {
             registry,
             docker_status_cache,
             lifecycle_providers,
+            scan_cancellations: Arc::new(CancellationRegistry::for_scans()),
             platform_capabilities,
         }
     }
@@ -142,16 +147,42 @@ impl CleanupService {
         let scan_service = self.scan_service.clone();
         let scan_store = self.scan_store.clone();
         let operation_gate = self.operation_gate.clone();
+        let cancellations = self.scan_cancellations.clone();
 
         let result = crate::blocking::run_blocking(
             move || {
                 let _permit = permit;
                 Ok(operation_gate.run_read(|| {
-                    let result = scan_service.scan(
-                        &request,
-                        progress.as_ref(),
-                        &crate::models::NeverCancelled,
-                    );
+                    // The interface cannot cancel a scan it has not been told
+                    // about, so the signal is registered the moment the scan
+                    // reports its id — before it has walked anything — under
+                    // that same id.
+                    let signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let registered: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+                    let probe = ScanCancellation::new(signal.clone());
+                    let sink = |event: ScanEvent| {
+                        if let ScanEvent::Started { scan_id } = &event {
+                            *registered
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                Some(scan_id.clone());
+                            cancellations.register(scan_id.clone(), signal.clone());
+                        }
+                        progress.emit(event);
+                    };
+
+                    let result = scan_service.scan(&request, &sink, &probe);
+
+                    // A finished scan keeps no way to be cancelled: success,
+                    // cancellation, and error all leave the same way.
+                    let finished = registered
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take();
+                    if let Some(scan_id) = finished.as_deref() {
+                        cancellations.remove(scan_id);
+                    }
+
                     scan_store.set(result.clone());
                     result
                 }))
@@ -166,6 +197,17 @@ impl CleanupService {
     /// Returns the current cached scan result if available.
     pub fn get_last_scan(&self) -> Option<ScanResult> {
         self.scan_store.get()
+    }
+
+    /// Requests cancellation of the scan reporting `scan_id`.
+    ///
+    /// A scan that already finished is not an error: there is nothing to stop,
+    /// and saying so as a failure would report a normal race as a broken
+    /// command. The caller sees the same answer either way, and the scan's own
+    /// result is what states whether it was cancelled.
+    pub fn cancel_scan(&self, scan_id: &str) -> Result<(), String> {
+        self.scan_cancellations.request(scan_id);
+        Ok(())
     }
 
     /// Creates and stores a verified DeletePlan from user-reviewed item IDs.
@@ -434,6 +476,8 @@ mod tests {
         let cleanable = items.iter().map(|i| i.cleanable_bytes()).sum();
         let now = unix_timestamp();
         ScanResult {
+            cancelled: false,
+            metrics: Default::default(),
             scan_id: "scan_123".to_string(),
             valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
             started_at: now.saturating_sub(5),
@@ -486,6 +530,122 @@ mod tests {
         let settings = ZenithSettings::default();
         let selected = select_quick_clean_safe_candidates(&scan, &settings);
         assert_eq!(selected, vec!["item_safe"]);
+    }
+
+    /// A cancel requested while a scan runs stops it, and the scan says so:
+    /// the result is partial with a cancellation reason, the categories that
+    /// had not started are absent, and the flag distinguishes it from any other
+    /// incomplete scan.
+    #[tokio::test]
+    async fn cancelling_a_running_scan_stops_it_and_the_result_says_so() {
+        struct CancelOnFirstItem {
+            service: Arc<CleanupService>,
+        }
+
+        impl ScanProgressSink for CancelOnFirstItem {
+            fn emit(&self, event: crate::models::ScanEvent) {
+                if let crate::models::ScanEvent::Started { scan_id } = &event {
+                    // The cancel is requested as soon as the scan states which
+                    // scan it is, exactly as the command does from the UI.
+                    self.service
+                        .cancel_scan(scan_id)
+                        .expect("a cancel request is accepted");
+                }
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let first_root = fixture.path().join("first-cache");
+        let second_root = fixture.path().join("second-cache");
+        std::fs::create_dir_all(&first_root).unwrap();
+        std::fs::create_dir_all(&second_root).unwrap();
+        std::fs::write(first_root.join("data.bin"), vec![1u8; 512]).unwrap();
+        std::fs::write(second_root.join("data.bin"), vec![2u8; 512]).unwrap();
+
+        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let mut registry = SignatureRegistry::new();
+        for (id, name, path) in [
+            ("test.cancel.first", "First cache", first_root),
+            ("test.cancel.second", "Second cache", second_root),
+        ] {
+            registry.register(Signature {
+                id: id.to_string(),
+                name: name.to_string(),
+                category: Category::Developer,
+                risk: RiskTier::Safe,
+                strategy: CleanStrategy::DeleteDirectory,
+                paths: vec![path.to_string_lossy().into_owned()],
+                exclusions: Vec::new(),
+                description: "test-only signature".to_string(),
+                min_age_days: None,
+                include_prefixes: Vec::new(),
+                exclude_prefixes: Vec::new(),
+                intensive_only: false,
+                platforms: Vec::new(),
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                provider_id: None,
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            });
+        }
+        let registry = Arc::new(registry);
+        let providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            providers.clone(),
+            env.clone(),
+        ));
+        let service = Arc::new(CleanupService::new(
+            scan_service,
+            Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup())),
+            Arc::new(ScanStore::new()),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            env.clone(),
+            registry,
+            Arc::new(DockerStatusCache::new()),
+            providers,
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        ));
+
+        let result = service
+            .start_scan(
+                ScanRequest {
+                    categories: Some(vec![Category::Developer]),
+                    excluded_signatures: Vec::new(),
+                    intensive_cleanup: false,
+                },
+                Arc::new(CancelOnFirstItem {
+                    service: service.clone(),
+                }),
+            )
+            .await
+            .expect("a cancelled scan still returns its partial result");
+
+        assert!(
+            result.cancelled,
+            "the result states that it was cancelled: {result:?}"
+        );
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result
+            .incomplete_reasons
+            .iter()
+            .any(|reason| reason.contains("cancelled")));
+        assert!(
+            result.categories.is_empty(),
+            "the cancelled scan stopped before finishing any category: {result:?}"
+        );
+
+        // The finished scan keeps no cancellation handle: requesting it again
+        // is a no-op rather than a second cancel of something else.
+        assert!(service.cancel_scan(&result.scan_id).is_ok());
     }
 
     #[tokio::test]

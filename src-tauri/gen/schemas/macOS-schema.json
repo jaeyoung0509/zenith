@@ -189,6 +189,12 @@
           "markdownDescription": "Enables the cancel_large_file_scan command without any pre-configured scope."
         },
         {
+          "description": "Enables the cancel_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-scan",
+          "markdownDescription": "Enables the cancel_scan command without any pre-configured scope."
+        },
+        {
           "description": "Enables the connect_openrouter_oauth command without any pre-configured scope.",
           "type": "string",
           "const": "allow-connect-openrouter-oauth",
@@ -583,6 +589,12 @@
           "type": "string",
           "const": "deny-cancel-large-file-scan",
           "markdownDescription": "Denies the cancel_large_file_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-scan",
+          "markdownDescription": "Denies the cancel_scan command without any pre-configured scope."
         },
         {
           "description": "Denies the connect_openrouter_oauth command without any pre-configured scope.",
