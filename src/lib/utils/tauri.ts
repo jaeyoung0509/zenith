@@ -163,9 +163,10 @@ export function tauriCreatePlan(scanId: string, items: ScanItem[]): Promise<Plan
 
 export function tauriExecuteClean(
   plan: PlanPreview,
+  confirmed: boolean,
   onEvent: (event: CleanEvent) => void
 ): Promise<CleanResult> {
-  return api.executeClean(plan, onEvent);
+  return api.executeClean(plan, confirmed, onEvent);
 }
 
 export function tauriQuickCleanSafe(
