@@ -234,13 +234,12 @@ impl LifecycleProviderRegistry {
         } else {
             ObservationQuality::Unavailable
         };
-        let incomplete_reason = (!probe.status.is_ready())
-            .then(|| {
-                probe
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| probe.status.display_name().to_string())
-            });
+        let incomplete_reason = (!probe.status.is_ready()).then(|| {
+            probe
+                .detail
+                .clone()
+                .unwrap_or_else(|| probe.status.display_name().to_string())
+        });
         let mut cache_metadata = signature.cache_metadata();
         cache_metadata.consequence = provider.consequence().to_string();
         cache_metadata.size_semantics =
