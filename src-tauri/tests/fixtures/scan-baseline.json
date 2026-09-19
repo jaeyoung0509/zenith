@@ -13,15 +13,15 @@
       "duration_ms_ceiling": 1250,
       "skipped_entries": 1,
       "logical_bytes": 4096,
-      "visited_entries": 36
+      "visited_entries": 35
     },
     "mixed_age": {
       "candidate_count": 2,
-      "directories_read": 2,
+      "directories_read": 3,
       "duration_ms_ceiling": 3500,
       "skipped_entries": 0,
       "logical_bytes": 16384,
-      "visited_entries": 11
+      "visited_entries": 7
     },
     "mixed_size": {
       "candidate_count": 1,
@@ -29,7 +29,7 @@
       "duration_ms_ceiling": 1250,
       "skipped_entries": 0,
       "logical_bytes": 3163827,
-      "visited_entries": 9
+      "visited_entries": 8
     },
     "overlapping_roots": {
       "candidate_count": 1,
@@ -37,7 +37,7 @@
       "duration_ms_ceiling": 1250,
       "skipped_entries": 0,
       "logical_bytes": 12288,
-      "visited_entries": 8
+      "visited_entries": 6
     },
     "wide": {
       "candidate_count": 1,
@@ -45,7 +45,7 @@
       "duration_ms_ceiling": 2500,
       "skipped_entries": 0,
       "logical_bytes": 2560000,
-      "visited_entries": 802
+      "visited_entries": 801
     }
   }
 }
