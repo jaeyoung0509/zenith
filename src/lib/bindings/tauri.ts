@@ -1007,6 +1007,23 @@ export type CleanupOverlap_Deserialize = {
 	name: string,
 	unit_path: string,
 	eligibility: CleanupEligibility,
+	risk?: RiskTier,
+	management_mode?: CacheManagementMode,
+	consequence?: string,
+	unit_kind?: CleanupUnitKind,
+	/**
+	 *  The gate the other rule was discovered under.
+	 * 
+	 *  A rule whose scope is switched off is discovered for visibility, not for
+	 *  authority: it must not withhold, downgrade, or constrain the rule that
+	 *  the current settings do run.
+	 */
+	gate?: EligibilityGate,
+	/**
+	 *  A nested rule requires a different mutation authority, so the broader
+	 *  filesystem item is inventory only and must never become a fallback.
+	 */
+	authority_conflict?: boolean,
 	observed_bytes: number,
 };
 
@@ -1022,6 +1039,23 @@ export type CleanupOverlap_Serialize = {
 	name: string,
 	unit_path: string,
 	eligibility: CleanupEligibility,
+	risk: RiskTier,
+	management_mode: CacheManagementMode,
+	consequence: string,
+	unit_kind: CleanupUnitKind,
+	/**
+	 *  The gate the other rule was discovered under.
+	 * 
+	 *  A rule whose scope is switched off is discovered for visibility, not for
+	 *  authority: it must not withhold, downgrade, or constrain the rule that
+	 *  the current settings do run.
+	 */
+	gate: EligibilityGate,
+	/**
+	 *  A nested rule requires a different mutation authority, so the broader
+	 *  filesystem item is inventory only and must never become a fallback.
+	 */
+	authority_conflict: boolean,
 	observed_bytes: number,
 };
 

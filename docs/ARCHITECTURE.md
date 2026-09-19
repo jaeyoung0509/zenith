@@ -414,30 +414,37 @@ packaged application, and every Electron cache subtree without listing the
 `Default` profile and calling it coverage. See
 [SAFETY.md](SAFETY.md#selectors) for the grammar and the bounds.
 A unit declares the root it was found under, so the planner and the execution
-guard can re-assert containment, and it normalizes to an identity that folds
-case only on a filesystem that does. The stated `PathFlavor` decides that: a
-Windows scan folds case in text, a POSIX scan does not, and a path that exists
-is decided by its stable filesystem identity either way.
+guard can re-assert containment. Existing objects are compared by stable
+filesystem identity, and containment is established by the identities of the
+actual ancestor entries. This handles case-sensitive directories on Windows
+and case-folding APFS volumes without treating the OS family as a volume fact.
+When an identity cannot be obtained, comparison falls back conservatively to
+case-sensitive path components.
 
-**Accounting counts each location once.** Two signatures that name the same
-location produce one unit, and a unit inside a broader one is the broader unit's
-bytes:
+**Accounting counts a location once when the scan can prove both observation
+coverage and compatible cleanup authority.** Otherwise it preserves the
+separate observations and fails closed on mutation:
 
 | overlap | what happens |
 | --- | --- |
-| identical identity | the first rule keeps the bytes; the second becomes provenance (`CleanupOverlap`) on the surviving item, and `suppressed_duplicate_count/bytes` state how much was folded away |
-| a unit inside another | the broader unit keeps the bytes and reports the contained unit as provenance; the contained item is not reported separately, and `suppressed_overlap_count/bytes` state what it held |
+| identical identity | the most conservative cleanup authority wins deterministically; provider/container/manual authority cannot be replaced by a generic filesystem rule, and a compatible losing rule becomes provenance (`CleanupOverlap`) |
+| identical identity, incompatible policy | the location is still one row — the bytes are counted once — and neither rule's operation authorizes the other's: the surviving item states the conflict and is not cleanable |
+| a unit inside another | the broader unit keeps the bytes only when its observation is complete and both rules have compatible mutation policy; `suppressed_overlap_count/bytes` state what was folded |
+| incomplete coverage or incompatible authority | both observations remain visible, and an authority conflict blocks the broader filesystem item instead of turning a provider/manual rule into generic deletion permission |
 
-Provenance is not decoration: the surviving item's disposition is re-derived
-with the strictest verdict among the rules that described the location, so a
-second rule can never make a location more deletable than the first. A rule that
-refuses (blocked, advisory, gated) or defers (recent, reviewable) a region
-therefore withholds the unit that contains it, and the reason names the rule it
-came from. Containment is resolved over the whole result — broadest unit first,
-ties by identity — rather than in discovery order, so the same filesystem
-snapshot produces the same totals and the same item set. `SafetyPlanner` applies
-the same rule when it builds a plan, so a selection that names both a unit and
-something inside it authorizes the bytes once.
+Provenance is not decoration: the surviving item exposes the strictest effective
+risk, management mode, consequence, and eligibility among the rules that were
+safely folded. Its risk buckets and selection summary therefore describe the
+same policy the planner sees. A rule that refuses (blocked, advisory, gated) or
+defers (recent, reviewable) a region withholds the compatible unit that contains
+it, and the reason names the rule it came from. A rule whose scope is switched
+off is the exception: it is discovered for visibility, so it is recorded as
+provenance and cannot withhold, downgrade, or constrain a rule the current
+settings do run. Containment is resolved over the whole result — broadest unit
+first, with authority and identity tie-breakers —
+rather than in discovery order. `SafetyPlanner` applies the same unit rule when
+it builds a plan, so a selection that names both a unit and something inside it
+authorizes the bytes once.
 
 Items also carry what the catalog knows about ownership (`owner` and how
 strongly it is known), the age policy's verdict, and the structured-state
