@@ -1548,6 +1548,40 @@ mod tests {
         entry.set_modified(when).expect("backdate fixture entry");
     }
 
+    #[test]
+    fn aged_tree_measurement_honors_cancellation_before_reading_a_file() {
+        struct AlwaysCancelled;
+
+        impl crate::models::CancellationProbe for AlwaysCancelled {
+            fn is_cancelled(&self) -> bool {
+                true
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let file = fixture.path().join("payload.bin");
+        std::fs::write(&file, vec![1u8; 4_096]).unwrap();
+        let environment = environment();
+        let counters = super::super::observation::TraversalCounters::default();
+        let context = super::super::observation::WalkContext::new(
+            &environment,
+            &AlwaysCancelled,
+            super::super::observation::ScanLimits::default(),
+            &counters,
+            &super::super::observation::NoRootProgress,
+        );
+
+        let stats = DirectoryScanner::measure_tree_stats(&context, &file, &[], 0, None);
+
+        assert!(!stats.complete);
+        assert_eq!(stats.logical, 0);
+        assert_eq!(stats.file_count, 0);
+        assert!(stats
+            .incomplete_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("cancelled")));
+    }
+
     /// One recently written child must not hide its stale sibling, and it must
     /// stay visible itself: the age policy decides eligibility, not discovery.
     #[test]
