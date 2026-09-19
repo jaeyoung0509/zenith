@@ -6,6 +6,7 @@
     cleanableBytes,
     filterAndSortCleanupItems,
     isCleanable,
+    observedByteRange,
     presentedItems,
     riskCounts,
     summarizeCategory,
@@ -64,6 +65,9 @@
   let tabs = $derived(riskCounts(categoryResult.items));
 
   let categorySelectedBytes = $derived(summary.selected_bytes);
+  let observedRange = $derived(
+    observedByteRange(categoryResult.total_bytes, categoryResult.ambiguous_overlap_bytes ?? 0)
+  );
 
   function toggleAllFiltered() {
     if (cleanableFilteredItems.length === 0) return;
@@ -100,7 +104,7 @@
           {/if}
         </div>
         <p class="text-xs text-muted-foreground">
-          {presentedCount} detected {presentedCount === 1 ? 'location' : 'locations'} • {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)} detected
+          {presentedCount} detected {presentedCount === 1 ? 'location' : 'locations'} • {observedRange.isAmbiguous ? `${formatBytes(observedRange.lower)} – ${formatBytes(observedRange.upper)} observed` : `${categoryResult.quality === 'partial' ? '≥ ' : ''}${formatBytes(categoryResult.total_bytes)} detected`}
         </p>
       </div>
     </div>
