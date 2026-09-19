@@ -174,6 +174,33 @@ describe('metric and action consistency contracts', () => {
     expect(complete.body).not.toContain('items not fully measured');
   });
 
+  it('renders ambiguous detected bytes as a range instead of an exact lower bound', () => {
+    const rendered = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer',
+          items: [],
+          total_bytes: 1024,
+          cleanable_bytes: 0,
+          safe_bytes: 0,
+          rebuild_bytes: 0,
+          manual_bytes: 0,
+          quality: 'partial',
+          skipped_entry_count: 1,
+          incomplete_item_count: 1,
+          ambiguous_overlap_count: 1,
+          ambiguous_overlap_bytes: 512,
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('Observed range');
+    expect(rendered.body).toContain('512 B');
+    expect(rendered.body).toContain('1 KB');
+    expect(rendered.body).not.toContain('≥ 1 KB');
+  });
+
   it('does not duplicate the default safe subtotal as a Selected metric', () => {
     scanStore.selectedMap = { safe: true, rebuild: false };
     const rendered = render(CategoryCard, {
