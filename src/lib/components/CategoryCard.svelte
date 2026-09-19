@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { CategoryResult, CleanupEligibility } from '../models/types';
   import { formatBytes } from '../utils/format';
-  import { cleanableBytes, isCleanable, presentedItems } from '../utils/cleanup';
+  import { cleanableBytes, isCleanable, observedByteRange, presentedItems } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import Card from './Card.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -36,6 +36,9 @@
   let presented = $derived(presentedItems(categoryResult.items));
 
   let cleanableItems = $derived(categoryResult.items.filter(isCleanable));
+  let observedRange = $derived(
+    observedByteRange(categoryResult.total_bytes, categoryResult.ambiguous_overlap_bytes ?? 0)
+  );
 
   let allSelected = $derived.by(() => {
     if (cleanableItems.length === 0) return false;
@@ -190,9 +193,15 @@
     <div class="flex shrink-0 items-center gap-3">
       <div class="w-[7rem] shrink-0 text-right">
         <span class="block whitespace-nowrap text-sm font-semibold font-mono tabular-nums text-foreground">
-          {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)}
+          {#if observedRange.isAmbiguous}
+            {formatBytes(observedRange.lower)} – {formatBytes(observedRange.upper)}
+          {:else}
+            {categoryResult.quality === 'partial' ? '≥ ' : ''}{formatBytes(categoryResult.total_bytes)}
+          {/if}
         </span>
-        <span class="block whitespace-nowrap text-micro text-muted-foreground">Detected</span>
+        <span class="block whitespace-nowrap text-micro text-muted-foreground">
+          {observedRange.isAmbiguous ? 'Observed range' : 'Detected'}
+        </span>
         {#if showSelectedBytes}
           <div class="whitespace-nowrap text-caption text-muted-foreground font-mono">
             Selected: {formatBytes(selectedBytes)}

@@ -414,10 +414,44 @@ packaged application, and every Electron cache subtree without listing the
 `Default` profile and calling it coverage. See
 [SAFETY.md](SAFETY.md#selectors) for the grammar and the bounds.
 A unit declares the root it was found under, so the planner and the execution
-guard can re-assert containment, and it normalizes to an identity that folds
-case only on a filesystem that does. Two signatures that name the same location
-therefore produce one unit: the first one wins, the duplicate is counted once,
-and the suppressed bytes are reported instead of silently dropped.
+guard can re-assert containment. Existing objects are compared by stable
+filesystem identity, and containment is established by the identities of the
+actual ancestor entries. This handles case-sensitive directories on Windows
+and case-folding APFS volumes without treating the OS family as a volume fact.
+When an identity cannot be obtained, comparison falls back conservatively to
+case-sensitive path components.
+
+**Accounting counts a location once when the scan can prove both observation
+coverage and compatible cleanup authority.** Otherwise it preserves the
+separate observations and fails closed on mutation:
+
+| overlap | what happens |
+| --- | --- |
+| identical identity | the most conservative cleanup authority wins deterministically; provider/container/manual authority cannot be replaced by a generic filesystem rule, and a compatible losing rule becomes provenance (`CleanupOverlap`) |
+| identical identity, incompatible policy | the location is still one row — the bytes are counted once — and neither rule's operation authorizes the other's: the surviving item states the conflict and is not cleanable |
+| a unit inside another | the broader unit keeps the bytes only when its observation is complete and both rules have compatible mutation policy; `suppressed_overlap_count/bytes` state what was folded |
+| incomplete coverage or incompatible authority | both observations remain visible and their bytes are stated as possibly shared (`ambiguous_overlap_count/bytes`): `total_bytes` is an upper bound of the observed union and the union is at least `total_bytes - ambiguous_overlap_bytes`, instead of a sum presented as exact. The broader active item is not independently cleanable while that overlap is unresolved, so cleanable/selected bytes cannot claim the same region twice. An authority conflict likewise blocks generic fallback rather than turning a provider/manual rule into path deletion permission |
+
+Provenance is not decoration: the surviving item exposes the strictest effective
+risk, management mode, consequence, and eligibility among the rules that were
+safely folded. Its risk buckets and selection summary therefore describe the
+same policy the planner sees. A rule that refuses (blocked, advisory, gated) or
+defers (recent, reviewable) a region withholds the compatible unit that contains
+it, and the reason names the rule it came from. A rule whose scope is switched
+off is the exception: it is discovered for visibility, so it is recorded as
+provenance, cannot withhold, downgrade, or constrain a rule the current
+settings do run, and never takes the surviving row from the rule that is
+running. Containment is resolved over the whole result — broadest unit first,
+then a running rule before a gated one, then retention priority, then identity —
+rather than in discovery order.
+
+Whether two units are one location is a property of the filesystem, not of the
+OS family: `scanner::relationship` establishes it from stable identity (and the
+identities of the real ancestor entries) with path text as the conservative
+fallback. `SafetyPlanner` calls the same function, so a plan cannot disagree
+with the scan it came from about a case-sensitive directory on a folding
+platform, so a selection that names both a unit and something inside it
+authorizes the bytes once.
 
 Items also carry what the catalog knows about ownership (`owner` and how
 strongly it is known), the age policy's verdict, and the structured-state

@@ -2,6 +2,27 @@ import type { RiskTier, ScanItem } from '../models/types';
 
 export type CleanupSortMode = 'size' | 'name' | 'modified';
 
+export interface ByteRange {
+  lower: number;
+  upper: number;
+  isAmbiguous: boolean;
+}
+
+/**
+ * The observed union when some nested observations may already be part of a
+ * broader measurement. totalBytes is the conservative upper bound and the
+ * ambiguous population is subtracted for the lower bound.
+ */
+export function observedByteRange(totalBytes: number, ambiguousOverlapBytes = 0): ByteRange {
+  const upper = Math.max(0, totalBytes);
+  const ambiguous = Math.min(upper, Math.max(0, ambiguousOverlapBytes));
+  return {
+    lower: upper - ambiguous,
+    upper,
+    isAmbiguous: ambiguous > 0,
+  };
+}
+
 /** The raw size figure a row reports, whether or not the item can be cleaned. */
 export function reclaimableBytes(item: ScanItem): number {
   return item.size.allocated ?? item.size.logical;

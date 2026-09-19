@@ -77,11 +77,13 @@ pub use zenith_core::domain::platform::{
 };
 pub use zenith_core::domain::risk::{RiskSummary, RiskTier};
 pub use zenith_core::domain::scan::{
-    derive_cleanup_disposition, is_safety_blocked_reason, AgeObservation, CacheArtifactKind,
-    CacheManagementMode, CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult,
-    CleanupDisposition, CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitIdentity,
+    derive_cleanup_disposition, is_safety_blocked_reason, resolve_unit_overlaps,
+    resolve_unit_overlaps_with, AgeObservation, CacheArtifactKind, CacheManagementMode,
+    CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult, CleanupDisposition,
+    CleanupEligibility, CleanupOverlap, CleanupOwnership, CleanupUnit, CleanupUnitIdentity,
     CleanupUnitKind, DispositionFacts, EligibilityBucket, EligibilityGate, EligibilitySummary,
-    FileSize, OwnershipConfidence, PathIdentity, ScanItem, ScanResult, StaleEntryObservation,
+    FileSize, OverlappedDiscovery, OwnershipConfidence, PathIdentity, ScanItem, ScanResult,
+    StaleEntryObservation, UnitRelationship,
 };
 pub use zenith_core::domain::storage::{
     AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,

@@ -493,6 +493,62 @@ mod tests {
         );
     }
 
+    /// The plan's expectation is never the run's measurement: a target whose
+    /// estimate overstates the tree reclaims what the run removed, and the two
+    /// numbers stay separate fields.
+    #[test]
+    fn reclaimed_bytes_are_measured_not_copied_from_the_estimate() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("stale-estimate");
+        std::fs::create_dir(&cache_root).unwrap();
+        std::fs::write(cache_root.join("data.bin"), vec![1u8; 8_192]).unwrap();
+
+        // An estimate from an earlier, larger tree: a plan's expectation is a
+        // property of the scan it came from, not of what this run finds.
+        let plan = DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-estimate".to_string(),
+            targets: vec![DeleteTarget {
+                item_id: "estimated-target".to_string(),
+                signature_id: "test.estimate".to_string(),
+                name: "Stale estimate".to_string(),
+                path: cache_root.clone(),
+                strategy: CleanStrategy::DeleteContents,
+                expected_bytes: 1_048_576,
+                risk: crate::models::RiskTier::Safe,
+                identity: ToctouGuard::capture(&cache_root),
+                exclusions: vec![],
+                min_age_days: None,
+                unit: crate::models::CleanupUnit::fixed_path(
+                    cache_root.to_string_lossy().to_string(),
+                ),
+                target_kind: crate::models::EntryKind::Directory,
+                owner: crate::models::CleanupOwnership::unknown(),
+                process_guard: crate::models::RunningProcessPolicy::none(),
+            }],
+            expected_reclaim_bytes: 1_048_576,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+            mode: CleanupMode::PermanentDelete,
+        };
+
+        let result = CleanExecutor::execute(plan, &PlatformEnvironment::native(), |_| {});
+
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Success);
+        assert_eq!(item.estimated_bytes, 1_048_576);
+        assert!(
+            item.bytes_reclaimed > 0 && item.bytes_reclaimed < item.estimated_bytes,
+            "the reclaim states what the run removed, not what the plan expected: {item:?}"
+        );
+        assert_eq!(result.total_reclaimed_bytes, item.bytes_reclaimed);
+        assert_eq!(result.failed_count, 0);
+        assert!(
+            !cache_root.join("data.bin").exists(),
+            "delete_contents removes the entries and leaves the root"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn partial_cleanup_keeps_item_success_but_reports_the_count() {

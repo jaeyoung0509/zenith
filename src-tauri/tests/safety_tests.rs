@@ -15,7 +15,7 @@ use zenith_lib::safety::{
     Blacklist, RevalidationOutcome, SafeTreeDeleter, SafetyPlanner, SafetyValidator, SymlinkGuard,
     ToctouGuard, ValidatedTarget,
 };
-use zenith_lib::scanner::SizeCalculator;
+use zenith_lib::scanner::{ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
 use zenith_platform::path_algebra::PathFlavor;
 use zenith_platform::paths::SimulatedPaths;
@@ -710,6 +710,10 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -723,6 +727,10 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -1282,6 +1290,10 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 eligibility: Default::default(),
                 suppressed_duplicate_count: 0,
                 suppressed_duplicate_bytes: 0,
+                suppressed_overlap_count: 0,
+                suppressed_overlap_bytes: 0,
+                ambiguous_overlap_count: 0,
+                ambiguous_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1307,6 +1319,10 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 eligibility: Default::default(),
                 suppressed_duplicate_count: 0,
                 suppressed_duplicate_bytes: 0,
+                suppressed_overlap_count: 0,
+                suppressed_overlap_bytes: 0,
+                ambiguous_overlap_count: 0,
+                ambiguous_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
             CategoryResult {
@@ -1332,6 +1348,10 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
                 eligibility: Default::default(),
                 suppressed_duplicate_count: 0,
                 suppressed_duplicate_bytes: 0,
+                suppressed_overlap_count: 0,
+                suppressed_overlap_bytes: 0,
+                ambiguous_overlap_count: 0,
+                ambiguous_overlap_bytes: 0,
                 skipped_entry_count: 0,
             },
         ],
@@ -1341,6 +1361,10 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
         skipped_entry_count: 0,
     };
 
@@ -1443,6 +1467,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        overlaps: Vec::new(),
         is_selected: partial_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
@@ -1484,6 +1509,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        overlaps: Vec::new(),
         is_selected: unavailable_disposition.eligibility == CleanupEligibility::AutoCleanable,
         last_modified: None,
         exists: true,
@@ -1531,6 +1557,10 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Permission denied in subtree".to_string()],
@@ -1539,6 +1569,10 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     };
 
     let settings = ZenithSettings::default();
@@ -1734,6 +1768,7 @@ fn test_cleanup_eligibility_matrix_and_byte_semantics() {
             entry_kind: EntryKind::Directory,
             gate: EligibilityGate::Open,
             owner_running: false,
+            overlaps: Vec::new(),
             is_selected: disposition.eligibility == CleanupEligibility::AutoCleanable,
             last_modified: None,
             exists: true,
@@ -2243,6 +2278,117 @@ fn the_shipped_explorer_cache_entry_scans_and_plans() {
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].path, thumbcache);
     assert!(thumbcache.exists(), "planning does not mutate");
+}
+
+/// Two shipped rules can name one location with different operations:
+/// `ai.cursor.cache` deletes the whole cache, while the intensive
+/// `system.intensive.user_app_caches` removes only the entries older than seven
+/// days. The location is counted once, and neither rule's operation may
+/// authorize what the other refuses.
+#[test]
+fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() {
+    let fixture = tempdir().expect("fixture");
+    let caches = fixture.path().join("Caches");
+    let cursor = caches.join("Cursor");
+    fs::create_dir_all(&cursor).unwrap();
+    let stale = cursor.join("old.bin");
+    fs::write(&stale, vec![1u8; 8_192]).unwrap();
+    fs::write(cursor.join("recent.bin"), vec![2u8; 8_192]).unwrap();
+    age_entry(&stale, 30);
+
+    let shipped = SignatureRegistry::load_embedded().expect("catalog");
+    let mut cursor_rule = shipped
+        .get("ai.cursor.cache")
+        .cloned()
+        .expect("the Cursor cache entry is in the catalog");
+    cursor_rule.paths = vec![cursor.to_string_lossy().into_owned()];
+    let mut stale_rule = shipped
+        .get("system.intensive.user_app_caches")
+        .cloned()
+        .expect("the intensive cache entry is in the catalog");
+    stale_rule.paths = vec![caches.to_string_lossy().into_owned()];
+    // The accounting rule under test is not platform-specific.
+    stale_rule.platforms = vec![];
+
+    let mut registry = SignatureRegistry::new();
+    registry.register(cursor_rule);
+    registry.register(stale_rule);
+
+    // Intensive cleanup runs both rules. The wider operation (`delete_contents`
+    // with no age policy) may not be built out of a location another rule only
+    // authorizes entry by entry. The answer must not depend on which category
+    // the scan visits first, so the same facts are scanned in both orders.
+    for order in [
+        vec![Category::Ai, Category::System],
+        vec![Category::System, Category::Ai],
+    ] {
+        let scan = |intensive: bool| {
+            ScanEngine::scan(
+                &registry,
+                Some(&order),
+                &[],
+                intensive,
+                &PlatformEnvironment::native(),
+                &zenith_lib::models::NeverCancelled,
+                |_| {},
+            )
+        };
+        let item_at_cursor = |result: &ScanResult| -> ScanItem {
+            let found: Vec<&ScanItem> = result
+                .categories
+                .iter()
+                .flat_map(|category| category.items.iter())
+                .filter(|item| item.path.replace('\\', "/").ends_with("Caches/Cursor"))
+                .collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "one location is one unit however many rules name it ({order:?}): {found:?}"
+            );
+            found[0].clone()
+        };
+
+        let intensive = scan(true);
+        let surviving = item_at_cursor(&intensive);
+        assert_eq!(
+            surviving.disposition.eligibility,
+            CleanupEligibility::Blocked,
+            "two rules with different operations leave the location unplanned ({order:?}): {:?}",
+            surviving.disposition
+        );
+        assert!(!surviving.is_selected);
+        assert_eq!(surviving.cleanable_bytes(), 0);
+        assert!(
+            surviving
+                .overlaps
+                .iter()
+                .any(|overlap| overlap.authority_conflict),
+            "the location states which rule it disagrees with ({order:?}): {:?}",
+            surviving.overlaps
+        );
+        assert!(
+            SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry).is_err(),
+            "a location blocked by an overlapping rule cannot be planned"
+        );
+        assert_eq!(
+            intensive.total_bytes,
+            surviving.observed_bytes(),
+            "the location is counted once, not once per rule ({order:?})"
+        );
+
+        // The scope that is switched off states nothing about the location: a
+        // standard scan still offers the cache the running rule authorizes,
+        // whichever category is visited first.
+        let standard = scan(false);
+        let offered = item_at_cursor(&standard);
+        assert_eq!(
+            offered.disposition.eligibility,
+            CleanupEligibility::AutoCleanable,
+            "a gated rule cannot withhold another rule's permission ({order:?}): {:?}",
+            offered.disposition
+        );
+        assert!(offered.is_selected);
+    }
 }
 
 /// A cache namespace that is written to while it is being cleaned: the aged
@@ -2888,6 +3034,10 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         total_bytes: 0,
         cleanable_bytes: 0,
@@ -2901,6 +3051,10 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     }
 }
 
@@ -3041,6 +3195,7 @@ fn test_nested_protected_app_bundle_fails_closed() {
         entry_kind: EntryKind::Directory,
         gate: EligibilityGate::Open,
         owner_running: false,
+        overlaps: Vec::new(),
         is_selected: false,
         last_modified: None,
         exists: true,
@@ -3080,6 +3235,10 @@ fn test_nested_protected_app_bundle_fails_closed() {
             eligibility: Default::default(),
             suppressed_duplicate_count: 0,
             suppressed_duplicate_bytes: 0,
+            suppressed_overlap_count: 0,
+            suppressed_overlap_bytes: 0,
+            ambiguous_overlap_count: 0,
+            ambiguous_overlap_bytes: 0,
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Protected system or application bundle detected".into()],
@@ -3088,6 +3247,10 @@ fn test_nested_protected_app_bundle_fails_closed() {
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
         suppressed_duplicate_bytes: 0,
+        suppressed_overlap_count: 0,
+        suppressed_overlap_bytes: 0,
+        ambiguous_overlap_count: 0,
+        ambiguous_overlap_bytes: 0,
     };
 
     let settings = ZenithSettings::default();

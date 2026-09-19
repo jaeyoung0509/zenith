@@ -1,8 +1,9 @@
 use crate::models::{
-    CleanStrategy, CleanupMode, DeletePlan, DeleteTarget, RiskSummary, RiskTier, ScanItem,
-    ScanResult, Signature, ZenithError,
+    CleanStrategy, CleanupMode, CleanupUnitIdentity, DeletePlan, DeleteTarget, PathIdentity,
+    RiskSummary, RiskTier, ScanItem, ScanResult, Signature, UnitRelationship, ZenithError,
 };
 use crate::safety::{entry_kind_at, structured_state_at, Blacklist, SymlinkGuard, ToctouGuard};
+use crate::scanner::relationship::unit_relationship;
 use crate::signatures::SignatureRegistry;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -96,7 +97,56 @@ impl SafetyPlanner {
         let mut expected_reclaim_bytes = 0u64;
         let mut risk_summary = RiskSummary::default();
 
-        for item in items {
+        // A plan authorizes each location once. The scan already reports an
+        // overlapping unit as the broader unit's provenance, and a caller that
+        // hands the planner both — an older scan, or a selection assembled by
+        // hand — must not produce a plan whose expected reclaim counts the same
+        // bytes twice. The broader unit wins, exactly as it does in the scan's
+        // accounting, and the plan says which unit was folded into which.
+        //
+        // Whether two units are one location is the same question the scan
+        // answered, and it is answered by the same function: stable filesystem
+        // identity first, path text as the conservative fallback. Deriving it
+        // from the OS family instead would let a plan disagree with the scan
+        // about a case-sensitive directory on a folding platform.
+        let mut candidates: Vec<(usize, CleanupUnitIdentity, usize)> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.is_selected && item.unit.is_declared())
+            .map(|(index, item)| {
+                let key = item.unit_identity(PathIdentity::CaseSensitive);
+                (key.components().count(), key, index)
+            })
+            .collect();
+        candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        let mut authorized: Vec<usize> = Vec::new();
+        let mut overlapped: HashSet<usize> = HashSet::new();
+        for (_, _key, index) in candidates {
+            let contained = authorized.iter().any(|outer| {
+                let outer_item = &items[*outer];
+                match unit_relationship(&items[index], outer_item) {
+                    UnitRelationship::Equivalent
+                    | UnitRelationship::EquivalentConflict
+                    | UnitRelationship::Contained
+                    | UnitRelationship::AuthorityConflict => true,
+                    UnitRelationship::Distinct => false,
+                }
+            });
+            if contained {
+                overlapped.insert(index);
+                crate::diagnostics::log_error(
+                    "cleanup",
+                    &format!(
+                        "Planned unit {} is inside a unit this plan already authorizes; its bytes are counted once",
+                        items[index].path
+                    ),
+                );
+            } else {
+                authorized.push(index);
+            }
+        }
+
+        for (index, item) in items.iter().enumerate() {
             // Only consider selected items
             if !item.is_selected {
                 continue;
@@ -256,6 +306,14 @@ impl SafetyPlanner {
                 }
             }
 
+            // A unit inside a unit this plan already authorizes is that unit's
+            // bytes: the plan authorizes the location once. The item is skipped
+            // only here, after every refusal above has run, so an unplannable
+            // item still fails the plan instead of disappearing from it.
+            if overlapped.contains(&index) {
+                continue;
+            }
+
             let bytes = item.cleanable_bytes();
             expected_reclaim_bytes += bytes;
             risk_summary.add(item.risk, bytes);
@@ -338,6 +396,7 @@ mod tests {
             entry_kind: crate::models::EntryKind::File,
             gate: Default::default(),
             owner_running: false,
+            overlaps: Vec::new(),
             is_selected: true,
             last_modified: None,
             exists: true,
@@ -352,6 +411,272 @@ mod tests {
             Err(ZenithError::UnsupportedManualOperation(name))
                 if name == "OrbStack VM Storage"
         ));
+    }
+
+    /// A plan authorizes each location once: a unit inside another selected
+    /// unit is that unit's bytes, and the plan's expected reclaim states it.
+    #[test]
+    fn a_plan_counts_an_overlapping_unit_once() {
+        use crate::models::{CleanStrategy, CleanupUnit, EntryKind, Signature};
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let parent = fixture.path().join("Cache");
+        let child = parent.join("nested");
+        std::fs::create_dir_all(&child).expect("fixture");
+        std::fs::write(parent.join("data.bin"), vec![1u8; 8_192]).expect("fixture");
+        std::fs::write(child.join("state.bin"), vec![2u8; 8_192]).expect("fixture");
+
+        let mut registry = SignatureRegistry::new();
+        for (id, name, path, strategy) in [
+            (
+                "test.parent",
+                "Parent cache",
+                parent.clone(),
+                CleanStrategy::DeleteDirectory,
+            ),
+            (
+                "test.child",
+                "Nested cache",
+                child.clone(),
+                CleanStrategy::DeleteContents,
+            ),
+        ] {
+            registry.register(Signature {
+                id: id.into(),
+                name: name.into(),
+                category: Category::System,
+                risk: RiskTier::Safe,
+                strategy,
+                paths: vec![path.to_string_lossy().into_owned()],
+                exclusions: vec![],
+                description: String::new(),
+                min_age_days: None,
+                include_prefixes: vec![],
+                exclude_prefixes: vec![],
+                intensive_only: false,
+                platforms: vec![],
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            });
+        }
+
+        let selected =
+            |id: &str, signature: &str, name: &str, path: &std::path::Path, bytes: u64| {
+                let mut item = ScanItem::mock(
+                    id,
+                    signature,
+                    name,
+                    Category::System,
+                    RiskTier::Safe,
+                    path.to_string_lossy(),
+                    FileSize::new(bytes, Some(bytes)),
+                    1,
+                );
+                item.unit = CleanupUnit::fixed_path(path.to_string_lossy());
+                item.entry_kind = EntryKind::Directory;
+                item.rederive_disposition();
+                item.is_selected = true;
+                item
+            };
+        let parent_item = selected(
+            "parent-item",
+            "test.parent",
+            "Parent cache",
+            &parent,
+            16_384,
+        );
+        let child_item = selected("child-item", "test.child", "Nested cache", &child, 8_192);
+
+        let plan = SafetyPlanner::create_plan(&[child_item, parent_item], &registry)
+            .expect("the plan is built");
+
+        assert_eq!(
+            plan.targets.len(),
+            1,
+            "a location inside an authorized unit is not authorized a second time"
+        );
+        assert_eq!(plan.targets[0].path, parent);
+        assert_eq!(
+            plan.expected_reclaim_bytes, 16_384,
+            "the expectation counts the broader unit's bytes once"
+        );
+    }
+
+    /// A unit inside another selected unit is skipped only after every refusal
+    /// has run: an unplannable item fails the plan instead of quietly leaving
+    /// it, even when the broader unit would have covered its bytes.
+    #[test]
+    fn an_unplannable_contained_item_still_fails_the_plan() {
+        use crate::models::{CleanStrategy, CleanupUnit, EntryKind, Signature};
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let parent = fixture.path().join("Cache");
+        let child = parent.join("nested");
+        std::fs::create_dir_all(&child).expect("fixture");
+        std::fs::write(parent.join("data.bin"), vec![1u8; 8_192]).expect("fixture");
+        std::fs::write(child.join("state.bin"), vec![2u8; 8_192]).expect("fixture");
+
+        let mut registry = SignatureRegistry::new();
+        for (id, name, path) in [
+            ("test.parent", "Parent cache", parent.clone()),
+            ("test.child", "Nested cache", child.clone()),
+        ] {
+            registry.register(Signature {
+                id: id.into(),
+                name: name.into(),
+                category: Category::System,
+                risk: RiskTier::Safe,
+                strategy: CleanStrategy::DeleteDirectory,
+                paths: vec![path.to_string_lossy().into_owned()],
+                exclusions: vec![],
+                description: String::new(),
+                min_age_days: None,
+                include_prefixes: vec![],
+                exclude_prefixes: vec![],
+                intensive_only: false,
+                platforms: vec![],
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            });
+        }
+
+        let mut parent_item = ScanItem::mock(
+            "parent-item",
+            "test.parent",
+            "Parent cache",
+            Category::System,
+            RiskTier::Safe,
+            parent.to_string_lossy(),
+            FileSize::new(16_384, Some(16_384)),
+            1,
+        );
+        parent_item.unit = CleanupUnit::fixed_path(parent.to_string_lossy());
+        parent_item.entry_kind = EntryKind::Directory;
+        parent_item.rederive_disposition();
+        parent_item.is_selected = true;
+
+        // A manual-risk item inside the parent: the scan's own accounting would
+        // have folded its verdict into the parent, but a hand-built selection
+        // can still present the pair, and the refusal must win.
+        let mut child_item = ScanItem::mock(
+            "child-item",
+            "test.child",
+            "Nested cache",
+            Category::System,
+            RiskTier::Manual,
+            child.to_string_lossy(),
+            FileSize::new(8_192, Some(8_192)),
+            1,
+        );
+        child_item.unit = CleanupUnit::fixed_path(child.to_string_lossy());
+        child_item.entry_kind = EntryKind::Directory;
+        child_item.rederive_disposition();
+        child_item.is_selected = true;
+
+        let result = SafetyPlanner::create_plan(&[child_item, parent_item], &registry);
+
+        match &result {
+            Err(ZenithError::UnsupportedManualOperation(name)) => {
+                assert_eq!(name, "Nested cache");
+            }
+            other => panic!("the contained unit's refusal is reported, not skipped: {other:?}"),
+        }
+    }
+
+    /// A plan folds only what the filesystem identified as one unit. Two
+    /// distinct directories that differ by name are two targets, and the
+    /// containment rule that does fold is the one the scan used, so a plan and
+    /// the scan cannot disagree about a case-sensitive volume (see
+    /// `scanner::relationship` for the identity-first rule itself).
+    #[test]
+    fn a_plan_keeps_distinct_units_distinct() {
+        use crate::models::{CleanStrategy, CleanupUnit, EntryKind, Signature};
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let first = fixture.path().join("Cache");
+        let second = fixture.path().join("Other");
+        std::fs::create_dir_all(&first).expect("fixture");
+        std::fs::create_dir_all(&second).expect("fixture");
+        std::fs::write(first.join("data.bin"), vec![1u8; 8_192]).expect("fixture");
+        std::fs::write(second.join("data.bin"), vec![2u8; 8_192]).expect("fixture");
+
+        let mut registry = SignatureRegistry::new();
+        for (id, name, path) in [
+            ("test.first", "First cache", first.clone()),
+            ("test.second", "Second cache", second.clone()),
+        ] {
+            registry.register(Signature {
+                id: id.into(),
+                name: name.into(),
+                category: Category::System,
+                risk: RiskTier::Safe,
+                strategy: CleanStrategy::DeleteContents,
+                paths: vec![path.to_string_lossy().into_owned()],
+                exclusions: vec![],
+                description: String::new(),
+                min_age_days: None,
+                include_prefixes: vec![],
+                exclude_prefixes: vec![],
+                intensive_only: false,
+                platforms: vec![],
+                discovery: Default::default(),
+                unit: None,
+                owner: String::new(),
+                priority: 0,
+                fail_if_running: Vec::new(),
+                provider: String::new(),
+                management_mode: Default::default(),
+                artifact_kind: Default::default(),
+                consequence: String::new(),
+                reclaimable_is_lower_bound: false,
+            });
+        }
+
+        let selected = |id: &str, signature: &str, name: &str, path: &std::path::Path| {
+            let mut item = ScanItem::mock(
+                id,
+                signature,
+                name,
+                Category::System,
+                RiskTier::Safe,
+                path.to_string_lossy(),
+                FileSize::new(8_192, Some(8_192)),
+                1,
+            );
+            item.unit = CleanupUnit::fixed_path(path.to_string_lossy());
+            item.entry_kind = EntryKind::Directory;
+            item.rederive_disposition();
+            item.is_selected = true;
+            item
+        };
+        let first_item = selected("first-item", "test.first", "First cache", &first);
+        let second_item = selected("second-item", "test.second", "Second cache", &second);
+
+        let plan = SafetyPlanner::create_plan(&[first_item, second_item], &registry)
+            .expect("two separate units are plannable");
+
+        assert_eq!(
+            plan.targets.len(),
+            2,
+            "separate locations are separate targets"
+        );
+        assert_eq!(plan.expected_reclaim_bytes, 16_384);
     }
 
     /// A namespace enumerated under a broad root names nobody in the catalog, so
