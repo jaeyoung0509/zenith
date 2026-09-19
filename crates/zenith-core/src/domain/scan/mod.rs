@@ -1409,8 +1409,16 @@ mod tests {
         // A partial scan must NEVER report Fresh, even within the TTL window
         assert!(!scan.is_fresh_at(1000));
         assert!(!scan.is_fresh_at(1200));
-        // But validate_for_cleanup allows cleaning inspected items if not expired
+        // But an ordinary partial scan may still authorize explicitly reviewed
+        // items when the scan was not stopped by the user.
         assert!(scan.validate_for_cleanup("fixture", 1200).is_ok());
+
+        // Cancellation is a different contract: the user intentionally stopped
+        // discovery before all requested roots were inspected, so that result
+        // is observability only and must not authorize a later mutation.
+        scan.cancelled = true;
+        assert!(scan.validate_for_cleanup("fixture", 1200).is_err());
+        scan.cancelled = false;
 
         // Unavailable scan cannot be cleaned
         scan.quality = ObservationQuality::Unavailable;
