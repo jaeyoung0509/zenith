@@ -196,7 +196,7 @@ mod tests {
             owner: crate::domain::scan::CleanupOwnership::unknown(),
             process_guard: crate::domain::cleanup::RunningProcessPolicy::none(),
             provider_id: None,
-        requires_confirmation: false,
+            requires_confirmation: false,
         }
     }
 
