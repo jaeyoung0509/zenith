@@ -756,7 +756,7 @@ mod tests {
             400,
             RiskTier::Safe,
         );
-        child.gate = crate::domain::scan::EligibilityGate::IntensiveDisabled;
+        child.gate = crate::domain::scan::EligibilityGate::IntensiveCleanupDisabled;
         child.rederive_disposition();
 
         let mut categories = vec![category(vec![parent, child])];
