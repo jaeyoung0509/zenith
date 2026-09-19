@@ -14,6 +14,7 @@ use uuid::Uuid;
 pub struct PlanTargetPreview {
     pub item_id: String,
     pub name: String,
+    pub requires_confirmation: bool,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub expected_bytes: u64,
@@ -28,6 +29,9 @@ pub struct PlanPreview {
     #[specta(type = u64)]
     pub expected_reclaim_bytes: u64,
     pub risk: RiskSummary,
+    /// True when at least one target must be explicitly confirmed before the
+    /// destructive command may execute this plan.
+    pub requires_confirmation: bool,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub expires_at: u64,
@@ -52,12 +56,14 @@ impl DeletePlan {
                 .map(|target| PlanTargetPreview {
                     item_id: target.item_id.clone(),
                     name: target.name.clone(),
+                    requires_confirmation: target.requires_confirmation,
                     expected_bytes: target.expected_bytes,
                     risk: target.risk,
                 })
                 .collect(),
             expected_reclaim_bytes: self.expected_reclaim_bytes,
             risk: self.risk.clone(),
+            requires_confirmation: self.requires_confirmation(),
             expires_at: self.created_at.saturating_add(ttl_secs),
             mode: self.mode,
         }
