@@ -544,8 +544,8 @@ mod tests {
         filesystem_registry.register(filesystem_signature);
         let refused = SafetyPlanner::create_plan(&[item.clone()], &filesystem_registry);
         assert!(
-            matches!(&refused, Err(ZenithError::UnsupportedManualOperation(name)) if name == "Stated Store"),
-            "a manual unit is refused unless the catalog declares the provider action: {refused:?}"
+            matches!(&refused, Err(ZenithError::InvalidPlan(message)) if message.contains("disagrees with the catalog")),
+            "a manual unit cannot claim lifecycle-provider authority the catalog does not declare: {refused:?}"
         );
 
         // A catalog entry that names no provider describes an action nothing
