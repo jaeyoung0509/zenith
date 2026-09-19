@@ -1345,6 +1345,30 @@ mod tests {
         assert_eq!(serial.file_count, parallel.file_count);
         assert_eq!(serial.skipped_entries, parallel.skipped_entries);
         assert_eq!(serial.complete, parallel.complete);
+
+        // A host without a shared pool must report the same traversal facts.
+        // Scheduling may change; the meaning of visited_entries may not.
+        let inline_counters = crate::scanner::TraversalCounters::default();
+        let inline = SizeCalculator::measure_path_with_pool(
+            root.path(),
+            &[],
+            None,
+            &environment,
+            &NeverCancelled,
+            crate::scanner::ScanLimits::bounded(8, 4),
+            &inline_counters,
+        );
+        assert_eq!(inline, serial);
+        assert_eq!(
+            inline_counters.visited_entries(),
+            single.visited_entries(),
+            "visited entries are filesystem facts, not a consequence of whether a pool exists"
+        );
+        assert_eq!(
+            inline_counters.directories_read(),
+            single.directories_read(),
+            "directory reads are identical whichever scheduler executes the walk"
+        );
     }
 
     /// A tree deeper than the stated limit reports what it did not take rather
