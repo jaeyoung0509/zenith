@@ -1234,10 +1234,8 @@ impl DirectoryScanner {
         if cancellation.is_cancelled() {
             stats.complete = false;
             stats.skipped_entries = 1;
-            stats.incomplete_reason = Some(format!(
-                "Scan cancelled while measuring {}",
-                path.display()
-            ));
+            stats.incomplete_reason =
+                Some(format!("Scan cancelled while measuring {}", path.display()));
             return stats;
         }
 
