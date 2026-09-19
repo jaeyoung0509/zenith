@@ -1788,6 +1788,42 @@ mod tests {
     }
 
     #[test]
+    fn aged_traversal_metrics_count_each_entry_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("aged-root");
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("one-file.bin"), vec![1u8; 128]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.metrics.aged-root",
+            "Aged root",
+            Category::Developer,
+            &root,
+            vec![],
+            Some(0),
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        assert_eq!(
+            result.metrics.visited_entries, 3,
+            "one root, one child directory, and one file are three visited entries"
+        );
+        assert_eq!(result.metrics.directories_read, 2);
+    }
+
+    #[test]
     fn scan_engine_honors_cancellation_probe() {
         struct AlwaysCancelled;
         impl crate::models::CancellationProbe for AlwaysCancelled {
