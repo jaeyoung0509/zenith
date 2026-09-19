@@ -64,8 +64,9 @@ A generic target is executable only when all of the following hold:
     the same location with different operations leave it unplanned rather than
     letting the wider one authorize the narrower one's deletion. An unresolved
     authority conflict blocks the broader item and keeps both observations
-    visible, and an overlap that cannot be proven states its bytes as possibly
-    shared instead of adding them to a total presented as exact (see
+    visible. An overlap that cannot be proven states its bytes as possibly
+    shared instead of adding them to a total presented as exact, and the broader
+    active target is not independently cleanable until that overlap is resolved (see
     [ARCHITECTURE.md](ARCHITECTURE.md#discovery-eligibility-and-cleanup-units)).
 
 Before any of that runs, the executor classifies the target into the operation
