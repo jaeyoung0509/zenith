@@ -1684,6 +1684,107 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_inside_the_final_signature_stops_before_the_next_root_and_sets_the_flag() {
+        struct Probe {
+            cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl crate::models::CancellationProbe for Probe {
+            fn is_cancelled(&self) -> bool {
+                self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let first_root = fixture.path().join("first-root");
+        let second_root = fixture.path().join("second-root");
+        std::fs::create_dir_all(&first_root).unwrap();
+        std::fs::create_dir_all(&second_root).unwrap();
+        std::fs::write(first_root.join("data.bin"), vec![1u8; 128]).unwrap();
+        std::fs::write(second_root.join("data.bin"), vec![2u8; 128]).unwrap();
+
+        let mut sig = signature(
+            "test.cancel.final-signature",
+            "Final signature",
+            Category::Developer,
+            &first_root,
+            vec![],
+            None,
+        );
+        sig.paths = vec![
+            first_root.to_string_lossy().into_owned(),
+            second_root.to_string_lossy().into_owned(),
+        ];
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(sig);
+
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = Probe {
+            cancelled: cancelled.clone(),
+        };
+        let mut roots = Vec::new();
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &probe,
+            |event| {
+                if let ScanEvent::RootStarted { root, .. } = event {
+                    roots.push(root);
+                    cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        );
+
+        assert!(result.cancelled, "a stop inside the final signature must survive into the final result");
+        assert_eq!(
+            roots.len(),
+            1,
+            "once cancellation is observed, the signature must not start another root"
+        );
+    }
+
+    #[test]
+    fn traversal_metrics_count_each_root_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("one-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("one-file.bin"), vec![1u8; 128]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.metrics.single-root",
+            "Single root",
+            Category::Developer,
+            &root,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        assert_eq!(
+            result.metrics.visited_entries, 2,
+            "one directory root plus one file is two visited filesystem entries"
+        );
+        assert_eq!(result.metrics.directories_read, 1);
+    }
+
+    #[test]
     fn scan_engine_honors_cancellation_probe() {
         struct AlwaysCancelled;
         impl crate::models::CancellationProbe for AlwaysCancelled {
