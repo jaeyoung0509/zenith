@@ -164,7 +164,6 @@ impl<'a> ProviderCleanup<'a> {
 #[derive(Debug)]
 pub struct LifecycleProviderCleanup<'a> {
     provider_id: &'a str,
-requires_confirmation: false,
 }
 
 impl<'a> LifecycleProviderCleanup<'a> {
