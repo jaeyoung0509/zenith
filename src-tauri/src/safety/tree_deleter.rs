@@ -24,7 +24,7 @@ pub struct TreeDeleteReport {
     /// failure classification can use the code instead of localized text.
     pub os_error_codes: Vec<i32>,
     pub(crate) protect_structured_state: bool,
-    pub(crate) allow_cargo_registry_contents: bool,
+    pub(crate) allow_cargo_package_store_contents: bool,
 }
 
 impl TreeDeleteReport {
@@ -313,12 +313,12 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         protect_structured_state: bool,
-        allow_cargo_registry_contents: bool,
+        allow_cargo_package_store_contents: bool,
         stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
             protect_structured_state,
-            allow_cargo_registry_contents,
+            allow_cargo_package_store_contents,
             ..Default::default()
         };
         let root_metadata = match fs::symlink_metadata(root) {
@@ -436,12 +436,12 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         protect_structured_state: bool,
-        allow_cargo_registry_contents: bool,
+        allow_cargo_package_store_contents: bool,
         stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
             protect_structured_state,
-            allow_cargo_registry_contents,
+            allow_cargo_package_store_contents,
             ..Default::default()
         };
         match fs::symlink_metadata(root) {
@@ -489,7 +489,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
-            auth.allow_cargo_registry_contents(),
+            auth.allow_cargo_package_store_contents(),
             auth.stale_policy(),
         )
     }
@@ -519,7 +519,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
-            auth.allow_cargo_registry_contents(),
+            auth.allow_cargo_package_store_contents(),
             Some(policy),
         )
     }
@@ -535,7 +535,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
-            auth.allow_cargo_registry_contents(),
+            auth.allow_cargo_package_store_contents(),
             auth.stale_policy(),
         )
     }
@@ -610,7 +610,7 @@ impl SafeTreeDeleter {
                 .then(|| {
                     super::structured_state_at_with_policy(
                         &child_path,
-                        report.allow_cargo_registry_contents,
+                        report.allow_cargo_package_store_contents,
                     )
                 })
                 .flatten()
@@ -810,7 +810,7 @@ impl SafeTreeDeleter {
         if let Some((kind, _)) = report
             .protect_structured_state
             .then(|| {
-                super::structured_state_at_with_policy(path, report.allow_cargo_registry_contents)
+                super::structured_state_at_with_policy(path, report.allow_cargo_package_store_contents)
             })
             .flatten()
         {
@@ -1949,7 +1949,7 @@ mod tests {
         let policy = super::super::StaleEntryPolicy::from_days(7);
         let mut report = TreeDeleteReport {
             protect_structured_state: true,
-            allow_cargo_registry_contents: false,
+            allow_cargo_package_store_contents: false,
             ..Default::default()
         };
         SafeTreeDeleter::delete_entry(&recent, &dir, &[], &environment, Some(policy), &mut report);

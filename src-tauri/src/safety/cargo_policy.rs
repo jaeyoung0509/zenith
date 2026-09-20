@@ -38,7 +38,7 @@ fn package_store_roots(signature_id: &str, environment: &PlatformEnvironment) ->
 /// and one of Cargo's environment-resolved owner-managed roots keeps a forged
 /// signature id, a path-prefix lookalike, or a user project from widening the
 /// exception.
-pub fn allows_registry_source_contents(
+pub fn allows_cargo_package_store_contents(
     signature: &Signature,
     target: &Path,
     authorized_roots: &[PathBuf],
@@ -56,7 +56,7 @@ pub fn allows_registry_source_contents(
 
 /// Runtime counterpart of the planning authorization above. Execution repeats
 /// the exact environment/root check before recursive mutation.
-pub fn target_allows_registry_source_contents(
+pub fn target_allows_cargo_package_store_contents(
     signature_id: &str,
     target: &Path,
     unit_root: &Path,
@@ -80,12 +80,12 @@ pub fn target_allows_registry_source_contents(
 /// special filesystem entries, mount boundaries, blacklists, TOCTOU identity,
 /// and the Cargo/rustc process guard remain enforced by their dedicated
 /// boundaries.
-pub fn allows_registry_source_entry(
+pub fn allows_cargo_package_store_entry(
     _path: &Path,
     entry_kind: EntryKind,
-    allow_cargo_registry_contents: bool,
+    allow_cargo_package_store_contents: bool,
 ) -> bool {
-    allow_cargo_registry_contents && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
+    allow_cargo_package_store_contents && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
 }
 
 #[cfg(test)]
@@ -143,19 +143,19 @@ mod tests {
         let git_db = dir.path().join(".cargo/git/db");
 
         let registry = signature(REGISTRY_SOURCE_SIGNATURE_ID);
-        assert!(allows_registry_source_contents(
+        assert!(allows_cargo_package_store_contents(
             &registry,
             &registry_root,
             std::slice::from_ref(&registry_root),
             &environment
         ));
-        assert!(!allows_registry_source_contents(
+        assert!(!allows_cargo_package_store_contents(
             &registry,
             &registry_root.join("index.crates.io-1949cf8c6b5b557f"),
             std::slice::from_ref(&registry_root),
             &environment
         ));
-        assert!(!allows_registry_source_contents(
+        assert!(!allows_cargo_package_store_contents(
             &registry,
             &git_checkouts,
             std::slice::from_ref(&git_checkouts),
@@ -163,31 +163,31 @@ mod tests {
         ));
 
         let git = signature(GIT_CACHE_SIGNATURE_ID);
-        assert!(allows_registry_source_contents(
+        assert!(allows_cargo_package_store_contents(
             &git,
             &git_checkouts,
             std::slice::from_ref(&git_checkouts),
             &environment
         ));
-        assert!(allows_registry_source_contents(
+        assert!(allows_cargo_package_store_contents(
             &git,
             &git_db,
             std::slice::from_ref(&git_db),
             &environment
         ));
-        assert!(!allows_registry_source_contents(
+        assert!(!allows_cargo_package_store_contents(
             &git,
             &dir.path().join("project"),
             std::slice::from_ref(&dir.path().join("project")),
             &environment
         ));
-        assert!(target_allows_registry_source_contents(
+        assert!(target_allows_cargo_package_store_contents(
             GIT_CACHE_SIGNATURE_ID,
             &git_checkouts,
             &git_checkouts,
             &environment
         ));
-        assert!(!target_allows_registry_source_contents(
+        assert!(!target_allows_cargo_package_store_contents(
             GIT_CACHE_SIGNATURE_ID,
             &dir.path().join("project"),
             &dir.path().join("project"),
@@ -201,7 +201,7 @@ mod tests {
         let environment = environment(dir.path());
         let project = dir.path().join("project");
         let signature = signature("test.generic");
-        assert!(!allows_registry_source_contents(
+        assert!(!allows_cargo_package_store_contents(
             &signature,
             &project,
             std::slice::from_ref(&project),
@@ -214,23 +214,23 @@ mod tests {
             "/home/me/.cargo/registry/src/pkg/build.sh",
             "/home/me/.cargo/registry/src/pkg/state.sqlite",
         ] {
-            assert!(allows_registry_source_entry(
+            assert!(allows_cargo_package_store_entry(
                 Path::new(path),
                 EntryKind::File,
                 true
             ));
         }
-        assert!(allows_registry_source_entry(
+        assert!(allows_cargo_package_store_entry(
             Path::new("/home/me/.cargo/registry/src/pkg/Tool.app"),
             EntryKind::Directory,
             true
         ));
-        assert!(!allows_registry_source_entry(
+        assert!(!allows_cargo_package_store_entry(
             Path::new("/home/me/.cargo/registry/src/pkg/Cargo.lock"),
             EntryKind::Other,
             true
         ));
-        assert!(!allows_registry_source_entry(
+        assert!(!allows_cargo_package_store_entry(
             Path::new("/home/me/.cargo/registry/src/pkg/build.sh"),
             EntryKind::File,
             false

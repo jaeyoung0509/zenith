@@ -276,7 +276,7 @@ impl SafetyPlanner {
             let path = PathBuf::from(&item.path);
             let strategy = signature.strategy;
             let mut identity = None;
-            let mut allow_cargo_registry_contents = false;
+            let mut allow_cargo_package_store_contents = false;
 
             // A provider action is not a filesystem operation at all: it owns
             // no host path, so the pseudo location carries no deletion
@@ -301,8 +301,8 @@ impl SafetyPlanner {
                     if resolved_roots.is_empty() {
                         return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
                     }
-                    allow_cargo_registry_contents =
-                        crate::safety::cargo_policy::allows_registry_source_contents(
+                    allow_cargo_package_store_contents =
+                        crate::safety::cargo_policy::allows_cargo_package_store_contents(
                             signature,
                             &path,
                             &resolved_roots,
@@ -336,7 +336,7 @@ impl SafetyPlanner {
                 //    from offering a target that could never be cleaned.
                 if let Some((kind, _)) = crate::safety::validator::structured_state_at_with_policy(
                     &path,
-                    allow_cargo_registry_contents,
+                    allow_cargo_package_store_contents,
                 ) {
                     return Err(ZenithError::InvalidPlan(format!(
                         "`{}` is {} and can only be handled by a dedicated provider, not by generic cleanup",
@@ -351,7 +351,7 @@ impl SafetyPlanner {
                 {
                     match crate::safety::validator::structured_descendant(
                         &path,
-                        allow_cargo_registry_contents,
+                        allow_cargo_package_store_contents,
                     ) {
                         Ok(Some((nested, kind))) => {
                             return Err(ZenithError::InvalidPlan(format!(
