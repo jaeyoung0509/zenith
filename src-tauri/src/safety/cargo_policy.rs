@@ -1,10 +1,11 @@
 //! Context-aware protection rules for owner-managed Cargo cache units.
 //!
-//! Cargo registry sources are rebuildable package artifacts. Their extracted
-//! trees legitimately contain names (`Cargo.lock`, `Cargo.toml`, scripts, and
-//! executables) that the generic structured-state classifier protects in user
-//! data. The exception is therefore scoped to the catalog signature and the
-//! environment-resolved registry root; it is never a basename-wide exception.
+//! Cargo registry sources and git dependency stores are rebuildable package
+//! artifacts. Their downloaded trees legitimately contain names (`Cargo.lock`,
+//! `Cargo.toml`, scripts, executables, configuration, and fixtures) that the
+//! generic structured-state classifier protects in user data. The exception is
+//! therefore scoped to registered Cargo signatures and exact environment-
+//! resolved package-store roots; it is never a basename-wide exception.
 
 use std::path::{Path, PathBuf};
 
@@ -68,9 +69,9 @@ pub fn target_allows_cargo_package_store_contents(
             .any(|trusted| unit_root == trusted)
 }
 
-/// Returns whether an entry belongs to the already-verified Cargo registry
-/// source unit and may therefore bypass the generic name-shaped structured
-/// state classifier.
+/// Returns whether an entry belongs to an already-verified Cargo package-store
+/// unit and may therefore bypass the generic name-shaped structured-state
+/// classifier.
 ///
 /// Once the target has satisfied the exact signature/root checks above, regular
 /// files and directories are downloaded package contents: a crate may
@@ -85,7 +86,8 @@ pub fn allows_cargo_package_store_entry(
     entry_kind: EntryKind,
     allow_cargo_package_store_contents: bool,
 ) -> bool {
-    allow_cargo_package_store_contents && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
+    allow_cargo_package_store_contents
+        && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
 }
 
 #[cfg(test)]
