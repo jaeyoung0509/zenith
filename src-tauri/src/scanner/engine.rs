@@ -703,12 +703,15 @@ mod tests {
 
     #[test]
     fn scan_gap_classification_is_typed_and_full_disk_access_is_context_aware() {
-        let home = tempfile::tempdir().unwrap();
+        // Keep the fixture path in the same algebra as the simulated macOS
+        // environment. A host-native temp path becomes `C:\\...` on the
+        // Windows runner and is intentionally not a valid POSIX home.
+        let home = Path::new("/Users/fixture");
         let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
             .with_roots(std::sync::Arc::new(
                 zenith_platform::paths::SimulatedPaths::new()
                     .with_flavor(PathFlavor::Posix)
-                    .with_home(home.path()),
+                    .with_home(home),
             ))
             .with_platform(crate::models::PlatformKind::Macos);
         let mut protected = ScanItem::mock(
@@ -717,8 +720,7 @@ mod tests {
             "Protected",
             Category::System,
             RiskTier::Safe,
-            home.path()
-                .join("Library/Containers/com.example/Data/Library/Caches")
+            home.join("Library/Containers/com.example/Data/Library/Caches")
                 .to_string_lossy()
                 .into_owned(),
             FileSize::default(),
@@ -737,7 +739,7 @@ mod tests {
             Some(ScanGapKind::DepthLimit)
         );
 
-        protected.path = home.path().join("ordinary").to_string_lossy().into_owned();
+        protected.path = home.join("ordinary").to_string_lossy().into_owned();
         protected.incomplete_reason = Some("I/O failure".to_string());
         assert_eq!(
             scan_gap_kind(&environment, &protected),

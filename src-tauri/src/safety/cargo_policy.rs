@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::models::{EntryKind, Signature};
+use crate::models::{
+    classify_structured_state, EntryKind, PathFacts, Signature, StructuredStateKind,
+};
 use zenith_platform::PlatformEnvironment;
 
 pub const REGISTRY_SOURCE_SIGNATURE_ID: &str = "dev.cargo.registry.src";
@@ -73,21 +75,39 @@ pub fn target_allows_cargo_package_store_contents(
 /// unit and may therefore bypass the generic name-shaped structured-state
 /// classifier.
 ///
-/// Once the target has satisfied the exact signature/root checks above, regular
-/// files and directories are downloaded package contents: a crate may
-/// legitimately contain shell scripts, executable fixtures, configuration
-/// files, database fixtures, or bundle-shaped test data, and all of them are
-/// regenerated when Cargo restores the package. Symlinks/reparse points,
+/// Once the target has satisfied the exact signature/root checks above, most
+/// regular files and directories are downloaded package contents: a crate may
+/// legitimately contain shell scripts, executable fixtures, configuration,
+/// credentials-shaped examples, or database fixtures, and Cargo regenerates
+/// them with the package tree. `Cargo.lock` is package metadata, not evidence
+/// of a live owner.
+///
+/// Runtime lock/pid markers and application bundles remain protected. Those
+/// names can represent live Cargo/Git state or an independently managed
+/// installable object, so the owner policy must not turn the scoped exception
+/// into an unrestricted structured-state bypass. Symlinks/reparse points,
 /// special filesystem entries, mount boundaries, blacklists, TOCTOU identity,
-/// and the Cargo/rustc process guard remain enforced by their dedicated
-/// boundaries.
+/// and process guards remain enforced by their dedicated boundaries as well.
 pub fn allows_cargo_package_store_entry(
-    _path: &Path,
+    path: &Path,
     entry_kind: EntryKind,
     allow_cargo_package_store_contents: bool,
 ) -> bool {
-    allow_cargo_package_store_contents
-        && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
+    if !allow_cargo_package_store_contents
+        || !matches!(entry_kind, EntryKind::File | EntryKind::Directory)
+    {
+        return false;
+    }
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    match classify_structured_state(PathFacts::new(&name, entry_kind)) {
+        Some(StructuredStateKind::Lock) => name.eq_ignore_ascii_case("Cargo.lock"),
+        Some(StructuredStateKind::ApplicationBundle) => false,
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -198,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_cargo_package_store_allows_regular_downloaded_entries_only() {
+    fn verified_cargo_package_store_allows_package_contents_but_not_runtime_markers() {
         let dir = tempdir().unwrap();
         let environment = environment(dir.path());
         let project = dir.path().join("project");
@@ -223,6 +243,21 @@ mod tests {
             ));
         }
         assert!(allows_cargo_package_store_entry(
+            Path::new("/home/me/.cargo/registry/src/pkg/auth.json"),
+            EntryKind::File,
+            true
+        ));
+        for path in [
+            "/home/me/.cargo/registry/src/pkg/app.lock",
+            "/home/me/.cargo/registry/src/pkg/server.pid",
+        ] {
+            assert!(!allows_cargo_package_store_entry(
+                Path::new(path),
+                EntryKind::File,
+                true
+            ));
+        }
+        assert!(!allows_cargo_package_store_entry(
             Path::new("/home/me/.cargo/registry/src/pkg/Tool.app"),
             EntryKind::Directory,
             true

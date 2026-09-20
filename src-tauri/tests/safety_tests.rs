@@ -3417,7 +3417,7 @@ fn cargo_registry_allows_downloaded_structured_names_inside_verified_source_root
     let registry_root = fixture.path().join(".cargo/registry/src");
     let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
     let crate_root = source_root.join("request-0.13.4");
-    fs::create_dir_all(crate_root.join("Tool.app")).unwrap();
+    fs::create_dir_all(&crate_root).unwrap();
     fs::write(crate_root.join("state.sqlite"), b"fixture").unwrap();
     fs::write(crate_root.join("auth.json"), br#"{"fixture":true}"#).unwrap();
     fs::write(crate_root.join("tool.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
@@ -3465,6 +3465,120 @@ fn cargo_registry_allows_downloaded_structured_names_inside_verified_source_root
     assert!(
         registry_root.exists(),
         "the configured registry root remains"
+    );
+}
+
+#[test]
+fn cargo_package_store_runtime_locks_remain_protected() {
+    for (signature_id, root_relative, marker_relative) in [
+        (
+            "dev.cargo.registry.src",
+            ".cargo/registry/src",
+            "index.crates.io-1949cf8c6b5b557f/request-0.13.4/app.lock",
+        ),
+        (
+            "dev.cargo.git",
+            ".cargo/git/db",
+            "example-0123456789abcdef.git/index.lock",
+        ),
+    ] {
+        let fixture = tempdir().expect("fixture");
+        let package_store_root = fixture.path().join(root_relative);
+        let runtime_lock = package_store_root.join(marker_relative);
+        fs::create_dir_all(runtime_lock.parent().expect("runtime lock parent")).unwrap();
+        fs::write(&runtime_lock, b"active owner marker").unwrap();
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+                SimulatedPaths::new()
+                    .with_flavor(PathFlavor::current())
+                    .with_home(fixture.path())
+                    .with_temp_dir(fixture.path()),
+            ));
+        let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+        let mut signature = registry
+            .get(signature_id)
+            .expect("the Cargo package-store signature is in the catalog")
+            .clone();
+        signature.fail_if_running.clear();
+        registry.register(signature.clone());
+
+        let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
+            &signature,
+            &environment,
+            &zenith_lib::models::NeverCancelled,
+        )
+        .into_iter()
+        .find(|item| item.path == package_store_root.to_string_lossy())
+        .expect("the scanner reports the configured Cargo package-store root");
+        item.is_selected = true;
+
+        let error = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+            .expect_err("an active runtime lock must block the whole package-store cleanup unit");
+        assert!(
+            matches!(&error, ZenithError::InvalidPlan(message) if message.contains("lock or pid file")),
+            "the owner policy must preserve {}: {error}",
+            runtime_lock.display()
+        );
+        assert!(runtime_lock.exists());
+    }
+}
+
+#[test]
+fn cargo_package_store_runtime_lock_inserted_after_validation_is_not_deleted() {
+    let fixture = tempdir().expect("fixture");
+    let registry_root = fixture.path().join(".cargo/registry/src");
+    let crate_root = registry_root.join("index.crates.io-1949cf8c6b5b557f/request-0.13.4");
+    fs::create_dir_all(&crate_root).unwrap();
+    fs::write(
+        crate_root.join("payload.bin"),
+        b"downloaded package content",
+    )
+    .unwrap();
+
+    let environment =
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(fixture.path())
+                .with_temp_dir(fixture.path()),
+        ));
+    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+    let mut signature = registry
+        .get("dev.cargo.registry.src")
+        .expect("the Cargo source signature is in the catalog")
+        .clone();
+    signature.fail_if_running.clear();
+    registry.register(signature.clone());
+
+    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
+        &signature,
+        &environment,
+        &zenith_lib::models::NeverCancelled,
+    )
+    .into_iter()
+    .next()
+    .expect("the scanner reports the configured Cargo source root");
+    item.is_selected = true;
+    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+        .expect("the package store is initially cleanable");
+    let validated = match SafetyValidator::revalidate(&plan.targets[0], &environment) {
+        RevalidationOutcome::Validated(target) => target,
+        other => panic!("expected a validated Cargo target, got {other:?}"),
+    };
+
+    let inserted = crate_root.join("app.lock");
+    fs::write(&inserted, b"inserted after validation").unwrap();
+    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
+
+    assert!(!report.is_success());
+    assert!(report
+        .errors
+        .iter()
+        .any(|error| error.contains("lock or pid file")));
+    assert!(
+        inserted.exists(),
+        "the recursive guard must preserve the lock"
     );
 }
 

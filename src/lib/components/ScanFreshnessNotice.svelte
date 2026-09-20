@@ -5,9 +5,12 @@
 
   let settingsError = $state<string | null>(null);
 
-  let hasFullDiskAccessGap = $derived(
-    scanStore.lastScan?.gaps?.some((gap) => gap.kind === 'full_disk_access') ?? false
+  let fullDiskAccessGapCount = $derived(
+    scanStore.lastScan?.gaps
+      ?.filter((gap) => gap.kind === 'full_disk_access')
+      .reduce((total, gap) => total + gap.count, 0) ?? 0
   );
+  let hasFullDiskAccessGap = $derived(fullDiskAccessGapCount > 0);
   let hasSelectorTruncationGap = $derived(
     scanStore.lastScan?.gaps?.some((gap) => gap.kind === 'selector_truncated') ?? false
   );
@@ -49,7 +52,7 @@
         {scanStore.cancelledScanNotice}
       {:else if scanStore.freshness === 'partial'}
         {#if hasFullDiskAccessGap}
-          Some locations couldn't be scanned because macOS denied access. Grant Full Disk Access to Zenith, then scan again. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
+          macOS denied access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Grant Full Disk Access to Zenith, then scan again. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
         {:else if hasSelectorTruncationGap}
           Some locations were not inspected because the scan reached its bounded root limit. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
         {:else}
@@ -57,7 +60,7 @@
         {/if}
       {:else if scanStore.freshness === 'unavailable'}
         {#if hasFullDiskAccessGap}
-          Scan results are unavailable because macOS denied access to the configured locations. Grant Full Disk Access to Zenith, then scan again. Cleaning is blocked until a scan succeeds.
+          Scan results are unavailable because macOS denied access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Grant Full Disk Access to Zenith, then scan again. Cleaning is blocked until a scan succeeds.
         {:else}
           Scan results are unavailable because the configured locations could not be inspected. Cleaning is blocked until a scan succeeds.
         {/if}

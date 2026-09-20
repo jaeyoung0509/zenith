@@ -646,6 +646,7 @@ describe('StorageView scan remediation', () => {
       },
     });
 
+    expect(rendered.body).toContain('248 locations');
     expect(rendered.body).toContain('Grant Full Disk Access to Zenith');
     expect(rendered.body).toContain('Open System Settings');
     expect(rendered.body).not.toContain('Partial scan completed');
