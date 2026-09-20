@@ -1744,6 +1744,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("locked.bin");
         std::fs::write(&target, b"locked payload").unwrap();
+        // The rest of the directory is what a locked file must not cost: a
+        // sibling file and a nested directory that are freely removable.
+        let sibling = dir.path().join("reclaimable.bin");
+        std::fs::write(&sibling, vec![7u8; 4_096]).unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("inner.bin"), vec![9u8; 2_048]).unwrap();
 
         // Hold an exclusive lock with share_mode(0)
         let lock_handle = std::fs::OpenOptions::new()
@@ -1757,7 +1764,12 @@ mod tests {
             !report.is_success(),
             "deletion must fail while file is exclusively locked"
         );
-        assert_eq!(report.errors.len(), 1);
+        assert_eq!(
+            report.errors.len(),
+            1,
+            "only the locked entry is a failure: {:?}",
+            report.errors
+        );
         let error_msg = &report.errors[0];
         assert!(
             error_msg.contains("Sharing violation")
@@ -1765,6 +1777,18 @@ mod tests {
                 || error_msg.contains("os error 32"),
             "Error must report Win32 sharing violation distinctly, got: {}",
             error_msg
+        );
+        // The locked file is the remainder, and the rest of the directory is
+        // reclaimed around it rather than abandoned with it.
+        assert!(target.exists(), "the locked file stays");
+        assert!(!sibling.exists(), "a removable sibling is still removed");
+        assert!(
+            !nested.exists(),
+            "a nested directory that became empty is still removed"
+        );
+        assert!(
+            report.reclaimed_bytes >= 4_096 + 2_048,
+            "the reclaimed amount states what was removed beside the lock: {report:?}"
         );
 
         drop(lock_handle);

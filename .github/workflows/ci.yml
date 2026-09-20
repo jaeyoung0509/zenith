@@ -121,6 +121,24 @@ jobs:
       - name: Rust Unit & Safety Tests
         run: just test-rust
 
+      # The committed scan baseline is generated data, like the TypeScript
+      # bindings: the export test regenerates it and the diff is the gate. The
+      # fixture facts are platform-independent by construction (the two fixtures
+      # that cannot exist off unix are asserted by their own tests and are not in
+      # this file), so the same file is regenerated and diffed on both platform
+      # jobs.
+      - name: Generate the scan benchmark baseline
+        run: cargo test -p zenith-desktop --test scan_benchmark -- --ignored --exact export_scan_baseline
+
+      - name: Verify the generated scan benchmark baseline
+        run: git diff --exit-code -- src-tauri/tests/fixtures/scan-baseline.json
+
+      # Prints the metrics table for this platform: one JSON object per fixture
+      # after a line naming the OS, the architecture, and the crate version, so a
+      # real-machine baseline can be read out of the log.
+      - name: Report the scan benchmark metrics
+        run: cargo test -p zenith-desktop --test scan_benchmark -- --nocapture
+
       - name: Rust Cargo Check
         run: just check-rust
 
@@ -166,6 +184,18 @@ jobs:
 
       - name: Rust Unit & Safety Tests
         run: just test-rust
+
+      # The same generated baseline, regenerated and diffed on this platform:
+      # its fixture facts are platform-independent by construction, and the
+      # reported table is this machine's measurement of them.
+      - name: Generate the scan benchmark baseline
+        run: cargo test -p zenith-desktop --test scan_benchmark -- --ignored --exact export_scan_baseline
+
+      - name: Verify the generated scan benchmark baseline
+        run: git diff --exit-code -- src-tauri/tests/fixtures/scan-baseline.json
+
+      - name: Report the scan benchmark metrics
+        run: cargo test -p zenith-desktop --test scan_benchmark -- --nocapture
 
       - name: Rust Cargo Check
         run: just check-rust

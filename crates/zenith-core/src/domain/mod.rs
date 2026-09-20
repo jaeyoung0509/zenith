@@ -48,7 +48,7 @@ pub use scan::{
     CacheManagementMode, CacheMetadata, CacheSizeSemantics, CacheUsageConfidence, CategoryResult,
     CleanupDisposition, CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitKind,
     DispositionFacts, EligibilityBucket, EligibilityGate, EligibilitySummary, FileSize,
-    OwnershipConfidence, ScanItem, ScanResult,
+    OwnershipConfidence, ScanItem, ScanMetrics, ScanResult,
 };
 pub use storage::{
     AppInstallSource, AppRelatedConfidence, AppRelatedKind, LargeFileFilter, LargeFileKind,

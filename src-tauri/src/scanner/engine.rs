@@ -1,3 +1,4 @@
+use super::observation::{RootProgressSink, ScanLimits, TraversalCounters, WalkContext};
 use crate::cache_providers::CacheProviderRegistry;
 use crate::cleaner::LifecycleProviderRegistry;
 use crate::docker::DockerAdapter;
@@ -9,8 +10,10 @@ use crate::models::{
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
+use std::cell::RefCell;
 use std::time::SystemTime;
 use uuid::Uuid;
+use zenith_core::domain::ScanMetrics;
 use zenith_platform::PlatformEnvironment;
 
 use crate::scanner::relationship::unit_relationship;
@@ -315,8 +318,14 @@ impl ScanEngine {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        let started = std::time::Instant::now();
+        // The loop and the walker's root reports write through one channel, so
+        // the emitted stream keeps the order the scan produced it in.
+        let events = ScanEvents {
+            emit: RefCell::new(&mut on_event),
+        };
 
-        on_event(ScanEvent::Started {
+        events.send(ScanEvent::Started {
             scan_id: scan_id.clone(),
         });
 
@@ -346,6 +355,12 @@ impl ScanEngine {
         // Reuse the explicitly bounded shared scan pool (see
         // `execution_budget`); never expand pools per request.
         let directory_pool = shared_scan_pool();
+        // The scan's own bounds and counters. The limits are stated once, and
+        // the counters are what turn them into a measurement: the peak
+        // outstanding directory-task count is checked against the bound by the
+        // tests and reported to the interface.
+        let limits = ScanLimits::default();
+        let counters = TraversalCounters::default();
 
         for &category in target_categories {
             if cancellation.is_cancelled() {
@@ -353,7 +368,7 @@ impl ScanEngine {
                 break;
             }
 
-            on_event(ScanEvent::CategoryStarted { category });
+            events.send(ScanEvent::CategoryStarted { category });
 
             let mut accumulator = CategoryAccumulator::new();
 
@@ -371,20 +386,25 @@ impl ScanEngine {
                     continue;
                 }
                 let gate = sig.eligibility_gate(intensive_cleanup);
-                let items = DirectoryScanner::scan_signature_with_pool(
+                let context =
+                    WalkContext::new(environment, cancellation, limits, &counters, &events);
+                let scanned = DirectoryScanner::scan_signature_with_context(
                     sig,
                     directory_pool,
-                    environment,
-                    cancellation,
+                    &context,
                     gate,
                     &running_apps,
                 );
-                for item in items {
+                for item in scanned.items {
                     if let Some(retained) = accumulator.push(item) {
-                        on_event(ScanEvent::ItemFound {
+                        events.send(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
                     }
+                }
+                if cancellation.is_cancelled() {
+                    was_cancelled = true;
+                    break;
                 }
             }
 
@@ -396,7 +416,7 @@ impl ScanEngine {
                         break;
                     }
                     if let Some(retained) = accumulator.push(item) {
-                        on_event(ScanEvent::ItemFound {
+                        events.send(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
                     }
@@ -419,7 +439,7 @@ impl ScanEngine {
                         break;
                     }
                     if let Some(retained) = accumulator.push(item) {
-                        on_event(ScanEvent::ItemFound {
+                        events.send(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
                     }
@@ -437,7 +457,7 @@ impl ScanEngine {
                         break;
                     }
                     if let Some(retained) = accumulator.push(item) {
-                        on_event(ScanEvent::ItemFound {
+                        events.send(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
                     }
@@ -489,7 +509,7 @@ impl ScanEngine {
             if was_cancelled && index + 1 == category_results.len() {
                 break;
             }
-            on_event(ScanEvent::CategoryFinished {
+            events.send(ScanEvent::CategoryFinished {
                 category: category_result.category,
                 bytes: category_result.total_bytes,
                 item_count: category_result.items.len(),
@@ -542,13 +562,47 @@ impl ScanEngine {
             suppressed_overlap_bytes,
             ambiguous_overlap_count,
             ambiguous_overlap_bytes,
+            cancelled: was_cancelled,
+            metrics: ScanMetrics {
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                visited_entries: counters.visited_entries(),
+                directories_read: counters.directories_read(),
+                peak_outstanding_directory_tasks: counters.peak_outstanding_directory_tasks(),
+            },
         };
 
-        on_event(ScanEvent::Finished {
+        events.send(ScanEvent::Finished {
             result: result.clone(),
         });
 
         result
+    }
+}
+
+/// The scan's single event channel.
+///
+/// The loop and the walker's root reports write through one value, so the
+/// emitted stream keeps the order the scan produced it in; the interior
+/// mutability is what lets the walker hold the channel while the loop still
+/// emits items.
+struct ScanEvents<'a, F: FnMut(ScanEvent)> {
+    emit: std::cell::RefCell<&'a mut F>,
+}
+
+impl<F: FnMut(ScanEvent)> ScanEvents<'_, F> {
+    fn send(&self, event: ScanEvent) {
+        (self.emit.borrow_mut())(event);
+    }
+}
+
+impl<F: FnMut(ScanEvent)> RootProgressSink for ScanEvents<'_, F> {
+    fn root_started(&self, signature: &crate::models::Signature, root: &std::path::Path) {
+        self.send(ScanEvent::RootStarted {
+            category: signature.category,
+            signature_id: signature.id.clone(),
+            name: signature.name.clone(),
+            root: root.to_string_lossy().into_owned(),
+        });
     }
 }
 
@@ -1541,6 +1595,7 @@ mod tests {
         let kinds: Vec<&str> = events
             .iter()
             .map(|event| match event {
+                ScanEvent::RootStarted { .. } => "root_started",
                 ScanEvent::Started { .. } => "started",
                 ScanEvent::CategoryStarted { .. } => "category_started",
                 ScanEvent::ItemFound { .. } => "item_found",
@@ -1553,13 +1608,223 @@ mod tests {
             [
                 "started",
                 "category_started",
+                // Each root is named before it is read, which is what lets the
+                // interface show where a long scan is.
+                "root_started",
                 "item_found",
+                "root_started",
                 "item_found",
                 "category_finished",
                 "finished",
             ],
             "an item-level measurement gap is never a destructive scan event"
         );
+    }
+
+    /// A subtree the walk cannot read is reported rather than silently
+    /// absent: what it could not measure stays visible as a skipped entry with
+    /// a reason, and the scan does not claim a complete observation.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_subtree_is_reported_rather_than_silently_missing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("partial-cache");
+        std::fs::create_dir_all(root.join("open")).unwrap();
+        std::fs::write(root.join("open/data.bin"), vec![1u8; 4_096]).unwrap();
+        let closed = root.join("closed");
+        std::fs::create_dir_all(closed.join("inner")).unwrap();
+        std::fs::write(closed.join("inner/hidden.bin"), vec![2u8; 4_096]).unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.partial",
+            "Partly readable cache",
+            Category::Developer,
+            &root,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        // Restore before the fixture is dropped so the temporary tree can be
+        // removed with it.
+        let _ = std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755));
+
+        assert!(
+            result.skipped_entry_count >= 1,
+            "the unreadable directory is counted, not dropped: {result:?}"
+        );
+        assert_eq!(
+            result.quality,
+            ObservationQuality::Partial,
+            "a scan that could not read part of a tree says so"
+        );
+        assert!(
+            !result.cancelled,
+            "an unreadable subtree is not a cancellation"
+        );
+        let item = result.categories[0]
+            .items
+            .iter()
+            .find(|item| item.signature_id == "test.partial")
+            .expect("the partially readable root is still reported");
+        assert!(
+            item.incomplete_reason.is_some(),
+            "the item states why it is incomplete: {item:?}"
+        );
+    }
+
+    #[test]
+    fn cancellation_inside_the_final_signature_stops_before_the_next_root_and_sets_the_flag() {
+        struct Probe {
+            cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        impl crate::models::CancellationProbe for Probe {
+            fn is_cancelled(&self) -> bool {
+                self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let first_root = fixture.path().join("first-root");
+        let second_root = fixture.path().join("second-root");
+        std::fs::create_dir_all(&first_root).unwrap();
+        std::fs::create_dir_all(&second_root).unwrap();
+        std::fs::write(first_root.join("data.bin"), vec![1u8; 128]).unwrap();
+        std::fs::write(second_root.join("data.bin"), vec![2u8; 128]).unwrap();
+
+        let mut sig = signature(
+            "test.cancel.final-signature",
+            "Final signature",
+            Category::Developer,
+            &first_root,
+            vec![],
+            None,
+        );
+        sig.paths = vec![
+            first_root.to_string_lossy().into_owned(),
+            second_root.to_string_lossy().into_owned(),
+        ];
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(sig);
+
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = Probe {
+            cancelled: cancelled.clone(),
+        };
+        let mut roots = Vec::new();
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &probe,
+            |event| {
+                if let ScanEvent::RootStarted { root, .. } = event {
+                    roots.push(root);
+                    cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        );
+
+        assert!(
+            result.cancelled,
+            "a stop inside the final signature must survive into the final result"
+        );
+        assert_eq!(
+            roots.len(),
+            1,
+            "once cancellation is observed, the signature must not start another root"
+        );
+    }
+
+    #[test]
+    fn traversal_metrics_count_each_root_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("one-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("one-file.bin"), vec![1u8; 128]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.metrics.single-root",
+            "Single root",
+            Category::Developer,
+            &root,
+            vec![],
+            None,
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        assert_eq!(
+            result.metrics.visited_entries, 2,
+            "one directory root plus one file is two visited filesystem entries"
+        );
+        assert_eq!(result.metrics.directories_read, 1);
+    }
+
+    #[test]
+    fn aged_traversal_metrics_count_each_entry_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("aged-root");
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("one-file.bin"), vec![1u8; 128]).unwrap();
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.metrics.aged-root",
+            "Aged root",
+            Category::Developer,
+            &root,
+            vec![],
+            Some(0),
+        ));
+
+        let result = ScanEngine::scan(
+            &registry,
+            &LifecycleProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &crate::models::NeverCancelled,
+            |_| {},
+        );
+
+        assert_eq!(
+            result.metrics.visited_entries, 3,
+            "one root, one child directory, and one file are three visited entries"
+        );
+        assert_eq!(result.metrics.directories_read, 2);
     }
 
     #[test]
@@ -1598,10 +1863,99 @@ mod tests {
         );
 
         assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(
+            result.cancelled,
+            "a cancelled scan says so as a fact, not only in prose"
+        );
         assert!(result
             .incomplete_reasons
             .iter()
             .any(|reason| reason.contains("cancelled")));
+    }
+
+    /// A wide tree scans to the same result twice, and the run states what its
+    /// traversal did: entries visited, directories read, and the peak number of
+    /// directory tasks it kept outstanding, which never exceeds the stated
+    /// bound.
+    #[test]
+    fn a_wide_tree_scans_deterministically_within_its_stated_bound() {
+        const DIRECTORIES: usize = 32;
+        const FILES_PER_DIRECTORY: usize = 2;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("wide-cache");
+        for directory in 0..DIRECTORIES {
+            let path = root.join(format!("namespace-{directory:03}"));
+            std::fs::create_dir_all(&path).unwrap();
+            for file in 0..FILES_PER_DIRECTORY {
+                std::fs::write(path.join(format!("entry-{file}.bin")), vec![4u8; 2_048]).unwrap();
+            }
+        }
+
+        let mut registry = SignatureRegistry::new();
+        registry.register(signature(
+            "test.wide",
+            "Wide cache",
+            Category::Developer,
+            &root,
+            vec![],
+            None,
+        ));
+
+        let providers = LifecycleProviderRegistry::new(Vec::new());
+        let scan = || {
+            ScanEngine::scan(
+                &registry,
+                &providers,
+                Some(&[Category::Developer]),
+                &[],
+                false,
+                &scan_environment(),
+                &crate::models::NeverCancelled,
+                |_| {},
+            )
+        };
+        let first = scan();
+        let second = scan();
+
+        let summary = |result: &crate::models::ScanResult| {
+            result.categories[0]
+                .items
+                .iter()
+                .map(|item| (item.id.clone(), item.observed_bytes()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            summary(&first),
+            summary(&second),
+            "two scans of one tree state the same items in the same order"
+        );
+        assert_eq!(first.total_bytes, second.total_bytes);
+        // The counts describe the tree, so they repeat; the duration and the
+        // peak task count describe one run and are compared to the bound
+        // instead of to each other.
+        assert_eq!(
+            first.metrics.visited_entries,
+            second.metrics.visited_entries
+        );
+        assert_eq!(
+            first.metrics.directories_read,
+            second.metrics.directories_read
+        );
+        assert!(
+            !first.cancelled && !second.cancelled,
+            "nothing cancelled these scans, and the result says so"
+        );
+
+        let limits = crate::scanner::ScanLimits::default();
+        assert!(first.metrics.visited_entries > 0);
+        assert!(first.metrics.directories_read > 0);
+        assert!(
+            first.metrics.peak_outstanding_directory_tasks
+                <= limits.max_concurrent_directory_reads as u64,
+            "the traversal stays inside its stated bound: {:?}",
+            first.metrics
+        );
     }
 
     #[test]

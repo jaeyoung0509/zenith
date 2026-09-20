@@ -1,4 +1,5 @@
 mod ai_service;
+pub mod cancellation;
 pub mod desktop_notifications;
 mod plan_store;
 pub mod progress;
@@ -9,6 +10,7 @@ mod storage_service;
 mod system_service;
 
 pub use ai_service::AiService;
+pub use cancellation::{CancellationRegistry, ScanCancellation};
 pub use cleanup_service::{select_quick_clean_safe_candidates, CleanupService};
 pub use plan_store::{OneShotPlan, PlanLifecycle, PlanStore};
 pub(crate) use scan_service::ScanService;

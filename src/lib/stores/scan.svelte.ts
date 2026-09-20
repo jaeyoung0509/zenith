@@ -9,6 +9,7 @@ import type {
 } from '../models/types';
 import {
   refusalForPreview,
+  tauriCancelScan,
   tauriCreatePlan,
   tauriExecuteClean,
   tauriGetLastScan,
@@ -25,6 +26,14 @@ export class ScanStore {
   isCleaning = $state(false);
   currentCategory = $state<Category | null>(null);
   currentScanningItem = $state<string | null>(null);
+  /** The id the running scan reported, so Stop cancels the scan being watched. */
+  scanId = $state<string | null>(null);
+  /** The root the walk is reading, from `RootStarted`. */
+  currentRoot = $state<{ name: string; path: string } | null>(null);
+  /** Items the running scan has reported so far. */
+  foundItemCount = $state(0);
+  /** Whether a stop request is in flight; the scan's own result ends it. */
+  isCancelling = $state(false);
   lastScan = $state<ScanResult | null>(null);
   cleanProgress = $state<{
     currentItem: string;
@@ -94,6 +103,20 @@ export class ScanStore {
 
   get canClean(): boolean {
     return (this.freshness === 'fresh' || this.freshness === 'partial') && !this.isCleaning;
+  }
+
+  /**
+   * How a stopped scan reads: it states that it was stopped, that the locations
+   * it had not reached were not inspected, and that retrying is safe. A user who
+   * pressed Stop must never read their own action as a failure or as a scan
+   * that completed. `null` when the last scan was not cancelled.
+   */
+  get cancelledScanNotice(): string | null {
+    const scan = this.lastScan;
+    if (!scan?.cancelled) return null;
+    const recorded = scan.incomplete_reasons ?? [];
+    const gaps = recorded.length > 0 ? ` The scan recorded: ${recorded.join('; ')}.` : '';
+    return `Scan stopped before it finished, so locations it had not reached were not inspected.${gaps} Nothing was removed, and scanning again is safe.`;
   }
 
   private freshAt(nowMs: number): boolean {
@@ -404,24 +427,38 @@ export class ScanStore {
     this.invalidate();
     this.isScanning = true;
     this.error = null;
+    // A scan is only cancellable through the id it reports, so the previous
+    // scan's id must never survive into the next one.
+    this.scanId = null;
+    this.currentRoot = null;
+    this.foundItemCount = 0;
+    this.isCancelling = false;
 
     try {
       const result = await tauriScan((event: ScanEvent) => {
         switch (event.type) {
           case 'Started':
+            this.scanId = event.scan_id;
             this.currentCategory = null;
+            this.currentRoot = null;
+            this.foundItemCount = 0;
             break;
           case 'CategoryStarted':
             this.currentCategory = event.category;
             break;
+          case 'RootStarted':
+            this.currentRoot = { name: event.name, path: event.root };
+            break;
           case 'ItemFound':
             this.currentScanningItem = event.item.name;
+            this.foundItemCount++;
             break;
           case 'CategoryFinished':
             break;
           case 'Finished':
             this.currentCategory = null;
             this.currentScanningItem = null;
+            this.currentRoot = null;
             break;
         }
       }, categories);
@@ -433,8 +470,32 @@ export class ScanStore {
       return null;
     } finally {
       this.isScanning = false;
+      this.isCancelling = false;
+      this.scanId = null;
       this.currentCategory = null;
       this.currentScanningItem = null;
+      this.currentRoot = null;
+    }
+  }
+
+  /**
+   * Stop the scan that is running. The request names the id the scan itself
+   * reported, and the scan's own result states what it managed to observe, so
+   * this never clears the scanning state: the interface must not claim a scan
+   * ended before its result says how.
+   */
+  async cancelScan(): Promise<void> {
+    const scanId = this.scanId;
+    if (!this.isScanning || !scanId || this.isCancelling) return;
+    this.isCancelling = true;
+    // The stopped scan's partial result supersedes what is selected now, so no
+    // selection made from the interrupted scan survives the stop.
+    this.invalidate();
+    try {
+      await tauriCancelScan(scanId);
+    } catch (cause: unknown) {
+      this.isCancelling = false;
+      this.error = `Could not stop the scan: ${cause instanceof Error ? cause.message : String(cause)}`;
     }
   }
 

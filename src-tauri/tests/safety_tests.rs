@@ -741,6 +741,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         suppressed_overlap_bytes: 0,
         ambiguous_overlap_count: 0,
         ambiguous_overlap_bytes: 0,
+        cancelled: false,
+        metrics: Default::default(),
     };
 
     let forged = vec!["frontend-supplied-arbitrary-path".to_string()];
@@ -1260,6 +1262,8 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
     use zenith_lib::models::ZenithSettings;
 
     let mut scan = ScanResult {
+        cancelled: false,
+        metrics: Default::default(),
         scan_id: "test-scan-123".to_string(),
         valid_for_seconds: 60,
         started_at: 1000,
@@ -1602,6 +1606,8 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         suppressed_overlap_bytes: 0,
         ambiguous_overlap_count: 0,
         ambiguous_overlap_bytes: 0,
+        cancelled: false,
+        metrics: Default::default(),
     };
 
     let settings = ZenithSettings::default();
@@ -2217,14 +2223,23 @@ fn a_running_owner_keeps_its_cache_out_of_the_default_selection() {
     let running = zenith_lib::applications::RunningApplications::from_ids(vec![
         "com.example.running".to_string(),
     ]);
-    let items = zenith_lib::scanner::DirectoryScanner::scan_signature_with_pool(
+    let counters = zenith_lib::scanner::TraversalCounters::default();
+    let environment = PlatformEnvironment::native();
+    let context = zenith_lib::scanner::WalkContext::new(
+        &environment,
+        &zenith_lib::models::NeverCancelled,
+        zenith_lib::scanner::ScanLimits::default(),
+        &counters,
+        &zenith_lib::scanner::NoRootProgress,
+    );
+    let items = zenith_lib::scanner::DirectoryScanner::scan_signature_with_context(
         registry.get("test.running-owner").expect("registered"),
         None,
-        &PlatformEnvironment::native(),
-        &zenith_lib::models::NeverCancelled,
+        &context,
         zenith_lib::models::EligibilityGate::Open,
         &running,
-    );
+    )
+    .items;
 
     let item = items
         .iter()
@@ -3105,6 +3120,8 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
         .expect("the test clock is after the epoch")
         .as_secs();
     ScanResult {
+        cancelled: false,
+        metrics: Default::default(),
         scan_id: "scan".into(),
         valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
         started_at: now,
@@ -3343,6 +3360,8 @@ fn test_nested_protected_app_bundle_fails_closed() {
         suppressed_overlap_bytes: 0,
         ambiguous_overlap_count: 0,
         ambiguous_overlap_bytes: 0,
+        cancelled: false,
+        metrics: Default::default(),
     };
 
     let settings = ZenithSettings::default();

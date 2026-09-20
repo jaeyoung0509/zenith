@@ -318,6 +318,44 @@ function mockControlSnapshot(): AiControlCenterSnapshot {
 
 let lastMockScan: ScanResult | null = null;
 
+/** The preview scan a `cancelScan` call can still stop. */
+let activeMockScanId: string | null = null;
+let mockScanCancelled = false;
+
+/**
+ * What a stopped preview scan reports: only the categories the walk had
+ * reached, and — as natively — the durable reason it is incomplete and the
+ * `cancelled` flag. The preview must never state a tree the walk never read.
+ */
+function cancelledMockScan(scanId: string, reached: CategoryResult[]): ScanResult {
+  const total = (pick: (category: CategoryResult) => number) =>
+    reached.reduce((sum, category) => sum + pick(category), 0);
+  return {
+    scan_id: scanId,
+    valid_for_seconds: 300,
+    started_at: Math.floor(Date.now() / 1000) - 1,
+    finished_at: Math.floor(Date.now() / 1000),
+    categories: reached,
+    total_bytes: total((category) => category.total_bytes),
+    cleanable_bytes: total((category) => category.cleanable_bytes ?? 0),
+    safe_bytes: total((category) => category.safe_bytes),
+    rebuild_bytes: total((category) => category.rebuild_bytes),
+    manual_bytes: total((category) => category.manual_bytes),
+    quality: 'partial',
+    incomplete_reasons: ['Scan was cancelled before completion'],
+    skipped_entry_count: total((category) => category.skipped_entry_count ?? 0),
+    incomplete_item_count: total((category) => category.incomplete_item_count ?? 0),
+    eligibility: eligibilityFor(reached.flatMap((category) => category.items as ScanItem[])),
+    suppressed_duplicate_count: 0,
+    suppressed_duplicate_bytes: 0,
+    suppressed_overlap_count: 0,
+    suppressed_overlap_bytes: 0,
+    ambiguous_overlap_count: 0,
+    ambiguous_overlap_bytes: 0,
+    cancelled: true,
+  };
+}
+
 export const mockApi = {
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return goldenCapabilitiesByPlatform[previewPlatform()];
@@ -745,9 +783,25 @@ export const mockApi = {
   ): Promise<ScanResult> {
     return new Promise((resolve) => {
       const scanId = 'mock-scan-' + Date.now();
+      activeMockScanId = scanId;
+      mockScanCancelled = false;
       onEvent({ type: 'Started', scan_id: scanId });
+      // The categories the walk has finished, so a stopped scan reports what it
+      // read instead of the whole tree.
+      const reached: Category[] = [];
 
       setTimeout(() => {
+        if (mockScanCancelled) return;
+        reached.push('ai');
+        // The walk names the root it is reading before it reports what is in
+        // it, so the preview states the same progress the backend streams.
+        onEvent({
+          type: 'RootStarted',
+          category: 'ai',
+          signature_id: 'ai.cursor.cache',
+          name: 'Cursor Editor Cache',
+          root: '~/Library/Caches/Cursor',
+        });
         onEvent({ type: 'CategoryStarted', category: 'ai' });
         onEvent({
           type: 'ItemFound',
@@ -801,6 +855,15 @@ export const mockApi = {
       }, 150);
 
       setTimeout(() => {
+        if (mockScanCancelled) return;
+        reached.push('developer');
+        onEvent({
+          type: 'RootStarted',
+          category: 'developer',
+          signature_id: 'dev.go.build',
+          name: 'Go Build Cache',
+          root: '~/Library/Caches/go-build',
+        });
         onEvent({ type: 'CategoryStarted', category: 'developer' });
         onEvent({
           type: 'ItemFound',
@@ -854,6 +917,9 @@ export const mockApi = {
       }, 300);
 
       setTimeout(() => {
+        // A scan stopped by cancellation still finishes: what follows states
+        // what it read instead of the tree it never walked.
+        const cancelled = mockScanCancelled;
         let intensiveCleanup = false;
         if (typeof localStorage !== 'undefined') {
           try {
@@ -1016,16 +1082,25 @@ export const mockApi = {
           ambiguous_overlap_bytes: 0,
         };
 
-        onEvent({ type: 'CategoryStarted', category: 'system' });
-        for (const item of systemItems) {
-          onEvent({ type: 'ItemFound', item });
+        if (!cancelled) {
+          onEvent({
+            type: 'RootStarted',
+            category: 'system',
+            signature_id: 'system.intensive.user_app_caches',
+            name: 'Application Caches',
+            root: '~/Library/Caches',
+          });
+          onEvent({ type: 'CategoryStarted', category: 'system' });
+          for (const item of systemItems) {
+            onEvent({ type: 'ItemFound', item });
+          }
+          onEvent({
+            type: 'CategoryFinished',
+            category: 'system',
+            bytes: systemCategory.total_bytes,
+            item_count: systemItems.length,
+          });
         }
-        onEvent({
-          type: 'CategoryFinished',
-          category: 'system',
-          bytes: systemCategory.total_bytes,
-          item_count: systemItems.length,
-        });
 
         const aiItems: ScanItem[] = [
           {
@@ -1177,6 +1252,18 @@ export const mockApi = {
           },
           systemCategory,
         ];
+        if (cancelled) {
+          const stopped = cancelledMockScan(
+            scanId,
+            categories.filter((category) => reached.includes(category.category))
+          );
+          activeMockScanId = null;
+          lastMockScan = stopped;
+          onEvent({ type: 'Finished', result: stopped });
+          resolve(stopped);
+          return;
+        }
+
         const result: ScanResult = {
           scan_id: scanId,
           valid_for_seconds: 300,
@@ -1197,6 +1284,9 @@ export const mockApi = {
           incomplete_reasons: [
             'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
           ],
+          // The preview states the same completion contract as the backend:
+          // this scan ran to the end, so it was not cancelled.
+          cancelled: false,
           // Buckets sum to `total_bytes` over the observed column: what the scan
           // found, and how much of it the current policy would reclaim.
           eligibility: eligibilityFor(
@@ -1210,11 +1300,19 @@ export const mockApi = {
           ambiguous_overlap_bytes: 0,
         };
 
+        activeMockScanId = null;
         lastMockScan = result;
         onEvent({ type: 'Finished', result });
         resolve(result);
       }, 450);
     });
+  },
+
+  async cancelScan(scanId: string): Promise<void> {
+    // Cancelling a scan that already finished is not an error: the result is
+    // what states whether it was cancelled, so an id that is not running the
+    // preview scan is a no-op.
+    if (activeMockScanId === scanId) mockScanCancelled = true;
   },
 
   async getLastScan(): Promise<ScanResult | null> {

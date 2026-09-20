@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScanStore } from '../lib/stores/scan.svelte';
-import type { ScanResult } from '../lib/models/types';
-import { tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriScan } from '../lib/utils/tauri';
+import type { ScanEvent, ScanResult } from '../lib/models/types';
+import { tauriCancelScan, tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriScan } from '../lib/utils/tauri';
 
 vi.mock('../lib/utils/tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/utils/tauri')>();
   return {
     ...actual,
+    tauriCancelScan: vi.fn(),
     tauriCreatePlan: vi.fn(),
     tauriExecuteClean: vi.fn(),
     tauriGetLastScan: vi.fn(),
@@ -467,5 +468,125 @@ describe('cleanup freshness and recovery', () => {
     // Partial item CAN be selected manually for review cleanup
     store.setItemSelected('partial-safe-item', true);
     expect(store.selectedMap['partial-safe-item']).toBe(true);
+  });
+});
+
+describe('scan progress and cancellation', () => {
+  /** A scan whose event stream and completion the test drives itself. */
+  function scanUnderTest() {
+    const completion = deferred<ScanResult>();
+    const streams: ((event: ScanEvent) => void)[] = [];
+    vi.mocked(tauriScan).mockImplementation(async (onEvent) => {
+      streams.push(onEvent);
+      return completion.promise;
+    });
+    return { completion, emit: (event: ScanEvent) => streams.forEach((send) => send(event)) };
+  }
+
+  it('tracks the scan id and the root being read, and clears them when the scan finishes', async () => {
+    const store = new ScanStore();
+    const first = scanUnderTest();
+
+    const running = store.runScan();
+    first.emit({ type: 'Started', scan_id: 'scan-7' });
+    expect(store.scanId).toBe('scan-7');
+
+    first.emit({ type: 'CategoryStarted', category: 'developer' });
+    first.emit({
+      type: 'RootStarted',
+      category: 'developer',
+      signature_id: 'dev.cargo.registry.cache',
+      name: 'Cargo Registry',
+      root: '/Users/dev/.cargo/registry',
+    });
+    expect(store.currentCategory).toBe('developer');
+    expect(store.currentRoot).toEqual({
+      name: 'Cargo Registry',
+      path: '/Users/dev/.cargo/registry',
+    });
+
+    first.emit({ type: 'ItemFound', item: fixture().categories[0].items[0] });
+    expect(store.currentScanningItem).toBe('Fixture');
+    expect(store.foundItemCount).toBe(1);
+
+    first.emit({ type: 'Finished', result: fixture('scan-7') });
+    expect(store.currentRoot).toBeNull();
+    expect(store.currentScanningItem).toBeNull();
+    first.completion.resolve(fixture('scan-7'));
+    await running;
+    expect(store.scanId).toBeNull();
+
+    // The next scan starts from nothing: the finished scan's id and count are
+    // never carried into it.
+    const second = scanUnderTest();
+    const next = store.runScan();
+    second.emit({ type: 'Started', scan_id: 'scan-9' });
+    expect(store.scanId).toBe('scan-9');
+    expect(store.foundItemCount).toBe(0);
+    expect(store.currentRoot).toBeNull();
+    second.completion.resolve(fixture('scan-9'));
+    await next;
+  });
+
+  it('stops the scan it is watching and leaves the outcome to that scan', async () => {
+    const store = new ScanStore();
+    await store.cancelScan();
+    expect(tauriCancelScan).not.toHaveBeenCalled();
+
+    const running = scanUnderTest();
+    const scan = store.runScan();
+    running.emit({ type: 'Started', scan_id: 'scan-8' });
+    await store.cancelScan();
+    expect(tauriCancelScan).toHaveBeenCalledWith('scan-8');
+
+    // The request is not the result: the scan keeps reporting until its own
+    // result arrives, and a second stop is not sent while one is in flight.
+    expect(store.isScanning).toBe(true);
+    expect(store.isCancelling).toBe(true);
+    await store.cancelScan();
+    expect(tauriCancelScan).toHaveBeenCalledTimes(1);
+
+    const stopped: ScanResult = {
+      ...fixture('scan-8'),
+      cancelled: true,
+      quality: 'partial',
+      incomplete_reasons: ['Scan was cancelled before completion'],
+    };
+    running.emit({ type: 'Finished', result: stopped });
+    running.completion.resolve(stopped);
+    await scan;
+
+    expect(store.isScanning).toBe(false);
+    expect(store.isCancelling).toBe(false);
+    // A stale id can never reach the backend: finishing cleared it.
+    expect(store.scanId).toBeNull();
+    await store.cancelScan();
+    expect(tauriCancelScan).toHaveBeenCalledTimes(1);
+
+    // A stopped scan is incomplete, not failed: its result is reviewable and
+    // reads as a stop. Quick Clean still requires a complete scan.
+    expect(store.canClean).toBe(true);
+    expect(store.cancelledScanNotice).toContain('Scan stopped before it finished');
+  });
+
+  it('never cancels the previous scan while a new one is starting', async () => {
+    const store = new ScanStore();
+    const first = scanUnderTest();
+    const firstRun = store.runScan();
+    first.emit({ type: 'Started', scan_id: 'scan-old' });
+    first.completion.resolve(fixture('scan-old'));
+    await firstRun;
+
+    const second = scanUnderTest();
+    const secondRun = store.runScan();
+    // Between starting a scan and its `Started` event there is no id to stop.
+    await store.cancelScan();
+    expect(tauriCancelScan).not.toHaveBeenCalled();
+
+    second.emit({ type: 'Started', scan_id: 'scan-new' });
+    await store.cancelScan();
+    expect(tauriCancelScan).toHaveBeenCalledWith('scan-new');
+    second.completion.resolve(fixture('scan-new'));
+    await secondRun;
   });
 });

@@ -1227,6 +1227,57 @@ pub struct ScanResult {
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub ambiguous_overlap_bytes: u64,
+    /// Whether this scan stopped because it was cancelled.
+    ///
+    /// A cancelled scan is incomplete for a stated reason, and the interface
+    /// must be able to say *which* reason without reading prose: a user who
+    /// pressed Stop sees a cancelled scan, not a scan that failed. Every other
+    /// incompleteness leaves this `false` and keeps its own reason.
+    #[serde(default)]
+    pub cancelled: bool,
+    /// What the scan observed about its own work.
+    #[serde(default)]
+    pub metrics: ScanMetrics,
+}
+
+/// What one scan observed about the work it did.
+///
+/// These are the numbers a benchmark compares and a user can be shown; they are
+/// measurements of the run, not estimates of the machine. Item counts and bytes
+/// stay on the result — this carries only what the result did not already
+/// state.
+///
+/// Two of the fields describe the tree and repeat exactly across scans
+/// (`visited_entries`, `directories_read`); two describe one run and are
+/// reported because a bound is only real if it is measured (`duration_ms`,
+/// `peak_outstanding_directory_tasks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+pub struct ScanMetrics {
+    /// Wall-clock duration of the scan.
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub duration_ms: u64,
+    /// Entries the traversal visited and accounted for.
+    ///
+    /// Counted where the walk actually looks at an entry: a file it measured, a
+    /// directory it read, or an entry it refused or could not read. A scan that
+    /// silently stopped visiting entries therefore cannot look like one that
+    /// visited fewer.
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub visited_entries: u64,
+    /// Directories whose contents were read.
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub directories_read: u64,
+    /// The highest number of directory tasks that were outstanding at once.
+    ///
+    /// Reported so the traversal's stated bound is a measurement rather than a
+    /// claim: a run whose peak exceeds the bound is a bug the interface shows
+    /// instead of a property the reader has to trust.
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub peak_outstanding_directory_tasks: u64,
 }
 
 impl ScanResult {
@@ -1291,6 +1342,8 @@ mod tests {
     #[test]
     fn cleanup_observation_expiry_and_clock_rollback_fail_closed() {
         let scan = ScanResult {
+            cancelled: false,
+            metrics: ScanMetrics::default(),
             scan_id: "fixture".into(),
             valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
             started_at: 999,
@@ -1329,6 +1382,8 @@ mod tests {
     #[test]
     fn partial_and_unavailable_scans_never_report_fresh() {
         let mut scan = ScanResult {
+            cancelled: false,
+            metrics: ScanMetrics::default(),
             scan_id: "fixture".into(),
             valid_for_seconds: ScanResult::VALID_FOR_SECONDS,
             started_at: 999,
