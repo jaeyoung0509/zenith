@@ -703,10 +703,11 @@ mod tests {
 
     #[test]
     fn scan_gap_classification_is_typed_and_full_disk_access_is_context_aware() {
-        // Keep the fixture path in the same algebra as the simulated macOS
-        // environment. A host-native temp path becomes `C:\\...` on the
-        // Windows runner and is intentionally not a valid POSIX home.
-        let home = Path::new("/Users/fixture");
+        // Keep the fixture path in the simulated macOS path algebra all the
+        // way through. `std::path::Path::join` follows the CI host, so on
+        // Windows it would inject backslashes into an otherwise POSIX path and
+        // make the Full Disk Access containment check correctly reject it.
+        let home = "/Users/fixture";
         let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
             .with_roots(std::sync::Arc::new(
                 zenith_platform::paths::SimulatedPaths::new()
@@ -720,9 +721,11 @@ mod tests {
             "Protected",
             Category::System,
             RiskTier::Safe,
-            home.join("Library/Containers/com.example/Data/Library/Caches")
-                .to_string_lossy()
-                .into_owned(),
+            zenith_platform::path_algebra::join(
+                home,
+                "Library/Containers/com.example/Data/Library/Caches",
+                PathFlavor::Posix,
+            ),
             FileSize::default(),
             0,
         );
@@ -739,7 +742,8 @@ mod tests {
             Some(ScanGapKind::DepthLimit)
         );
 
-        protected.path = home.join("ordinary").to_string_lossy().into_owned();
+        protected.path =
+            zenith_platform::path_algebra::join(home, "ordinary", PathFlavor::Posix);
         protected.incomplete_reason = Some("I/O failure".to_string());
         assert_eq!(
             scan_gap_kind(&environment, &protected),
