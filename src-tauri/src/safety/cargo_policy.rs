@@ -76,8 +76,7 @@ pub fn allows_registry_source_entry(
     entry_kind: EntryKind,
     allow_cargo_registry_contents: bool,
 ) -> bool {
-    allow_cargo_registry_contents
-        && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
+    allow_cargo_registry_contents && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
 }
 
 #[cfg(test)]
