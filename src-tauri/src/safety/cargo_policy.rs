@@ -12,51 +12,60 @@ use crate::models::{EntryKind, Signature};
 use zenith_platform::PlatformEnvironment;
 
 pub const REGISTRY_SOURCE_SIGNATURE_ID: &str = "dev.cargo.registry.src";
+pub const GIT_CACHE_SIGNATURE_ID: &str = "dev.cargo.git";
 
-/// Returns the trusted Cargo registry source root for the stated environment.
-pub fn registry_source_root(environment: &PlatformEnvironment) -> Option<PathBuf> {
-    environment
-        .user_home()
-        .map(|home| home.join(".cargo/registry/src"))
+/// Returns the exact owner-managed Cargo package-store roots for one catalog
+/// signature in the stated environment.
+fn package_store_roots(signature_id: &str, environment: &PlatformEnvironment) -> Vec<PathBuf> {
+    let Some(home) = environment.user_home() else {
+        return Vec::new();
+    };
+    match signature_id {
+        REGISTRY_SOURCE_SIGNATURE_ID => vec![home.join(".cargo/registry/src")],
+        GIT_CACHE_SIGNATURE_ID => vec![
+            home.join(".cargo/git/checkouts"),
+            home.join(".cargo/git/db"),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 /// Whether a filesystem cleanup target is authorized to treat structured names
-/// as rebuildable package contents.
+/// as rebuildable Cargo package-store contents.
 ///
 /// The caller must have already re-derived the signature's authorized roots.
-/// Requiring the concrete target root to be the environment-resolved Cargo
-/// registry root keeps a forged signature id or a path-prefix lookalike from
-/// widening the exception.
+/// Requiring the concrete target root to equal both a catalog-authorized root
+/// and one of Cargo's environment-resolved owner-managed roots keeps a forged
+/// signature id, a path-prefix lookalike, or a user project from widening the
+/// exception.
 pub fn allows_registry_source_contents(
     signature: &Signature,
     target: &Path,
     authorized_roots: &[PathBuf],
     environment: &PlatformEnvironment,
 ) -> bool {
-    if signature.id != REGISTRY_SOURCE_SIGNATURE_ID {
-        return false;
-    }
-    let Some(trusted_root) = registry_source_root(environment) else {
-        return false;
-    };
-    authorized_roots
+    package_store_roots(&signature.id, environment)
         .iter()
-        .any(|root| root == &trusted_root && target == root)
+        .any(|trusted| {
+            target == trusted
+                && authorized_roots
+                    .iter()
+                    .any(|authorized| authorized == trusted)
+        })
 }
 
-/// Runtime counterpart of [`allows_registry_source_contents`]. The opaque
-/// target carries the unit root but not the catalog registry, so execution
-/// repeats the exact environment/root check before recursive mutation.
+/// Runtime counterpart of the planning authorization above. Execution repeats
+/// the exact environment/root check before recursive mutation.
 pub fn target_allows_registry_source_contents(
     signature_id: &str,
     target: &Path,
     unit_root: &Path,
     environment: &PlatformEnvironment,
 ) -> bool {
-    if signature_id != REGISTRY_SOURCE_SIGNATURE_ID || target != unit_root {
-        return false;
-    }
-    registry_source_root(environment).is_some_and(|root| unit_root == root)
+    target == unit_root
+        && package_store_roots(signature_id, environment)
+            .iter()
+            .any(|trusted| unit_root == trusted)
 }
 
 /// Returns whether an entry belongs to the already-verified Cargo registry
@@ -126,32 +135,60 @@ mod tests {
     }
 
     #[test]
-    fn only_the_registered_cargo_registry_root_gets_the_exception() {
+    fn only_exact_registered_cargo_package_store_roots_get_the_exception() {
         let dir = tempdir().unwrap();
         let environment = environment(dir.path());
-        let root = dir.path().join(".cargo/registry/src");
-        let signature = signature(REGISTRY_SOURCE_SIGNATURE_ID);
+        let registry_root = dir.path().join(".cargo/registry/src");
+        let git_checkouts = dir.path().join(".cargo/git/checkouts");
+        let git_db = dir.path().join(".cargo/git/db");
 
+        let registry = signature(REGISTRY_SOURCE_SIGNATURE_ID);
         assert!(allows_registry_source_contents(
-            &signature,
-            &root,
-            std::slice::from_ref(&root),
+            &registry,
+            &registry_root,
+            std::slice::from_ref(&registry_root),
             &environment
         ));
         assert!(!allows_registry_source_contents(
-            &signature,
-            &root.join("index.crates.io-1949cf8c6b5b557f"),
-            std::slice::from_ref(&root),
+            &registry,
+            &registry_root.join("index.crates.io-1949cf8c6b5b557f"),
+            std::slice::from_ref(&registry_root),
             &environment
         ));
         assert!(!allows_registry_source_contents(
-            &signature,
+            &registry,
+            &git_checkouts,
+            std::slice::from_ref(&git_checkouts),
+            &environment
+        ));
+
+        let git = signature(GIT_CACHE_SIGNATURE_ID);
+        assert!(allows_registry_source_contents(
+            &git,
+            &git_checkouts,
+            std::slice::from_ref(&git_checkouts),
+            &environment
+        ));
+        assert!(allows_registry_source_contents(
+            &git,
+            &git_db,
+            std::slice::from_ref(&git_db),
+            &environment
+        ));
+        assert!(!allows_registry_source_contents(
+            &git,
             &dir.path().join("project"),
             std::slice::from_ref(&dir.path().join("project")),
             &environment
         ));
+        assert!(target_allows_registry_source_contents(
+            GIT_CACHE_SIGNATURE_ID,
+            &git_checkouts,
+            &git_checkouts,
+            &environment
+        ));
         assert!(!target_allows_registry_source_contents(
-            REGISTRY_SOURCE_SIGNATURE_ID,
+            GIT_CACHE_SIGNATURE_ID,
             &dir.path().join("project"),
             &dir.path().join("project"),
             &environment
@@ -159,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_registry_source_allows_regular_downloaded_entries_only() {
+    fn verified_cargo_package_store_allows_regular_downloaded_entries_only() {
         let dir = tempdir().unwrap();
         let environment = environment(dir.path());
         let project = dir.path().join("project");
