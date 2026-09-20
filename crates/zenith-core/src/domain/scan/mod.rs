@@ -38,6 +38,30 @@ fn unavailable_observation_quality() -> ObservationQuality {
     ObservationQuality::Unavailable
 }
 
+/// A stable reason why one or more scan locations were not fully inspected.
+/// The prose in `incomplete_reasons` remains useful for logs and diagnostics,
+/// but the interface must not parse that prose to decide whether it can offer
+/// a remediation such as Full Disk Access. Counts are aggregated after
+/// overlap resolution, so one retained observation contributes at most once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanGapKind {
+    PermissionDenied,
+    FullDiskAccess,
+    SelectorTruncated,
+    DepthLimit,
+    Cancelled,
+    IoError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ScanGap {
+    pub kind: ScanGapKind,
+    #[serde(with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheManagementMode {
@@ -1192,6 +1216,12 @@ pub struct ScanResult {
     pub quality: ObservationQuality,
     #[serde(default)]
     pub incomplete_reasons: Vec<String>,
+    /// Stable categories for locations the scan could not fully inspect.
+    /// This is intentionally separate from `incomplete_reasons`: callers may
+    /// display the latter, but must use this field for typed remediation and
+    /// analytics instead of matching localized/free-form text.
+    #[serde(default)]
+    pub gaps: Vec<ScanGap>,
     /// Sum of the categories' skipped-entry counts.
     #[serde(default, with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
@@ -1356,6 +1386,7 @@ mod tests {
             manual_bytes: 0,
             quality: ObservationQuality::Fresh,
             incomplete_reasons: vec![],
+            gaps: vec![],
             skipped_entry_count: 0,
             incomplete_item_count: 0,
             eligibility: EligibilitySummary::default(),
@@ -1396,6 +1427,10 @@ mod tests {
             manual_bytes: 0,
             quality: ObservationQuality::Partial,
             incomplete_reasons: vec!["Some directories were unreadable".into()],
+            gaps: vec![ScanGap {
+                kind: ScanGapKind::PermissionDenied,
+                count: 1,
+            }],
             skipped_entry_count: 4,
             incomplete_item_count: 1,
             eligibility: EligibilitySummary::default(),

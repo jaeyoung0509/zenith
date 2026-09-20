@@ -343,6 +343,7 @@ function cancelledMockScan(scanId: string, reached: CategoryResult[]): ScanResul
     manual_bytes: total((category) => category.manual_bytes),
     quality: 'partial',
     incomplete_reasons: ['Scan was cancelled before completion'],
+    gaps: [{ kind: 'cancelled', count: 1 }],
     skipped_entry_count: total((category) => category.skipped_entry_count ?? 0),
     incomplete_item_count: total((category) => category.incomplete_item_count ?? 0),
     eligibility: eligibilityFor(reached.flatMap((category) => category.items as ScanItem[])),
@@ -1284,6 +1285,7 @@ export const mockApi = {
           incomplete_reasons: [
             'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
           ],
+          gaps: [{ kind: 'io_error', count: 1 }],
           // The preview states the same completion contract as the backend:
           // this scan ran to the end, so it was not cancelled.
           cancelled: false,
@@ -1581,6 +1583,10 @@ export const mockApi = {
   },
 
   async openStorageSettings(): Promise<void> {
+    // No-op in browser mock
+  },
+
+  async openFullDiskAccessSettings(): Promise<void> {
     // No-op in browser mock
   },
 

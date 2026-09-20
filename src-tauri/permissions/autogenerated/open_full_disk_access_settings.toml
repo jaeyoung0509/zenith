@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-full-disk-access-settings"
+description = "Enables the open_full_disk_access_settings command without any pre-configured scope."
+commands.allow = ["open_full_disk_access_settings"]
+
+[[permission]]
+identifier = "deny-open-full-disk-access-settings"
+description = "Denies the open_full_disk_access_settings command without any pre-configured scope."
+commands.deny = ["open_full_disk_access_settings"]

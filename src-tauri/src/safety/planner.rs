@@ -2,7 +2,7 @@ use crate::models::{
     CleanStrategy, CleanupMode, CleanupUnitIdentity, DeletePlan, DeleteTarget, PathIdentity,
     RiskSummary, RiskTier, ScanItem, ScanResult, Signature, UnitRelationship, ZenithError,
 };
-use crate::safety::{entry_kind_at, structured_state_at, Blacklist, SymlinkGuard, ToctouGuard};
+use crate::safety::{entry_kind_at, Blacklist, SymlinkGuard, ToctouGuard};
 use crate::scanner::relationship::unit_relationship;
 use crate::signatures::SignatureRegistry;
 use std::collections::HashSet;
@@ -86,6 +86,21 @@ impl SafetyPlanner {
         registry: &SignatureRegistry,
     ) -> Result<DeletePlan, ZenithError> {
         Self::create_plan_for(items, registry, &PlatformEnvironment::native())
+    }
+
+    /// Creates a plan with the same environment that produced the scan.
+    ///
+    /// Most callers use [`Self::create_plan_from_scan`], which threads this
+    /// environment through the scan-store workflow. This explicit variant is
+    /// useful for adapters and deterministic tests that run against a
+    /// simulated home directory; it also prevents owner-managed cache rules
+    /// from silently consulting the process host instead of the scan host.
+    pub fn create_plan_with_environment(
+        items: &[ScanItem],
+        registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
+    ) -> Result<DeletePlan, ZenithError> {
+        Self::create_plan_for(items, registry, environment)
     }
 
     fn create_plan_for(
@@ -261,6 +276,7 @@ impl SafetyPlanner {
             let path = PathBuf::from(&item.path);
             let strategy = signature.strategy;
             let mut identity = None;
+            let mut allow_cargo_registry_contents = false;
 
             // A provider action is not a filesystem operation at all: it owns
             // no host path, so the pseudo location carries no deletion
@@ -285,6 +301,13 @@ impl SafetyPlanner {
                     if resolved_roots.is_empty() {
                         return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
                     }
+                    allow_cargo_registry_contents =
+                        crate::safety::cargo_policy::allows_registry_source_contents(
+                            signature,
+                            &path,
+                            &resolved_roots,
+                            environment,
+                        );
 
                     // 2b. Ancestor symlink escape protection: ensure no directory between anchor/root and path is a symlink
                     for root in &resolved_roots {
@@ -311,7 +334,10 @@ impl SafetyPlanner {
                 // 6. Structured state is not generic cleanup's to remove. The
                 //    execution guard refuses it too; refusing here keeps a plan
                 //    from offering a target that could never be cleaned.
-                if let Some((kind, _)) = structured_state_at(&path) {
+                if let Some((kind, _)) = crate::safety::validator::structured_state_at_with_policy(
+                    &path,
+                    allow_cargo_registry_contents,
+                ) {
                     return Err(ZenithError::InvalidPlan(format!(
                         "`{}` is {} and can only be handled by a dedicated provider, not by generic cleanup",
                         item.name,
@@ -323,7 +349,10 @@ impl SafetyPlanner {
                     CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
                 ) && path.is_dir()
                 {
-                    match crate::safety::validator::structured_descendant(&path) {
+                    match crate::safety::validator::structured_descendant(
+                        &path,
+                        allow_cargo_registry_contents,
+                    ) {
                         Ok(Some((nested, kind))) => {
                             return Err(ZenithError::InvalidPlan(format!(
                                 "`{}` contains {} ({}); generic cleanup cannot remove this unit",

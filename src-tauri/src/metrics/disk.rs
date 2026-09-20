@@ -2,6 +2,9 @@ use crate::models::{DiskMetrics, DiskVolume, ZenithError};
 use sysinfo::Disks;
 use zenith_platform::description::PlatformEnvironment;
 
+#[cfg(target_os = "macos")]
+use std::io::Cursor;
+
 /// The primary mount point of the described platform.
 ///
 /// Windows does not guarantee that the system drive is `C:` or the first disk
@@ -127,6 +130,7 @@ impl DiskMetricsCollector {
                 .cmp(&left.volume.is_primary)
                 .then_with(|| left.volume.mount_point.cmp(&right.volume.mount_point))
         });
+        coalesce_apfs_startup_pair(&mut reports);
         reports
     }
 
@@ -148,6 +152,96 @@ impl DiskMetricsCollector {
             percent_used: volume.percent_used,
         })
     }
+}
+
+/// Removes the read-only System mount when macOS exposes the writable Data
+/// mount from the same startup APFS volume group as a second user-facing disk.
+///
+/// The UI represents logical storage pools, so counting both mounts would show
+/// the same APFS capacity twice. The comparison is deliberately narrow: it
+/// requires the OS-reported group id for `/` and the canonical Data mount, and
+/// leaves same-name, same-size, unrelated, or metadata-incomplete volumes
+/// visible.
+fn coalesce_apfs_startup_pair(reports: &mut Vec<VolumeReport>) {
+    #[cfg(target_os = "macos")]
+    {
+        if !reports
+            .iter()
+            .any(|report| report.volume.mount_point == "/")
+        {
+            return;
+        }
+        if !reports
+            .iter()
+            .any(|report| report.volume.mount_point == "/System/Volumes/Data")
+        {
+            return;
+        }
+        let Some(root_group) = apfs_volume_group_id("/") else {
+            return;
+        };
+        let Some(data_group) = apfs_volume_group_id("/System/Volumes/Data") else {
+            return;
+        };
+        coalesce_verified_startup_pair(reports, Some(&root_group), Some(&data_group));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = reports;
+}
+
+/// Applies the already-verified APFS group relationship to a report list.
+/// Keeping this operation pure lets regression tests exercise the actual
+/// removal rather than only the predicate, without shelling out to `diskutil`.
+fn coalesce_verified_startup_pair(
+    reports: &mut Vec<VolumeReport>,
+    root_group: Option<&str>,
+    data_group: Option<&str>,
+) {
+    let Some(data_index) = reports
+        .iter()
+        .position(|report| report.volume.mount_point == "/System/Volumes/Data")
+    else {
+        return;
+    };
+    let has_root = reports
+        .iter()
+        .any(|report| report.volume.mount_point == "/");
+    if has_root
+        && should_coalesce_apfs_startup_pair("/", "/System/Volumes/Data", root_group, data_group)
+    {
+        let _ = reports.remove(data_index);
+    }
+}
+
+fn should_coalesce_apfs_startup_pair(
+    root_mount: &str,
+    data_mount: &str,
+    root_group: Option<&str>,
+    data_group: Option<&str>,
+) -> bool {
+    root_mount == "/"
+        && data_mount == "/System/Volumes/Data"
+        && root_group.is_some()
+        && root_group == data_group
+}
+
+#[cfg(target_os = "macos")]
+fn apfs_volume_group_id(mount_point: &str) -> Option<String> {
+    let mut command = std::process::Command::new("diskutil");
+    command.args(["info", "-plist", mount_point]);
+    let output =
+        zenith_platform::subprocess::run_with_timeout(command, std::time::Duration::from_secs(2))
+            .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let plist = plist::Value::from_reader(Cursor::new(output.stdout)).ok()?;
+    plist
+        .as_dictionary()?
+        .get("APFSVolumeGroupID")
+        .and_then(plist::Value::as_string)
+        .map(str::to_owned)
 }
 
 /// Space facts the OS exposes for a stated mount point, when it knows one.
@@ -178,6 +272,42 @@ mod tests {
     use zenith_platform::description::VolumeIdentity;
     use zenith_platform::path_algebra::PathFlavor;
     use zenith_platform::paths::SimulatedPaths;
+
+    #[test]
+    fn only_the_verified_startup_system_data_pair_is_coalesced() {
+        let report = |mount_point: &str| VolumeReport {
+            volume: DiskVolume {
+                name: "Macintosh HD".to_string(),
+                mount_point: mount_point.to_string(),
+                file_system: "APFS".to_string(),
+                disk_type: "SSD".to_string(),
+                total_bytes: 100,
+                used_bytes: 50,
+                available_bytes: 50,
+                percent_used: 50.0,
+                is_removable: false,
+                is_primary: mount_point == "/",
+            },
+            identity: None,
+        };
+
+        let mut verified = vec![report("/"), report("/System/Volumes/Data")];
+        coalesce_verified_startup_pair(&mut verified, Some("group"), Some("group"));
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified[0].volume.mount_point, "/");
+
+        let mut different_group = vec![report("/"), report("/System/Volumes/Data")];
+        coalesce_verified_startup_pair(&mut different_group, Some("group-a"), Some("group-b"));
+        assert_eq!(different_group.len(), 2);
+
+        let mut wrong_mount = vec![report("/"), report("/Volumes/Data")];
+        coalesce_verified_startup_pair(&mut wrong_mount, Some("group"), Some("group"));
+        assert_eq!(wrong_mount.len(), 2);
+
+        let mut missing_metadata = vec![report("/"), report("/System/Volumes/Data")];
+        coalesce_verified_startup_pair(&mut missing_metadata, None, Some("group"));
+        assert_eq!(missing_metadata.len(), 2);
+    }
 
     #[test]
     fn system_drive_is_not_assumed_to_be_c_or_the_first_disk() {

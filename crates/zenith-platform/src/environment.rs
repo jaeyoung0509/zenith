@@ -119,7 +119,9 @@ pub const FULL_DISK_ACCESS_REMEDY: &str = "macOS protects this location from oth
 pub fn refusal_may_be_full_disk_access(environment: &PlatformEnvironment, path: &Path) -> bool {
     use crate::path_algebra;
 
-    if environment.flavor() != PathFlavor::Posix {
+    if environment.platform() != zenith_core::domain::platform::PlatformKind::Macos
+        || environment.flavor() != PathFlavor::Posix
+    {
         return false;
     }
     let Some(home) = environment.user_home() else {
@@ -655,8 +657,9 @@ mod tests {
     /// a refusal anywhere else is reported as it came.
     #[test]
     fn a_refusal_inside_a_protected_location_names_full_disk_access() {
-        let environment =
-            PlatformEnvironment::simulated(PathFlavor::Posix).with_roots(std::sync::Arc::new(
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_platform(zenith_core::domain::platform::PlatformKind::Macos)
+            .with_roots(std::sync::Arc::new(
                 crate::paths::SimulatedPaths::new()
                     .with_flavor(PathFlavor::Posix)
                     .with_home("/Users/tester"),
@@ -701,6 +704,18 @@ mod tests {
         assert!(!refusal_may_be_full_disk_access(
             &windows,
             Path::new(r"C:\Users\tester\Library\Containers\x")
+        ));
+
+        let linux = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_platform(zenith_core::domain::platform::PlatformKind::Linux)
+            .with_roots(std::sync::Arc::new(
+                crate::paths::SimulatedPaths::new()
+                    .with_flavor(PathFlavor::Posix)
+                    .with_home("/home/tester"),
+            ));
+        assert!(!refusal_may_be_full_disk_access(
+            &linux,
+            Path::new("/home/tester/Library/Containers/x")
         ));
     }
 }

@@ -35,6 +35,7 @@ fn main() {
         "get_disk_metrics",
         "get_disk_volumes",
         "open_storage_settings",
+        "open_full_disk_access_settings",
         "get_docker_status",
         "prune_docker_target",
         "get_local_models",

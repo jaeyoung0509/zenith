@@ -71,6 +71,22 @@ pub async fn open_storage_settings() -> Result<(), String> {
     .await
 }
 
+/// Opens macOS's Privacy & Security > Full Disk Access pane. This is kept
+/// separate from storage settings because the latter cannot grant the
+/// permission needed to inspect protected containers.
+#[tauri::command]
+#[specta::specta]
+pub async fn open_full_disk_access_settings() -> Result<(), String> {
+    run_blocking(
+        || {
+            use zenith_platform::SystemActionProvider;
+            zenith_platform::NativeSystemActions::new().open_full_disk_access_settings()
+        },
+        "Full Disk Access settings worker panicked",
+    )
+    .await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_docker_status(state: State<'_, DesktopState>) -> Result<DockerStatus, String> {

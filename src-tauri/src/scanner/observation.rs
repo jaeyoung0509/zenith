@@ -209,6 +209,9 @@ pub struct SignatureScan {
     pub items: Vec<ScanItem>,
     /// Roots the walk reported before reading them, in visit order.
     pub roots: Vec<PathBuf>,
+    /// Number of selector patterns whose bounded expansion had more matches
+    /// than the scanner could inspect.
+    pub selector_truncated_count: u64,
 }
 
 impl SignatureScan {
@@ -216,6 +219,7 @@ impl SignatureScan {
         Self {
             items,
             roots: Vec::new(),
+            selector_truncated_count: 0,
         }
     }
 }

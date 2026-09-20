@@ -225,6 +225,10 @@ export const nativeApi = {
     await unwrap(commands.openStorageSettings());
   },
 
+  async openFullDiskAccessSettings(): Promise<void> {
+    await unwrap(commands.openFullDiskAccessSettings());
+  },
+
   async getDockerStatus(): Promise<DockerStatus> {
     return await unwrap(commands.getDockerStatus());
   },

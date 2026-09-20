@@ -1181,6 +1181,10 @@ mod tests {
         fn open_storage_settings(&self) -> Result<(), String> {
             Ok(())
         }
+
+        fn open_full_disk_access_settings(&self) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     struct TestCapabilitiesProvider(crate::models::PlatformCapabilities);

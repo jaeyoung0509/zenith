@@ -41,6 +41,7 @@
     "allow-get-disk-metrics",
     "allow-get-disk-volumes",
     "allow-open-storage-settings",
+    "allow-open-full-disk-access-settings",
     "allow-get-docker-status",
     "allow-prune-docker-target",
     "allow-get-local-models",

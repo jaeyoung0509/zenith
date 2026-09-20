@@ -19,7 +19,7 @@ function fixture(id = 'scan', finished = 1000): ScanResult {
   return {
     scan_id: id, valid_for_seconds: 300, started_at: finished - 1, finished_at: finished,
     total_bytes: 10, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0,
-    quality: 'fresh', incomplete_reasons: [],
+    quality: 'fresh', incomplete_reasons: [], gaps: [],
     categories: [{ category: 'developer', display_name: 'Developer', total_bytes: 10,
       safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0, quality: 'fresh', items: [{
         id: `${id}-item`, signature_id: 'fixture', name: 'Fixture', category: 'developer',

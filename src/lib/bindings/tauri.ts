@@ -59,6 +59,13 @@ export const commands = {
 	manual_bytes: number,
 	quality: ObservationQuality,
 	incomplete_reasons: string[],
+	/**
+	 *  Stable categories for locations the scan could not fully inspect.
+	 *  This is intentionally separate from `incomplete_reasons`: callers may
+	 *  display the latter, but must use this field for typed remediation and
+	 *  analytics instead of matching localized/free-form text.
+	 */
+	gaps: ScanGap_Serialize[],
 	/**  Sum of the categories' skipped-entry counts. */
 	skipped_entry_count: number,
 	/**  Retained items whose observation is not `Fresh`. */
@@ -106,6 +113,12 @@ export const commands = {
 	getDiskMetrics: () => typedError<DiskMetrics_Serialize, string>(__TAURI_INVOKE("get_disk_metrics")),
 	getDiskVolumes: () => typedError<DiskVolume_Serialize[], string>(__TAURI_INVOKE("get_disk_volumes")),
 	openStorageSettings: () => typedError<null, string>(__TAURI_INVOKE("open_storage_settings")),
+	/**
+	 *  Opens macOS's Privacy & Security > Full Disk Access pane. This is kept
+	 *  separate from storage settings because the latter cannot grant the
+	 *  permission needed to inspect protected containers.
+	 */
+	openFullDiskAccessSettings: () => typedError<null, string>(__TAURI_INVOKE("open_full_disk_access_settings")),
 	getDockerStatus: () => typedError<DockerStatus_Serialize, string>(__TAURI_INVOKE("get_docker_status")),
 	pruneDockerTarget: (signatureId: string) => typedError<number, string>(__TAURI_INVOKE("prune_docker_target", { signatureId })),
 	getLocalModels: () => typedError<LocalModelInventory_Serialize, string>(__TAURI_INVOKE("get_local_models")),
@@ -2627,6 +2640,27 @@ export type ScanEvent_Serialize = ({ type: "Started"; scan_id: string }) & { byt
 /**  The resolved root, as the walker reads it. */
 root: string }) & { bytes?: never; item?: never; item_count?: never; result?: never; scan_id?: never } | ({ type: "ItemFound"; item: ScanItem_Serialize }) & { bytes?: never; category?: never; item_count?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "CategoryFinished"; category: Category; bytes: number; item_count: number }) & { item?: never; name?: never; result?: never; root?: never; scan_id?: never; signature_id?: never } | ({ type: "Finished"; result: ScanResult_Serialize }) & { bytes?: never; category?: never; item?: never; item_count?: never; name?: never; root?: never; scan_id?: never; signature_id?: never };
 
+export type ScanGap = ScanGap_Serialize | ScanGap_Deserialize;
+
+/**
+ *  A stable reason why one or more scan locations were not fully inspected.
+ *  The prose in `incomplete_reasons` remains useful for logs and diagnostics,
+ *  but the interface must not parse that prose to decide whether it can offer
+ *  a remediation such as Full Disk Access. Counts are aggregated after
+ *  overlap resolution, so one retained observation contributes at most once.
+ */
+export type ScanGapKind = "permission_denied" | "full_disk_access" | "selector_truncated" | "depth_limit" | "cancelled" | "io_error";
+
+export type ScanGap_Deserialize = {
+	kind: ScanGapKind,
+	count: number,
+};
+
+export type ScanGap_Serialize = {
+	kind: ScanGapKind,
+	count: number,
+};
+
 export type ScanItem = ScanItem_Serialize | ScanItem_Deserialize;
 
 export type ScanItem_Deserialize = {
@@ -2914,6 +2948,13 @@ export type ScanResult_Deserialize = {
 	manual_bytes: number,
 	quality?: ObservationQuality,
 	incomplete_reasons?: string[],
+	/**
+	 *  Stable categories for locations the scan could not fully inspect.
+	 *  This is intentionally separate from `incomplete_reasons`: callers may
+	 *  display the latter, but must use this field for typed remediation and
+	 *  analytics instead of matching localized/free-form text.
+	 */
+	gaps?: ScanGap_Deserialize[],
 	/**  Sum of the categories' skipped-entry counts. */
 	skipped_entry_count?: number,
 	/**  Retained items whose observation is not `Fresh`. */
@@ -2963,6 +3004,13 @@ export type ScanResult_Serialize = {
 	manual_bytes: number,
 	quality: ObservationQuality,
 	incomplete_reasons: string[],
+	/**
+	 *  Stable categories for locations the scan could not fully inspect.
+	 *  This is intentionally separate from `incomplete_reasons`: callers may
+	 *  display the latter, but must use this field for typed remediation and
+	 *  analytics instead of matching localized/free-form text.
+	 */
+	gaps: ScanGap_Serialize[],
 	/**  Sum of the categories' skipped-entry counts. */
 	skipped_entry_count: number,
 	/**  Retained items whose observation is not `Fresh`. */

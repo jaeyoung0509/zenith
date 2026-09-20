@@ -545,6 +545,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::get_disk_metrics,
             commands::get_disk_volumes,
             commands::open_storage_settings,
+            commands::open_full_disk_access_settings,
             commands::get_docker_status,
             commands::prune_docker_target,
             commands::get_local_models,

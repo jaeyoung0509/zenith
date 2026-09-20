@@ -5,12 +5,14 @@ use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
 use crate::models::{
     resolve_unit_overlaps_with, Category, CategoryResult, EligibilitySummary, ObservationQuality,
-    PathIdentity, RiskTier, ScanEvent, ScanItem, ScanResult, UnitRelationship,
+    PathIdentity, RiskTier, ScanEvent, ScanGap, ScanGapKind, ScanItem, ScanResult,
+    UnitRelationship,
 };
 use crate::orbstack::OrbStackAdapter;
 use crate::scanner::DirectoryScanner;
 use crate::signatures::SignatureRegistry;
 use std::cell::RefCell;
+use std::path::Path;
 use std::time::SystemTime;
 use uuid::Uuid;
 use zenith_core::domain::ScanMetrics;
@@ -147,6 +149,52 @@ fn aggregate_quality(
     }
 }
 
+fn add_scan_gap(gaps: &mut Vec<ScanGap>, kind: ScanGapKind, count: u64) {
+    if count == 0 {
+        return;
+    }
+    if let Some(existing) = gaps.iter_mut().find(|gap| gap.kind == kind) {
+        existing.count = existing.count.saturating_add(count);
+    } else {
+        gaps.push(ScanGap { kind, count });
+    }
+}
+
+/// Maps an incomplete retained observation to a stable remediation category.
+///
+/// The item still carries the original backend reason for diagnostics, but the
+/// UI never has to parse that prose. Stable cancellation, depth, and access
+/// refusal markers are classified first; only an access refusal on a protected
+/// macOS path is attributed to Full Disk Access.
+fn scan_gap_kind(environment: &PlatformEnvironment, item: &ScanItem) -> Option<ScanGapKind> {
+    if item.quality == ObservationQuality::Fresh && item.incomplete_reason.is_none() {
+        return None;
+    }
+    let reason = item.incomplete_reason.as_deref().unwrap_or_default();
+    if reason.to_ascii_lowercase().contains("cancel") {
+        return Some(ScanGapKind::Cancelled);
+    }
+    let lower = reason.to_ascii_lowercase();
+    if lower.contains("depth limit") {
+        return Some(ScanGapKind::DepthLimit);
+    }
+    let is_access_refusal = lower.contains("permission denied")
+        || lower.contains("operation not permitted")
+        || lower.contains("access denied");
+    if is_access_refusal
+        && zenith_platform::environment::refusal_may_be_full_disk_access(
+            environment,
+            Path::new(&item.path),
+        )
+    {
+        return Some(ScanGapKind::FullDiskAccess);
+    }
+    if is_access_refusal {
+        return Some(ScanGapKind::PermissionDenied);
+    }
+    Some(ScanGapKind::IoError)
+}
+
 /// The retained items and byte populations of one category.
 ///
 /// `total_bytes` is the observed footprint, including blocked/advisory rows;
@@ -217,7 +265,7 @@ impl CategoryAccumulator {
             self.manual_bytes += observed;
         }
 
-        if !item.allows_cleanup() {
+        if item.quality != ObservationQuality::Fresh || item.incomplete_reason.is_some() {
             // An item whose observation cannot support a cleanup is reported
             // once, through its own `quality` and through the scan's durable
             // `incomplete_reasons`. It never becomes a second, destructive
@@ -348,6 +396,7 @@ impl ScanEngine {
         let mut eligibility = EligibilitySummary::default();
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
+        let mut gaps = Vec::new();
         // One process-table pass for the whole scan: the scan asks which
         // application bundles are running, and every signature sees the same
         // answer.
@@ -394,6 +443,11 @@ impl ScanEngine {
                     &context,
                     gate,
                     &running_apps,
+                );
+                add_scan_gap(
+                    &mut gaps,
+                    ScanGapKind::SelectorTruncated,
+                    scanned.selector_truncated_count,
                 );
                 for item in scanned.items {
                     if let Some(retained) = accumulator.push(item) {
@@ -529,12 +583,24 @@ impl ScanEngine {
                         incomplete_reasons.push(reason.clone());
                     }
                 }
+                if let Some(kind) = scan_gap_kind(environment, item) {
+                    add_scan_gap(&mut gaps, kind, 1);
+                }
             }
         }
         if was_cancelled {
             incomplete_reasons.push("Scan was cancelled before completion".to_string());
+            add_scan_gap(&mut gaps, ScanGapKind::Cancelled, 1);
         }
-        let scan_quality = if was_cancelled {
+        if gaps
+            .iter()
+            .any(|gap| gap.kind == ScanGapKind::SelectorTruncated)
+        {
+            incomplete_reasons.push(
+                "A selector matched more roots than the bounded scan could inspect".to_string(),
+            );
+        }
+        let scan_quality = if was_cancelled || !gaps.is_empty() {
             ObservationQuality::Partial
         } else {
             aggregate_quality(category_results.iter().map(|cat| cat.quality))
@@ -553,6 +619,7 @@ impl ScanEngine {
             manual_bytes,
             quality: scan_quality,
             incomplete_reasons,
+            gaps,
             skipped_entry_count,
             incomplete_item_count,
             eligibility,
@@ -608,11 +675,11 @@ impl<F: FnMut(ScanEvent)> RootProgressSink for ScanEvents<'_, F> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_quality, CategoryAccumulator, ScanEngine};
+    use super::{add_scan_gap, aggregate_quality, scan_gap_kind, CategoryAccumulator, ScanEngine};
     use crate::cleaner::LifecycleProviderRegistry;
     use crate::models::{
         Category, CleanStrategy, FileSize, ObservationQuality, PathIdentity, RiskTier, ScanEvent,
-        ScanItem, Signature,
+        ScanGapKind, ScanItem, Signature,
     };
     use crate::scanner::relationship::{same_directory_entry, unit_relationship};
     use crate::signatures::SignatureRegistry;
@@ -629,6 +696,76 @@ mod tests {
             .with_missing_tool("npm")
             .with_missing_tool("pnpm")
             .with_missing_tool("uv")
+    }
+
+    #[test]
+    fn scan_gap_classification_is_typed_and_full_disk_access_is_context_aware() {
+        let home = tempfile::tempdir().unwrap();
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_roots(std::sync::Arc::new(
+                zenith_platform::paths::SimulatedPaths::new()
+                    .with_flavor(PathFlavor::Posix)
+                    .with_home(home.path()),
+            ))
+            .with_platform(crate::models::PlatformKind::Macos);
+        let mut protected = ScanItem::mock(
+            "gap.protected",
+            "gap.protected",
+            "Protected",
+            Category::System,
+            RiskTier::Safe,
+            home.path()
+                .join("Library/Containers/com.example/Data/Library/Caches")
+                .to_string_lossy()
+                .into_owned(),
+            FileSize::default(),
+            0,
+        );
+        protected.quality = ObservationQuality::Unavailable;
+        protected.incomplete_reason = Some("Operation not permitted".to_string());
+        assert_eq!(
+            scan_gap_kind(&environment, &protected),
+            Some(ScanGapKind::FullDiskAccess)
+        );
+
+        protected.incomplete_reason = Some("Directory depth limit exceeded".to_string());
+        assert_eq!(
+            scan_gap_kind(&environment, &protected),
+            Some(ScanGapKind::DepthLimit)
+        );
+
+        protected.path = home.path().join("ordinary").to_string_lossy().into_owned();
+        protected.incomplete_reason = Some("I/O failure".to_string());
+        assert_eq!(
+            scan_gap_kind(&environment, &protected),
+            Some(ScanGapKind::IoError)
+        );
+        protected.incomplete_reason = Some("Permission denied".to_string());
+        assert_eq!(
+            scan_gap_kind(&environment, &protected),
+            Some(ScanGapKind::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn scan_gap_counts_merge_without_requiring_frontend_prose_parsing() {
+        let mut gaps = Vec::new();
+        add_scan_gap(&mut gaps, ScanGapKind::SelectorTruncated, 1);
+        add_scan_gap(&mut gaps, ScanGapKind::SelectorTruncated, 2);
+        add_scan_gap(&mut gaps, ScanGapKind::PermissionDenied, 1);
+        assert_eq!(
+            gaps,
+            vec![
+                crate::models::ScanGap {
+                    kind: ScanGapKind::SelectorTruncated,
+                    count: 3,
+                },
+                crate::models::ScanGap {
+                    kind: ScanGapKind::PermissionDenied,
+                    count: 1,
+                },
+            ]
+        );
     }
 
     fn signature(
@@ -1673,6 +1810,10 @@ mod tests {
             "a scan that could not read part of a tree says so"
         );
         assert!(
+            !result.gaps.is_empty(),
+            "a partial observation carries a typed gap instead of only prose"
+        );
+        assert!(
             !result.cancelled,
             "an unreadable subtree is not a cancellation"
         );
@@ -1867,6 +2008,10 @@ mod tests {
             result.cancelled,
             "a cancelled scan says so as a fact, not only in prose"
         );
+        assert!(result
+            .gaps
+            .iter()
+            .any(|gap| gap.kind == crate::models::ScanGapKind::Cancelled));
         assert!(result
             .incomplete_reasons
             .iter()

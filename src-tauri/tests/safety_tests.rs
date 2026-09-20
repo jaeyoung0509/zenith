@@ -732,6 +732,7 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
         manual_bytes: 0,
         quality: ObservationQuality::Fresh,
         incomplete_reasons: vec![],
+        gaps: vec![],
         skipped_entry_count: 0,
         incomplete_item_count: 0,
         eligibility: Default::default(),
@@ -1386,6 +1387,7 @@ fn test_select_quick_clean_safe_candidates_filters_risk_bytes_and_settings() {
         ],
         quality: ObservationQuality::Fresh,
         incomplete_reasons: vec![],
+        gaps: vec![],
         incomplete_item_count: 0,
         eligibility: Default::default(),
         suppressed_duplicate_count: 0,
@@ -1597,6 +1599,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Permission denied in subtree".to_string()],
+        gaps: vec![],
         skipped_entry_count: 0,
         incomplete_item_count: 0,
         eligibility: Default::default(),
@@ -3153,6 +3156,7 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
         manual_bytes: 0,
         quality: ObservationQuality::Fresh,
         incomplete_reasons: vec![],
+        gaps: vec![],
         skipped_entry_count: 0,
         incomplete_item_count: 0,
         eligibility: Default::default(),
@@ -3227,6 +3231,193 @@ fn a_plan_carries_the_scan_time_expectations() {
         target.process_guard.executables(),
         expected_guard.executables()
     );
+}
+
+/// A Cargo registry source is a trusted rebuildable package tree. Its normal
+/// package metadata must not be mistaken for a runtime lock by the generic
+/// structured-state guard, while the plan still has to cross the real planner
+/// and executor boundaries.
+#[test]
+fn cargo_registry_source_with_package_lock_is_plannable_and_cleanable() {
+    let fixture = tempdir().expect("fixture");
+    let registry_root = fixture.path().join(".cargo/registry/src");
+    let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
+    let crate_root = source_root.join("request-0.13.4");
+    fs::create_dir_all(&crate_root).unwrap();
+    fs::write(crate_root.join("Cargo.lock"), b"version = 3").unwrap();
+    fs::write(
+        crate_root.join("Cargo.toml"),
+        b"[package]\nname = \"request\"\n",
+    )
+    .unwrap();
+    fs::write(crate_root.join("src.rs"), b"pub fn request() {}\n").unwrap();
+
+    let environment =
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(fixture.path())
+                .with_temp_dir(fixture.path()),
+        ));
+    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+    let mut signature = registry
+        .get("dev.cargo.registry.src")
+        .expect("the Cargo source signature is in the catalog");
+    // The test itself runs under Cargo, so disable only the process guard for
+    // this fixture; the production catalog keeps the guard and the planner's
+    // in-use regression remains covered by the surrounding safety tests.
+    let mut test_signature = signature.clone();
+    test_signature.fail_if_running.clear();
+    registry.register(test_signature);
+    signature = registry
+        .get("dev.cargo.registry.src")
+        .expect("the test signature is registered");
+
+    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
+        signature,
+        &environment,
+        &zenith_lib::models::NeverCancelled,
+    )
+    .into_iter()
+    .next()
+    .expect("the scanner reports the configured Cargo source root");
+    assert_eq!(item.path, registry_root.to_string_lossy());
+    item.is_selected = true;
+
+    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+        .expect("Cargo package metadata is valid rebuildable source content");
+    let result = CleanExecutor::execute(
+        plan,
+        &environment,
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
+    assert_eq!(result.items.len(), 1);
+    assert!(result.items[0].success, "{:?}", result.items[0]);
+    assert!(!crate_root.exists());
+    assert!(
+        registry_root.exists(),
+        "the configured registry root remains"
+    );
+}
+
+#[test]
+fn generic_project_cargo_lock_remains_protected() {
+    let fixture = tempdir().expect("fixture");
+    let project = fixture.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let lock = project.join("Cargo.lock");
+    fs::write(&lock, b"version = 3").unwrap();
+
+    let environment =
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(fixture.path())
+                .with_temp_dir(fixture.path()),
+        ));
+    let source_registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+    let mut signature = source_registry
+        .get("dev.cargo.registry.src")
+        .expect("the Cargo source signature is in the catalog")
+        .clone();
+    signature.id = "test.generic.cargo".into();
+    signature.paths = vec![project.to_string_lossy().into_owned()];
+    signature.fail_if_running.clear();
+    let mut registry = SignatureRegistry::new();
+    registry.register(signature.clone());
+
+    let mut item = ScanItem::mock(
+        "test.generic.cargo",
+        "test.generic.cargo",
+        "Project Cargo files",
+        Category::Developer,
+        RiskTier::Rebuild,
+        lock.to_string_lossy().into_owned(),
+        FileSize::new(11, Some(11)),
+        1,
+    );
+    item.is_selected = true;
+    item.path = project.to_string_lossy().into_owned();
+    item.entry_kind = EntryKind::Directory;
+    item.ownership = signature.ownership();
+    item.unit = CleanupUnit::fixed_path(project.to_string_lossy().into_owned());
+
+    let error = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+        .expect_err("a project Cargo.lock is not a rebuildable registry artifact");
+    assert!(
+        matches!(error, ZenithError::InvalidPlan(ref message) if message.contains("lock or pid file")),
+        "the generic lock classification remains visible: {error}"
+    );
+    assert!(lock.exists());
+}
+
+#[test]
+fn cargo_registry_protects_non_metadata_structured_entries() {
+    let cases = [
+        ("state.sqlite", "database file"),
+        ("auth.json", "credential or key material"),
+        ("tool.sh", "executable image"),
+        ("Tool.app", "application bundle"),
+    ];
+
+    for (name, expected_kind) in cases {
+        let fixture = tempdir().expect("fixture");
+        let registry_root = fixture.path().join(".cargo/registry/src");
+        let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
+        let crate_root = source_root.join("request-0.13.4");
+        fs::create_dir_all(&crate_root).unwrap();
+        let protected = crate_root.join(name);
+        if name.ends_with(".app") {
+            fs::create_dir(&protected).unwrap();
+        } else {
+            fs::write(&protected, b"protected").unwrap();
+        }
+
+        let environment =
+            PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+                SimulatedPaths::new()
+                    .with_flavor(PathFlavor::current())
+                    .with_home(fixture.path())
+                    .with_temp_dir(fixture.path()),
+            ));
+        let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+        let mut signature = registry
+            .get("dev.cargo.registry.src")
+            .expect("the Cargo source signature is in the catalog")
+            .clone();
+        signature.fail_if_running.clear();
+        registry.register(signature.clone());
+
+        let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
+            &signature,
+            &environment,
+            &zenith_lib::models::NeverCancelled,
+        )
+        .into_iter()
+        .next()
+        .expect("the scanner reports the configured Cargo source root");
+        item.is_selected = true;
+
+        let error = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+            .expect_err("generic cleanup must not remove structured state in Cargo sources");
+        let message = match &error {
+            ZenithError::InvalidPlan(message) => message,
+            other => panic!("the Cargo policy must refuse {name}: {other}"),
+        };
+        if name.ends_with(".app") {
+            assert!(
+                message.contains("not completely inspected") || message.contains(expected_kind),
+                "the Cargo policy still protects {name}: {error}"
+            );
+        } else {
+            assert!(
+                message.contains(expected_kind),
+                "the Cargo policy still protects {name}: {error}"
+            );
+        }
+        assert!(protected.exists());
+    }
 }
 
 /// What a plan states about its target is validated, not assumed: an item that
@@ -3351,6 +3542,7 @@ fn test_nested_protected_app_bundle_fails_closed() {
         }],
         quality: ObservationQuality::Partial,
         incomplete_reasons: vec!["Protected system or application bundle detected".into()],
+        gaps: vec![],
         skipped_entry_count: 0,
         incomplete_item_count: 1,
         eligibility: Default::default(),

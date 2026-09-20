@@ -124,6 +124,7 @@ impl DirectoryScanner {
     ) -> SignatureScan {
         let mut items = Vec::new();
         let mut scanned_roots = Vec::new();
+        let mut selector_truncated_count = 0u64;
 
         // If signature has no explicit file paths (e.g. Docker commands), return early or handle in Docker adapter
         if signature.paths.is_empty() {
@@ -140,7 +141,11 @@ impl DirectoryScanner {
                 continue;
             };
 
-            let (roots, failures) = Self::signature_roots(&path_buf, context.environment);
+            let (roots, failures, truncated) =
+                Self::signature_roots(&path_buf, context.environment);
+            if truncated {
+                selector_truncated_count += 1;
+            }
 
             for (fail_idx, failure) in failures.iter().enumerate() {
                 let reason = format!(
@@ -232,6 +237,7 @@ impl DirectoryScanner {
         SignatureScan {
             items,
             roots: scanned_roots,
+            selector_truncated_count,
         }
     }
 
@@ -247,6 +253,7 @@ impl DirectoryScanner {
     ) -> (
         Vec<SignatureRoot>,
         Vec<zenith_platform::selector::SelectionFailure>,
+        bool,
     ) {
         let text = expanded.to_string_lossy().into_owned();
         if !zenith_platform::selector::PathSelector::is_pattern(&text) {
@@ -256,6 +263,7 @@ impl DirectoryScanner {
                     key: None,
                 }],
                 Vec::new(),
+                false,
             );
         }
 
@@ -269,7 +277,7 @@ impl DirectoryScanner {
                 "scanner",
                 &format!("Refused a malformed catalog pattern: {text}"),
             );
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), false);
         };
 
         let outcome = selector.expand(
@@ -298,7 +306,7 @@ impl DirectoryScanner {
                 }
             })
             .collect();
-        (roots, outcome.failures)
+        (roots, outcome.failures, outcome.truncated)
     }
 
     /// Scans one root when the root itself is the cleanup unit.

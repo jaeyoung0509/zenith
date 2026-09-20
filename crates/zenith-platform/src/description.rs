@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use zenith_core::domain::platform::PlatformKind;
+
 use super::path_algebra::PathFlavor;
 use super::paths::{NativePlatformPaths, PlatformPathsProvider};
 
@@ -91,6 +93,7 @@ pub struct VolumeIdentity {
 #[derive(Clone)]
 pub struct PlatformEnvironment {
     flavor: PathFlavor,
+    platform: PlatformKind,
     roots: Arc<dyn PlatformPathsProvider>,
     /// Stated temporary directory. `None` defers to the roots provider.
     temp_dir: Option<PathBuf>,
@@ -105,6 +108,7 @@ impl std::fmt::Debug for PlatformEnvironment {
         formatter
             .debug_struct("PlatformEnvironment")
             .field("flavor", &self.flavor)
+            .field("platform", &self.platform)
             .field("known_folders", &self.known_folders)
             .field("path_entries", &self.path_entries)
             .field("volumes", &self.volumes)
@@ -125,6 +129,7 @@ impl PlatformEnvironment {
         }
         Self {
             flavor: PathFlavor::current(),
+            platform: PlatformKind::current(),
             roots: Arc::new(native),
             temp_dir: None,
             known_folders,
@@ -140,8 +145,14 @@ impl PlatformEnvironment {
     /// An empty description for a stated path flavor. Tests add only the facts
     /// they intend the code to observe.
     pub fn simulated(flavor: PathFlavor) -> Self {
+        let platform = if flavor.is_windows() {
+            PlatformKind::Windows
+        } else {
+            PlatformKind::current()
+        };
         Self {
             flavor,
+            platform,
             roots: Arc::new(super::paths::SimulatedPaths::new().with_flavor(flavor)),
             temp_dir: None,
             known_folders: BTreeMap::new(),
@@ -153,6 +164,18 @@ impl PlatformEnvironment {
 
     pub fn flavor(&self) -> PathFlavor {
         self.flavor
+    }
+
+    /// The operating-system identity stated by this environment. A simulated
+    /// environment defaults to the host platform for POSIX paths, but tests
+    /// can override it to distinguish macOS from another POSIX platform.
+    pub fn platform(&self) -> PlatformKind {
+        self.platform
+    }
+
+    pub fn with_platform(mut self, platform: PlatformKind) -> Self {
+        self.platform = platform;
+        self
     }
 
     pub fn roots(&self) -> &dyn PlatformPathsProvider {

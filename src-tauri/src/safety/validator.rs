@@ -31,10 +31,11 @@ pub struct ValidatedTarget {
     /// rather than a tree-level one.
     stale_policy: Option<crate::safety::StaleEntryPolicy>,
     min_age_days: Option<u32>,
+    allow_cargo_registry_contents: bool,
 }
 
 impl ValidatedTarget {
-    fn from_planned(target: &DeleteTarget) -> Self {
+    fn from_planned(target: &DeleteTarget, environment: &PlatformEnvironment) -> Self {
         let stale_policy = match (target.strategy, target.min_age_days) {
             (CleanStrategy::DeleteStaleContents, Some(days)) => {
                 Some(crate::safety::StaleEntryPolicy::from_days(days))
@@ -50,6 +51,13 @@ impl ValidatedTarget {
             exclusions: target.exclusions.clone(),
             stale_policy,
             min_age_days: target.min_age_days,
+            allow_cargo_registry_contents:
+                crate::safety::cargo_policy::target_allows_registry_source_contents(
+                    &target.signature_id,
+                    &target.path,
+                    Path::new(&target.unit.root),
+                    environment,
+                ),
         }
     }
 
@@ -83,6 +91,10 @@ impl ValidatedTarget {
 
     pub fn min_age_days(&self) -> Option<u32> {
         self.min_age_days
+    }
+
+    pub(crate) fn allow_cargo_registry_contents(&self) -> bool {
+        self.allow_cargo_registry_contents
     }
 }
 
@@ -206,6 +218,7 @@ fn crosses_mount_boundary(_path: &Path) -> bool {
 /// Symlinks are classified by name but never followed.
 pub(crate) fn structured_descendant(
     path: &Path,
+    allow_cargo_registry_contents: bool,
 ) -> std::io::Result<Option<(PathBuf, StructuredStateKind)>> {
     let mut pending = vec![path.to_path_buf()];
     while let Some(current) = pending.pop() {
@@ -217,8 +230,14 @@ pub(crate) fn structured_descendant(
             .unwrap_or_default();
         let facts = PathFacts::new(&name, kind)
             .executable(kind == EntryKind::File && is_executable(&metadata));
-        if let Some(structured) = classify_structured_state(facts) {
-            return Ok(Some((current, structured)));
+        if !crate::safety::cargo_policy::allows_registry_source_entry(
+            &current,
+            kind,
+            allow_cargo_registry_contents,
+        ) {
+            if let Some(structured) = classify_structured_state(facts) {
+                return Ok(Some((current, structured)));
+            }
         }
         if kind == EntryKind::Directory && !SymlinkGuard::is_symlink_metadata(&current)? {
             if current != path && crosses_mount_boundary(&current) {
@@ -274,6 +293,14 @@ impl SafetyValidator {
                 ),
             );
         }
+
+        let allow_cargo_registry_contents =
+            crate::safety::cargo_policy::target_allows_registry_source_contents(
+                &target.signature_id,
+                path,
+                Path::new(&target.unit.root),
+                environment,
+            );
 
         // 1. Presence probe. A path that no longer exists is already absent.
         let metadata = match std::fs::symlink_metadata(path) {
@@ -408,13 +435,12 @@ impl SafetyValidator {
 
         // 6. Structured state is never generic cleanup's to remove, even when a
         //    discovery rule produced the target.
-        let target_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let facts = PathFacts::new(&target_name, current_kind)
-            .executable(current_kind == EntryKind::File && is_executable(&metadata));
-        if let Some(kind) = classify_structured_state(facts) {
+        if let Some(kind) = crate::safety::validator::structured_state_at_with_policy(
+            path,
+            allow_cargo_registry_contents,
+        )
+        .map(|(kind, _)| kind)
+        {
             return skipped(
                 target,
                 CleanFailureReason::StructuredStore,
@@ -434,7 +460,7 @@ impl SafetyValidator {
                 CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
             )
         {
-            match structured_descendant(path) {
+            match structured_descendant(path, allow_cargo_registry_contents) {
                 Ok(Some((nested, kind))) => {
                     return skipped(
                         target,
@@ -530,7 +556,10 @@ impl SafetyValidator {
                             ),
                         );
                     }
-                    return RevalidationOutcome::Validated(ValidatedTarget::from_planned(target));
+                    return RevalidationOutcome::Validated(ValidatedTarget::from_planned(
+                        target,
+                        environment,
+                    ));
                 }
                 let newest = stats.newest_mtime.and_then(|modified| {
                     modified
@@ -557,7 +586,7 @@ impl SafetyValidator {
             }
         }
 
-        RevalidationOutcome::Validated(ValidatedTarget::from_planned(target))
+        RevalidationOutcome::Validated(ValidatedTarget::from_planned(target, environment))
     }
 }
 
@@ -608,6 +637,13 @@ impl<'a> FilesystemDeleteAuthority<'a> {
     pub(crate) fn protect_structured_state(&self) -> bool {
         matches!(self.inner, AuthorityKind::Cleanup(_))
     }
+
+    pub(crate) fn allow_cargo_registry_contents(&self) -> bool {
+        match self.inner {
+            AuthorityKind::Cleanup(target) => target.allow_cargo_registry_contents(),
+            AuthorityKind::ModelInventory(_) => false,
+        }
+    }
 }
 
 impl<'a> From<&'a ValidatedTarget> for FilesystemDeleteAuthority<'a> {
@@ -633,6 +669,19 @@ impl<'a> From<&'a ValidatedModelTarget> for FilesystemDeleteAuthority<'a> {
 /// would refuse: planning and execution must agree, and the cheaper place to
 /// say no is before the user is offered a confirmation.
 pub fn structured_state_at(path: &Path) -> Option<(StructuredStateKind, EntryKind)> {
+    structured_state_at_with_policy(path, false)
+}
+
+/// Classifies one entry for a cleanup target with its trusted owner policy.
+///
+/// Cargo registry source is an extracted, rebuildable artifact. Its package
+/// metadata is allowed only when the caller has already established that the
+/// whole target is the environment-resolved registry source unit. Generic
+/// callers keep the fail-closed structured-state rule.
+pub fn structured_state_at_with_policy(
+    path: &Path,
+    allow_cargo_registry_contents: bool,
+) -> Option<(StructuredStateKind, EntryKind)> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     let entry_kind = entry_kind_of(&metadata);
     let name = path
@@ -641,7 +690,15 @@ pub fn structured_state_at(path: &Path) -> Option<(StructuredStateKind, EntryKin
         .unwrap_or_default();
     let facts = PathFacts::new(&name, entry_kind)
         .executable(entry_kind == EntryKind::File && is_executable(&metadata));
-    classify_structured_state(facts).map(|kind| (kind, entry_kind))
+    if crate::safety::cargo_policy::allows_registry_source_entry(
+        path,
+        entry_kind,
+        allow_cargo_registry_contents,
+    ) {
+        None
+    } else {
+        classify_structured_state(facts).map(|kind| (kind, entry_kind))
+    }
 }
 
 /// The entry kind of a path, as the plan records it.
