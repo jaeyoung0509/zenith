@@ -17,7 +17,7 @@ use zenith_lib::safety::{
 };
 use zenith_lib::scanner::{ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
-use zenith_platform::path_algebra::PathFlavor;
+use zenith_platform::path_algebra::{self, PathFlavor};
 use zenith_platform::paths::SimulatedPaths;
 use zenith_platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 
@@ -3281,7 +3281,16 @@ fn cargo_registry_source_with_package_lock_is_plannable_and_cleanable() {
     .into_iter()
     .next()
     .expect("the scanner reports the configured Cargo source root");
-    assert_eq!(item.path, registry_root.to_string_lossy());
+    assert!(
+        path_algebra::equal(
+            &item.path,
+            &registry_root.to_string_lossy(),
+            PathFlavor::current(),
+        ),
+        "scanner root {} should denote fixture root {}",
+        item.path,
+        registry_root.display()
+    );
     item.is_selected = true;
 
     let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
@@ -3338,7 +3347,13 @@ fn cargo_git_checkout_with_package_metadata_is_plannable_and_cleanable() {
         &zenith_lib::models::NeverCancelled,
     )
     .into_iter()
-    .find(|item| item.path == checkouts_root.to_string_lossy())
+    .find(|item| {
+        path_algebra::equal(
+            &item.path,
+            &checkouts_root.to_string_lossy(),
+            PathFlavor::current(),
+        )
+    })
     .expect("the scanner reports the configured Cargo git checkout root");
     item.is_selected = true;
 
@@ -3509,7 +3524,13 @@ fn cargo_package_store_runtime_locks_remain_protected() {
             &zenith_lib::models::NeverCancelled,
         )
         .into_iter()
-        .find(|item| item.path == package_store_root.to_string_lossy())
+        .find(|item| {
+            path_algebra::equal(
+                &item.path,
+                &package_store_root.to_string_lossy(),
+                PathFlavor::current(),
+            )
+        })
         .expect("the scanner reports the configured Cargo package-store root");
         item.is_selected = true;
 
