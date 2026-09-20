@@ -2,6 +2,7 @@
   import SegmentedTabs from '../../lib/components/SegmentedTabs.svelte';
   import CleanupReviewDialog from '../../lib/components/CleanupReviewDialog.svelte';
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
+  import ScanFreshnessNotice from '../../lib/components/ScanFreshnessNotice.svelte';
   import { onMount, untrack } from 'svelte';
   import type { CategoryResult } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
@@ -427,16 +428,9 @@
       </div>
     {/if}
 
-    <!-- Partial Scan Alert -->
-    {#if scanStore.freshness === 'partial'}
-      <div role="status" class="p-3.5 rounded-xl bg-warning/10 border border-warning/30 text-warning flex items-center gap-2.5 text-xs">
-        <AlertCircle size={16} class="shrink-0" />
-        {#if scanStore.cancelledScanNotice}
-          <span>{scanStore.cancelledScanNotice}</span>
-        {:else}
-          <span>Partial scan completed. Some locations could not be fully inspected. Values marked ≥ are lower bounds; ranges are shown where observations may overlap. Incomplete items cannot be auto-cleaned.</span>
-        {/if}
-      </div>
+    <!-- Scan freshness / remediation notice -->
+    {#if scanStore.freshness === 'partial' || scanStore.freshness === 'unavailable'}
+      <ScanFreshnessNotice />
     {/if}
 
     <!-- Categories Section -->

@@ -3353,71 +3353,60 @@ fn generic_project_cargo_lock_remains_protected() {
 }
 
 #[test]
-fn cargo_registry_protects_non_metadata_structured_entries() {
-    let cases = [
-        ("state.sqlite", "database file"),
-        ("auth.json", "credential or key material"),
-        ("tool.sh", "executable image"),
-        ("Tool.app", "application bundle"),
-    ];
+fn cargo_registry_allows_downloaded_structured_names_inside_verified_source_root() {
+    let fixture = tempdir().expect("fixture");
+    let registry_root = fixture.path().join(".cargo/registry/src");
+    let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
+    let crate_root = source_root.join("request-0.13.4");
+    fs::create_dir_all(crate_root.join("Tool.app")).unwrap();
+    fs::write(crate_root.join("state.sqlite"), b"fixture").unwrap();
+    fs::write(crate_root.join("auth.json"), br#"{"fixture":true}"#).unwrap();
+    fs::write(crate_root.join("tool.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(crate_root.join("rustfmt.toml"), b"edition = \"2021\"\n").unwrap();
 
-    for (name, expected_kind) in cases {
-        let fixture = tempdir().expect("fixture");
-        let registry_root = fixture.path().join(".cargo/registry/src");
-        let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
-        let crate_root = source_root.join("request-0.13.4");
-        fs::create_dir_all(&crate_root).unwrap();
-        let protected = crate_root.join(name);
-        if name.ends_with(".app") {
-            fs::create_dir(&protected).unwrap();
-        } else {
-            fs::write(&protected, b"protected").unwrap();
-        }
+    let environment =
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(fixture.path())
+                .with_temp_dir(fixture.path()),
+        ));
+    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+    let mut signature = registry
+        .get("dev.cargo.registry.src")
+        .expect("the Cargo source signature is in the catalog")
+        .clone();
+    // The test process itself is Cargo, so keep the production process guard
+    // intact in the catalog and disable only this fixture's copy.
+    signature.fail_if_running.clear();
+    registry.register(signature.clone());
 
-        let environment =
-            PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
-                SimulatedPaths::new()
-                    .with_flavor(PathFlavor::current())
-                    .with_home(fixture.path())
-                    .with_temp_dir(fixture.path()),
-            ));
-        let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-        let mut signature = registry
-            .get("dev.cargo.registry.src")
-            .expect("the Cargo source signature is in the catalog")
-            .clone();
-        signature.fail_if_running.clear();
-        registry.register(signature.clone());
+    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
+        &signature,
+        &environment,
+        &zenith_lib::models::NeverCancelled,
+    )
+    .into_iter()
+    .next()
+    .expect("the scanner reports the configured Cargo source root");
+    item.is_selected = true;
 
-        let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
-            &signature,
-            &environment,
-            &zenith_lib::models::NeverCancelled,
-        )
-        .into_iter()
-        .next()
-        .expect("the scanner reports the configured Cargo source root");
-        item.is_selected = true;
+    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+        .expect("owner-managed Cargo source contents are rebuildable");
+    let result = CleanExecutor::execute(
+        plan,
+        &environment,
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
 
-        let error = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-            .expect_err("generic cleanup must not remove structured state in Cargo sources");
-        let message = match &error {
-            ZenithError::InvalidPlan(message) => message,
-            other => panic!("the Cargo policy must refuse {name}: {other}"),
-        };
-        if name.ends_with(".app") {
-            assert!(
-                message.contains("not completely inspected") || message.contains(expected_kind),
-                "the Cargo policy still protects {name}: {error}"
-            );
-        } else {
-            assert!(
-                message.contains(expected_kind),
-                "the Cargo policy still protects {name}: {error}"
-            );
-        }
-        assert!(protected.exists());
-    }
+    assert_eq!(result.items.len(), 1);
+    assert!(result.items[0].success, "{:?}", result.items[0]);
+    assert!(!crate_root.exists());
+    assert!(
+        registry_root.exists(),
+        "the configured registry root remains"
+    );
 }
 
 /// What a plan states about its target is validated, not assumed: an item that

@@ -56,7 +56,11 @@
           Partial scan completed. Some locations could not be fully inspected, so displayed totals are lower bounds (≥). Incomplete items cannot be auto-cleaned.
         {/if}
       {:else if scanStore.freshness === 'unavailable'}
-        Scan results are unavailable because the configured locations could not be inspected. Cleaning is blocked until a scan succeeds.
+        {#if hasFullDiskAccessGap}
+          Scan results are unavailable because macOS denied access to the configured locations. Grant Full Disk Access to Zenith, then scan again. Cleaning is blocked until a scan succeeds.
+        {:else}
+          Scan results are unavailable because the configured locations could not be inspected. Cleaning is blocked until a scan succeeds.
+        {/if}
       {:else if scanStore.lastScan}
         Results are out of date. Scan again, then review the new selection before cleaning.
       {:else}
@@ -72,7 +76,7 @@
       {/if}
     </span>
     <span class="flex shrink-0 flex-wrap items-center gap-2">
-      {#if hasFullDiskAccessGap && scanStore.freshness === 'partial'}
+      {#if hasFullDiskAccessGap && (scanStore.freshness === 'partial' || scanStore.freshness === 'unavailable')}
         <Button size="sm" variant="secondary" onclick={openFullDiskAccessSettings}>
           Open System Settings
         </Button>

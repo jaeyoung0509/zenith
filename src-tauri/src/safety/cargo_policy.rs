@@ -59,24 +59,25 @@ pub fn target_allows_registry_source_contents(
     registry_source_root(environment).is_some_and(|root| unit_root == root)
 }
 
-/// Returns whether a structured entry is package metadata that Cargo itself
-/// regenerates with the registry source tree.
+/// Returns whether an entry belongs to the already-verified Cargo registry
+/// source unit and may therefore bypass the generic name-shaped structured
+/// state classifier.
 ///
-/// The exception is intentionally not a blanket "ignore structured state"
-/// switch: databases, credentials, configuration unrelated to Cargo, and
-/// executable files inside a crate remain protected by the generic guard.
+/// Once the target has satisfied the exact signature/root checks above, regular
+/// files and directories are downloaded package contents: a crate may
+/// legitimately contain shell scripts, executable fixtures, configuration
+/// files, database fixtures, or bundle-shaped test data, and all of them are
+/// regenerated when Cargo restores the package. Symlinks/reparse points,
+/// special filesystem entries, mount boundaries, blacklists, TOCTOU identity,
+/// and the Cargo/rustc process guard remain enforced by their dedicated
+/// boundaries.
 pub fn allows_registry_source_entry(
-    path: &Path,
+    _path: &Path,
     entry_kind: EntryKind,
     allow_cargo_registry_contents: bool,
 ) -> bool {
-    if !allow_cargo_registry_contents || entry_kind != EntryKind::File {
-        return false;
-    }
-    path.file_name().is_some_and(|name| {
-        name.to_string_lossy().eq_ignore_ascii_case("Cargo.lock")
-            || name.to_string_lossy().eq_ignore_ascii_case("Cargo.toml")
-    })
+    allow_cargo_registry_contents
+        && matches!(entry_kind, EntryKind::File | EntryKind::Directory)
 }
 
 #[cfg(test)]
@@ -159,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn cargo_metadata_exception_only_covers_regular_metadata_files() {
+    fn verified_registry_source_allows_regular_downloaded_entries_only() {
         let dir = tempdir().unwrap();
         let environment = environment(dir.path());
         let project = dir.path().join("project");
@@ -170,25 +171,33 @@ mod tests {
             std::slice::from_ref(&project),
             &environment
         ));
+
+        for path in [
+            "/home/me/.cargo/registry/src/pkg/Cargo.lock",
+            "/home/me/.cargo/registry/src/pkg/Cargo.toml",
+            "/home/me/.cargo/registry/src/pkg/build.sh",
+            "/home/me/.cargo/registry/src/pkg/state.sqlite",
+        ] {
+            assert!(allows_registry_source_entry(
+                Path::new(path),
+                EntryKind::File,
+                true
+            ));
+        }
         assert!(allows_registry_source_entry(
-            Path::new("/home/me/.cargo/registry/src/pkg/Cargo.lock"),
-            EntryKind::File,
-            true
-        ));
-        assert!(allows_registry_source_entry(
-            Path::new("/home/me/.cargo/registry/src/pkg/Cargo.toml"),
-            EntryKind::File,
-            true
-        ));
-        assert!(!allows_registry_source_entry(
-            Path::new("/home/me/.cargo/registry/src/pkg/build.sh"),
-            EntryKind::File,
+            Path::new("/home/me/.cargo/registry/src/pkg/Tool.app"),
+            EntryKind::Directory,
             true
         ));
         assert!(!allows_registry_source_entry(
             Path::new("/home/me/.cargo/registry/src/pkg/Cargo.lock"),
             EntryKind::Other,
             true
+        ));
+        assert!(!allows_registry_source_entry(
+            Path::new("/home/me/.cargo/registry/src/pkg/build.sh"),
+            EntryKind::File,
+            false
         ));
     }
 }

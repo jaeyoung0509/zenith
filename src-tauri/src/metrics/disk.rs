@@ -154,14 +154,12 @@ impl DiskMetricsCollector {
     }
 }
 
-/// Removes the read-only System mount when macOS exposes the writable Data
-/// mount from the same startup APFS volume group as a second user-facing disk.
+/// Coalesces macOS's startup System/Data volume pair into one user-facing disk.
 ///
-/// The UI represents logical storage pools, so counting both mounts would show
-/// the same APFS capacity twice. The comparison is deliberately narrow: it
-/// requires the OS-reported group id for `/` and the canonical Data mount, and
-/// leaves same-name, same-size, unrelated, or metadata-incomplete volumes
-/// visible.
+/// The UI keeps the canonical primary `/` report and removes only the duplicate
+/// `/System/Volumes/Data` presentation after both mounts report the same APFS
+/// volume-group id. Same-name, same-size, unrelated, or metadata-incomplete
+/// volumes remain visible.
 fn coalesce_apfs_startup_pair(reports: &mut Vec<VolumeReport>) {
     #[cfg(target_os = "macos")]
     {
@@ -193,6 +191,7 @@ fn coalesce_apfs_startup_pair(reports: &mut Vec<VolumeReport>) {
 /// Applies the already-verified APFS group relationship to a report list.
 /// Keeping this operation pure lets regression tests exercise the actual
 /// removal rather than only the predicate, without shelling out to `diskutil`.
+#[cfg(any(target_os = "macos", test))]
 fn coalesce_verified_startup_pair(
     reports: &mut Vec<VolumeReport>,
     root_group: Option<&str>,
@@ -214,6 +213,7 @@ fn coalesce_verified_startup_pair(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_coalesce_apfs_startup_pair(
     root_mount: &str,
     data_mount: &str,

@@ -592,15 +592,18 @@ impl ScanEngine {
             incomplete_reasons.push("Scan was cancelled before completion".to_string());
             add_scan_gap(&mut gaps, ScanGapKind::Cancelled, 1);
         }
-        if gaps
+        let has_selector_truncation = gaps
             .iter()
-            .any(|gap| gap.kind == ScanGapKind::SelectorTruncated)
-        {
+            .any(|gap| gap.kind == ScanGapKind::SelectorTruncated);
+        if has_selector_truncation {
             incomplete_reasons.push(
                 "A selector matched more roots than the bounded scan could inspect".to_string(),
             );
         }
-        let scan_quality = if was_cancelled || !gaps.is_empty() {
+        // Item-derived gaps already contribute their own observation quality,
+        // including the all-unavailable case. Only scan-level incompleteness
+        // that is not represented by a retained item must force Partial.
+        let scan_quality = if was_cancelled || has_selector_truncation {
             ObservationQuality::Partial
         } else {
             aggregate_quality(category_results.iter().map(|cat| cat.quality))
