@@ -67,7 +67,7 @@ use std::time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
-use zenith_lib::cleaner::LifecycleProviderRegistry;
+use zenith_lib::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry};
 use zenith_lib::models::{
     CancellationProbe, Category, CleanStrategy, CleanupUnitKind, NeverCancelled, RiskTier,
     ScanEvent, ScanResult, Signature,
@@ -160,6 +160,7 @@ impl Fixture {
         ScanEngine::scan(
             &self.registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &OwnerProviderRegistry::new(Vec::new()),
             Some(&CATEGORIES),
             &[],
             false,

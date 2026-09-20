@@ -7,7 +7,7 @@ use crate::models::{
 };
 use crate::safety::SafeTreeDeleter;
 use std::time::SystemTime;
-use zenith_core::domain::cleanup::{ProviderOutcome, ProviderStatus};
+use zenith_core::domain::cleanup::{OwnerUnitOutcome, ProviderOutcome, ProviderStatus};
 use zenith_platform::PlatformEnvironment;
 
 pub struct CleanExecutor;
@@ -85,6 +85,46 @@ fn count_incomplete_items(items: &[CleanItemResult]) -> (u64, u64, u64) {
 /// The reclaimed amount is the provider's measurement, never the plan's
 /// estimate, and a refusal states zero rather than the bytes it could not
 /// remove.
+/// Maps one provider unit's own verification onto a per-item result.
+///
+/// The status vocabulary is the provider's: a unit it verified as removed is a
+/// success, one it verified as partly removed is a partial run, and everything
+/// else is a refusal whose typed reason the interface reacts to. The provider's
+/// own words travel with it, because they name the entry that refused it.
+fn owner_unit_result(outcome: &OwnerUnitOutcome, name: &str, path: &str) -> CleanItemResult {
+    let (status, reason) = match outcome.status {
+        ProviderStatus::Cleaned => (CleanStatus::Success, None),
+        ProviderStatus::PartiallyCleaned => (CleanStatus::Partial, None),
+        ProviderStatus::PrerequisiteNotMet => (
+            CleanStatus::Failed,
+            Some(CleanFailureReason::InUse),
+        ),
+        ProviderStatus::Unsupported => (
+            CleanStatus::Failed,
+            Some(CleanFailureReason::ProviderUnavailable),
+        ),
+        ProviderStatus::Blocked | ProviderStatus::Failed => (
+            CleanStatus::Failed,
+            Some(CleanFailureReason::ProviderRefused),
+        ),
+        ProviderStatus::Ready => (
+            CleanStatus::Failed,
+            Some(CleanFailureReason::ProviderRefused),
+        ),
+    };
+    CleanItemResult {
+        item_id: outcome.item_id.clone(),
+        name: name.to_string(),
+        path: path.to_string(),
+        status,
+        success: matches!(status, CleanStatus::Success | CleanStatus::Partial),
+        estimated_bytes: 0,
+        bytes_reclaimed: outcome.reclaimed_bytes,
+        failure_reason: reason,
+        error_message: (status != CleanStatus::Success).then(|| outcome.message()),
+    }
+}
+
 fn provider_result(target: &DeleteTarget, outcome: ProviderOutcome) -> CleanItemResult {
     let detail = outcome.detail.clone();
     match outcome.status {
@@ -156,6 +196,7 @@ impl CleanExecutor {
         plan: DeletePlan,
         environment: &PlatformEnvironment,
         providers: &crate::cleaner::LifecycleProviderRegistry,
+        owner_providers: &crate::cleaner::OwnerProviderRegistry,
         mut on_event: F,
     ) -> CleanResult
     where
@@ -168,16 +209,21 @@ impl CleanExecutor {
 
         let initial_disk = DiskMetricsCollector::get_primary_disk(environment).ok();
 
+        // An owner-scoped unit is a target of the same run: the interface is
+        // told the plan's real size, and each unit reports its own result
+        // rather than the store's.
+        let owner_units = plan.owner_units().count();
+        let total_count = plan.targets.len() + owner_units;
+
         on_event(CleanEvent::Started {
             plan_id: plan.id,
-            total_targets: plan.targets.len(),
+            total_targets: total_count,
             expected_bytes: plan.expected_reclaim_bytes,
         });
 
         let mut item_results = Vec::new();
         let mut total_reclaimed_bytes = 0u64;
         let mut total_failed_bytes = 0u64;
-        let total_count = plan.targets.len();
 
         for (index, target) in plan.targets.iter().enumerate() {
             on_event(CleanEvent::ItemStarted {
@@ -228,6 +274,68 @@ impl CleanExecutor {
             });
 
             item_results.push(result);
+        }
+
+        // Owner-scoped authorizations run through the provider that enumerated
+        // them, one authorization at a time. Nothing here decides what a unit
+        // is: the provider re-reads its own store, refuses what it cannot
+        // verify now, and reports per unit what its measurement observed.
+        if plan.mode == CleanupMode::PermanentDelete {
+            let mut index = plan.targets.len();
+            for authorization in &plan.owner_authorizations {
+                let expected: std::collections::BTreeMap<&str, u64> = authorization
+                    .units
+                    .iter()
+                    .map(|unit| (unit.item_id.as_str(), unit.expected_bytes))
+                    .collect();
+                let execution = owner_providers.execute(authorization, environment);
+                for outcome in &execution.units {
+                    index += 1;
+                    let name = authorization
+                        .units
+                        .iter()
+                        .find(|unit| unit.item_id == outcome.item_id)
+                        .map(|unit| unit.name.clone())
+                        .unwrap_or_else(|| outcome.unit_key.clone());
+                    let path = authorization
+                        .units
+                        .iter()
+                        .find(|unit| unit.item_id == outcome.item_id)
+                        .map(|unit| unit.path.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    on_event(CleanEvent::ItemStarted {
+                        item_id: outcome.item_id.clone(),
+                        name: name.clone(),
+                        index,
+                        total: total_count,
+                    });
+                    let result = owner_unit_result(outcome, &name, &path);
+                    match result.status {
+                        CleanStatus::Success | CleanStatus::Partial => {
+                            total_reclaimed_bytes += result.bytes_reclaimed;
+                        }
+                        CleanStatus::Skipped => {}
+                        CleanStatus::Failed => {
+                            total_failed_bytes += expected
+                                .get(outcome.item_id.as_str())
+                                .copied()
+                                .unwrap_or(result.estimated_bytes);
+                        }
+                    }
+                    if result.status != CleanStatus::Success {
+                        crate::diagnostics::log_error("cleanup", &incomplete_item_message(&result));
+                    }
+                    on_event(CleanEvent::ItemFinished {
+                        item_id: result.item_id.clone(),
+                        name: result.name.clone(),
+                        status: result.status,
+                        success: result.success,
+                        reclaimed_bytes: result.bytes_reclaimed,
+                        error: result.error_message.clone(),
+                    });
+                    item_results.push(result);
+                }
+            }
         }
 
         let (partial_count, failed_count, skipped_count) = count_incomplete_items(&item_results);
@@ -403,7 +511,8 @@ impl CleanExecutor {
             // of these strategies, and `ValidatedTarget` carries the planned
             // strategy unchanged, so no other arm is reachable. Refusing
             // explicitly keeps a future strategy from silently deleting.
-            CleanStrategy::ExternalCommand
+            CleanStrategy::OwnerProvider
+            | CleanStrategy::ExternalCommand
             | CleanStrategy::DockerPrune
             | CleanStrategy::LifecycleProvider
             | CleanStrategy::Manual => {
@@ -592,6 +701,8 @@ mod tests {
         let plan = DeletePlan {
             id: uuid::Uuid::new_v4(),
             scan_id: "scan-estimate".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
             targets: vec![DeleteTarget {
                 item_id: "estimated-target".to_string(),
                 signature_id: "test.estimate".to_string(),
@@ -622,6 +733,7 @@ mod tests {
             plan,
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
 
@@ -662,6 +774,8 @@ mod tests {
         let plan = DeletePlan {
             id: uuid::Uuid::new_v4(),
             scan_id: "scan-partial".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
             targets: vec![DeleteTarget {
                 item_id: "partial-target".to_string(),
                 signature_id: "test.partial".to_string(),
@@ -692,6 +806,7 @@ mod tests {
             plan,
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
 
@@ -818,6 +933,8 @@ mod tests {
         DeletePlan {
             id: uuid::Uuid::new_v4(),
             scan_id: "scan-volatile".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
             targets: vec![DeleteTarget {
                 item_id: "volatile-target".to_string(),
                 signature_id: "test.volatile".to_string(),
@@ -848,6 +965,8 @@ mod tests {
         DeletePlan {
             id: uuid::Uuid::new_v4(),
             scan_id: "scan-provider".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
             targets: vec![DeleteTarget {
                 item_id: "provider-target".to_string(),
                 signature_id: signature_id.to_string(),
@@ -891,6 +1010,7 @@ mod tests {
             plan,
             &environment,
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
 
@@ -923,6 +1043,7 @@ mod tests {
             plan,
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
         assert_eq!(result.failed_count, 0);
@@ -953,6 +1074,7 @@ mod tests {
             plan,
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
         assert_eq!(result.failed_count, 0);
@@ -984,6 +1106,7 @@ mod tests {
             plan,
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
         assert_eq!(result.failed_count, 0);
@@ -1004,6 +1127,8 @@ mod tests {
         DeletePlan {
             id: uuid::Uuid::new_v4(),
             scan_id: "scan-lifecycle".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
             targets: vec![DeleteTarget {
                 item_id: "lifecycle-target".to_string(),
                 signature_id: "test.stated.store".to_string(),
@@ -1049,6 +1174,7 @@ mod tests {
             lifecycle_plan("test.stated", "stated-store://all-volumes", 9_999),
             &PlatformEnvironment::native(),
             &providers,
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
 
@@ -1091,6 +1217,7 @@ mod tests {
             lifecycle_plan("test.stated", &real_path, 1_024),
             &PlatformEnvironment::native(),
             &providers,
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
 
@@ -1110,10 +1237,12 @@ mod tests {
         // An action nothing implements is its own answer: the user cannot
         // retry it into existence, and it says so.
         let empty = crate::cleaner::LifecycleProviderRegistry::new(Vec::new());
+        let owner_providers = crate::cleaner::OwnerProviderRegistry::new(Vec::new());
         let result = CleanExecutor::execute(
             lifecycle_plan("test.missing", &real_path, 1_024),
             &PlatformEnvironment::native(),
             &empty,
+            &owner_providers,
             |_| {},
         );
         let item = &result.items[0];
@@ -1136,6 +1265,7 @@ mod tests {
             lifecycle_plan("test.stated", &real_path, 4_000),
             &PlatformEnvironment::native(),
             &providers,
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
         let item = &result.items[0];

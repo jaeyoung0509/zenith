@@ -100,9 +100,9 @@ export const commands = {
 	/**  What the scan observed about its own work. */
 	metrics: ScanMetrics_Serialize,
 } | null>("get_last_scan"),
-	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, string>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
-	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
-	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, string>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
+	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, CleanupFailure>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
+	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
+	quickCleanSafe: (onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("quick_clean_safe", { onEvent })),
 	getMemoryMetrics: () => typedError<MemoryMetrics_Serialize, string>(__TAURI_INVOKE("get_memory_metrics")),
 	terminateMemoryGroup: (leaseId: string, mode: MemoryTerminationMode) => typedError<MemoryTerminationResult, string>(__TAURI_INVOKE("terminate_memory_group", { leaseId, mode })),
 	pickKeepAwakeApplication: () => typedError<{
@@ -873,6 +873,17 @@ export type CleanEvent_Deserialize = ({ type: "Started"; plan_id: string; total_
 
 export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_targets: number; expected_bytes: number }) & { error?: never; index?: never; item_id?: never; message?: never; name?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total?: never } | ({ type: "ItemStarted"; item_id: string; name: string; index: number; total: number }) & { error?: never; expected_bytes?: never; message?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total_targets?: never } | ({ type: "ItemFinished"; item_id: string; name: string; status: CleanStatus; success: boolean; reclaimed_bytes: number; error: string | null }) & { expected_bytes?: never; index?: never; message?: never; plan_id?: never; result?: never; total?: never; total_targets?: never } | ({ type: "Finished"; result: CleanResult_Serialize }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; message?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; status?: never; success?: never; total?: never; total_targets?: never } | ({ type: "Error"; message: string }) & { error?: never; expected_bytes?: never; index?: never; item_id?: never; name?: never; plan_id?: never; reclaimed_bytes?: never; result?: never; status?: never; success?: never; total?: never; total_targets?: never };
 
+/**
+ *  Why one cleanup step did not happen, in the closed vocabulary the interface
+ *  derives its copy from.
+ * 
+ *  A message is not an outcome: two failures that read the same may need
+ *  different remedies, and the interface decides which remedy to offer from the
+ *  kind rather than by parsing prose. The domain owns the vocabulary because
+ *  planning and execution both produce refusals and both must name them the
+ *  same way; the projection in [`crate::application::dto::cleanup`] carries it
+ *  to the interface unchanged.
+ */
 export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "not_found" | "in_use" | "blacklisted" | 
 /**
  *  The target matched structured state (a database, its companions, a
@@ -890,6 +901,13 @@ export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "n
  *  has no adapter that can perform its action here.
  */
 "provider_unavailable" | 
+/**
+ *  The location belongs to a program that maintains it itself, and no
+ *  reviewed provider in this build may remove it. The store stays
+ *  inventoried and measured; the refusal is about who owns it, not about
+ *  what is inside it.
+ */
+"owner_managed" | 
 /**
  *  The provider ran (or re-checked itself) and did not reach the state its
  *  action promises. Its own message states which prerequisite or refusal
@@ -1045,6 +1063,50 @@ export type CleanupEligibility =
  *  invalidation.
  */
 "advisory" | "blocked";
+
+/**  A refused cleanup operation, with the scope the interface reacts to. */
+export type CleanupFailure = {
+	scope: CleanupFailureScope,
+	reason: CleanFailureReason,
+	message: string,
+	/**  The items the refusal names, when the scope is item-shaped. */
+	items: PlanRefusalPreview[],
+};
+
+/**
+ *  What a refused cleanup operation is about.
+ * 
+ *  The interface holds state — a scan, a selection — that a failure either
+ *  invalidates or does not, and only the backend knows which. A single error
+ *  string cannot say it: "this item is refused under a current policy" and
+ *  "the inventory this names is gone" need opposite reactions, and treating
+ *  the first like the second is what makes a correct refusal look like another
+ *  broken selection.
+ */
+export type CleanupFailureScope = 
+/**
+ *  The scan or plan this operation named is gone, expired, or was replaced.
+ *  The inventory it refers to must be rebuilt: an interface that keeps
+ *  showing it is showing a measurement of a machine that has changed.
+ */
+"inventory_stale" | 
+/**
+ *  One or more selected items were refused under a current policy. The
+ *  inventory and every other selection remain usable, and the refusal is
+ *  stated for the items it names.
+ */
+"items" | 
+/**  A store's owner is running, so the store is in use right now. */
+"provider_busy" | 
+/**
+ *  The platform refused the operation for want of a permission the user
+ *  can grant.
+ */
+"permission" | 
+/**  The user cancelled the operation. */
+"cancelled" | 
+/**  An unexpected backend failure. */
+"internal";
 
 /**
  *  What a plan authorizes doing to its targets.
@@ -2071,6 +2133,11 @@ export type PlanPreview = PlanPreview_Serialize | PlanPreview_Deserialize;
 export type PlanPreview_Deserialize = {
 	id: string,
 	targets: PlanTargetPreview_Deserialize[],
+	/**
+	 *  Selected items this plan does not cover, and why. Empty when every
+	 *  selection was authorized.
+	 */
+	refused: PlanRefusalPreview[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Deserialize,
 	/**
@@ -2090,6 +2157,11 @@ export type PlanPreview_Deserialize = {
 export type PlanPreview_Serialize = {
 	id: string,
 	targets: PlanTargetPreview_Serialize[],
+	/**
+	 *  Selected items this plan does not cover, and why. Empty when every
+	 *  selection was authorized.
+	 */
+	refused: PlanRefusalPreview[],
 	expected_reclaim_bytes: number,
 	risk: RiskSummary_Serialize,
 	/**
@@ -2104,6 +2176,25 @@ export type PlanPreview_Serialize = {
 	 *  bytes are gone" and "the bytes are in the Trash".
 	 */
 	mode: CleanupMode,
+};
+
+/**
+ *  One selected item a plan did not authorize, with the reason.
+ * 
+ *  A refusal is stated per item rather than as a failed operation: the rest of
+ *  the selection is still a plan, and the interface marks the rows this names
+ *  instead of discarding the inventory the user was looking at.
+ */
+export type PlanRefusalPreview = {
+	item_id: string,
+	name: string,
+	/**
+	 *  The typed outcome the copy is derived from. The interface must not have
+	 *  to read [`Self::message`] to decide whether the item can be retried or
+	 *  the whole scan has to be redone.
+	 */
+	reason: CleanFailureReason,
+	message: string,
 };
 
 export type PlanTargetPreview = PlanTargetPreview_Serialize | PlanTargetPreview_Deserialize;

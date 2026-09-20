@@ -7,6 +7,28 @@ use crate::models::DeletePlan;
 
 use zenith_core::domain::is_within_window;
 
+/// Why a plan store refused to hand a plan over.
+///
+/// The two answers lead somewhere different: a plan that expired or was already
+/// consumed means the authority is gone, while a poisoned lock means the store
+/// itself is unusable. Reporting the second as the first would tell a user to
+/// scan again for a reason that has nothing to do with their scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanStoreError {
+    /// The plan is not there, was already consumed, or expired.
+    Unavailable(String),
+    /// The store could not be read at all.
+    Unusable(String),
+}
+
+impl std::fmt::Display for PlanStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(message) | Self::Unusable(message) => write!(formatter, "{message}"),
+        }
+    }
+}
+
 /// A plan a bounded store can expire, evict, and consume exactly once.
 ///
 /// The store owns the lifecycle; a plan type states only its identity and when
@@ -85,11 +107,11 @@ impl<P: OneShotPlan> PlanStore<P> {
     }
 
     /// Inserts a newly generated plan, enforcing TTL purging and bounded capacity.
-    pub fn insert(&self, plan: P, now: u64) -> Result<(), String> {
+    pub fn insert(&self, plan: P, now: u64) -> Result<(), PlanStoreError> {
         let mut plans = self
             .plans
             .lock()
-            .map_err(|_| "Plan store lock poisoned".to_string())?;
+            .map_err(|_| PlanStoreError::Unusable("Plan store lock poisoned".to_string()))?;
 
         // Purge expired plans first
         plans.retain(|_, stored| self.is_valid(stored, now));
@@ -120,18 +142,20 @@ impl<P: OneShotPlan> PlanStore<P> {
     /// The plan is removed on retrieval so it cannot be replayed, whether the
     /// execution then succeeds or fails. Fails if the plan does not exist or has
     /// expired according to the lifecycle.
-    pub fn take_valid(&self, plan_id: Uuid, now: u64) -> Result<P, String> {
+    pub fn take_valid(&self, plan_id: Uuid, now: u64) -> Result<P, PlanStoreError> {
         let mut plans = self
             .plans
             .lock()
-            .map_err(|_| "Plan store lock poisoned".to_string())?;
+            .map_err(|_| PlanStoreError::Unusable("Plan store lock poisoned".to_string()))?;
 
-        let stored = plans
-            .remove(&plan_id)
-            .ok_or_else(|| self.lifecycle.not_found.to_string())?;
+        let stored = plans.remove(&plan_id).ok_or_else(|| {
+            PlanStoreError::Unavailable(self.lifecycle.not_found.to_string())
+        })?;
 
         if !self.is_valid(&stored, now) {
-            return Err(self.lifecycle.expired.to_string());
+            return Err(PlanStoreError::Unavailable(
+                self.lifecycle.expired.to_string(),
+            ));
         }
 
         Ok(stored.plan)
@@ -166,6 +190,8 @@ mod tests {
 
     fn make_test_plan(id: Uuid, created_at: u64) -> DeletePlan {
         DeletePlan {
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
             id,
             scan_id: "scan".to_string(),
             targets: Vec::new(),
@@ -189,7 +215,7 @@ mod tests {
         assert!(store.take_valid(plan_id, 1_050).is_ok());
         let second = store.take_valid(plan_id, 1_051);
         assert!(second.is_err(), "a consumed plan must not be replayable");
-        assert!(second.unwrap_err().contains("not found"));
+        assert!(second.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]
@@ -201,7 +227,7 @@ mod tests {
         // 300 seconds is the TTL boundary: at the boundary the plan is stale.
         let expired = store.take_valid(plan_id, 1_300);
         assert!(expired.is_err(), "a plan at its TTL boundary is expired");
-        assert!(expired.unwrap_err().contains("expired"));
+        assert!(expired.unwrap_err().to_string().contains("expired"));
         assert_eq!(store.len(), 0, "a refused plan is still consumed");
     }
 
@@ -218,7 +244,7 @@ mod tests {
             refused.is_err(),
             "a plan read through a rolled-back clock must be refused"
         );
-        assert!(refused.unwrap_err().contains("expired"));
+        assert!(refused.unwrap_err().to_string().contains("expired"));
     }
 
     #[test]
@@ -242,7 +268,7 @@ mod tests {
             refused.is_err(),
             "elapsed monotonic time must keep an expired plan from reviving"
         );
-        assert!(refused.unwrap_err().contains("expired"));
+        assert!(refused.unwrap_err().to_string().contains("expired"));
     }
 
     #[test]

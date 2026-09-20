@@ -161,6 +161,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
     let result = ScanEngine::scan(
         &registry,
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         Some(&[Category::System]),
         &[],
         false,
@@ -177,6 +178,7 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
     let filtered = ScanEngine::scan(
         &registry,
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         Some(&[Category::System]),
         &excluded,
         false,

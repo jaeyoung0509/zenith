@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use tempfile::tempdir;
-use zenith_lib::cleaner::CleanExecutor;
+use zenith_lib::cleaner::{CleanExecutor, OwnerProviderRegistry};
 use zenith_lib::models::{
     derive_cleanup_disposition, CacheManagementMode, CacheMetadata, CacheSizeSemantics, Category,
     CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, CleanupMode,
@@ -20,6 +20,15 @@ use zenith_lib::signatures::SignatureRegistry;
 use zenith_platform::path_algebra::{self, PathFlavor};
 use zenith_platform::paths::SimulatedPaths;
 use zenith_platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
+
+/// The owner-scoped provider registry a test that does not exercise one uses.
+///
+/// An empty registry is the honest input for a generic-cleanup assertion: a
+/// build with no provider for an entry refuses that entry per item rather than
+/// falling back to a filesystem primitive.
+fn no_owner_providers() -> OwnerProviderRegistry {
+    OwnerProviderRegistry::new(Vec::new())
+}
 
 /// The Windows environment every Windows blacklist assertion is computed
 /// against. The classifier's input is derived from the same value the runtime
@@ -449,7 +458,7 @@ fn test_safety_planner_rejects_unknown_signatures() {
         1,
     );
 
-    let plan_res = SafetyPlanner::create_plan(&[fake_item], &registry);
+    let plan_res = SafetyPlanner::create_plan(&[fake_item], &registry, &no_owner_providers());
     assert!(plan_res.is_err());
     match plan_res {
         Err(ZenithError::SignatureMismatch(_)) => {}
@@ -481,7 +490,7 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
         forged_path.to_string_lossy().into_owned(),
     );
 
-    let result = SafetyPlanner::create_plan(&[forged_item], &registry);
+    let result = SafetyPlanner::create_plan(&[forged_item], &registry, &no_owner_providers());
     assert!(matches!(result, Err(ZenithError::SignatureMismatch(_))));
 }
 
@@ -543,13 +552,14 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         2,
     );
 
-    let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
+    let plan = SafetyPlanner::create_plan(&[scan_item], &registry, &no_owner_providers()).expect("create plan");
     assert_eq!(plan.targets.len(), 1);
 
     let clean_res = CleanExecutor::execute(
         plan,
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert_eq!(clean_res.items.len(), 1);
@@ -753,7 +763,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             "trusted-scan",
             &forged,
             &registry,
-            &PlatformEnvironment::native()
+            &PlatformEnvironment::native(),
+            &no_owner_providers(),
         ),
         Err(ZenithError::InvalidPlan(_))
     ));
@@ -763,7 +774,8 @@ fn frontend_selection_must_resolve_against_trusted_scan() {
             "stale-scan",
             &forged,
             &registry,
-            &PlatformEnvironment::native()
+            &PlatformEnvironment::native(),
+            &no_owner_providers(),
         ),
         Err(ZenithError::InvalidPlan(_))
     ));
@@ -813,10 +825,14 @@ fn manual_strategy_never_enters_generic_cleaner() {
     );
     item.is_selected = true;
 
-    assert!(matches!(
-        SafetyPlanner::create_plan(&[item], &registry),
-        Err(ZenithError::UnsupportedManualOperation(_))
-    ));
+    assert!(
+        matches!(
+            SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers()),
+            Err(ZenithError::RefusedSelection(refusals))
+                if refusals[0].reason == zenith_lib::models::CleanFailureReason::OwnerManaged
+        ),
+        "a manual observation is refused by item, and the location is left alone"
+    );
     assert!(model_root.exists());
 }
 
@@ -850,7 +866,7 @@ fn npm_cache_selection_plans_provider_cleanup_without_deleting_fixture() {
         .expect("the npm entry is in the catalog")
         .ownership();
     item.is_selected = true;
-    let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
+    let plan = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers()).unwrap();
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].strategy, CleanStrategy::ExternalCommand);
     assert!(plan.targets[0].identity.is_some());
@@ -912,11 +928,12 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         .expect("the fixture signature is registered")
         .ownership();
     item.is_selected = true;
-    let plan = SafetyPlanner::create_plan(&[item], &registry).unwrap();
+    let plan = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers()).unwrap();
     let result = CleanExecutor::execute(
         plan,
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert!(!result.items[0].success);
@@ -1105,7 +1122,7 @@ fn test_docker_prune_target_can_create_plan() {
         "docker://buildkit/cache".to_string(),
     );
 
-    let plan = SafetyPlanner::create_plan(&[docker_item], &registry)
+    let plan = SafetyPlanner::create_plan(&[docker_item], &registry, &no_owner_providers())
         .expect("DockerPrune target must successfully create a plan");
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].strategy, CleanStrategy::DockerPrune);
@@ -1164,13 +1181,14 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         temp_child.to_string_lossy().into_owned(),
     );
 
-    let plan = SafetyPlanner::create_plan(&[scan_item], &registry).expect("create plan");
+    let plan = SafetyPlanner::create_plan(&[scan_item], &registry, &no_owner_providers()).expect("create plan");
     assert_eq!(plan.targets[0].min_age_days, Some(3));
 
     let clean_res = CleanExecutor::execute(
         plan,
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert_eq!(clean_res.items.len(), 1);
@@ -1560,7 +1578,7 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
 
     let registry = SignatureRegistry::load_embedded().unwrap();
     let unavailable_plan_res =
-        SafetyPlanner::create_plan(std::slice::from_ref(&unavailable_item), &registry);
+        SafetyPlanner::create_plan(std::slice::from_ref(&unavailable_item), &registry, &no_owner_providers());
     assert!(
         matches!(unavailable_plan_res, Err(ZenithError::InvalidPlan(_))),
         "SafetyPlanner must reject unavailable items"
@@ -1884,12 +1902,13 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
     item.entry_kind = EntryKind::Directory;
     item.unit = CleanupUnit::fixed_path(cache.to_string_lossy().into_owned());
 
-    let plan = SafetyPlanner::create_plan(std::slice::from_ref(&item), &registry)
+    let plan = SafetyPlanner::create_plan(std::slice::from_ref(&item), &registry, &no_owner_providers())
         .expect("the first plan is authorized");
     let first = CleanExecutor::execute(
         plan.clone(),
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert_eq!(
@@ -1905,6 +1924,7 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
         plan,
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert_eq!(
@@ -2073,7 +2093,7 @@ fn the_planner_refuses_a_structured_target() {
         database.to_string_lossy().into_owned(),
     );
 
-    let error = SafetyPlanner::create_plan(&[item], &registry)
+    let error = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers())
         .expect_err("structured state is never plannable");
     assert!(
         matches!(&error, ZenithError::InvalidPlan(message) if message.contains("database")),
@@ -2340,7 +2360,7 @@ fn the_shipped_explorer_cache_entry_scans_and_plans() {
     // Discovery is not the claim: the plan must be buildable too.
     let mut selected = cache_item.clone();
     selected.is_selected = true;
-    let plan = SafetyPlanner::create_plan(&[selected], &registry)
+    let plan = SafetyPlanner::create_plan(&[selected], &registry, &no_owner_providers())
         .expect("the cache container is plannable");
     assert_eq!(plan.targets.len(), 1);
     assert_eq!(plan.targets[0].path, thumbcache);
@@ -2393,6 +2413,7 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
             ScanEngine::scan(
                 &registry,
                 &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 Some(&order),
                 &[],
                 intensive,
@@ -2435,7 +2456,7 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
             surviving.overlaps
         );
         assert!(
-            SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry).is_err(),
+            SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry, &no_owner_providers()).is_err(),
             "a location blocked by an overlapping rule cannot be planned"
         );
         assert_eq!(
@@ -2551,12 +2572,13 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
 
     let mut selected = item.clone();
     selected.is_selected = true;
-    let plan = SafetyPlanner::create_plan(&[selected], &registry).expect("plan");
+    let plan = SafetyPlanner::create_plan(&[selected], &registry, &no_owner_providers()).expect("plan");
     assert_eq!(plan.expected_reclaim_bytes, cleanable);
     let result = CleanExecutor::execute(
         plan.clone(),
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
 
@@ -2588,6 +2610,7 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
         plan,
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert_eq!(
@@ -2608,6 +2631,8 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
     let plan = DeletePlan {
         id: uuid::Uuid::new_v4(),
         scan_id: "scan-preview".into(),
+        refusals: Vec::new(),
+        owner_authorizations: Vec::new(),
         targets: vec![DeleteTarget {
             item_id: "preview-target".into(),
             signature_id: "test.preview".into(),
@@ -2649,6 +2674,7 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
             refused_plan,
             &native_environment(),
             &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
         assert_eq!(result.failed_count, 1, "{mode:?} must be refused");
@@ -2708,7 +2734,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         2,
     );
     item.is_selected = true;
-    let error = SafetyPlanner::create_plan(&[item], &registry)
+    let error = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers())
         .expect_err("nested structured state must be rejected before confirmation");
     assert!(
         matches!(&error, ZenithError::InvalidPlan(message) if message.contains("session.sqlite"))
@@ -2717,6 +2743,8 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
     let plan = DeletePlan {
         id: uuid::Uuid::new_v4(),
         scan_id: "scan-nested-structured".into(),
+        refusals: Vec::new(),
+        owner_authorizations: Vec::new(),
         targets: vec![DeleteTarget {
             item_id: "ordinary-cache".into(),
             signature_id: "test.nested-structured".into(),
@@ -2745,6 +2773,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         plan,
         &native_environment(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
         |_| {},
     );
     assert_eq!(result.skipped_count, 1);
@@ -3174,11 +3203,11 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
 #[test]
 fn a_plan_carries_the_scan_time_expectations() {
     let fixture = tempdir().expect("fixture");
-    // The catalog's cargo signature resolves `~/.cargo/registry/cache`, so the
+    // The catalog's Go module signature resolves `~/go/pkg/mod/cache`, so the
     // fixture states a profile whose home is the temporary directory.
-    let cache = fixture.path().join(".cargo/registry/cache");
+    let cache = fixture.path().join("go/pkg/mod/cache");
     fs::create_dir_all(&cache).unwrap();
-    fs::write(cache.join("payload.bin"), b"crate").unwrap();
+    fs::write(cache.join("payload.bin"), b"module").unwrap();
 
     let environment =
         PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
@@ -3189,16 +3218,16 @@ fn a_plan_carries_the_scan_time_expectations() {
         ));
     let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
     let signature = registry
-        .get("dev.cargo.registry.cache")
-        .expect("the cargo cache entry is in the catalog");
+        .get("dev.go.mod")
+        .expect("the Go module cache entry is in the catalog");
     let expected_guard = signature.process_guard();
     assert!(!expected_guard.is_empty(), "the catalog declares a guard");
     let expected_owner = signature.ownership();
 
     let mut item = ScanItem::mock(
-        "dev.cargo.registry.cache",
-        "dev.cargo.registry.cache",
-        "Cargo Registry Cache",
+        "dev.go.mod",
+        "dev.go.mod",
+        "Go Module Cache",
         Category::Developer,
         RiskTier::Rebuild,
         cache.to_string_lossy().into_owned(),
@@ -3219,6 +3248,7 @@ fn a_plan_carries_the_scan_time_expectations() {
         &[item.id.clone()],
         &registry,
         &environment,
+        &no_owner_providers(),
     )
     .expect("the catalog signature authorizes the fixture path");
     assert_eq!(plan.mode, CleanupMode::PermanentDelete);
@@ -3233,275 +3263,42 @@ fn a_plan_carries_the_scan_time_expectations() {
     );
 }
 
-/// A Cargo registry source is a trusted rebuildable package tree. Its normal
-/// package metadata must not be mistaken for a runtime lock by the generic
-/// structured-state guard, while the plan still has to cross the real planner
-/// and executor boundaries.
+/// An owner-managed Cargo package store is inventoried, and no selection of it
+/// ever becomes a generic filesystem target.
+///
+/// The downloaded trees legitimately contain names the generic structured-state
+/// classifier protects in user data — a package-authored `Cargo.lock`, a
+/// `flake.lock`, a build script, a database-shaped fixture. None of them is a
+/// filename question here: the store is a different kind of object, and the
+/// catalog says so, so the refusal is about the store's owner rather than about
+/// whichever name a published crate happens to ship.
 #[test]
-fn cargo_registry_source_with_package_lock_is_plannable_and_cleanable() {
-    let fixture = tempdir().expect("fixture");
-    let registry_root = fixture.path().join(".cargo/registry/src");
-    let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
-    let crate_root = source_root.join("request-0.13.4");
-    fs::create_dir_all(&crate_root).unwrap();
-    fs::write(crate_root.join("Cargo.lock"), b"version = 3").unwrap();
-    fs::write(
-        crate_root.join("Cargo.toml"),
-        b"[package]\nname = \"request\"\n",
-    )
-    .unwrap();
-    fs::write(crate_root.join("src.rs"), b"pub fn request() {}\n").unwrap();
-
-    let environment =
-        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
-            SimulatedPaths::new()
-                .with_flavor(PathFlavor::current())
-                .with_home(fixture.path())
-                .with_temp_dir(fixture.path()),
-        ));
-    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-    let mut signature = registry
-        .get("dev.cargo.registry.src")
-        .expect("the Cargo source signature is in the catalog");
-    // The test itself runs under Cargo, so disable only the process guard for
-    // this fixture; the production catalog keeps the guard and the planner's
-    // in-use regression remains covered by the surrounding safety tests.
-    let mut test_signature = signature.clone();
-    test_signature.fail_if_running.clear();
-    registry.register(test_signature);
-    signature = registry
-        .get("dev.cargo.registry.src")
-        .expect("the test signature is registered");
-
-    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
-        signature,
-        &environment,
-        &zenith_lib::models::NeverCancelled,
-    )
-    .into_iter()
-    .next()
-    .expect("the scanner reports the configured Cargo source root");
-    assert!(
-        path_algebra::equal(
-            &item.path,
-            &registry_root.to_string_lossy(),
-            PathFlavor::current(),
-        ),
-        "scanner root {} should denote fixture root {}",
-        item.path,
-        registry_root.display()
-    );
-    item.is_selected = true;
-
-    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-        .expect("Cargo package metadata is valid rebuildable source content");
-    let result = CleanExecutor::execute(
-        plan,
-        &environment,
-        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
-        |_| {},
-    );
-    assert_eq!(result.items.len(), 1);
-    assert!(result.items[0].success, "{:?}", result.items[0]);
-    assert!(!crate_root.exists());
-    assert!(
-        registry_root.exists(),
-        "the configured registry root remains"
-    );
-}
-
-#[test]
-fn cargo_git_checkout_with_package_metadata_is_plannable_and_cleanable() {
-    let fixture = tempdir().expect("fixture");
-    let checkouts_root = fixture.path().join(".cargo/git/checkouts");
-    let checkout = checkouts_root.join("example-0123456789abcdef/abcdef0");
-    fs::create_dir_all(&checkout).unwrap();
-    fs::write(
-        checkout.join("Cargo.toml"),
-        b"[package]\nname = \"example\"\n",
-    )
-    .unwrap();
-    fs::write(checkout.join("build.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::write(checkout.join("fixture.sqlite"), b"fixture").unwrap();
-
-    let environment =
-        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
-            SimulatedPaths::new()
-                .with_flavor(PathFlavor::current())
-                .with_home(fixture.path())
-                .with_temp_dir(fixture.path()),
-        ));
-    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-    let mut signature = registry
-        .get("dev.cargo.git")
-        .expect("the Cargo git signature is in the catalog")
-        .clone();
-    // The test process itself is Cargo, so disable only this fixture's process
-    // guard; production still refuses cleanup while Cargo/rustc is active.
-    signature.fail_if_running.clear();
-    registry.register(signature.clone());
-
-    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
-        &signature,
-        &environment,
-        &zenith_lib::models::NeverCancelled,
-    )
-    .into_iter()
-    .find(|item| {
-        path_algebra::equal(
-            &item.path,
-            &checkouts_root.to_string_lossy(),
-            PathFlavor::current(),
-        )
-    })
-    .expect("the scanner reports the configured Cargo git checkout root");
-    item.is_selected = true;
-
-    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-        .expect("owner-managed Cargo git checkout contents are rebuildable");
-    let result = CleanExecutor::execute(
-        plan,
-        &environment,
-        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
-        |_| {},
-    );
-
-    assert_eq!(result.items.len(), 1);
-    assert!(result.items[0].success, "{:?}", result.items[0]);
-    assert!(!checkout.exists());
-    assert!(
-        checkouts_root.exists(),
-        "the configured Cargo git root remains"
-    );
-}
-
-#[test]
-fn generic_project_cargo_lock_remains_protected() {
-    let fixture = tempdir().expect("fixture");
-    let project = fixture.path().join("project");
-    fs::create_dir_all(&project).unwrap();
-    let lock = project.join("Cargo.lock");
-    fs::write(&lock, b"version = 3").unwrap();
-
-    let environment =
-        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
-            SimulatedPaths::new()
-                .with_flavor(PathFlavor::current())
-                .with_home(fixture.path())
-                .with_temp_dir(fixture.path()),
-        ));
-    let source_registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-    let mut signature = source_registry
-        .get("dev.cargo.registry.src")
-        .expect("the Cargo source signature is in the catalog")
-        .clone();
-    signature.id = "test.generic.cargo".into();
-    signature.paths = vec![project.to_string_lossy().into_owned()];
-    signature.fail_if_running.clear();
-    let mut registry = SignatureRegistry::new();
-    registry.register(signature.clone());
-
-    let mut item = ScanItem::mock(
-        "test.generic.cargo",
-        "test.generic.cargo",
-        "Project Cargo files",
-        Category::Developer,
-        RiskTier::Rebuild,
-        lock.to_string_lossy().into_owned(),
-        FileSize::new(11, Some(11)),
-        1,
-    );
-    item.is_selected = true;
-    item.path = project.to_string_lossy().into_owned();
-    item.entry_kind = EntryKind::Directory;
-    item.ownership = signature.ownership();
-    item.unit = CleanupUnit::fixed_path(project.to_string_lossy().into_owned());
-
-    let error = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-        .expect_err("a project Cargo.lock is not a rebuildable registry artifact");
-    assert!(
-        matches!(error, ZenithError::InvalidPlan(ref message) if message.contains("lock or pid file")),
-        "the generic lock classification remains visible: {error}"
-    );
-    assert!(lock.exists());
-}
-
-#[test]
-fn cargo_registry_allows_downloaded_structured_names_inside_verified_source_root() {
-    let fixture = tempdir().expect("fixture");
-    let registry_root = fixture.path().join(".cargo/registry/src");
-    let source_root = registry_root.join("index.crates.io-1949cf8c6b5b557f");
-    let crate_root = source_root.join("request-0.13.4");
-    fs::create_dir_all(&crate_root).unwrap();
-    fs::write(crate_root.join("state.sqlite"), b"fixture").unwrap();
-    fs::write(crate_root.join("auth.json"), br#"{"fixture":true}"#).unwrap();
-    fs::write(crate_root.join("tool.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
-    fs::write(crate_root.join("rustfmt.toml"), b"edition = \"2021\"\n").unwrap();
-
-    let environment =
-        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
-            SimulatedPaths::new()
-                .with_flavor(PathFlavor::current())
-                .with_home(fixture.path())
-                .with_temp_dir(fixture.path()),
-        ));
-    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-    let mut signature = registry
-        .get("dev.cargo.registry.src")
-        .expect("the Cargo source signature is in the catalog")
-        .clone();
-    // The test process itself is Cargo, so keep the production process guard
-    // intact in the catalog and disable only this fixture's copy.
-    signature.fail_if_running.clear();
-    registry.register(signature.clone());
-
-    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
-        &signature,
-        &environment,
-        &zenith_lib::models::NeverCancelled,
-    )
-    .into_iter()
-    .next()
-    .expect("the scanner reports the configured Cargo source root");
-    item.is_selected = true;
-
-    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-        .expect("owner-managed Cargo source contents are rebuildable");
-    let result = CleanExecutor::execute(
-        plan,
-        &environment,
-        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
-        |_| {},
-    );
-
-    assert_eq!(result.items.len(), 1);
-    assert!(result.items[0].success, "{:?}", result.items[0]);
-    assert!(!crate_root.exists());
-    assert!(
-        registry_root.exists(),
-        "the configured registry root remains"
-    );
-}
-
-#[test]
-fn cargo_package_store_runtime_locks_remain_protected() {
-    for (signature_id, root_relative, marker_relative) in [
+fn cargo_package_stores_are_inventoried_and_never_plannable() {
+    for (signature_id, root_relative, unit_relative) in [
         (
             "dev.cargo.registry.src",
             ".cargo/registry/src",
-            "index.crates.io-1949cf8c6b5b557f/request-0.13.4/app.lock",
+            "index.crates.io-1949cf8c6b5b557f/request-0.13.4",
         ),
         (
             "dev.cargo.git",
             ".cargo/git/db",
-            "example-0123456789abcdef.git/index.lock",
+            "example-0123456789abcdef.git",
         ),
     ] {
         let fixture = tempdir().expect("fixture");
-        let package_store_root = fixture.path().join(root_relative);
-        let runtime_lock = package_store_root.join(marker_relative);
-        fs::create_dir_all(runtime_lock.parent().expect("runtime lock parent")).unwrap();
-        fs::write(&runtime_lock, b"active owner marker").unwrap();
+        let store_root = fixture.path().join(root_relative);
+        let unit = store_root.join(unit_relative);
+        fs::create_dir_all(&unit).unwrap();
+        let archived = [
+            ("Cargo.lock", b"version = 3".as_slice()),
+            ("flake.lock", b"locked".as_slice()),
+            ("build.sh", b"#!/bin/sh\nexit 0\n".as_slice()),
+            ("state.sqlite", b"fixture".as_slice()),
+        ];
+        for (name, contents) in archived {
+            fs::write(unit.join(name), contents).unwrap();
+        }
 
         let environment =
             PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
@@ -3510,97 +3307,71 @@ fn cargo_package_store_runtime_locks_remain_protected() {
                     .with_home(fixture.path())
                     .with_temp_dir(fixture.path()),
             ));
-        let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-        let mut signature = registry
-            .get(signature_id)
-            .expect("the Cargo package-store signature is in the catalog")
-            .clone();
-        signature.fail_if_running.clear();
-        registry.register(signature.clone());
-
-        let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
-            &signature,
-            &environment,
-            &zenith_lib::models::NeverCancelled,
-        )
-        .into_iter()
-        .find(|item| {
-            path_algebra::equal(
-                &item.path,
-                &package_store_root.to_string_lossy(),
-                PathFlavor::current(),
-            )
-        })
-        .expect("the scanner reports the configured Cargo package-store root");
-        item.is_selected = true;
-
-        let error = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-            .expect_err("an active runtime lock must block the whole package-store cleanup unit");
-        assert!(
-            matches!(&error, ZenithError::InvalidPlan(message) if message.contains("lock or pid file")),
-            "the owner policy must preserve {}: {error}",
-            runtime_lock.display()
+        let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+        let signature = registry.get(signature_id).expect("the catalog entry exists");
+        assert_eq!(
+            signature.strategy,
+            CleanStrategy::OwnerProvider,
+            "{signature_id} is enumerated by the provider it names, never by a filesystem rule"
         );
-        assert!(runtime_lock.exists());
+        assert!(
+            signature.provider_id.is_some(),
+            "{signature_id} names the owner that enumerates it"
+        );
+        assert!(
+            signature.paths.is_empty(),
+            "{signature_id} owns no host path a generic rule could copy"
+        );
+        if signature_id == "dev.cargo.registry.src" {
+            assert_eq!(
+                signature.cache_metadata().management_mode,
+                CacheManagementMode::Advisory,
+                "{signature_id} states that its owner, not Zenith, decides"
+            );
+        }
+
+        // The store is enumerated by its provider, and this build has no
+        // provider for these entries in a test process, so the item the scan
+        // offers is the entry itself, reported as unavailable rather than
+        // silently missing.
+        let mut item = ScanItem::mock(
+            signature_id,
+            signature_id,
+            &signature.name,
+            Category::Developer,
+            RiskTier::Rebuild,
+            store_root.to_string_lossy().into_owned(),
+            FileSize::new(4096, Some(4096)),
+            2,
+        );
+        item.unit = CleanupUnit::new(
+            CleanupUnitKind::ProviderAction,
+            store_root.to_string_lossy().into_owned(),
+            store_root.to_string_lossy().into_owned(),
+        );
+        item.lifecycle_provider_action = true;
+        item.requires_confirmation = true;
+        item.ownership = signature.ownership();
+        item.rederive_disposition();
+        // A provider unit is offered for explicit selection, so a reviewer that
+        // selected it is what a plan is built from.
+        item.is_selected = item.is_pre_selectable() || item.disposition.is_cleanable();
+
+        let error = SafetyPlanner::create_plan_with_environment(
+            &[item],
+            &registry,
+            &environment,
+            &no_owner_providers(),
+        )
+        .expect_err("an owner-managed store is never a generic filesystem target");
+        assert!(
+            matches!(error, ZenithError::RefusedSelection(_)),
+            "the refusal names the item and the provider this build lacks: {error}"
+        );
+        for (name, _) in archived {
+            assert!(unit.join(name).exists(), "{name} was not touched");
+        }
     }
-}
-
-#[test]
-fn cargo_package_store_runtime_lock_inserted_after_validation_is_not_deleted() {
-    let fixture = tempdir().expect("fixture");
-    let registry_root = fixture.path().join(".cargo/registry/src");
-    let crate_root = registry_root.join("index.crates.io-1949cf8c6b5b557f/request-0.13.4");
-    fs::create_dir_all(&crate_root).unwrap();
-    fs::write(
-        crate_root.join("payload.bin"),
-        b"downloaded package content",
-    )
-    .unwrap();
-
-    let environment =
-        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
-            SimulatedPaths::new()
-                .with_flavor(PathFlavor::current())
-                .with_home(fixture.path())
-                .with_temp_dir(fixture.path()),
-        ));
-    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-    let mut signature = registry
-        .get("dev.cargo.registry.src")
-        .expect("the Cargo source signature is in the catalog")
-        .clone();
-    signature.fail_if_running.clear();
-    registry.register(signature.clone());
-
-    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
-        &signature,
-        &environment,
-        &zenith_lib::models::NeverCancelled,
-    )
-    .into_iter()
-    .next()
-    .expect("the scanner reports the configured Cargo source root");
-    item.is_selected = true;
-    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
-        .expect("the package store is initially cleanable");
-    let validated = match SafetyValidator::revalidate(&plan.targets[0], &environment) {
-        RevalidationOutcome::Validated(target) => target,
-        other => panic!("expected a validated Cargo target, got {other:?}"),
-    };
-
-    let inserted = crate_root.join("app.lock");
-    fs::write(&inserted, b"inserted after validation").unwrap();
-    let report = SafeTreeDeleter::delete_contents_validated(&validated, &environment);
-
-    assert!(!report.is_success());
-    assert!(report
-        .errors
-        .iter()
-        .any(|error| error.contains("lock or pid file")));
-    assert!(
-        inserted.exists(),
-        "the recursive guard must preserve the lock"
-    );
 }
 
 /// What a plan states about its target is validated, not assumed: an item that
@@ -3625,9 +3396,9 @@ fn an_item_that_cannot_name_its_unit_is_refused_at_planning() {
     item.is_selected = true;
     item.unit = CleanupUnit::default();
 
-    let error = SafetyPlanner::create_plan(&[item], &registry)
+    let error = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers())
         .expect_err("an undeclared unit is not plannable");
-    assert!(matches!(error, ZenithError::InvalidPlan(_)));
+    assert!(matches!(error, ZenithError::ChangedSinceScan(_)));
 }
 
 #[test]
@@ -3749,9 +3520,9 @@ fn test_nested_protected_app_bundle_fails_closed() {
     // Planning even if forced selected must fail closed
     item.is_selected = true;
     let registry = SignatureRegistry::load_embedded().unwrap();
-    let plan_res = SafetyPlanner::create_plan(&[item], &registry);
+    let plan_res = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers());
     assert!(
-        matches!(plan_res, Err(ZenithError::InvalidPlan(_))),
+        matches!(plan_res, Err(ZenithError::ChangedSinceScan(_))),
         "Planning must reject items that do not allow cleanup"
     );
 }

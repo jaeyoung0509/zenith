@@ -90,10 +90,19 @@ pub fn desktop_state_with_catalog(
     // scan (which probes for candidates) and the executor (which performs the
     // reviewed action), so the two cannot disagree about which exist.
     let lifecycle_providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::native());
+    // The owner-scoped providers are built once, from the same description
+    // every other component receives, and injected into the services that scan
+    // and execute. Their ports are the components that already own those facts:
+    // the process table and the allocated-size measurement.
+    let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::native(
+        Arc::new(crate::cleaner::SysinfoProcessProbe),
+        Arc::new(crate::scanner::SizeCalculatorMeasurement),
+    ));
 
     let scan_service = Arc::new(crate::services::ScanService::new(
         registry.clone(),
         lifecycle_providers.clone(),
+        owner_providers.clone(),
         environment.clone(),
     ));
     let plan_store = Arc::new(crate::services::PlanStore::new(
@@ -110,6 +119,7 @@ pub fn desktop_state_with_catalog(
         registry.clone(),
         docker_status.clone(),
         lifecycle_providers.clone(),
+        owner_providers.clone(),
         platform_capabilities.clone(),
     ));
 

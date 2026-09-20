@@ -12,7 +12,40 @@
 //! user closes the tool, which is the outcome the user asked for.
 
 use sysinfo::{ProcessesToUpdate, System};
-use zenith_core::domain::cleanup::RunningProcessPolicy;
+use zenith_core::domain::cleanup::{RunningProcessPolicy, RunningProcessProbe};
+
+/// The process-table port an owner-scoped provider reads through.
+///
+/// The provider must decide whether a store's owner is idle, and the process
+/// table belongs to this module — the one that already reads it for the
+/// execution guard. `None` is the honest answer when the table cannot be read:
+/// an owner provider must fail closed rather than read an unreadable table as
+/// an idle owner.
+pub struct SysinfoProcessProbe;
+
+impl RunningProcessProbe for SysinfoProcessProbe {
+    fn running(&self, guard: &RunningProcessPolicy) -> Option<Vec<String>> {
+        if guard.is_empty() {
+            return Some(Vec::new());
+        }
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::All, true);
+        if system.processes().is_empty() {
+            // A process table with no entries is not a machine with no
+            // processes; it is a table this process could not read.
+            return None;
+        }
+        let mut matched: Vec<String> = system
+            .processes()
+            .values()
+            .map(|process| process.name().to_string_lossy().into_owned())
+            .filter(|name| guard.matches(name))
+            .collect();
+        matched.sort();
+        matched.dedup();
+        Some(matched)
+    }
+}
 
 /// The executables from `policy` that are running right now.
 ///

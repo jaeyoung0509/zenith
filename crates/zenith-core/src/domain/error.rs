@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::domain::cleanup::PlanItemRefusal;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZenithError {
     PermissionDenied(String),
@@ -17,6 +19,14 @@ pub enum ZenithError {
     BlacklistedPath(String),
     InvalidPlan(String),
     UnsupportedManualOperation(String),
+    /// Nothing the caller selected could be authorized, and every item states
+    /// why.
+    ///
+    /// This is an answer about the items rather than a failure of the scan: a
+    /// current policy refused each of them, so the inventory the caller holds
+    /// is still the truth about the machine and the refusal is stated per item
+    /// instead of discarding the selection.
+    RefusedSelection(Vec<PlanItemRefusal>),
     Io(String),
 }
 
@@ -37,6 +47,18 @@ impl fmt::Display for ZenithError {
             ZenithError::InvalidPlan(msg) => write!(f, "Invalid delete plan: {}", msg),
             ZenithError::UnsupportedManualOperation(name) => {
                 write!(f, "Manual item requires a dedicated adapter: {}", name)
+            }
+            ZenithError::RefusedSelection(refusals) => {
+                let first = refusals
+                    .first()
+                    .map(|refusal| refusal.message.as_str())
+                    .unwrap_or("no item in the selection can be cleaned");
+                write!(
+                    f,
+                    "Nothing in the selection can be cleaned ({} item(s) refused): {}",
+                    refusals.len(),
+                    first
+                )
             }
             ZenithError::Io(e) => write!(f, "IO error: {}", e),
         }

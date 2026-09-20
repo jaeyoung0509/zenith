@@ -838,7 +838,7 @@ fn resolve_user_home(
 /// When the described environment is the host's, the host join is byte-exact
 /// and is preferred. When it is a simulation of another platform, the join must
 /// follow the described flavor instead of the host's separator rules.
-fn join_with_flavor(base: PathBuf, tail: &str, flavor: PathFlavor) -> PathBuf {
+pub(crate) fn join_with_flavor(base: PathBuf, tail: &str, flavor: PathFlavor) -> PathBuf {
     if flavor == PathFlavor::current() {
         return base.join(tail);
     }

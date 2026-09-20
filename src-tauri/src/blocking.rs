@@ -4,14 +4,19 @@
 //! module, so the panic-reporting contract is stated once: a worker that died
 //! reports what it died with, through the redacting diagnostics sink.
 
-pub(crate) async fn run_blocking<T, F>(work: F, context: &'static str) -> Result<T, String>
+/// The work function's own error type is preserved, so a command that states a
+/// typed refusal does not have to flatten it into a string to survive the
+/// worker boundary. A worker that died still reports through the caller's error
+/// type, because a dead worker is that caller's internal failure.
+pub(crate) async fn run_blocking<T, E, F>(work: F, context: &'static str) -> Result<T, E>
 where
-    F: FnOnce() -> Result<T, String> + Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
     T: Send + 'static,
+    E: From<String> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(work)
         .await
-        .map_err(|error| join_failure(context, error))?
+        .map_err(|error| E::from(join_failure(context, error)))?
 }
 
 /// The error for a worker task that never returned its result.

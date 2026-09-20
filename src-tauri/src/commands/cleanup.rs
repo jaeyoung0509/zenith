@@ -11,7 +11,7 @@ use super::state::DesktopState;
 use crate::events::cleanup::TauriCleanupProgress;
 use crate::events::scan::TauriScanProgress;
 use crate::models::{
-    Category, CleanEvent, CleanResult, CleanupProgressSink, PlanPreview, ScanEvent,
+    Category, CleanEvent, CleanResult, CleanupFailure, CleanupProgressSink, PlanPreview, ScanEvent,
     ScanProgressSink, ScanRequest, ScanResult,
 };
 
@@ -61,7 +61,7 @@ pub async fn create_delete_plan(
     scan_id: String,
     selected_item_ids: Vec<String>,
     state: State<'_, DesktopState>,
-) -> Result<PlanPreview, String> {
+) -> Result<PlanPreview, CleanupFailure> {
     state
         .cleanup
         .create_delete_plan(scan_id, selected_item_ids)
@@ -75,7 +75,7 @@ pub async fn execute_clean(
     confirmed: bool,
     on_event: Channel<CleanEvent>,
     state: State<'_, DesktopState>,
-) -> Result<CleanResult, String> {
+) -> Result<CleanResult, CleanupFailure> {
     let progress: Arc<dyn CleanupProgressSink> = Arc::new(TauriCleanupProgress::new(on_event));
     state
         .cleanup
@@ -88,7 +88,7 @@ pub async fn execute_clean(
 pub async fn quick_clean_safe(
     on_event: Channel<CleanEvent>,
     state: State<'_, DesktopState>,
-) -> Result<CleanResult, String> {
+) -> Result<CleanResult, CleanupFailure> {
     let settings = state.settings.snapshot()?;
     let progress: Arc<dyn CleanupProgressSink> = Arc::new(TauriCleanupProgress::new(on_event));
     state.cleanup.quick_clean_safe(&settings, progress).await

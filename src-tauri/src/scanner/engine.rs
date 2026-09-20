@@ -351,6 +351,7 @@ impl ScanEngine {
     pub fn scan<F>(
         registry: &SignatureRegistry,
         lifecycle_providers: &LifecycleProviderRegistry,
+        owner_providers: &crate::cleaner::OwnerProviderRegistry,
         categories_filter: Option<&[Category]>,
         excluded_signatures: &[String],
         intensive_cleanup: bool,
@@ -500,7 +501,31 @@ impl ScanEngine {
                 }
             }
 
-            // 4. Typed container adapters can report cleanable or observation-only storage.
+            // 4. Owner-scoped providers enumerate the units of a store whose
+            //    semantics only its owner knows. Their candidates are
+            //    discovered here — in the category their catalog entry declares
+            //    — and every one of them is offered for explicit selection.
+            if !was_cancelled {
+                for item in owner_providers.scan_items(
+                    registry,
+                    category,
+                    intensive_cleanup,
+                    excluded_signatures,
+                    environment,
+                ) {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
+                    if let Some(retained) = accumulator.push(item) {
+                        events.send(ScanEvent::ItemFound {
+                            item: retained.clone(),
+                        });
+                    }
+                }
+            }
+
+            // 5. Typed container adapters can report cleanable or observation-only storage.
             if !was_cancelled && category == Category::Container {
                 let adapter_items = DockerAdapter::scan_items(environment)
                     .into_iter()
@@ -842,6 +867,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &providers,
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::System]),
             &[],
             false,
@@ -912,6 +938,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1031,6 +1058,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1100,6 +1128,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1164,6 +1193,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1267,6 +1297,7 @@ mod tests {
             ScanEngine::scan(
                 &registry,
                 &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 None,
                 &[],
                 false,
@@ -1425,6 +1456,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1523,6 +1555,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1608,6 +1641,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1691,6 +1725,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::System]),
             &[],
             false,
@@ -1796,6 +1831,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -1881,6 +1917,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -1925,6 +1962,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -1961,6 +1999,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -2003,6 +2042,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -2060,6 +2100,7 @@ mod tests {
             ScanEngine::scan(
                 &registry,
                 &providers,
+                &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 Some(&[Category::Developer]),
                 &[],
                 false,
@@ -2161,6 +2202,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,

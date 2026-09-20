@@ -151,7 +151,7 @@ describe('cleanup freshness and recovery', () => {
     const store = await loaded();
     vi.mocked(tauriCreatePlan).mockImplementation(async () => {
       vi.setSystemTime(1300_000);
-      return { id: 'plan', targets: [], expected_reclaim_bytes: 10, requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete', risk: {
+      return { id: 'plan', targets: [], refused: [], expected_reclaim_bytes: 10, requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete', risk: {
         safe_count: 1, rebuild_count: 0, manual_count: 0, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0,
       } };
     });
@@ -199,7 +199,7 @@ describe('cleanup freshness and recovery', () => {
     expect(store.selectionSummary.manualSelectedCount).toBe(1);
 
     vi.mocked(tauriCreatePlan).mockResolvedValue({
-      id: 'plan', targets: [], expected_reclaim_bytes: 2010, requires_confirmation: true, expires_at: 1600, mode: 'permanent_delete',
+      id: 'plan', targets: [], refused: [], expected_reclaim_bytes: 2010, requires_confirmation: true, expires_at: 1600, mode: 'permanent_delete',
       risk: { safe_count: 1, rebuild_count: 0, manual_count: 1, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 2000 },
     });
     vi.mocked(tauriExecuteClean).mockResolvedValue({

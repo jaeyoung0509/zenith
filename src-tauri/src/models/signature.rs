@@ -139,9 +139,9 @@ impl Signature {
         }
         match self.strategy {
             CleanStrategy::DockerPrune => CleanupUnitKind::ContainerResource,
-            CleanStrategy::ExternalCommand | CleanStrategy::LifecycleProvider => {
-                CleanupUnitKind::ProviderAction
-            }
+            CleanStrategy::ExternalCommand
+            | CleanStrategy::LifecycleProvider
+            | CleanStrategy::OwnerProvider => CleanupUnitKind::ProviderAction,
             CleanStrategy::Manual => CleanupUnitKind::FixedPath,
             CleanStrategy::DeleteContents
             | CleanStrategy::DeleteDirectory
@@ -160,9 +160,9 @@ impl Signature {
     fn strategy_unit_kind(&self) -> CleanupUnitKind {
         match self.strategy {
             CleanStrategy::DockerPrune => CleanupUnitKind::ContainerResource,
-            CleanStrategy::ExternalCommand | CleanStrategy::LifecycleProvider => {
-                CleanupUnitKind::ProviderAction
-            }
+            CleanStrategy::ExternalCommand
+            | CleanStrategy::LifecycleProvider
+            | CleanStrategy::OwnerProvider => CleanupUnitKind::ProviderAction,
             CleanStrategy::Manual => CleanupUnitKind::FixedPath,
             CleanStrategy::DeleteContents
             | CleanStrategy::DeleteDirectory
@@ -327,10 +327,36 @@ impl Signature {
                     );
                 }
             }
+            CleanStrategy::OwnerProvider => {
+                if !names_a_provider {
+                    return invalid(
+                        "an owner-scoped provider entry must name the provider that enumerates \
+                         and removes its units (`provider_id`)"
+                            .to_string(),
+                    );
+                }
+                if self.platforms.is_empty() {
+                    return invalid(
+                        "an owner-scoped provider entry must declare the platforms it runs on"
+                            .to_string(),
+                    );
+                }
+                // The provider consults the process table before it reads or
+                // mutates its store, and the executables it consults are the
+                // ones the catalog names. An entry that names none would ask a
+                // provider to prove its owner is idle with nothing to look for.
+                if self.fail_if_running.is_empty() {
+                    return invalid(
+                        "an owner-scoped provider entry must declare the executables whose \
+                         running state makes its store unsafe to touch (`fail_if_running`)"
+                            .to_string(),
+                    );
+                }
+            }
             _ => {
                 if self.provider_id.is_some() {
                     return invalid(format!(
-                        "`provider_id` is declared but strategy {:?} is not a lifecycle provider action",
+                        "`provider_id` is declared but strategy {:?} is not a reviewed provider action",
                         self.strategy
                     ));
                 }

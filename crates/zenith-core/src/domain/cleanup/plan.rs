@@ -1,3 +1,4 @@
+use super::owner::{OwnerProviderAuthorization, OwnerProviderUnit};
 use super::structured::EntryKind;
 use super::CleanStrategy;
 use crate::domain::identity::CleanupIdentity;
@@ -146,6 +147,23 @@ pub struct DeletePlan {
     pub id: Uuid,
     pub scan_id: String,
     pub targets: Vec<DeleteTarget>,
+    /// Selected items this plan did not authorize, each with the reason.
+    ///
+    /// The selection is not all-or-nothing: an item a current policy refuses
+    /// is named here while the rest of the selection is still authorized, so a
+    /// refusal never discards the inventory the user was looking at.
+    pub refusals: Vec<PlanItemRefusal>,
+    /// Owner-scoped provider authorizations, one per provider the selection
+    /// reached.
+    ///
+    /// This is the plan's second variant of authority, and it is a value of its
+    /// own rather than a flag or a pseudo target: a provider authorization
+    /// names units by the provider's identity and carries the identity that
+    /// provider captured, and no filesystem strategy classifies it. It cannot
+    /// be a [`DeleteTarget`], because there is nothing generic to carry out —
+    /// the registry dispatches it by provider id, and the provider re-derives
+    /// every fact it mutates on when it runs.
+    pub owner_authorizations: Vec<OwnerProviderAuthorization>,
     pub expected_reclaim_bytes: u64,
     pub risk: RiskSummary,
     pub created_at: u64,
@@ -154,11 +172,155 @@ pub struct DeletePlan {
 }
 
 impl DeletePlan {
-    /// Whether any target in this plan requires an explicit confirmation token
-    /// at the destructive boundary.
+    /// Whether any target or provider authorization in this plan requires an
+    /// explicit confirmation token at the destructive boundary.
     pub fn requires_confirmation(&self) -> bool {
         self.targets
             .iter()
             .any(|target| target.requires_confirmation)
+            || self
+                .owner_authorizations
+                .iter()
+                .any(|authorization| authorization.requires_confirmation)
     }
+
+    /// Every owner-provider unit this plan authorizes, provider included.
+    pub fn owner_units(&self) -> impl Iterator<Item = (&str, &OwnerProviderUnit)> {
+        self.owner_authorizations
+            .iter()
+            .flat_map(|authorization| {
+                authorization
+                    .units
+                    .iter()
+                    .map(move |unit| (authorization.provider_id.as_str(), unit))
+            })
+    }
+}
+
+
+/// Why one cleanup step did not happen, in the closed vocabulary the interface
+/// derives its copy from.
+///
+/// A message is not an outcome: two failures that read the same may need
+/// different remedies, and the interface decides which remedy to offer from the
+/// kind rather than by parsing prose. The domain owns the vocabulary because
+/// planning and execution both produce refusals and both must name them the
+/// same way; the projection in [`crate::application::dto::cleanup`] carries it
+/// to the interface unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanFailureReason {
+    PermissionDenied,
+    ChangedSinceScan,
+    NotFound,
+    InUse,
+    Blacklisted,
+    /// The target matched structured state (a database, its companions, a
+    /// lock, a credential, configuration, a bundle, or an executable) that
+    /// generic cleanup never removes.
+    StructuredStore,
+    /// The target is now a link, a reparse point, a junction, or a mount
+    /// boundary: traversal and deletion stop there.
+    SafetyBoundary,
+    ExternalCommandFailed,
+    /// A reviewed lifecycle provider was named for the target, and this build
+    /// has no adapter that can perform its action here.
+    ProviderUnavailable,
+    /// The location belongs to a program that maintains it itself, and no
+    /// reviewed provider in this build may remove it. The store stays
+    /// inventoried and measured; the refusal is about who owns it, not about
+    /// what is inside it.
+    OwnerManaged,
+    /// The provider ran (or re-checked itself) and did not reach the state its
+    /// action promises. Its own message states which prerequisite or refusal
+    /// applied.
+    ProviderRefused,
+    Unknown,
+}
+
+impl CleanFailureReason {
+    pub fn user_message(&self, target_name: &str) -> String {
+        match self {
+            CleanFailureReason::PermissionDenied => {
+                format!("The operating system denied permission to clean {}. Check your system's storage and privacy permissions.", target_name)
+            }
+            CleanFailureReason::ChangedSinceScan => {
+                format!("{} changed on disk since the last scan. Aborted cleaning to prevent data corruption.", target_name)
+            }
+            CleanFailureReason::NotFound => {
+                format!("{} was already removed or does not exist.", target_name)
+            }
+            CleanFailureReason::InUse => {
+                format!(
+                    "{} is currently locked or in use by another running process.",
+                    target_name
+                )
+            }
+            CleanFailureReason::Blacklisted => {
+                format!(
+                    "{} matches a protected system security rule and cannot be modified.",
+                    target_name
+                )
+            }
+            CleanFailureReason::StructuredStore => {
+                format!(
+                    "{} holds application state rather than regenerable cache data, so generic cleanup leaves it alone.",
+                    target_name
+                )
+            }
+            CleanFailureReason::SafetyBoundary => {
+                format!(
+                    "{} changed into a link, a mount point, or another indirection. Zenith refuses to delete through it.",
+                    target_name
+                )
+            }
+            CleanFailureReason::ExternalCommandFailed => {
+                format!(
+                    "Failed to execute external clean helper for {}.",
+                    target_name
+                )
+            }
+            CleanFailureReason::ProviderUnavailable => {
+                format!(
+                    "{} is cleaned through a dedicated provider, and no provider adapter for it is available on this platform.",
+                    target_name
+                )
+            }
+            CleanFailureReason::ProviderRefused => {
+                format!(
+                    "The dedicated provider for {} did not complete its action.",
+                    target_name
+                )
+            }
+            CleanFailureReason::OwnerManaged => {
+                format!(
+                    "{} is a store the program that owns it maintains; Zenith inventories it and does not delete it.",
+                    target_name
+                )
+            }
+            CleanFailureReason::Unknown => {
+                format!(
+                    "An unexpected error occurred while cleaning {}.",
+                    target_name
+                )
+            }
+        }
+    }
+}
+
+/// One selected item a plan refused to authorize, and why.
+///
+/// A refusal is stated per item rather than raised as a failed operation: the
+/// rest of a selection is still a plan, and the interface marks the rows this
+/// names instead of discarding the inventory the user was looking at. The typed
+/// reason travels with the message so a caller never has to read prose to
+/// decide whether the item can be retried or the whole scan has to be redone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanItemRefusal {
+    pub item_id: String,
+    pub item_name: String,
+    pub reason: CleanFailureReason,
+    /// The planner's own words about this item, which name the entry that
+    /// caused the refusal.
+    pub message: String,
 }

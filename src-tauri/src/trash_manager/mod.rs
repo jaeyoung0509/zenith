@@ -1401,7 +1401,7 @@ mod tests {
             .take_valid(stale_id, now)
             .expect_err("a plan at its TTL boundary is expired");
         assert!(
-            refused.contains("Trash plan expired"),
+            refused.to_string().contains("Trash plan expired"),
             "unexpected message: {refused}"
         );
     }

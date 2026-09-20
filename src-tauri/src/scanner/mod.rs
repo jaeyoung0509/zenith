@@ -8,5 +8,5 @@ pub use engine::ScanEngine;
 pub use observation::{
     NoRootProgress, RootProgressSink, ScanLimits, SignatureScan, TraversalCounters, WalkContext,
 };
-pub use size::{get_allocated_size, PathMeasurement, SizeCalculator};
+pub use size::{get_allocated_size, PathMeasurement, SizeCalculator, SizeCalculatorMeasurement};
 pub use walker::DirectoryScanner;

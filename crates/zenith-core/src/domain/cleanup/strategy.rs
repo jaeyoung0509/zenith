@@ -18,6 +18,17 @@ pub enum CleanStrategy {
     DeleteStaleContents,
     ExternalCommand,
     DockerPrune,
+    /// A registered owner-scoped provider enumerates and mutates the units of
+    /// a store whose semantics only its owner knows.
+    ///
+    /// The store is inventoried by the provider, not by the signature: the
+    /// catalog names the owner and the provider resolves its own root from the
+    /// environment. Unlike [`Self::DeleteContents`] the units are not generic
+    /// filesystem targets — the provider re-derives each one and refuses any
+    /// entry its store contract does not describe — and unlike
+    /// [`Self::LifecycleProvider`] the units are addressable, so a user selects
+    /// the ones to remove.
+    OwnerProvider,
     /// A reviewed lifecycle-aware provider performs the operation through the
     /// interface the owning system or application provides.
     ///

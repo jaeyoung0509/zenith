@@ -31,11 +31,10 @@ pub struct ValidatedTarget {
     /// rather than a tree-level one.
     stale_policy: Option<crate::safety::StaleEntryPolicy>,
     min_age_days: Option<u32>,
-    allow_cargo_package_store_contents: bool,
 }
 
 impl ValidatedTarget {
-    fn from_planned(target: &DeleteTarget, environment: &PlatformEnvironment) -> Self {
+    fn from_planned(target: &DeleteTarget) -> Self {
         let stale_policy = match (target.strategy, target.min_age_days) {
             (CleanStrategy::DeleteStaleContents, Some(days)) => {
                 Some(crate::safety::StaleEntryPolicy::from_days(days))
@@ -51,13 +50,6 @@ impl ValidatedTarget {
             exclusions: target.exclusions.clone(),
             stale_policy,
             min_age_days: target.min_age_days,
-            allow_cargo_package_store_contents:
-                crate::safety::cargo_policy::target_allows_cargo_package_store_contents(
-                    &target.signature_id,
-                    &target.path,
-                    Path::new(&target.unit.root),
-                    environment,
-                ),
         }
     }
 
@@ -91,10 +83,6 @@ impl ValidatedTarget {
 
     pub fn min_age_days(&self) -> Option<u32> {
         self.min_age_days
-    }
-
-    pub(crate) fn allow_cargo_package_store_contents(&self) -> bool {
-        self.allow_cargo_package_store_contents
     }
 }
 
@@ -218,7 +206,6 @@ fn crosses_mount_boundary(_path: &Path) -> bool {
 /// Symlinks are classified by name but never followed.
 pub(crate) fn structured_descendant(
     path: &Path,
-    allow_cargo_package_store_contents: bool,
 ) -> std::io::Result<Option<(PathBuf, StructuredStateKind)>> {
     let mut pending = vec![path.to_path_buf()];
     while let Some(current) = pending.pop() {
@@ -230,14 +217,8 @@ pub(crate) fn structured_descendant(
             .unwrap_or_default();
         let facts = PathFacts::new(&name, kind)
             .executable(kind == EntryKind::File && is_executable(&metadata));
-        if !crate::safety::cargo_policy::allows_cargo_package_store_entry(
-            &current,
-            kind,
-            allow_cargo_package_store_contents,
-        ) {
-            if let Some(structured) = classify_structured_state(facts) {
-                return Ok(Some((current, structured)));
-            }
+        if let Some(structured) = classify_structured_state(facts) {
+            return Ok(Some((current, structured)));
         }
         if kind == EntryKind::Directory && !SymlinkGuard::is_symlink_metadata(&current)? {
             if current != path && crosses_mount_boundary(&current) {
@@ -293,14 +274,6 @@ impl SafetyValidator {
                 ),
             );
         }
-
-        let allow_cargo_package_store_contents =
-            crate::safety::cargo_policy::target_allows_cargo_package_store_contents(
-                &target.signature_id,
-                path,
-                Path::new(&target.unit.root),
-                environment,
-            );
 
         // 1. Presence probe. A path that no longer exists is already absent.
         let metadata = match std::fs::symlink_metadata(path) {
@@ -435,12 +408,7 @@ impl SafetyValidator {
 
         // 6. Structured state is never generic cleanup's to remove, even when a
         //    discovery rule produced the target.
-        if let Some(kind) = crate::safety::validator::structured_state_at_with_policy(
-            path,
-            allow_cargo_package_store_contents,
-        )
-        .map(|(kind, _)| kind)
-        {
+        if let Some((kind, _)) = crate::safety::validator::structured_state_at(path) {
             return skipped(
                 target,
                 CleanFailureReason::StructuredStore,
@@ -460,7 +428,7 @@ impl SafetyValidator {
                 CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
             )
         {
-            match structured_descendant(path, allow_cargo_package_store_contents) {
+            match structured_descendant(path) {
                 Ok(Some((nested, kind))) => {
                     return skipped(
                         target,
@@ -556,10 +524,7 @@ impl SafetyValidator {
                             ),
                         );
                     }
-                    return RevalidationOutcome::Validated(ValidatedTarget::from_planned(
-                        target,
-                        environment,
-                    ));
+                    return RevalidationOutcome::Validated(ValidatedTarget::from_planned(target));
                 }
                 let newest = stats.newest_mtime.and_then(|modified| {
                     modified
@@ -586,7 +551,7 @@ impl SafetyValidator {
             }
         }
 
-        RevalidationOutcome::Validated(ValidatedTarget::from_planned(target, environment))
+        RevalidationOutcome::Validated(ValidatedTarget::from_planned(target))
     }
 }
 
@@ -637,13 +602,6 @@ impl<'a> FilesystemDeleteAuthority<'a> {
     pub(crate) fn protect_structured_state(&self) -> bool {
         matches!(self.inner, AuthorityKind::Cleanup(_))
     }
-
-    pub(crate) fn allow_cargo_package_store_contents(&self) -> bool {
-        match self.inner {
-            AuthorityKind::Cleanup(target) => target.allow_cargo_package_store_contents(),
-            AuthorityKind::ModelInventory(_) => false,
-        }
-    }
 }
 
 impl<'a> From<&'a ValidatedTarget> for FilesystemDeleteAuthority<'a> {
@@ -662,27 +620,12 @@ impl<'a> From<&'a ValidatedModelTarget> for FilesystemDeleteAuthority<'a> {
     }
 }
 
-/// The structured-state verdict for a path, for callers that must refuse a
-/// target before a plan is built.
+/// Classifies one entry for a cleanup target.
 ///
-/// The planner uses this so a plan never contains a target the execution guard
-/// would refuse: planning and execution must agree, and the cheaper place to
-/// say no is before the user is offered a confirmation.
+/// Every caller is generic cleanup: an owner-managed store that legitimately
+/// holds names this classifier protects is not cleaned through a filesystem
+/// primitive at all, so there is no per-signature exemption to consult here.
 pub fn structured_state_at(path: &Path) -> Option<(StructuredStateKind, EntryKind)> {
-    structured_state_at_with_policy(path, false)
-}
-
-/// Classifies one entry for a cleanup target with its trusted owner policy.
-///
-/// Cargo registry sources and git dependency stores are rebuildable artifacts.
-/// Their downloaded contents are exempt only when the caller has already
-/// established that the whole target is an exact environment-resolved Cargo
-/// package-store unit. Generic callers keep the fail-closed structured-state
-/// rule.
-pub fn structured_state_at_with_policy(
-    path: &Path,
-    allow_cargo_package_store_contents: bool,
-) -> Option<(StructuredStateKind, EntryKind)> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     let entry_kind = entry_kind_of(&metadata);
     let name = path
@@ -691,15 +634,7 @@ pub fn structured_state_at_with_policy(
         .unwrap_or_default();
     let facts = PathFacts::new(&name, entry_kind)
         .executable(entry_kind == EntryKind::File && is_executable(&metadata));
-    if crate::safety::cargo_policy::allows_cargo_package_store_entry(
-        path,
-        entry_kind,
-        allow_cargo_package_store_contents,
-    ) {
-        None
-    } else {
-        classify_structured_state(facts).map(|kind| (kind, entry_kind))
-    }
+    classify_structured_state(facts).map(|kind| (kind, entry_kind))
 }
 
 /// The entry kind of a path, as the plan records it.

@@ -562,20 +562,35 @@ fn audit_signature(
 
     // A provider action is carried out by the implementation the manifest
     // names, so a catalog entry that names one this build does not have is a
-    // target nothing can complete. The check reads the same registry the scan
-    // and the executor dispatch through, so the two cannot drift apart.
+    // target nothing can complete. The check reads the same registries the scan
+    // and the executor dispatch through, so the two cannot drift apart — and it
+    // reads the registry the declared strategy dispatches into, so a lifecycle
+    // action cannot pass itself off as an owner-scoped one or the reverse.
     if let Some(provider_id) = signature
         .provider_id
         .as_deref()
         .filter(|provider_id| !provider_id.trim().is_empty())
     {
-        let implemented = crate::cleaner::LifecycleProviderRegistry::native().implemented_ids();
+        let (implemented, kind) = match signature.strategy {
+            CleanStrategy::OwnerProvider => (
+                crate::cleaner::OwnerProviderRegistry::native(
+                    std::sync::Arc::new(crate::cleaner::SysinfoProcessProbe),
+                    std::sync::Arc::new(crate::scanner::SizeCalculatorMeasurement),
+                )
+                .implemented_ids(),
+                "owner-scoped provider",
+            ),
+            _ => (
+                crate::cleaner::LifecycleProviderRegistry::native().implemented_ids(),
+                "lifecycle provider",
+            ),
+        };
         if !implemented.contains(&provider_id) {
             findings.push(finding(
                 signature,
                 None,
                 format!(
-                    "names lifecycle provider `{provider_id}`, which this build does not implement (implemented: {})",
+                    "names {kind} `{provider_id}`, which this build does not implement (implemented: {})",
                     implemented.join(", ")
                 ),
             ));
@@ -1115,6 +1130,27 @@ mod tests {
                             .as_deref()
                             .is_some_and(|provider_id| !provider_id.trim().is_empty()),
                         "{} names the provider that performs its action",
+                        signature.id
+                    );
+                }
+                CleanStrategy::OwnerProvider => {
+                    assert_eq!(
+                        kind,
+                        CleanupUnitKind::ProviderAction,
+                        "{} is enumerated and removed by the provider it names",
+                        signature.id
+                    );
+                    assert!(
+                        signature
+                            .provider_id
+                            .as_deref()
+                            .is_some_and(|provider_id| !provider_id.trim().is_empty()),
+                        "{} names the provider that owns the store",
+                        signature.id
+                    );
+                    assert!(
+                        !signature.fail_if_running.is_empty(),
+                        "{} states the executables whose running state makes its store unsafe",
                         signature.id
                     );
                 }

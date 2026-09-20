@@ -3,15 +3,16 @@ use std::time::SystemTime;
 use uuid::Uuid;
 
 use super::cancellation::{CancellationRegistry, ScanCancellation};
-use super::plan_store::PlanStore;
+use super::plan_store::{PlanStore, PlanStoreError};
 use super::scan_service::ScanService;
 use super::scan_store::ScanStore;
-use crate::cleaner::{CleanExecutor, LifecycleProviderRegistry};
+use crate::cleaner::{CleanExecutor, LifecycleProviderRegistry, OwnerProviderRegistry};
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
-    CleanEvent, CleanResult, CleanStrategy, CleanupEligibility, CleanupProgressSink, DeletePlan,
-    ObservationQuality, PlanPreview, PlatformCapabilitiesProvider, PlatformFeature, ScanEvent,
-    ScanProgressSink, ScanRequest, ScanResult, ZenithSettings,
+    CleanEvent, CleanFailureReason, CleanResult, CleanStrategy, CleanupEligibility, CleanupFailure,
+    CleanupFailureScope, CleanupProgressSink, DeletePlan, ObservationQuality, PlanPreview,
+    PlanRefusalPreview, PlatformCapabilitiesProvider, PlatformFeature, ScanEvent, ScanProgressSink,
+    ScanRequest, ScanResult, ZenithError, ZenithSettings,
 };
 use crate::operation_gate::StorageOperationGate;
 use crate::safety::SafetyPlanner;
@@ -59,6 +60,56 @@ pub fn select_quick_clean_safe_candidates(
     eligible_ids
 }
 
+/// The projection of one planner refusal onto the interface contract.
+fn refusal_preview(refusal: &crate::models::PlanItemRefusal) -> PlanRefusalPreview {
+    PlanRefusalPreview {
+        item_id: refusal.item_id.clone(),
+        name: refusal.item_name.clone(),
+        reason: refusal.reason,
+        message: refusal.message.clone(),
+    }
+}
+
+/// Maps a planning failure onto the scope the interface reacts to.
+///
+/// The distinction the interface cannot make for itself: a refusal that names
+/// items leaves the inventory and every other selection usable, while a scan
+/// that is no longer current makes the inventory a description of a machine
+/// that has changed. Reading both as the same failure is what made a correct
+/// refusal look like a broken selection.
+fn plan_failure(error: ZenithError) -> CleanupFailure {
+    match error {
+        ZenithError::RefusedSelection(refusals) => CleanupFailure::items(
+            "Nothing in the selection can be cleaned right now.",
+            refusals.iter().map(refusal_preview).collect(),
+        ),
+        ZenithError::ChangedSinceScan(message) => CleanupFailure::inventory_stale(message),
+        ZenithError::UnsupportedManualOperation(name) => CleanupFailure::items(
+            format!(
+                "`{name}` is reported for information only; this build has no reviewed operation that removes it"
+            ),
+            Vec::new(),
+        ),
+        other => CleanupFailure::new(
+            CleanupFailureScope::Internal,
+            CleanFailureReason::Unknown,
+            other.to_string(),
+        ),
+    }
+}
+
+/// Maps a plan-store refusal onto the scope the interface reacts to.
+fn store_failure(error: PlanStoreError) -> CleanupFailure {
+    match error {
+        PlanStoreError::Unavailable(message) => CleanupFailure::inventory_stale(message),
+        PlanStoreError::Unusable(message) => CleanupFailure::new(
+            CleanupFailureScope::Internal,
+            CleanFailureReason::Unknown,
+            message,
+        ),
+    }
+}
+
 /// The intent for a cleanup operation.
 ///
 /// Main Clean and Quick Clean are intents routed through the same
@@ -83,6 +134,7 @@ pub struct CleanupService {
     registry: Arc<SignatureRegistry>,
     docker_status_cache: Arc<DockerStatusCache>,
     lifecycle_providers: Arc<LifecycleProviderRegistry>,
+    owner_providers: Arc<OwnerProviderRegistry>,
     /// The cancellation handles of the scans this service is running, keyed by
     /// the id each scan reports so `cancel_scan` can reach one in flight.
     scan_cancellations: Arc<CancellationRegistry>,
@@ -101,6 +153,7 @@ impl CleanupService {
         registry: Arc<SignatureRegistry>,
         docker_status_cache: Arc<DockerStatusCache>,
         lifecycle_providers: Arc<LifecycleProviderRegistry>,
+    owner_providers: Arc<OwnerProviderRegistry>,
         platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
     ) -> Self {
         Self {
@@ -113,6 +166,7 @@ impl CleanupService {
             registry,
             docker_status_cache,
             lifecycle_providers,
+            owner_providers,
             scan_cancellations: Arc::new(CancellationRegistry::for_scans()),
             platform_capabilities,
         }
@@ -150,7 +204,7 @@ impl CleanupService {
         let cancellations = self.scan_cancellations.clone();
 
         let result = crate::blocking::run_blocking(
-            move || {
+            move || -> Result<_, String> {
                 let _permit = permit;
                 Ok(operation_gate.run_read(|| {
                     // The interface cannot cancel a scan it has not been told
@@ -210,32 +264,45 @@ impl CleanupService {
         Ok(())
     }
 
-    /// Creates and stores a verified DeletePlan from user-reviewed item IDs.
+    /// Creates and stores a verified cleanup plan from user-reviewed item IDs.
+    ///
+    /// The refusal scope is the contract's point: an item a current policy
+    /// declines is reported per item, and only a scan that is no longer current
+    /// invalidates the inventory the interface holds.
     pub async fn create_delete_plan(
         &self,
         scan_id: String,
         selected_item_ids: Vec<String>,
-    ) -> Result<PlanPreview, String> {
+    ) -> Result<PlanPreview, CleanupFailure> {
         self.platform_capabilities
             .capabilities()
             .require(
                 PlatformFeature::Cleanup,
                 crate::models::CapabilityAccess::Mutate,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| {
+                CleanupFailure::new(
+                    CleanupFailureScope::Permission,
+                    CleanFailureReason::PermissionDenied,
+                    error.to_string(),
+                )
+            })?;
 
         let scan_store = self.scan_store.clone();
         let plan_store = self.plan_store.clone();
         let registry = self.registry.clone();
         let environment = self.environment.clone();
+        let owner_providers = self.owner_providers.clone();
 
         crate::blocking::run_blocking(
-            move || {
+            move || -> Result<PlanPreview, CleanupFailure> {
                 let scan = scan_store
                     .get()
-                    .filter(|s| s.scan_id == scan_id)
+                    .filter(|scan| scan.scan_id == scan_id)
                     .ok_or_else(|| {
-                        "The scan is no longer current. Scan again before cleaning.".to_string()
+                        CleanupFailure::inventory_stale(
+                            "The scan is no longer current. Scan again before cleaning.",
+                        )
                     })?;
 
                 let plan = SafetyPlanner::create_plan_from_scan(
@@ -244,8 +311,9 @@ impl CleanupService {
                     &selected_item_ids,
                     &registry,
                     &environment,
+                    &owner_providers,
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(plan_failure)?;
 
                 let ttl = plan_store.ttl_seconds();
                 let mut preview = plan.preview(ttl);
@@ -255,7 +323,7 @@ impl CleanupService {
                 );
 
                 let now = unix_timestamp();
-                plan_store.insert(plan, now)?;
+                plan_store.insert(plan, now).map_err(store_failure)?;
                 Ok(preview)
             },
             "Delete plan worker panicked",
@@ -269,7 +337,7 @@ impl CleanupService {
         plan_id: Uuid,
         confirmed: bool,
         progress: Arc<dyn CleanupProgressSink>,
-    ) -> Result<CleanResult, String> {
+    ) -> Result<CleanResult, CleanupFailure> {
         self.execute_intent(
             CleanupIntent::ReviewedSelection { plan_id, confirmed },
             None,
@@ -287,7 +355,7 @@ impl CleanupService {
         &self,
         settings: &ZenithSettings,
         progress: Arc<dyn CleanupProgressSink>,
-    ) -> Result<CleanResult, String> {
+    ) -> Result<CleanResult, CleanupFailure> {
         self.execute_intent(CleanupIntent::QuickSafe, Some(settings.clone()), progress)
             .await
     }
@@ -298,14 +366,20 @@ impl CleanupService {
         intent: CleanupIntent,
         settings: Option<ZenithSettings>,
         progress: Arc<dyn CleanupProgressSink>,
-    ) -> Result<CleanResult, String> {
+    ) -> Result<CleanResult, CleanupFailure> {
         self.platform_capabilities
             .capabilities()
             .require(
                 PlatformFeature::Cleanup,
                 crate::models::CapabilityAccess::Mutate,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| {
+                CleanupFailure::new(
+                    CleanupFailureScope::Permission,
+                    CleanFailureReason::PermissionDenied,
+                    error.to_string(),
+                )
+            })?;
 
         let plan_store = self.plan_store.clone();
         let scan_store = self.scan_store.clone();
@@ -314,20 +388,22 @@ impl CleanupService {
         let registry = self.registry.clone();
         let docker_status_cache = self.docker_status_cache.clone();
         let lifecycle_providers = self.lifecycle_providers.clone();
+        let owner_providers = self.owner_providers.clone();
 
         crate::blocking::run_blocking(
-            move || -> Result<CleanResult, String> {
-                operation_gate.run_write(|| {
+            move || -> Result<CleanResult, CleanupFailure> {
+                operation_gate.run_write(|| -> Result<CleanResult, CleanupFailure> {
                     let now = unix_timestamp();
 
                     let plan: DeletePlan = match intent {
                         CleanupIntent::ReviewedSelection { plan_id, confirmed } => {
-                            let plan = plan_store.take_valid(plan_id, now)?;
+                            let plan = plan_store.take_valid(plan_id, now).map_err(store_failure)?;
                             if plan.requires_confirmation() && !confirmed {
-                                return Err(
-                                    "This cleanup includes an action that requires explicit confirmation. Review the plan and confirm it before cleaning."
-                                        .to_string(),
-                                );
+                                return Err(CleanupFailure::new(
+                                    CleanupFailureScope::Internal,
+                                    CleanFailureReason::Unknown,
+                                    "This cleanup includes an action that requires explicit confirmation. Review the plan and confirm it before cleaning.",
+                                ));
                             }
                             // Invalidate scan atomically so pre-cleanup inventory cannot be reused
                             scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
@@ -337,12 +413,15 @@ impl CleanupService {
                             let settings = settings
                                 .ok_or_else(|| "Settings required for Quick Clean".to_string())?;
                             let scan = scan_store.get().ok_or_else(|| {
-                                "The scan is no longer current. Scan again before cleaning."
-                                    .to_string()
+                                CleanupFailure::inventory_stale(
+                                    "The scan is no longer current. Scan again before cleaning.",
+                                )
                             })?;
 
                             scan.validate_for_cleanup(&scan.scan_id, now)
-                                .map_err(|e| e.to_string())?;
+                                .map_err(|error| {
+                                    CleanupFailure::inventory_stale(error.to_string())
+                                })?;
 
                             // Quick Clean deletes the Safe subset without a
                             // per-item review, so it requires a scan that observed
@@ -351,10 +430,9 @@ impl CleanupService {
                             // selection is different, because the user saw exactly
                             // what was inspected and chose from it.
                             if scan.quality != ObservationQuality::Fresh {
-                                return Err(
-                                "Quick Clean needs a complete scan. Scan again before cleaning."
-                                    .to_string(),
-                            );
+                                return Err(CleanupFailure::inventory_stale(
+                                    "Quick Clean needs a complete scan. Scan again before cleaning.",
+                                ));
                             }
 
                             let eligible_ids = select_quick_clean_safe_candidates(&scan, &settings);
@@ -379,18 +457,22 @@ impl CleanupService {
                                 &eligible_ids,
                                 &registry,
                                 &environment,
+                                &owner_providers,
                             )
-                            .map_err(|e| e.to_string())?;
+                            .map_err(plan_failure)?;
 
                             if plan.requires_confirmation() {
-                                return Err(
-                                    "Quick Clean cannot execute actions that require explicit confirmation."
-                                        .to_string(),
-                                );
+                                return Err(CleanupFailure::new(
+                                    CleanupFailureScope::Internal,
+                                    CleanFailureReason::Unknown,
+                                    "Quick Clean cannot execute actions that require explicit confirmation.",
+                                ));
                             }
 
                             // Invalidate scan atomically
-                            scan_store.validate_and_invalidate_for_cleanup(&plan.scan_id, now)?;
+                            scan_store
+                                .validate_and_invalidate_for_cleanup(&plan.scan_id, now)
+                                .map_err(CleanupFailure::inventory_stale)?;
                             plan
                         }
                     };
@@ -399,9 +481,13 @@ impl CleanupService {
                     // executor. A projection the user reviewed and a deletion
                     // are different claims, and the plan states which one it is.
                     if !plan.mode.is_mutating() {
-                        return Err(format!(
-                            "This plan is {} and cannot be executed",
-                            plan.mode.display_name()
+                        return Err(CleanupFailure::new(
+                            CleanupFailureScope::Internal,
+                            CleanFailureReason::Unknown,
+                            format!(
+                                "This plan is {} and cannot be executed",
+                                plan.mode.display_name()
+                            ),
                         ));
                     }
 
@@ -419,6 +505,7 @@ impl CleanupService {
                         plan,
                         &environment,
                         &lifecycle_providers,
+                        &owner_providers,
                         move |event: CleanEvent| {
                             progress.emit(event);
                         },
@@ -598,9 +685,11 @@ mod tests {
         }
         let registry = Arc::new(registry);
         let providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new()));
+        let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
             registry.clone(),
             providers.clone(),
+            owner_providers.clone(),
             env.clone(),
         ));
         let service = Arc::new(CleanupService::new(
@@ -613,6 +702,7 @@ mod tests {
             registry,
             Arc::new(DockerStatusCache::new()),
             providers,
+            owner_providers,
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         ));
 
@@ -653,9 +743,11 @@ mod tests {
     async fn cleanup_service_plan_and_execution_lifecycle() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
+        let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
             registry.clone(),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers.clone(),
             env.clone(),
         ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
@@ -675,6 +767,7 @@ mod tests {
             registry,
             docker_cache,
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers,
             capabilities,
         );
 
@@ -728,9 +821,11 @@ mod tests {
         let providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(vec![
             StatedProvider::holding(2_048, 1).shared(),
         ]));
+        let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
             registry.clone(),
             providers.clone(),
+            owner_providers.clone(),
             env.clone(),
         ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
@@ -745,6 +840,7 @@ mod tests {
             registry.clone(),
             Arc::new(DockerStatusCache::new()),
             providers.clone(),
+            owner_providers,
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -772,7 +868,11 @@ mod tests {
             .execute_clean(preview.id, false, progress.clone())
             .await
             .expect_err("confirmation-required plan must fail closed");
-        assert!(refused.contains("explicit confirmation"), "{refused}");
+        assert!(
+            refused.message.contains("explicit confirmation"),
+            "{}",
+            refused.message
+        );
 
         let confirmed_preview = service
             .create_delete_plan(
@@ -826,9 +926,11 @@ mod tests {
         });
         let registry = Arc::new(registry);
 
+        let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
             registry.clone(),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers.clone(),
             env.clone(),
         ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
@@ -843,6 +945,7 @@ mod tests {
             registry,
             Arc::new(DockerStatusCache::new()),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers,
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -880,8 +983,9 @@ mod tests {
         let replay = service.execute_clean(preview.id, false, progress).await;
         let error = replay.expect_err("a consumed plan must be refused");
         assert!(
-            error.contains("not found or already used"),
-            "unexpected error: {error}"
+            error.message.contains("not found or already used"),
+            "unexpected error: {}",
+            error.message
         );
     }
 
@@ -922,9 +1026,11 @@ mod tests {
         });
         let registry = Arc::new(registry);
 
+        let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
             registry.clone(),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers.clone(),
             env.clone(),
         ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
@@ -939,6 +1045,7 @@ mod tests {
             registry,
             Arc::new(DockerStatusCache::new()),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers,
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -964,7 +1071,11 @@ mod tests {
         let settings = ZenithSettings::default();
         let refused = service.quick_clean_safe(&settings, progress).await;
         let error = refused.expect_err("Quick Clean needs a scan that observed everything");
-        assert!(error.contains("complete scan"), "unexpected error: {error}");
+        assert!(
+            error.message.contains("complete scan"),
+            "unexpected error: {}",
+            error.message
+        );
         assert!(cache.join("payload.bin").is_file(), "nothing was deleted");
 
         // The same partial scan still supports a reviewed selection: the user
@@ -980,9 +1091,11 @@ mod tests {
     async fn quick_clean_safe_handles_empty_candidates_gracefully() {
         let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
         let registry = Arc::new(SignatureRegistry::new());
+        let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
             registry.clone(),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers.clone(),
             env.clone(),
         ));
         let plan_store = Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup()));
@@ -1002,6 +1115,7 @@ mod tests {
             registry,
             docker_cache,
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
+            owner_providers,
             capabilities,
         );
 
