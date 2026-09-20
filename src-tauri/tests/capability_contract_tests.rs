@@ -51,7 +51,7 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
 /// surface. Together with [`MUTATING_PERMISSIONS`] this is an exhaustive
 /// partition of the generated command surface, so a new command cannot enter a
 /// capability file before its authority is classified here.
-const READ_ONLY_PERMISSIONS: [&str; 39] = [
+const READ_ONLY_PERMISSIONS: [&str; 40] = [
     "allow-cancel-developer-artifact-scan",
     "allow-cancel-large-file-scan",
     // Cancelling a scan stops work; it does not authorize a mutation.
@@ -81,6 +81,7 @@ const READ_ONLY_PERMISSIONS: [&str; 39] = [
     "allow-inspect-app-uninstall",
     "allow-list-development-listeners",
     "allow-open-dashboard-window",
+    "allow-open-full-disk-access-settings",
     "allow-open-logs-folder",
     "allow-open-storage-settings",
     "allow-pick-developer-workspace",

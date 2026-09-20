@@ -56,6 +56,7 @@ describe('browser preview scan cancellation', () => {
       expect(result.cancelled).toBe(true);
       expect(result.quality).toBe('partial');
       expect(result.incomplete_reasons?.some((reason) => reason.includes('cancelled'))).toBe(true);
+      expect(result.gaps).toEqual([{ kind: 'cancelled', count: 1 }]);
       // Only the category the walk finished is reported; the ones it never
       // reached were neither streamed nor counted.
       expect(result.categories.map((category) => category.category)).toEqual(['ai']);

@@ -620,3 +620,35 @@ describe('detected versus reclaimable storage copy', () => {
     expect(rendered.body).toContain('Applications');
   });
 });
+
+describe('StorageView scan remediation', () => {
+  it('surfaces Full Disk Access guidance on the main cleanup view', () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    scanStore.lastScan = {
+      scan_id: 'scan-fda',
+      valid_for_seconds: 300,
+      started_at: nowSeconds - 1,
+      finished_at: nowSeconds,
+      categories: [],
+      total_bytes: 0,
+      safe_bytes: 0,
+      rebuild_bytes: 0,
+      manual_bytes: 0,
+      quality: 'unavailable',
+      incomplete_reasons: ['Operation not permitted'],
+      gaps: [{ kind: 'full_disk_access', count: 248 }],
+      cancelled: false,
+    };
+
+    const rendered = render(StorageView, {
+      props: {
+        onSelectCategory: vi.fn(),
+      },
+    });
+
+    expect(rendered.body).toContain('248 locations');
+    expect(rendered.body).toContain('Grant Full Disk Access to Zenith');
+    expect(rendered.body).toContain('Open System Settings');
+    expect(rendered.body).not.toContain('Partial scan completed');
+  });
+});

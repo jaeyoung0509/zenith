@@ -135,6 +135,8 @@ export type {
   FindingSeverity,
   GitChangeSummary,
   ScanEvent,
+  ScanGap,
+  ScanGapKind,
   ScanItem,
   ScanResult,
   SnapshotQuality,

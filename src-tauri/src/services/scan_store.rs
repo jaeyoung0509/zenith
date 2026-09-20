@@ -95,6 +95,7 @@ mod tests {
             manual_bytes: 0,
             categories: vec![],
             incomplete_reasons: vec![],
+            gaps: vec![],
             quality: crate::models::ObservationQuality::Fresh,
             skipped_entry_count: 0,
             incomplete_item_count: 0,

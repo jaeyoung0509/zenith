@@ -24,6 +24,7 @@ pub struct TreeDeleteReport {
     /// failure classification can use the code instead of localized text.
     pub os_error_codes: Vec<i32>,
     pub(crate) protect_structured_state: bool,
+    pub(crate) allow_cargo_package_store_contents: bool,
 }
 
 impl TreeDeleteReport {
@@ -304,7 +305,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_contents_with_policy(root, exclusions, environment, false, None)
+        Self::delete_contents_with_policy(root, exclusions, environment, false, false, None)
     }
 
     fn delete_contents_with_policy(
@@ -312,10 +313,12 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         protect_structured_state: bool,
+        allow_cargo_package_store_contents: bool,
         stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
             protect_structured_state,
+            allow_cargo_package_store_contents,
             ..Default::default()
         };
         let root_metadata = match fs::symlink_metadata(root) {
@@ -425,7 +428,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_path_with_policy(root, exclusions, environment, false, None)
+        Self::delete_path_with_policy(root, exclusions, environment, false, false, None)
     }
 
     fn delete_path_with_policy(
@@ -433,10 +436,12 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         protect_structured_state: bool,
+        allow_cargo_package_store_contents: bool,
         stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
             protect_structured_state,
+            allow_cargo_package_store_contents,
             ..Default::default()
         };
         match fs::symlink_metadata(root) {
@@ -484,6 +489,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
+            auth.allow_cargo_package_store_contents(),
             auth.stale_policy(),
         )
     }
@@ -513,6 +519,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
+            auth.allow_cargo_package_store_contents(),
             Some(policy),
         )
     }
@@ -528,6 +535,7 @@ impl SafeTreeDeleter {
             auth.exclusions(),
             environment,
             auth.protect_structured_state(),
+            auth.allow_cargo_package_store_contents(),
             auth.stale_policy(),
         )
     }
@@ -599,7 +607,12 @@ impl SafeTreeDeleter {
             // here as well so a newly inserted structured file is never unlinked.
             if let Some((kind, _)) = report
                 .protect_structured_state
-                .then(|| super::structured_state_at(&child_path))
+                .then(|| {
+                    super::structured_state_at_with_policy(
+                        &child_path,
+                        report.allow_cargo_package_store_contents,
+                    )
+                })
                 .flatten()
             {
                 report.errors.push(format!(
@@ -796,7 +809,12 @@ impl SafeTreeDeleter {
 
         if let Some((kind, _)) = report
             .protect_structured_state
-            .then(|| super::structured_state_at(path))
+            .then(|| {
+                super::structured_state_at_with_policy(
+                    path,
+                    report.allow_cargo_package_store_contents,
+                )
+            })
             .flatten()
         {
             report.errors.push(format!(
@@ -1887,8 +1905,14 @@ mod tests {
 
         let environment = environment();
         let policy = super::super::StaleEntryPolicy::from_days(7);
-        let report =
-            SafeTreeDeleter::delete_path_with_policy(&root, &[], &environment, true, Some(policy));
+        let report = SafeTreeDeleter::delete_path_with_policy(
+            &root,
+            &[],
+            &environment,
+            true,
+            false,
+            Some(policy),
+        );
 
         assert!(!old_file.exists(), "a stale file is removed");
         assert!(recent_file.exists(), "a recent file beside it stays");
@@ -1928,6 +1952,7 @@ mod tests {
         let policy = super::super::StaleEntryPolicy::from_days(7);
         let mut report = TreeDeleteReport {
             protect_structured_state: true,
+            allow_cargo_package_store_contents: false,
             ..Default::default()
         };
         SafeTreeDeleter::delete_entry(&recent, &dir, &[], &environment, Some(policy), &mut report);

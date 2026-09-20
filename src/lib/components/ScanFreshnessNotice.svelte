@@ -1,6 +1,28 @@
 <script lang="ts">
   import { scanStore } from '../stores/scan.svelte';
+  import { tauriOpenFullDiskAccessSettings } from '../utils/tauri';
   import Button from './Button.svelte';
+
+  let settingsError = $state<string | null>(null);
+
+  let fullDiskAccessGapCount = $derived(
+    scanStore.lastScan?.gaps
+      ?.filter((gap) => gap.kind === 'full_disk_access')
+      .reduce((total, gap) => total + gap.count, 0) ?? 0
+  );
+  let hasFullDiskAccessGap = $derived(fullDiskAccessGapCount > 0);
+  let hasSelectorTruncationGap = $derived(
+    scanStore.lastScan?.gaps?.some((gap) => gap.kind === 'selector_truncated') ?? false
+  );
+
+  async function openFullDiskAccessSettings() {
+    settingsError = null;
+    try {
+      await tauriOpenFullDiskAccessSettings();
+    } catch (error) {
+      settingsError = error instanceof Error ? error.message : String(error);
+    }
+  }
 
   /** How much of the last scan could not be measured, as an operator summary. */
   let measurementGaps = $derived.by(() => {
@@ -29,9 +51,19 @@
       {:else if scanStore.freshness === 'partial' && scanStore.cancelledScanNotice}
         {scanStore.cancelledScanNotice}
       {:else if scanStore.freshness === 'partial'}
-        Partial scan completed. Some locations could not be fully inspected, so displayed totals are lower bounds (≥). Incomplete items cannot be auto-cleaned.
+        {#if hasFullDiskAccessGap}
+          macOS denied access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Grant Full Disk Access to Zenith, then scan again. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
+        {:else if hasSelectorTruncationGap}
+          Some locations were not inspected because the scan reached its bounded root limit. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
+        {:else}
+          Partial scan completed. Some locations could not be fully inspected, so displayed totals are lower bounds (≥). Incomplete items cannot be auto-cleaned.
+        {/if}
       {:else if scanStore.freshness === 'unavailable'}
-        Scan results are unavailable because the configured locations could not be inspected. Cleaning is blocked until a scan succeeds.
+        {#if hasFullDiskAccessGap}
+          Scan results are unavailable because macOS denied access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Grant Full Disk Access to Zenith, then scan again. Cleaning is blocked until a scan succeeds.
+        {:else}
+          Scan results are unavailable because the configured locations could not be inspected. Cleaning is blocked until a scan succeeds.
+        {/if}
       {:else if scanStore.lastScan}
         Results are out of date. Scan again, then review the new selection before cleaning.
       {:else}
@@ -42,9 +74,19 @@
           {measurementGaps}
         </span>
       {/if}
+      {#if settingsError}
+        <span class="mt-1 block text-destructive">{settingsError}</span>
+      {/if}
     </span>
-    <Button size="sm" variant="outline" disabled={scanStore.isScanning || scanStore.isCleaning} onclick={() => scanStore.runScan()}>
-      {scanStore.isScanning ? 'Scanning…' : 'Scan Again'}
-    </Button>
+    <span class="flex shrink-0 flex-wrap items-center gap-2">
+      {#if hasFullDiskAccessGap && (scanStore.freshness === 'partial' || scanStore.freshness === 'unavailable')}
+        <Button size="sm" variant="secondary" onclick={openFullDiskAccessSettings}>
+          Open System Settings
+        </Button>
+      {/if}
+      <Button size="sm" variant="outline" disabled={scanStore.isScanning || scanStore.isCleaning} onclick={() => scanStore.runScan()}>
+        {scanStore.isScanning ? 'Scanning…' : 'Scan Again'}
+      </Button>
+    </span>
   </div>
 {/if}

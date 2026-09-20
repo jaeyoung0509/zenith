@@ -237,6 +237,7 @@ mod tests {
             errors: vec!["locked shard".to_string()],
             os_error_codes: vec![],
             protect_structured_state: false,
+            allow_cargo_package_store_contents: false,
         });
 
         let error = result.expect_err("a partial delete must remain a failure");

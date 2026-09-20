@@ -25,6 +25,7 @@ pub trait SystemActionProvider: Send + Sync {
     fn open_folder(&self, path: &Path) -> Result<(), String>;
     fn open_terminal(&self, path: &Path) -> Result<(), String>;
     fn open_storage_settings(&self) -> Result<(), String>;
+    fn open_full_disk_access_settings(&self) -> Result<(), String>;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -229,6 +230,24 @@ impl SystemActionProvider for NativeSystemActions {
             Err("Storage settings are unavailable on this platform.".to_string())
         }
     }
+
+    fn open_full_disk_access_settings(&self) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            // This is the Privacy & Security > Full Disk Access pane, not the
+            // Storage settings page used by disk-capacity actions.
+            Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")
+                .spawn()
+                .map_err(|error| format!("Could not open Full Disk Access settings: {error}"))?;
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err("Full Disk Access settings are only available on macOS.".to_string())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -267,6 +286,10 @@ impl SystemActionProvider for MockSystemActions {
     }
 
     fn open_storage_settings(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn open_full_disk_access_settings(&self) -> Result<(), String> {
         Ok(())
     }
 }

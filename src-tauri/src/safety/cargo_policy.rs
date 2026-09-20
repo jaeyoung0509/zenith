@@ -1,0 +1,276 @@
+//! Context-aware protection rules for owner-managed Cargo cache units.
+//!
+//! Cargo registry sources and git dependency stores are rebuildable package
+//! artifacts. Their downloaded trees legitimately contain names (`Cargo.lock`,
+//! `Cargo.toml`, scripts, executables, configuration, and fixtures) that the
+//! generic structured-state classifier protects in user data. The exception is
+//! therefore scoped to registered Cargo signatures and exact environment-
+//! resolved package-store roots; it is never a basename-wide exception.
+
+use std::path::{Path, PathBuf};
+
+use crate::models::{
+    classify_structured_state, EntryKind, PathFacts, Signature, StructuredStateKind,
+};
+use zenith_platform::PlatformEnvironment;
+
+pub const REGISTRY_SOURCE_SIGNATURE_ID: &str = "dev.cargo.registry.src";
+pub const GIT_CACHE_SIGNATURE_ID: &str = "dev.cargo.git";
+
+/// Returns the exact owner-managed Cargo package-store roots for one catalog
+/// signature in the stated environment.
+fn package_store_roots(signature_id: &str, environment: &PlatformEnvironment) -> Vec<PathBuf> {
+    let Some(home) = environment.user_home() else {
+        return Vec::new();
+    };
+    match signature_id {
+        REGISTRY_SOURCE_SIGNATURE_ID => vec![home.join(".cargo/registry/src")],
+        GIT_CACHE_SIGNATURE_ID => vec![
+            home.join(".cargo/git/checkouts"),
+            home.join(".cargo/git/db"),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a filesystem cleanup target is authorized to treat structured names
+/// as rebuildable Cargo package-store contents.
+///
+/// The caller must have already re-derived the signature's authorized roots.
+/// Requiring the concrete target root to equal both a catalog-authorized root
+/// and one of Cargo's environment-resolved owner-managed roots keeps a forged
+/// signature id, a path-prefix lookalike, or a user project from widening the
+/// exception.
+pub fn allows_cargo_package_store_contents(
+    signature: &Signature,
+    target: &Path,
+    authorized_roots: &[PathBuf],
+    environment: &PlatformEnvironment,
+) -> bool {
+    package_store_roots(&signature.id, environment)
+        .iter()
+        .any(|trusted| {
+            target == trusted
+                && authorized_roots
+                    .iter()
+                    .any(|authorized| authorized == trusted)
+        })
+}
+
+/// Runtime counterpart of the planning authorization above. Execution repeats
+/// the exact environment/root check before recursive mutation.
+pub fn target_allows_cargo_package_store_contents(
+    signature_id: &str,
+    target: &Path,
+    unit_root: &Path,
+    environment: &PlatformEnvironment,
+) -> bool {
+    target == unit_root
+        && package_store_roots(signature_id, environment)
+            .iter()
+            .any(|trusted| unit_root == trusted)
+}
+
+/// Returns whether an entry belongs to an already-verified Cargo package-store
+/// unit and may therefore bypass the generic name-shaped structured-state
+/// classifier.
+///
+/// Once the target has satisfied the exact signature/root checks above, most
+/// regular files and directories are downloaded package contents: a crate may
+/// legitimately contain shell scripts, executable fixtures, configuration,
+/// credentials-shaped examples, or database fixtures, and Cargo regenerates
+/// them with the package tree. `Cargo.lock` is package metadata, not evidence
+/// of a live owner.
+///
+/// Runtime lock/pid markers and application bundles remain protected. Those
+/// names can represent live Cargo/Git state or an independently managed
+/// installable object, so the owner policy must not turn the scoped exception
+/// into an unrestricted structured-state bypass. Symlinks/reparse points,
+/// special filesystem entries, mount boundaries, blacklists, TOCTOU identity,
+/// and process guards remain enforced by their dedicated boundaries as well.
+pub fn allows_cargo_package_store_entry(
+    path: &Path,
+    entry_kind: EntryKind,
+    allow_cargo_package_store_contents: bool,
+) -> bool {
+    if !allow_cargo_package_store_contents
+        || !matches!(entry_kind, EntryKind::File | EntryKind::Directory)
+    {
+        return false;
+    }
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    match classify_structured_state(PathFacts::new(&name, entry_kind)) {
+        Some(StructuredStateKind::Lock) => name.eq_ignore_ascii_case("Cargo.lock"),
+        Some(StructuredStateKind::ApplicationBundle) => false,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Category, CleanStrategy, PlatformKind, RiskTier};
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use zenith_platform::path_algebra::PathFlavor;
+    use zenith_platform::paths::SimulatedPaths;
+
+    fn signature(id: &str) -> Signature {
+        Signature {
+            id: id.into(),
+            name: "Cargo source".into(),
+            category: Category::Developer,
+            risk: RiskTier::Rebuild,
+            strategy: CleanStrategy::DeleteContents,
+            paths: vec![],
+            exclusions: vec![],
+            description: String::new(),
+            min_age_days: None,
+            include_prefixes: vec![],
+            exclude_prefixes: vec![],
+            intensive_only: false,
+            platforms: vec![PlatformKind::Macos],
+            provider: "Cargo".into(),
+            provider_id: None,
+            management_mode: Default::default(),
+            artifact_kind: Default::default(),
+            consequence: String::new(),
+            reclaimable_is_lower_bound: false,
+            discovery: Default::default(),
+            unit: None,
+            owner: "Cargo".into(),
+            priority: 0,
+            fail_if_running: vec![],
+        }
+    }
+
+    fn environment(home: &Path) -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::Posix).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::Posix)
+                .with_home(home),
+        ))
+    }
+
+    #[test]
+    fn only_exact_registered_cargo_package_store_roots_get_the_exception() {
+        let dir = tempdir().unwrap();
+        let environment = environment(dir.path());
+        let registry_root = dir.path().join(".cargo/registry/src");
+        let git_checkouts = dir.path().join(".cargo/git/checkouts");
+        let git_db = dir.path().join(".cargo/git/db");
+
+        let registry = signature(REGISTRY_SOURCE_SIGNATURE_ID);
+        assert!(allows_cargo_package_store_contents(
+            &registry,
+            &registry_root,
+            std::slice::from_ref(&registry_root),
+            &environment
+        ));
+        assert!(!allows_cargo_package_store_contents(
+            &registry,
+            &registry_root.join("index.crates.io-1949cf8c6b5b557f"),
+            std::slice::from_ref(&registry_root),
+            &environment
+        ));
+        assert!(!allows_cargo_package_store_contents(
+            &registry,
+            &git_checkouts,
+            std::slice::from_ref(&git_checkouts),
+            &environment
+        ));
+
+        let git = signature(GIT_CACHE_SIGNATURE_ID);
+        assert!(allows_cargo_package_store_contents(
+            &git,
+            &git_checkouts,
+            std::slice::from_ref(&git_checkouts),
+            &environment
+        ));
+        assert!(allows_cargo_package_store_contents(
+            &git,
+            &git_db,
+            std::slice::from_ref(&git_db),
+            &environment
+        ));
+        assert!(!allows_cargo_package_store_contents(
+            &git,
+            &dir.path().join("project"),
+            std::slice::from_ref(&dir.path().join("project")),
+            &environment
+        ));
+        assert!(target_allows_cargo_package_store_contents(
+            GIT_CACHE_SIGNATURE_ID,
+            &git_checkouts,
+            &git_checkouts,
+            &environment
+        ));
+        assert!(!target_allows_cargo_package_store_contents(
+            GIT_CACHE_SIGNATURE_ID,
+            &dir.path().join("project"),
+            &dir.path().join("project"),
+            &environment
+        ));
+    }
+
+    #[test]
+    fn verified_cargo_package_store_allows_package_contents_but_not_runtime_markers() {
+        let dir = tempdir().unwrap();
+        let environment = environment(dir.path());
+        let project = dir.path().join("project");
+        let signature = signature("test.generic");
+        assert!(!allows_cargo_package_store_contents(
+            &signature,
+            &project,
+            std::slice::from_ref(&project),
+            &environment
+        ));
+
+        for path in [
+            "/home/me/.cargo/registry/src/pkg/Cargo.lock",
+            "/home/me/.cargo/registry/src/pkg/Cargo.toml",
+            "/home/me/.cargo/registry/src/pkg/build.sh",
+            "/home/me/.cargo/registry/src/pkg/state.sqlite",
+        ] {
+            assert!(allows_cargo_package_store_entry(
+                Path::new(path),
+                EntryKind::File,
+                true
+            ));
+        }
+        assert!(allows_cargo_package_store_entry(
+            Path::new("/home/me/.cargo/registry/src/pkg/auth.json"),
+            EntryKind::File,
+            true
+        ));
+        for path in [
+            "/home/me/.cargo/registry/src/pkg/app.lock",
+            "/home/me/.cargo/registry/src/pkg/server.pid",
+        ] {
+            assert!(!allows_cargo_package_store_entry(
+                Path::new(path),
+                EntryKind::File,
+                true
+            ));
+        }
+        assert!(!allows_cargo_package_store_entry(
+            Path::new("/home/me/.cargo/registry/src/pkg/Tool.app"),
+            EntryKind::Directory,
+            true
+        ));
+        assert!(!allows_cargo_package_store_entry(
+            Path::new("/home/me/.cargo/registry/src/pkg/Cargo.lock"),
+            EntryKind::Other,
+            true
+        ));
+        assert!(!allows_cargo_package_store_entry(
+            Path::new("/home/me/.cargo/registry/src/pkg/build.sh"),
+            EntryKind::File,
+            false
+        ));
+    }
+}

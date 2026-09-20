@@ -218,6 +218,10 @@ export function tauriOpenStorageSettings(): Promise<void> {
   return api.openStorageSettings();
 }
 
+export function tauriOpenFullDiskAccessSettings(): Promise<void> {
+  return api.openFullDiskAccessSettings();
+}
+
 export function tauriGetDockerStatus(): Promise<DockerStatus> {
   return api.getDockerStatus();
 }

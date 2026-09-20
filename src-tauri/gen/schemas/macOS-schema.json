@@ -399,6 +399,12 @@
           "markdownDescription": "Enables the open_dashboard_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_full_disk_access_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-full-disk-access-settings",
+          "markdownDescription": "Enables the open_full_disk_access_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_logs_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-logs-folder",
@@ -799,6 +805,12 @@
           "type": "string",
           "const": "deny-open-dashboard-window",
           "markdownDescription": "Denies the open_dashboard_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_full_disk_access_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-full-disk-access-settings",
+          "markdownDescription": "Denies the open_full_disk_access_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the open_logs_folder command without any pre-configured scope.",
