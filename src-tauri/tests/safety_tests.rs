@@ -3302,6 +3302,65 @@ fn cargo_registry_source_with_package_lock_is_plannable_and_cleanable() {
 }
 
 #[test]
+fn cargo_git_checkout_with_package_metadata_is_plannable_and_cleanable() {
+    let fixture = tempdir().expect("fixture");
+    let checkouts_root = fixture.path().join(".cargo/git/checkouts");
+    let checkout = checkouts_root.join("example-0123456789abcdef/abcdef0");
+    fs::create_dir_all(&checkout).unwrap();
+    fs::write(
+        checkout.join("Cargo.toml"),
+        b"[package]\nname = \"example\"\n",
+    )
+    .unwrap();
+    fs::write(checkout.join("build.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::write(checkout.join("fixture.sqlite"), b"fixture").unwrap();
+
+    let environment =
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(std::sync::Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(fixture.path())
+                .with_temp_dir(fixture.path()),
+        ));
+    let mut registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+    let mut signature = registry
+        .get("dev.cargo.git")
+        .expect("the Cargo git signature is in the catalog")
+        .clone();
+    // The test process itself is Cargo, so disable only this fixture's process
+    // guard; production still refuses cleanup while Cargo/rustc is active.
+    signature.fail_if_running.clear();
+    registry.register(signature.clone());
+
+    let mut item = zenith_lib::scanner::DirectoryScanner::scan_signature(
+        &signature,
+        &environment,
+        &zenith_lib::models::NeverCancelled,
+    )
+    .into_iter()
+    .find(|item| item.path == checkouts_root.to_string_lossy())
+    .expect("the scanner reports the configured Cargo git checkout root");
+    item.is_selected = true;
+
+    let plan = SafetyPlanner::create_plan_with_environment(&[item], &registry, &environment)
+        .expect("owner-managed Cargo git checkout contents are rebuildable");
+    let result = CleanExecutor::execute(
+        plan,
+        &environment,
+        &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+        |_| {},
+    );
+
+    assert_eq!(result.items.len(), 1);
+    assert!(result.items[0].success, "{:?}", result.items[0]);
+    assert!(!checkout.exists());
+    assert!(
+        checkouts_root.exists(),
+        "the configured Cargo git root remains"
+    );
+}
+
+#[test]
 fn generic_project_cargo_lock_remains_protected() {
     let fixture = tempdir().expect("fixture");
     let project = fixture.path().join("project");
