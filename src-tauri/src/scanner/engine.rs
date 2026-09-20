@@ -742,8 +742,7 @@ mod tests {
             Some(ScanGapKind::DepthLimit)
         );
 
-        protected.path =
-            zenith_platform::path_algebra::join(home, "ordinary", PathFlavor::Posix);
+        protected.path = zenith_platform::path_algebra::join(home, "ordinary", PathFlavor::Posix);
         protected.incomplete_reason = Some("I/O failure".to_string());
         assert_eq!(
             scan_gap_kind(&environment, &protected),
