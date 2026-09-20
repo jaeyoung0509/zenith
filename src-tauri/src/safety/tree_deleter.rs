@@ -810,7 +810,10 @@ impl SafeTreeDeleter {
         if let Some((kind, _)) = report
             .protect_structured_state
             .then(|| {
-                super::structured_state_at_with_policy(path, report.allow_cargo_package_store_contents)
+                super::structured_state_at_with_policy(
+                    path,
+                    report.allow_cargo_package_store_contents,
+                )
             })
             .flatten()
         {
