@@ -186,3 +186,15 @@ on a supported Windows 11 desktop yet.
 Microsoft references: [Known Folders](https://learn.microsoft.com/en-us/windows/win32/shell/known-folders),
 [user profiles](https://learn.microsoft.com/en-us/windows/win32/shell/about-user-profiles),
 [power request lifecycle](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-powersetrequest).
+
+## Reusable aggregate evidence for #224 / #227
+
+`cargo run -p zenith-desktop --example scan_machine -- --live-read-only`
+records selected TEMP, application-data, packaged-app, browser, and developer
+filesystem signatures through the ordinary scan engine. Save its JSON with the
+exact Windows 11 build, application version, run date, and hardware. It reports
+missing platform signatures and zero-item coverage explicitly. It does not
+exercise Recycle Bin actions, Docker/provider commands, or destructive cleanup;
+those manual fixture cases still require separate evidence. A partial result
+must remain partial in the run record. No Windows 11 desktop execution is
+recorded by the 0.3.45 Mac evidence added in this series.

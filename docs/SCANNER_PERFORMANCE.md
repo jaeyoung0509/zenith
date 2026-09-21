@@ -114,7 +114,7 @@ compared against a known point rather than against a feeling.
 | Machine | OS build | Date | Zenith | Baseline |
 |---|---|---|---|---|
 | MacBook Air (Apple M1, 8 cores) | macOS 27.0 (26A428), Darwin 27.0.0 | 2026-09-19 | 0.3.36 | the table below |
-| GitHub `windows-latest` runner (Windows Server, x86_64) | as reported by the runner | 2026-09-19 | 0.3.36 | the table below |
+| MacBook Air (Apple M1, 8 cores, 16 GiB) | macOS 27.0 (26A428) | 2026-09-21 UTC | 0.3.45 | [synthetic and live evidence](validation/2026-09-21-macos-0.3.45.json) |
 
 macOS, `cargo test -p zenith-desktop --test scan_benchmark -- --nocapture`:
 
@@ -130,28 +130,11 @@ symlink                     96        4            2           2           1    
 cancellation                60        2            1           1           1        0           4096            4096   (cancelled)
 ```
 
-Windows, from the `Rust Checks (Windows x64)` job's log (the same command):
-
-```text
-fixture            duration_ms  visited  directories  peak_tasks  candidates  skipped  logical_bytes  on-disk_bytes
-wide                       316      801          201          16           1        0        2560000         2560000
-deep                        16       35           33           3           1        1           4096            4096
-mixed_size                   2        8            2           2           1        0        3163827         3163827
-mixed_age                  239        7            3           0           2        0          16384           16384
-overlapping_roots            2        6            3           2           1        0          12288           12288
-cancellation                 1        2            1           1           1        0           4096            4096   (cancelled)
-```
-
-The Windows row is where the two byte populations differ from macOS: the
-on-disk population equals the logical one, because `GetCompressedFileSizeW`
-reports what a file actually occupies and a small resident file occupies its
-logical size. Same fixtures, same counts, same candidates — a different
-platform's answer to "how many bytes are on disk".
-
-The same job ran the Windows-gated traversal tests, which is the evidence the
-junction rule rests on: `a_junction_inside_a_candidate_is_never_traversed` and
-`a_junction_root_is_refused_rather_than_walked` both pass on a real Windows
-runner.
+Windows CI regenerates the portable fixture baseline and runs the native
+junction tests. This is Windows runner coverage, not a supported Windows 11
+desktop baseline. The former numeric Windows table omitted its exact OS build
+and run link, so it is no longer presented as reproducible machine evidence.
+The remaining desktop checks are tracked in [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md).
 
 Two byte populations are reported, and only one of them is a committed fact:
 `logical_bytes` is a property of the tree and is identical on every machine,
@@ -178,3 +161,29 @@ stated in [WINDOWS_VALIDATION.md](WINDOWS_VALIDATION.md); the traversal rule is
 that the walk uses one classifier (`SymlinkGuard`) for links and reparse points
 in every walk, so a junction is a boundary in the walker and in the size
 measurement alike rather than only in one of them.
+
+## Repeating a read-only real-machine scan
+
+Run the synthetic suite above first, then the explicit live observation tool:
+
+```sh
+cargo run -p zenith-desktop --example scan_machine -- --live-read-only
+```
+
+The tool scans a fixed subset of the shipped filesystem catalog with intensive
+observation enabled. It constructs no cleanup plan and invokes no cleanup
+executor or cache-provider command. A cooperative 60-second deadline returns a
+cancelled/partial result; it is not an OS-level timeout for a stalled filesystem
+call. Output contains catalog IDs and aggregate counts/bytes, never item paths,
+user names, or free-form errors. Record the OS build, hardware, date, and version
+alongside the JSON. A zero-item signature is missing coverage, not a passing
+application-specific check. The tool does not validate Docker/provider probes.
+
+The [0.3.45 Mac record](validation/2026-09-21-macos-0.3.45.json) contains both
+synthetic fixture results and an actual cache scan. The live result was partial:
+sandbox access refusals remain visible in the incomplete/skipped totals. No
+cleanup ran. Cursor/Go produced no items, so that run does not establish their
+real-machine behavior. Timings include background developer activity and are
+observations for comparison, not new pass/fail thresholds. Windows 11 desktop
+validation and the uncovered Mac application/provider cases remain open in
+#224/#227; #221 cannot close on this evidence alone.

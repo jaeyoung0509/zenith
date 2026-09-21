@@ -1,0 +1,234 @@
+{
+  "machine": {
+    "hardware": "MacBook Air, Apple M1, 8 cores, 16 GiB",
+    "os": "macOS 27.0",
+    "os_build": "26A428",
+    "date_utc": "2026-09-21",
+    "zenith": "0.3.45"
+  },
+  "synthetic_fixtures": [
+    {
+      "fixture": "cancellation",
+      "duration_ms": 72,
+      "visited_entries": 2,
+      "directories_read": 1,
+      "peak_outstanding_directory_tasks": 1,
+      "candidate_count": 1,
+      "skipped_entries": 0,
+      "logical_bytes": 4096,
+      "total_bytes": 4096,
+      "cancelled": true,
+      "rss_growth_kib": 0
+    },
+    {
+      "fixture": "deep",
+      "duration_ms": 84,
+      "visited_entries": 35,
+      "directories_read": 33,
+      "peak_outstanding_directory_tasks": 2,
+      "candidate_count": 1,
+      "skipped_entries": 1,
+      "logical_bytes": 4096,
+      "total_bytes": 4096,
+      "cancelled": false,
+      "rss_growth_kib": 272
+    },
+    {
+      "fixture": "inaccessible",
+      "duration_ms": 251,
+      "visited_entries": 3,
+      "directories_read": 2,
+      "peak_outstanding_directory_tasks": 2,
+      "candidate_count": 1,
+      "skipped_entries": 1,
+      "logical_bytes": 4096,
+      "total_bytes": 4096,
+      "cancelled": false,
+      "rss_growth_kib": 0
+    },
+    {
+      "fixture": "mixed_age",
+      "duration_ms": 63,
+      "visited_entries": 7,
+      "directories_read": 3,
+      "peak_outstanding_directory_tasks": 0,
+      "candidate_count": 2,
+      "skipped_entries": 0,
+      "logical_bytes": 16384,
+      "total_bytes": 16384,
+      "cancelled": false,
+      "rss_growth_kib": 16
+    },
+    {
+      "fixture": "mixed_size",
+      "duration_ms": 71,
+      "visited_entries": 8,
+      "directories_read": 2,
+      "peak_outstanding_directory_tasks": 2,
+      "candidate_count": 1,
+      "skipped_entries": 0,
+      "logical_bytes": 3163827,
+      "total_bytes": 3174400,
+      "cancelled": false,
+      "rss_growth_kib": 368
+    },
+    {
+      "fixture": "overlapping_roots",
+      "duration_ms": 60,
+      "visited_entries": 6,
+      "directories_read": 3,
+      "peak_outstanding_directory_tasks": 2,
+      "candidate_count": 1,
+      "skipped_entries": 0,
+      "logical_bytes": 12288,
+      "total_bytes": 12288,
+      "cancelled": false,
+      "rss_growth_kib": 16
+    },
+    {
+      "fixture": "symlink",
+      "duration_ms": 86,
+      "visited_entries": 4,
+      "directories_read": 2,
+      "peak_outstanding_directory_tasks": 2,
+      "candidate_count": 1,
+      "skipped_entries": 0,
+      "logical_bytes": 4155,
+      "total_bytes": 4096,
+      "cancelled": false,
+      "rss_growth_kib": 0
+    },
+    {
+      "fixture": "wide",
+      "duration_ms": 142,
+      "visited_entries": 801,
+      "directories_read": 201,
+      "peak_outstanding_directory_tasks": 16,
+      "candidate_count": 1,
+      "skipped_entries": 0,
+      "logical_bytes": 2560000,
+      "total_bytes": 3276800,
+      "cancelled": false,
+      "rss_growth_kib": 6048
+    }
+  ],
+  "cancellation_latency_ms": 0,
+  "live_scan": {
+    "cancelled": false,
+    "categories": [
+      {
+        "category": "ai",
+        "cleanable_bytes": 0,
+        "items": 0,
+        "observed_bytes": 0,
+        "skipped_entries": 0
+      },
+      {
+        "category": "developer",
+        "cleanable_bytes": 0,
+        "items": 0,
+        "observed_bytes": 0,
+        "skipped_entries": 0
+      },
+      {
+        "category": "system",
+        "cleanable_bytes": 43569152,
+        "items": 492,
+        "observed_bytes": 890019840,
+        "skipped_entries": 465
+      }
+    ],
+    "cleanable_bytes": 43569152,
+    "included_signatures": [
+      "system.developer_temp",
+      "system.intensive.user_app_caches",
+      "system.intensive.containers_caches",
+      "system.intensive.group_containers_caches",
+      "system.app_support_cache_segments",
+      "ai.cursor.cache",
+      "dev.go.build",
+      "dev.go.mod"
+    ],
+    "incomplete_items": 465,
+    "metrics": {
+      "directories_read": 839,
+      "duration_ms": 8774,
+      "peak_outstanding_directory_tasks": 1,
+      "visited_entries": 12235
+    },
+    "observed_bytes": 890019840,
+    "platform": "macos",
+    "quality": "partial",
+    "schema": 1,
+    "scope": "selected filesystem signatures; intensive observation enabled; no cleanup",
+    "signature_results": [
+      {
+        "cleanable_bytes": 4276224,
+        "items": 14,
+        "observed_bytes": 32747520,
+        "signature_id": "system.developer_temp"
+      },
+      {
+        "cleanable_bytes": 39292928,
+        "items": 11,
+        "observed_bytes": 788807680,
+        "signature_id": "system.intensive.user_app_caches"
+      },
+      {
+        "cleanable_bytes": 0,
+        "items": 310,
+        "observed_bytes": 0,
+        "signature_id": "system.intensive.containers_caches"
+      },
+      {
+        "cleanable_bytes": 0,
+        "items": 142,
+        "observed_bytes": 0,
+        "signature_id": "system.intensive.group_containers_caches"
+      },
+      {
+        "cleanable_bytes": 0,
+        "items": 15,
+        "observed_bytes": 68464640,
+        "signature_id": "system.app_support_cache_segments"
+      },
+      {
+        "cleanable_bytes": 0,
+        "items": 0,
+        "observed_bytes": 0,
+        "signature_id": "ai.cursor.cache"
+      },
+      {
+        "cleanable_bytes": 0,
+        "items": 0,
+        "observed_bytes": 0,
+        "signature_id": "dev.go.build"
+      },
+      {
+        "cleanable_bytes": 0,
+        "items": 0,
+        "observed_bytes": 0,
+        "signature_id": "dev.go.mod"
+      }
+    ],
+    "skipped_entries": 465,
+    "started_at": 1790002255,
+    "unavailable_signatures": [
+      "system.windows.temp_known",
+      "system.windows.temp_other",
+      "system.windows.roaming_cache_segments",
+      "system.intensive.windows_user_caches",
+      "system.intensive.windows_browser_caches",
+      "system.intensive.windows_packages"
+    ],
+    "version": "0.3.45"
+  },
+  "live_process_maximum_rss_bytes": 27885568,
+  "live_process_wall_seconds": 8.79,
+  "limitations": [
+    "Live scan was partial; inaccessible sandbox roots remain unverified.",
+    "Cursor and Go signatures produced no items; those applications are not validated by this run.",
+    "Docker and provider commands, cleanup execution, and Windows 11 desktop behavior were not exercised.",
+    "Measurements were collected on a developer machine with background build activity; timings are observations, not release thresholds."
+  ]
+}

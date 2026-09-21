@@ -48,12 +48,10 @@
 //! therefore reported but never compared for equality — that is what the bound
 //! assertion is for.
 //!
-//! Byte totals are the observed (allocated) population, so the committed
-//! baseline states totals that both supported filesystems charge the same way:
-//! APFS blocks and NTFS clusters are 4096 bytes alike, so a file of `n` bytes
-//! allocates `ceil(n / 4096)` blocks on either — one block for the 3-byte file,
-//! two for the 5000-byte one. That is what lets a single file be regenerated and
-//! diffed on both platform jobs.
+//! The committed byte population is logical size, which is a property of the
+//! fixture. Allocated bytes are measured and bounded separately: APFS and NTFS
+//! can charge different amounts for the same small, sparse, or compressed file.
+//! The portable baseline must never assume their allocation rules are equal.
 //!
 //! Traversal counts are scheduler-independent: the pooled and inline walks
 //! count each filesystem entry once, so the committed baseline describes the
