@@ -336,7 +336,31 @@ impl Blacklist {
         // prefix that wraps a drive or UNC path and refuses the rest, and
         // normalizing first would strip `\\?\GLOBALROOT\...` into a harmless
         // looking relative path before that rule could see it.
-        classify_windows(&path.to_string_lossy(), described).is_denied()
+        Self::windows_with_alias_resolution(path, described, |path| {
+            std::fs::canonicalize(path).ok()
+        })
+    }
+
+    fn windows_with_alias_resolution(
+        path: &Path,
+        described: &BlacklistEnvironment,
+        resolve: impl FnOnce(&Path) -> Option<PathBuf>,
+    ) -> bool {
+        let text = path.to_string_lossy();
+        // Windows itself can supply an 8.3 profile in TEMP. Resolve an existing
+        // alias before classification; unresolved or still-ambiguous names stay
+        // refused. The independent symlink and identity guards still apply.
+        let verdict = classify_windows(&text, described);
+        if matches!(
+            verdict.reason(),
+            Some("unresolvable 8.3 short name" | "unresolvable 8.3 short name under a drive root")
+        ) {
+            let Some(resolved) = resolve(path) else {
+                return true;
+            };
+            return classify_windows(&resolved.to_string_lossy(), described).is_denied();
+        }
+        verdict.is_denied()
     }
 
     /// macOS protection uses a conservative comparison key even on case-sensitive
@@ -366,7 +390,7 @@ impl Blacklist {
         else {
             return true;
         };
-        if !path.is_absolute() {
+        if !path_algebra::is_absolute(raw_path, PathFlavor::Posix) {
             return true;
         }
         let path = key(raw_path);
@@ -482,6 +506,32 @@ impl Blacklist {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_aliases_require_resolution_and_recheck_the_resolved_location() {
+        let environment = windows_environment();
+        let alias = Path::new(r"D:\Users\ME~1\AppData\Local\Temp\cache");
+        assert!(!Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| { Some(PathBuf::from(r"D:\Users\me\AppData\Local\Temp\cache")) }
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| None
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| { Some(PathBuf::from(r"D:\Users\me\Documents\private")) }
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| Some(alias.into())
+        ));
+    }
 
     fn posix_environment() -> BlacklistEnvironment {
         BlacklistEnvironment {
