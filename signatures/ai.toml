@@ -11,11 +11,6 @@ paths = [
     "~/.claude/logs",
     "~/.claude/mcp-logs"
 ]
-exclusions = [
-    "~/.claude/config.json",
-    "~/.claude/credentials.json",
-    "~/.claude/auth.json"
-]
 description = "Diagnostic and MCP interaction logs generated during Claude Code sessions."
 
 [[signatures]]
@@ -27,12 +22,6 @@ strategy = "delete_contents"
 paths = [
     "~/.claude/cache",
     "~/.claude/tmp"
-]
-exclusions = [
-    "~/.claude/config.json",
-    "~/.claude/settings.json",
-    "~/.claude/prompts",
-    "~/.claude/skills"
 ]
 description = "Temporary context cache and downloaded transient assets."
 
@@ -50,14 +39,6 @@ paths = [
     "${ROAMING_APP_DATA}/Cursor/Cache",
     "${ROAMING_APP_DATA}/Cursor/Code Cache",
     "${ROAMING_APP_DATA}/Cursor/GPUCache"
-]
-exclusions = [
-    "~/Library/Application Support/Cursor/User/settings.json",
-    "~/Library/Application Support/Cursor/User/keybindings.json",
-    "~/Library/Application Support/Cursor/User/snippets",
-    "${ROAMING_APP_DATA}/Cursor/User/settings.json",
-    "${ROAMING_APP_DATA}/Cursor/User/keybindings.json",
-    "${ROAMING_APP_DATA}/Cursor/User/snippets"
 ]
 description = "V8 code cache, GPU shader cache, and webview temporary storage for Cursor."
 
@@ -99,17 +80,7 @@ exclusions = [
     "~/.gemini/antigravity-cli/cache/onboarding.json",
     "~/.gemini/antigravity-cli/cache/default_project_id.txt",
     "onboarding.json",
-    "default_project_id.txt",
-    "~/.gemini/antigravity-cli/settings.json",
-    "~/.gemini/antigravity-cli/keybindings.json",
-    "~/.gemini/antigravity-cli/installation_id",
-    "~/.gemini/antigravity-cli/jetski_state.pbtxt",
-    "~/.gemini/oauth_creds.json",
-    "~/.gemini/google_accounts.json",
-    "~/.gemini/state.json",
-    "~/.gemini/mcp-oauth-tokens-v2.json",
-    "~/.gemini/config.json",
-    "~/.gemini/credentials.json"
+    "default_project_id.txt"
 ]
 description = "Temporary session files and cached search/API tokens."
 
@@ -135,11 +106,6 @@ paths = [
     "~/.codex/cache",
     "~/.codex/tmp"
 ]
-exclusions = [
-    "~/.codex/auth.json",
-    "~/.codex/config.toml",
-    "~/.codex/sessions"
-]
 description = "Codex prompt caches and temporary scratchpads."
 
 [[signatures]]
@@ -163,10 +129,6 @@ strategy = "delete_contents"
 paths = [
     "~/.opencode/cache",
     "~/.opencode/logs"
-]
-exclusions = [
-    "~/.opencode/auth.json",
-    "~/.opencode/config.json"
 ]
 description = "Temporary telemetry and API response caches."
 

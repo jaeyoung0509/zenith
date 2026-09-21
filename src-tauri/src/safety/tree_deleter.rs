@@ -1,13 +1,12 @@
 #[cfg(windows)]
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
-use crate::signatures::SignatureLoader;
 #[cfg(unix)]
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use zenith_platform::{PathFlavor, PlatformEnvironment};
+use zenith_platform::PlatformEnvironment;
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -955,6 +954,10 @@ impl SafeTreeDeleter {
                     report.skipped_files += 1;
                 }
                 Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                    report.errors.push(format!(
+                        "{}: directory remains after cleanup; retained entries were not removed",
+                        child_path.display()
+                    ));
                     Self::restore_directory_permissions(&child_path, child_permissions, report);
                 }
                 Err(error) => {
@@ -1195,6 +1198,10 @@ impl SafeTreeDeleter {
                     report.skipped_files += 1;
                 }
                 Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                    report.errors.push(format!(
+                        "{}: directory remains after cleanup; retained entries were not removed",
+                        path.display()
+                    ));
                     Self::restore_directory_permissions(path, permissions, report);
                 }
                 Err(error) => {
@@ -1257,6 +1264,10 @@ impl SafeTreeDeleter {
             match remove_result {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                    report.errors.push(format!(
+                        "{}: directory remains after cleanup; retained entries were not removed",
+                        path.display()
+                    ));
                     Self::restore_directory_permissions(path, permissions, report);
                 }
                 Err(error) => {
@@ -1270,6 +1281,10 @@ impl SafeTreeDeleter {
         match fs::remove_dir(path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                report.errors.push(format!(
+                    "{}: directory remains after cleanup; retained entries were not removed",
+                    path.display()
+                ));
                 Self::restore_directory_permissions(path, permissions, report);
             }
             Err(error) => {
@@ -1707,36 +1722,7 @@ impl SafeTreeDeleter {
     }
 
     fn is_excluded(path: &Path, exclusions: &[String], environment: &PlatformEnvironment) -> bool {
-        exclusions.iter().any(|exclusion| {
-            if SignatureLoader::expand_exclusion(exclusion, environment).is_some_and(|expanded| {
-                Self::paths_equal(path, &expanded, environment.flavor())
-                    || Self::path_starts_with(path, &expanded, environment.flavor())
-            }) {
-                return true;
-            }
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == exclusion)
-        })
-    }
-
-    /// The shared flavor-parameterized rules, so exclusion matching cannot
-    /// drift from the path algebra the rest of the tree uses and the Windows
-    /// semantics are covered on every runner.
-    fn paths_equal(left: &Path, right: &Path, flavor: PathFlavor) -> bool {
-        zenith_platform::path_algebra::equal(
-            &left.to_string_lossy(),
-            &right.to_string_lossy(),
-            flavor,
-        )
-    }
-
-    fn path_starts_with(path: &Path, base: &Path, flavor: PathFlavor) -> bool {
-        zenith_platform::path_algebra::contains(
-            &base.to_string_lossy(),
-            &path.to_string_lossy(),
-            flavor,
-        )
+        crate::signatures::exclusions::is_excluded(path, exclusions, environment)
     }
 }
 
@@ -2230,7 +2216,9 @@ mod tests {
         );
         assert!(recent_only.exists(), "its recent entry stays");
         assert_eq!(report.skipped_files, 2);
-        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(!report.is_success());
+        assert_eq!(report.errors.len(), 3);
+        assert!(root.is_dir());
         assert!(report.reclaimed_bytes > 0);
     }
 

@@ -1,3 +1,4 @@
+pub mod exclusions;
 pub mod loader;
 pub mod registry;
 

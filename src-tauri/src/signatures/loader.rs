@@ -1,20 +1,11 @@
 use crate::models::{Signature, SignatureManifest, ZenithError};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use zenith_platform::path_algebra::PathFlavor;
 use zenith_platform::{KnownFolder, PlatformEnvironment};
 
 pub struct SignatureLoader;
 
 impl SignatureLoader {
-    /// Loads a signature manifest from a TOML file on disk.
-    pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Vec<Signature>, ZenithError> {
-        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
-            ZenithError::Io(format!("Failed to read {}: {}", path.as_ref().display(), e))
-        })?;
-        Self::load_str(&content)
-    }
-
     /// Rewrites a Windows `%VAR%` spelling into the placeholder the expander
     /// resolves.
     ///
@@ -93,6 +84,7 @@ impl SignatureLoader {
                 *exclusion = Self::normalize_pattern(exclusion);
             }
             sig.validate()?;
+            super::exclusions::validate_reachability(&sig)?;
             valid_signatures.push(sig);
         }
 
@@ -132,7 +124,7 @@ impl SignatureLoader {
             return None;
         }
         let path_shaped = trimmed.starts_with('~')
-            || trimmed.contains("${")
+            || trimmed.starts_with('$')
             || zenith_platform::path_algebra::is_absolute(trimmed, environment.flavor());
         if !path_shaped {
             return None;
@@ -198,6 +190,40 @@ mod tests {
     use zenith_platform::paths::SimulatedPaths;
     use zenith_platform::{KnownFolder, PlatformEnvironment};
 
+    #[test]
+    fn catalog_requires_an_explicit_strategy_and_reachable_exclusions() {
+        let valid = r#"
+[[signatures]]
+id = "test.exclusions"
+name = "Exclusions"
+category = "system"
+risk = "safe"
+strategy = "delete_contents"
+paths = ["~/.cache/tool"]
+exclusions = ["~/.cache/tool/keep.bin"]
+"#;
+        assert_eq!(SignatureLoader::load_str(valid).unwrap().len(), 1);
+        let missing = valid.replace("strategy = \"delete_contents\"", "");
+        assert!(SignatureLoader::load_str(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("strategy"));
+        let unreachable = valid.replace("~/.cache/tool/keep.bin", "~/.cache/sibling/keep.bin");
+        assert!(SignatureLoader::load_str(&unreachable)
+            .unwrap_err()
+            .to_string()
+            .contains("unreachable exclusion"));
+        let relative = valid.replace("~/.cache/tool/keep.bin", "relative/keep.bin");
+        assert!(SignatureLoader::load_str(&relative)
+            .unwrap_err()
+            .to_string()
+            .contains("bare entry name"));
+        let selector = valid
+            .replace("~/.cache/tool\"]", "~/.cache/*/{Cache,Temp}\"]")
+            .replace("~/.cache/tool/keep.bin", "~/.cache/editor/Cache/keep.bin");
+        assert_eq!(SignatureLoader::load_str(&selector).unwrap().len(), 1);
+    }
+
     /// A manifest written the way Windows documents paths resolves, and a
     /// spelling this build does not know fails the load instead of quietly
     /// matching nothing.
@@ -215,6 +241,7 @@ paths = [
     "%TMP%",
     "%SystemRoot%\\Temp",
     "%USERPROFILE%\\AppData\\Roaming",
+    "%APPDATA%\\tool",
 ]
 exclusions = ["%APPDATA%\\tool\\settings.json"]
 "#;

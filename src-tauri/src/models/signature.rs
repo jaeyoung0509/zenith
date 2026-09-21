@@ -29,7 +29,6 @@ pub struct Signature {
     pub name: String,
     pub category: Category,
     pub risk: RiskTier,
-    #[serde(default = "default_strategy")]
     pub strategy: CleanStrategy,
     #[serde(default)]
     pub paths: Vec<String>,
@@ -391,10 +390,6 @@ impl Signature {
     pub fn supports_current_platform(&self) -> bool {
         self.platforms.is_empty() || self.platforms.contains(&PlatformKind::current())
     }
-}
-
-fn default_strategy() -> CleanStrategy {
-    CleanStrategy::DeleteContents
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]

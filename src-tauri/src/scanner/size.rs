@@ -824,19 +824,7 @@ impl SizeCalculator {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> bool {
-        let child_str = child_path.to_string_lossy();
-        exclusions.iter().any(|exclusion| {
-            if crate::signatures::SignatureLoader::expand_exclusion(exclusion, environment)
-                .is_some_and(|expanded| child_path == expanded || child_path.starts_with(expanded))
-            {
-                return true;
-            }
-            child_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == exclusion)
-                || child_str.contains(exclusion)
-        })
+        crate::signatures::exclusions::is_excluded(child_path, exclusions, environment)
     }
 
     fn measure_dir_recursive(

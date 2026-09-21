@@ -317,6 +317,16 @@ a selector — `Cache*`, `**`, and nested braces are refused when the catalog
 loads, because a pattern that silently matches nothing is an entry that
 silently does nothing.
 
+Every signature explicitly declares its execution `strategy`; omitting it is a
+load error. Path exclusions must be reachable from a declared root, including
+selector alternatives. Authoring uses the same root expression on both sides
+(with `~`/`${USER_HOME}` and `$TMPDIR`/`${TEMP}` aliases normalized), rather than
+assuming two different platform placeholders will resolve to one directory.
+Discovery, byte measurement, and deletion share one matcher: a resolved path
+excludes its subtree and a bare name excludes exactly that name, never arbitrary
+substrings. An attempted directory removal that leaves retained entries reports
+an incomplete cleanup, including when `.git` appeared after validation.
+
 A selector is allowed in `paths` only. `exclusions`, `include_prefixes`, and
 `exclude_prefixes` are matched against concrete names or paths, so selector
 syntax there is a load error rather than a pattern that protects nothing.

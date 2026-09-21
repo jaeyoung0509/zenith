@@ -1430,15 +1430,7 @@ impl DirectoryScanner {
                 continue;
             }
 
-            let child_str = child_path.to_string_lossy();
-            if exclusions.iter().any(|ex| {
-                child_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n == ex)
-                    .unwrap_or(false)
-                    || child_str.contains(ex)
-            }) {
+            if crate::signatures::exclusions::is_excluded(&child_path, exclusions, environment) {
                 stats.skipped_entries += 1;
                 continue;
             }

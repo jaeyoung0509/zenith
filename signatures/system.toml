@@ -48,11 +48,6 @@ paths = ["~/Library/Caches"]
 min_age_days = 7
 exclude_prefixes = [
     "com.apple.",
-    "CloudKit",
-    "FamilyCircle",
-    "GeoServices",
-    "HomeKit",
-    "Safari",
     "dotslash",
     "ms-playwright"
 ]
