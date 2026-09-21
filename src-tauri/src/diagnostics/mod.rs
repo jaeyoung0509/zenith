@@ -539,11 +539,8 @@ pub fn get_snapshot(settings: &ZenithSettings, config_dir: &Path) -> Diagnostics
             .join(", ")
     ));
     features.push(format!(
-        "clean_categories: ai={}, dev={}, docker={}, models={}",
-        settings.clean_ai_tools,
-        settings.clean_developer_tools,
-        settings.clean_docker,
-        settings.clean_local_models
+        "clean_categories: ai={}, dev={}, docker={}",
+        settings.clean_ai_tools, settings.clean_developer_tools, settings.clean_docker
     ));
     features.push(format!("intensive_cleanup: {}", settings.intensive_cleanup));
     features.push(format!(

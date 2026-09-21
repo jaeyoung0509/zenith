@@ -242,12 +242,11 @@ impl LifecycleProviderRegistry {
         });
         let mut cache_metadata = signature.cache_metadata();
         cache_metadata.consequence = provider.consequence().to_string();
-        cache_metadata.size_semantics =
-            if probe.bytes_are_lower_bound || signature.reclaimable_is_lower_bound {
-                CacheSizeSemantics::ConservativeLowerBound
-            } else {
-                CacheSizeSemantics::PhysicalReclaimable
-            };
+        cache_metadata.size_semantics = if probe.bytes_are_lower_bound {
+            CacheSizeSemantics::ConservativeLowerBound
+        } else {
+            CacheSizeSemantics::PhysicalReclaimable
+        };
         let disposition = derive_cleanup_disposition(
             DispositionFacts::new(
                 signature.risk,
@@ -443,10 +442,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: "Stated Owner".to_string(),
             provider_id: Some("test.stated".to_string()),
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         }
     }
 

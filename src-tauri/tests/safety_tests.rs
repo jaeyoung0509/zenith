@@ -535,10 +535,8 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     let scan_item = ScanItem::mock(
@@ -810,10 +808,8 @@ fn manual_strategy_never_enters_generic_cleaner() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
     let mut item = ScanItem::mock(
         "test.manual-model",
@@ -905,10 +901,8 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         platforms: vec![],
         provider: "test".into(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
     let mut item = ScanItem::mock(
         "test.unknown-provider",
@@ -1163,10 +1157,8 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     let mut scan_item = ScanItem::mock(
@@ -1890,10 +1882,8 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     let mut item = ScanItem::mock(
@@ -2084,10 +2074,8 @@ fn the_planner_refuses_a_structured_target() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     let mut item = ScanItem::mock(
@@ -2179,10 +2167,8 @@ fn an_unreadable_root_is_reported_with_its_reason() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     // A directory the process may not read is what macOS withholds without
@@ -2251,10 +2237,8 @@ fn a_running_owner_keeps_its_cache_out_of_the_default_selection() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     let running = zenith_lib::applications::RunningApplications::from_ids(vec![
@@ -2553,10 +2537,8 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
 
     let items = zenith_lib::scanner::DirectoryScanner::scan_signature(
@@ -2745,10 +2727,8 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     });
     let mut item = ScanItem::mock(
         "ordinary-cache",
@@ -3355,8 +3335,8 @@ fn cargo_package_stores_are_inventoried_and_never_plannable() {
         if signature_id == "dev.cargo.registry.src" {
             assert_eq!(
                 signature.cache_metadata().management_mode,
-                CacheManagementMode::Advisory,
-                "{signature_id} states that its owner, not Zenith, decides"
+                CacheManagementMode::ToolManaged,
+                "{signature_id} derives ownership metadata from its provider strategy"
             );
         }
 

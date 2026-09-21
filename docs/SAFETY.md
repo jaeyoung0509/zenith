@@ -317,6 +317,14 @@ a selector — `Cache*`, `**`, and nested braces are refused when the catalog
 loads, because a pattern that silently matches nothing is an entry that
 silently does nothing.
 
+A signature's strategy derives its management label and initial size semantics;
+there are no independently authored management/lower-bound switches. A typed
+provider may refine size semantics from its actual probe. UI selection consumes
+the backend disposition, not the display label. Expanded roots within one
+signature are measured once even when home, temp, or application-data aliases
+name the same directory. Local model weights belong exclusively to the typed
+model inventory and are never enabled by a generic-cleanup setting.
+
 Every signature explicitly declares its execution `strategy`; omitting it is a
 load error. Path exclusions must be reachable from a declared root, including
 selector alternatives. Authoring uses the same root expression on both sides

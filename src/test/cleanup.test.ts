@@ -75,7 +75,6 @@ const allCategoriesEnabledSettings: ZenithSettings = {
   clean_ai_tools: true,
   clean_developer_tools: true,
   clean_docker: true,
-  clean_local_models: false,
   include_rebuild_caches: true, // Even if include_rebuild_caches is true, Quick Clean must be Safe only!
   intensive_cleanup: true,
   theme: 'system',
@@ -554,6 +553,17 @@ describe('scanStore selectionSummary', () => {
 });
 
 describe('cleanup disposition authority & byte semantics', () => {
+  it('uses backend eligibility even when display metadata disagrees', () => {
+    const candidate = item({
+      disposition: { eligibility: 'reviewable', cleanable_bytes: 1024, reason: null },
+    });
+    candidate.cache_metadata = { ...candidate.cache_metadata!, management_mode: 'advisory' };
+    expect(isCleanable(candidate)).toBe(true);
+    candidate.disposition = { eligibility: 'advisory', cleanable_bytes: 0, reason: 'Owner-managed store' };
+    candidate.cache_metadata.management_mode = 'zenith';
+    expect(isCleanable(candidate)).toBe(false);
+  });
+
   it('respects backend disposition with absolute precedence over legacy risk tier', () => {
     // Protected bundle in safe cache item
     const blockedSafeItem = item({

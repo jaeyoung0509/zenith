@@ -659,10 +659,8 @@ mod tests {
                 fail_if_running: Vec::new(),
                 provider: String::new(),
                 provider_id: provider_id.map(str::to_string),
-                management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
-                reclaimable_is_lower_bound: false,
             }
         }
 
@@ -773,10 +771,8 @@ mod tests {
                 fail_if_running: Vec::new(),
                 provider: String::new(),
                 provider_id: None,
-                management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
-                reclaimable_is_lower_bound: false,
             });
         }
 
@@ -866,10 +862,8 @@ mod tests {
                 fail_if_running: Vec::new(),
                 provider: String::new(),
                 provider_id: None,
-                management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
-                reclaimable_is_lower_bound: false,
             });
         }
 
@@ -978,10 +972,8 @@ mod tests {
                 fail_if_running: Vec::new(),
                 provider: String::new(),
                 provider_id: None,
-                management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
-                reclaimable_is_lower_bound: false,
             });
         }
 
@@ -1049,10 +1041,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         });
 
         let mut item = ScanItem::mock(

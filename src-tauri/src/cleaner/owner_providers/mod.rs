@@ -684,10 +684,8 @@ mod tests {
             fail_if_running: vec!["cargo".to_string()],
             provider: "Cargo".to_string(),
             provider_id: Some("test.owner".to_string()),
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         }
     }
 

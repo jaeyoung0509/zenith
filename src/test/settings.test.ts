@@ -10,7 +10,6 @@ describe('serializeSettingsSnapshot', () => {
     clean_ai_tools: true,
     clean_developer_tools: true,
     clean_docker: true,
-    clean_local_models: false,
     include_rebuild_caches: false,
     intensive_cleanup: false,
     theme: 'dark',
@@ -148,7 +147,6 @@ describe('SettingsStore persistence and lifecycle', () => {
       clean_ai_tools: true,
       clean_developer_tools: true,
       clean_docker: true,
-      clean_local_models: false,
       include_rebuild_caches: false,
       intensive_cleanup: false,
       theme: 'system',
@@ -296,7 +294,7 @@ describe('SettingsStore persistence and lifecycle', () => {
     mockSaveSettings.mockClear();
 
     const save1 = store.save({ clean_docker: false });
-    const save2 = store.save({ clean_local_models: true });
+    const save2 = store.save({ include_rebuild_caches: true });
     const save3 = store.save({ theme: 'dark' });
 
     await Promise.all([save1, save2, save3]);
@@ -309,13 +307,13 @@ describe('SettingsStore persistence and lifecycle', () => {
 
     expect(call1Snapshot.clean_docker).toBe(false);
     expect(call2Snapshot.clean_docker).toBe(false);
-    expect(call2Snapshot.clean_local_models).toBe(true);
+    expect(call2Snapshot.include_rebuild_caches).toBe(true);
     expect(call3Snapshot.clean_docker).toBe(false);
-    expect(call3Snapshot.clean_local_models).toBe(true);
+    expect(call3Snapshot.include_rebuild_caches).toBe(true);
     expect(call3Snapshot.theme).toBe('dark');
 
     expect(store.settings.clean_docker).toBe(false);
-    expect(store.settings.clean_local_models).toBe(true);
+    expect(store.settings.include_rebuild_caches).toBe(true);
     expect(store.settings.theme).toBe('dark');
     expect(store.error).toBeNull();
   });
@@ -353,13 +351,13 @@ describe('SettingsStore persistence and lifecycle', () => {
       .mockResolvedValueOnce(null);
 
     const saveA = store.save({ clean_docker: false });
-    const saveB = store.save({ clean_local_models: true });
+    const saveB = store.save({ include_rebuild_caches: true });
 
     await Promise.all([saveA, saveB]);
 
     // Save B is the latest revision, so its success should stand and error should be null
     expect(store.settings.clean_docker).toBe(false);
-    expect(store.settings.clean_local_models).toBe(true);
+    expect(store.settings.include_rebuild_caches).toBe(true);
     expect(store.error).toBeNull();
   });
 
@@ -371,12 +369,12 @@ describe('SettingsStore persistence and lifecycle', () => {
       .mockRejectedValueOnce(new Error('Second failure'));
 
     const saveA = store.save({ clean_docker: false });
-    const saveB = store.save({ clean_local_models: true });
+    const saveB = store.save({ include_rebuild_caches: true });
 
     await Promise.all([saveA, saveB]);
 
     expect(store.settings.clean_docker).toBe(true);
-    expect(store.settings.clean_local_models).toBe(false);
+    expect(store.settings.include_rebuild_caches).toBe(false);
     expect(store.error).toContain('Second failure');
   });
 });
@@ -443,7 +441,6 @@ describe('quick panel AI provider toggling and order preservation', () => {
       clean_ai_tools: true,
       clean_developer_tools: true,
       clean_docker: true,
-      clean_local_models: false,
       include_rebuild_caches: false,
       intensive_cleanup: false,
       theme: 'system',

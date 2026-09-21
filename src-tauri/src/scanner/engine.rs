@@ -105,7 +105,6 @@ fn containment_policies_are_compatible(
         return false;
     };
     nested_signature.strategy == container_signature.strategy
-        && nested_signature.management_mode == container_signature.management_mode
         && nested_signature.min_age_days == container_signature.min_age_days
         && same_string_set(
             &nested_signature.exclusions,
@@ -839,8 +838,8 @@ mod tests {
     use zenith_platform::path_algebra::PathFlavor;
     use zenith_platform::PlatformEnvironment;
 
-    /// A scan environment with no tools and no stated profile, so a scan in a
-    /// test only reports the fixture signatures it was given.
+    /// A scan environment with no tools and a synthetic profile, so a scan in
+    /// a test only reports the fixture signatures it was given.
     fn scan_environment() -> PlatformEnvironment {
         PlatformEnvironment::simulated(PathFlavor::current())
             .with_home(if PathFlavor::current().is_windows() {
@@ -958,10 +957,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         }
     }
 

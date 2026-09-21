@@ -795,10 +795,8 @@ mod tests {
                 fail_if_running: Vec::new(),
                 provider: String::new(),
                 provider_id: None,
-                management_mode: Default::default(),
                 artifact_kind: Default::default(),
                 consequence: String::new(),
-                reclaimable_is_lower_bound: false,
             });
         }
         let registry = Arc::new(registry);
@@ -1025,10 +1023,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: "Stated Owner".to_string(),
             provider_id: Some("test.stated".to_string()),
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         });
         let registry = Arc::new(registry);
         let providers = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(vec![
@@ -1140,10 +1136,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
             exclusions: Vec::new(),
         });
         let registry = Arc::new(registry);
@@ -1249,10 +1243,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
             exclusions: Vec::new(),
         });
         let registry = Arc::new(registry);

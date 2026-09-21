@@ -9,7 +9,6 @@ use zenith_platform::PlatformEnvironment;
 const EMBEDDED_AI_TOML: &str = include_str!("../../../signatures/ai.toml");
 const EMBEDDED_DEV_TOML: &str = include_str!("../../../signatures/developer.toml");
 const EMBEDDED_CONTAINERS_TOML: &str = include_str!("../../../signatures/containers.toml");
-const EMBEDDED_MODELS_TOML: &str = include_str!("../../../signatures/models.toml");
 const EMBEDDED_SYSTEM_TOML: &str = include_str!("../../../signatures/system.toml");
 
 /// One manifest lint result. `platform` is set when the finding is that a path
@@ -42,7 +41,7 @@ impl SignatureRegistry {
         }
     }
 
-    /// Loads built-in embedded signatures for AI, Developer, Container, and Model categories.
+    /// Loads built-in embedded signatures for AI, Developer, Container, and System categories.
     ///
     /// The catalog declares nothing environment-dependent, so this is the
     /// native wrapper; the platform-declaration gate is applied against the
@@ -98,7 +97,6 @@ impl SignatureRegistry {
             EMBEDDED_AI_TOML,
             EMBEDDED_DEV_TOML,
             EMBEDDED_CONTAINERS_TOML,
-            EMBEDDED_MODELS_TOML,
             EMBEDDED_SYSTEM_TOML,
         ];
 
@@ -777,10 +775,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         }
     }
 
@@ -1080,10 +1076,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         };
 
         // An enumerated or named unit without an age policy would delete state

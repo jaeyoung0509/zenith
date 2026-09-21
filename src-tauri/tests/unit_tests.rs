@@ -15,7 +15,7 @@ use zenith_platform::PlatformEnvironment;
 fn test_signature_registry_categories_and_risk_counts() {
     let registry = SignatureRegistry::load_embedded().expect("load embedded");
 
-    // All categories must have valid signatures
+    // Generic cleanup owns cache categories; models use their dedicated inventory.
     let ai_sigs = registry.by_category(Category::Ai);
     let dev_sigs = registry.by_category(Category::Developer);
     let container_sigs = registry.by_category(Category::Container);
@@ -31,7 +31,10 @@ fn test_signature_registry_categories_and_risk_counts() {
         !container_sigs.is_empty(),
         "Container signatures must not be empty"
     );
-    assert!(!model_sigs.is_empty(), "Model signatures must not be empty");
+    assert!(
+        model_sigs.is_empty(),
+        "Models belong to the dedicated inventory"
+    );
     assert!(
         !system_sigs.is_empty(),
         "System signatures must not be empty"
@@ -90,10 +93,8 @@ fn test_temp_scanner_only_includes_known_direct_children() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     };
 
     let items = DirectoryScanner::scan_signature(
@@ -141,10 +142,8 @@ fn test_scan_hides_empty_paths_and_orders_largest_first() {
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     };
 
     let mut registry = SignatureRegistry::new();
