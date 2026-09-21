@@ -11,9 +11,6 @@
       .reduce((total, gap) => total + gap.count, 0) ?? 0
   );
   let hasFullDiskAccessGap = $derived(fullDiskAccessGapCount > 0);
-  let hasSelectorTruncationGap = $derived(
-    scanStore.lastScan?.gaps?.some((gap) => gap.kind === 'selector_truncated') ?? false
-  );
 
   async function openFullDiskAccessSettings() {
     settingsError = null;
@@ -53,8 +50,6 @@
       {:else if scanStore.freshness === 'partial'}
         {#if hasFullDiskAccessGap}
           macOS denied access to {fullDiskAccessGapCount} {fullDiskAccessGapCount === 1 ? 'location' : 'locations'}. Grant Full Disk Access to Zenith, then scan again. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
-        {:else if hasSelectorTruncationGap}
-          Some locations were not inspected because the scan reached its bounded root limit. Displayed totals are lower bounds (≥); incomplete items cannot be auto-cleaned.
         {:else}
           Partial scan completed. Some locations could not be fully inspected, so displayed totals are lower bounds (≥). Incomplete items cannot be auto-cleaned.
         {/if}

@@ -62,14 +62,6 @@ impl CargoStore {
         matches!(self, Self::RegistryArchive)
     }
 
-    /// The label a unit key carries when the store owns more than one root, so
-    /// two roots cannot produce the same unit identity.
-    fn root_label(relative_root: &str) -> &str {
-        match relative_root.rsplit('/').next() {
-            Some(label) => label,
-            None => relative_root,
-        }
-    }
 }
 
 /// One store-specific mutation policy, implemented once per store.

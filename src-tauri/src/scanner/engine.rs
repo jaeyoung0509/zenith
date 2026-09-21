@@ -394,6 +394,11 @@ impl ScanEngine {
         let mut skipped_entry_count = 0u64;
         let mut incomplete_item_count = 0u64;
         let mut was_cancelled = false;
+        // Traversals that stopped before covering every root they name. A
+        // cancellation is the only reason one stops today, and the scan states
+        // both facts: the typed gap says the scan was stopped, and this says
+        // which coverage it therefore does not have.
+        let mut scanned_incomplete_selectors = 0u64;
         let mut eligibility = EligibilitySummary::default();
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
@@ -445,11 +450,9 @@ impl ScanEngine {
                     gate,
                     &running_apps,
                 );
-                add_scan_gap(
-                    &mut gaps,
-                    ScanGapKind::SelectorTruncated,
-                    scanned.selector_truncated_count,
-                );
+                if scanned.selector_incomplete {
+                    scanned_incomplete_selectors = scanned_incomplete_selectors.saturating_add(1);
+                }
                 for item in scanned.items {
                     if let Some(retained) = accumulator.push(item) {
                         events.send(ScanEvent::ItemFound {
@@ -617,12 +620,10 @@ impl ScanEngine {
             incomplete_reasons.push("Scan was cancelled before completion".to_string());
             add_scan_gap(&mut gaps, ScanGapKind::Cancelled, 1);
         }
-        let has_selector_truncation = gaps
-            .iter()
-            .any(|gap| gap.kind == ScanGapKind::SelectorTruncated);
+        let has_selector_truncation = scanned_incomplete_selectors > 0;
         if has_selector_truncation {
             incomplete_reasons.push(
-                "A selector matched more roots than the bounded scan could inspect".to_string(),
+                "A pattern's traversal stopped before it covered every root it names".to_string(),
             );
         }
         // Item-derived gaps already contribute their own observation quality,
@@ -783,14 +784,14 @@ mod tests {
     #[test]
     fn scan_gap_counts_merge_without_requiring_frontend_prose_parsing() {
         let mut gaps = Vec::new();
-        add_scan_gap(&mut gaps, ScanGapKind::SelectorTruncated, 1);
-        add_scan_gap(&mut gaps, ScanGapKind::SelectorTruncated, 2);
+        add_scan_gap(&mut gaps, ScanGapKind::DepthLimit, 1);
+        add_scan_gap(&mut gaps, ScanGapKind::DepthLimit, 2);
         add_scan_gap(&mut gaps, ScanGapKind::PermissionDenied, 1);
         assert_eq!(
             gaps,
             vec![
                 crate::models::ScanGap {
-                    kind: ScanGapKind::SelectorTruncated,
+                    kind: ScanGapKind::DepthLimit,
                     count: 3,
                 },
                 crate::models::ScanGap {

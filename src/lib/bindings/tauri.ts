@@ -2740,7 +2740,7 @@ export type ScanGap = ScanGap_Serialize | ScanGap_Deserialize;
  *  a remediation such as Full Disk Access. Counts are aggregated after
  *  overlap resolution, so one retained observation contributes at most once.
  */
-export type ScanGapKind = "permission_denied" | "full_disk_access" | "selector_truncated" | "depth_limit" | "cancelled" | "io_error";
+export type ScanGapKind = "permission_denied" | "full_disk_access" | "depth_limit" | "cancelled" | "io_error";
 
 export type ScanGap_Deserialize = {
 	kind: ScanGapKind,
