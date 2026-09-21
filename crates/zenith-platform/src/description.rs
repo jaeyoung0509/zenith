@@ -708,13 +708,25 @@ mod tests {
     #[test]
     fn stated_cargo_homes_follow_their_flavor_on_every_host() {
         for (flavor, home, stated) in [
-            (PathFlavor::Posix, "/Users/tester", "/Volumes/toolchains/cargo"),
+            (
+                PathFlavor::Posix,
+                "/Users/tester",
+                "/Volumes/toolchains/cargo",
+            ),
             (PathFlavor::Posix, "/home/tester", "/srv/홍 길동/cargo"),
             (PathFlavor::Windows, r"D:\Users\tester", r"E:\Tools\cargo"),
             (PathFlavor::Windows, r"D:\Users\tester", "E:/Tools/cargo"),
             (PathFlavor::Windows, r"D:\Users\tester", r"E:\홍 길동\cargo"),
-            (PathFlavor::Windows, r"D:\Users\tester", r"\\server\share\cargo"),
-            (PathFlavor::Windows, r"D:\Users\tester", r"\\?\E:\Tools\cargo"),
+            (
+                PathFlavor::Windows,
+                r"D:\Users\tester",
+                r"\\server\share\cargo",
+            ),
+            (
+                PathFlavor::Windows,
+                r"D:\Users\tester",
+                r"\\?\E:\Tools\cargo",
+            ),
             (
                 PathFlavor::Windows,
                 r"D:\Users\tester",
