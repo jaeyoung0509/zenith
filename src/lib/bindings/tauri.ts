@@ -1098,7 +1098,7 @@ export type CleanupMode =
 /**  Targets are removed from the filesystem. */
 "permanent_delete" | 
 /**  Targets are moved to the platform's recoverable location. */
-"trash" |
+"trash" | 
 /**
  *  Safe targets are permanently removed while reviewed rebuildable
  *  filesystem targets move to the platform's recoverable location.
@@ -3390,3 +3390,4 @@ async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; dat
         return { status: "error", error: e as any };
     }
 }
+
