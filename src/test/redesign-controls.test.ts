@@ -4,7 +4,7 @@ import SegmentedTabs from '../lib/components/SegmentedTabs.svelte';
 import SelectionToolbar from '../lib/components/SelectionToolbar.svelte';
 import InlineNotice from '../lib/components/InlineNotice.svelte';
 import CleanupReviewDialog from '../lib/components/CleanupReviewDialog.svelte';
-import type { ScanItem } from '../lib/models/types';
+import type { CleanupMode, PlanPreview, ScanItem } from '../lib/models/types';
 import { normalizeDashboardTab } from '../lib/utils/dashboardNavigation';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,27 @@ const item = {
   risk: 'rebuild', size: { logical: 1024, allocated: 1024 }, path: '/fixture',
   file_count: 1, description: '', is_selected: true, exists: true, last_modified: null,
 } as ScanItem;
+
+function planFor(items: ScanItem[], mode: CleanupMode = 'trash'): PlanPreview {
+  return {
+    id: 'plan',
+    targets: items.map((entry) => ({
+      item_id: entry.id,
+      name: entry.name,
+      path: entry.path,
+      mode: entry.risk === 'rebuild' ? 'trash' : 'permanent_delete',
+      requires_confirmation: entry.requires_confirmation ?? false,
+      expected_bytes: entry.size.allocated ?? entry.size.logical,
+      risk: entry.risk,
+    })),
+    refused: [],
+    expected_reclaim_bytes: 1024,
+    risk: { safe_count: 0, rebuild_count: 1, manual_count: 0, safe_bytes: 0, rebuild_bytes: 1024, manual_bytes: 0 },
+    requires_confirmation: false,
+    expires_at: Math.floor(Date.now() / 1000) + 300,
+    mode,
+  };
+}
 
 describe('redesign interaction semantics', () => {
   it('exposes one keyboard tab stop and associates tabs with their panel', () => {
@@ -70,12 +91,15 @@ describe('redesign interaction semantics', () => {
       },
     } as ScanItem;
     const { body } = render(CleanupReviewDialog, { props: {
+      plan: planFor([item, providerItem], 'mixed'),
       items: [item, providerItem], onCancel: () => {}, onConfirm: () => {},
     } });
     // The item's own consequence line, not a paraphrased warning.
     expect(body).toContain('Items move to the Recycle Bin and can be restored until it is emptied.');
-    // Only the item that carries a consequence gets the meta line.
-    expect(body.match(/text-meta/g)).toHaveLength(1);
+    // Both backend-resolved paths are present, while the consequence appears
+    // only on the provider-backed row that supplied it.
+    expect(body).toContain('/fixture');
+    expect(body.match(/Items move to the Recycle Bin and can be restored until it is emptied\./g)).toHaveLength(1);
   });
 
   it('routes category cleanup through review before executing selected items', () => {
@@ -90,13 +114,15 @@ describe('redesign interaction semantics', () => {
 
   it('explains rebuild consequences and blocks execution after scan invalidation', () => {
     const { body } = render(CleanupReviewDialog, { props: {
+      plan: planFor([item]),
       items: [item], disabled: true, onCancel: () => {}, onConfirm: () => {},
     } });
     expect(body).toContain('Build cache');
     expect(body).toContain('downloads or recompilation');
-    expect(body).toContain('cannot be undone');
+    expect(body).toContain('/fixture');
+    expect(body).toContain('remain recoverable');
     expect(body).toContain('scan changed or expired');
-    const confirm = body.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('Clean reviewed items'));
+    const confirm = body.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('Move to'));
     expect(confirm).toMatch(/<button[^>]*disabled/);
   });
 });

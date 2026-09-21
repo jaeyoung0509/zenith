@@ -1342,6 +1342,8 @@ export const mockApi = {
       targets: items.map((i) => ({
         item_id: i.id,
         name: i.name,
+        path: i.path,
+        mode: i.risk === 'rebuild' ? 'trash' : 'permanent_delete',
         requires_confirmation: i.requires_confirmation ?? false,
         expected_bytes: bytesFor(i),
         risk: i.risk,
@@ -1364,8 +1366,11 @@ export const mockApi = {
           .reduce((acc, i) => acc + bytesFor(i), 0),
       },
       expires_at: Math.floor(Date.now() / 1000) + 300,
-      // The preview clean path removes targets from disk, and says so.
-      mode: 'permanent_delete',
+      mode: items.every((item) => item.risk === 'rebuild')
+        ? 'trash'
+        : items.some((item) => item.risk === 'rebuild')
+          ? 'mixed'
+          : 'permanent_delete',
     };
   },
 
@@ -1386,6 +1391,10 @@ export const mockApi = {
       });
 
       const items: CleanItemResult[] = [];
+      const movedToTrashBytes = plan.targets
+        .filter((target) => target.mode === 'trash')
+        .reduce((total, target) => total + target.expected_bytes, 0);
+      const reclaimedBytes = plan.expected_reclaim_bytes - movedToTrashBytes;
       plan.targets.forEach((t, i) => {
         setTimeout(() => {
           onEvent({
@@ -1397,13 +1406,14 @@ export const mockApi = {
           });
 
           setTimeout(() => {
+            const movedToTrash = t.mode === 'trash';
             onEvent({
               type: 'ItemFinished',
               item_id: t.item_id,
               name: t.name,
               status: 'success',
               success: true,
-              reclaimed_bytes: t.expected_bytes,
+              reclaimed_bytes: movedToTrash ? 0 : t.expected_bytes,
               error: null,
             });
             items.push({
@@ -1413,7 +1423,8 @@ export const mockApi = {
               status: 'success',
               success: true,
               estimated_bytes: t.expected_bytes,
-              bytes_reclaimed: t.expected_bytes,
+              bytes_reclaimed: movedToTrash ? 0 : t.expected_bytes,
+              moved_to_trash_bytes: movedToTrash ? t.expected_bytes : 0,
               failure_reason: null,
               error_message: null,
             });
@@ -1423,13 +1434,14 @@ export const mockApi = {
                 plan_id: plan.id,
                 started_at: plan.expires_at - 300,
                 finished_at: Math.floor(Date.now() / 1000),
-                total_reclaimed_bytes: plan.expected_reclaim_bytes,
+                total_reclaimed_bytes: reclaimedBytes,
+                total_moved_to_trash_bytes: movedToTrashBytes,
                 total_failed_bytes: 0,
                 partial_count: 0,
                 failed_count: 0,
                 skipped_count: 0,
                 items,
-                actual_disk_free_delta: plan.expected_reclaim_bytes,
+                actual_disk_free_delta: reclaimedBytes,
               };
               onEvent({ type: 'Finished', result: res });
               resolve(res);
@@ -1477,6 +1489,7 @@ export const mockApi = {
             started_at: Math.floor(Date.now() / 1000) - 1,
             finished_at: Math.floor(Date.now() / 1000),
             total_reclaimed_bytes: 500 * 1024 * 1024,
+            total_moved_to_trash_bytes: 0,
             total_failed_bytes: 0,
             partial_count: 0,
             failed_count: 0,
@@ -1490,6 +1503,7 @@ export const mockApi = {
                 success: true,
                 estimated_bytes: 500 * 1024 * 1024,
                 bytes_reclaimed: 500 * 1024 * 1024,
+                moved_to_trash_bytes: 0,
                 failure_reason: null,
                 error_message: null,
               },

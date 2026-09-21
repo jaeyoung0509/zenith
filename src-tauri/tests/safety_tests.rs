@@ -561,6 +561,7 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert_eq!(clean_res.items.len(), 1);
@@ -935,6 +936,7 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert!(!result.items[0].success);
@@ -1191,6 +1193,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert_eq!(clean_res.items.len(), 1);
@@ -1918,6 +1921,7 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert_eq!(
@@ -1934,6 +1938,7 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert_eq!(
@@ -2594,6 +2599,7 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
 
@@ -2626,6 +2632,7 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
         &PlatformEnvironment::native(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert_eq!(
@@ -2676,10 +2683,14 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
     assert_eq!(preview.mode, CleanupMode::Preview);
     assert!(!CleanupMode::Preview.is_mutating());
     assert!(CleanupMode::PermanentDelete.is_mutating());
-    // The projection cannot carry a path or a strategy.
+    // The projection carries the backend-resolved path for informed review,
+    // but never the strategy or any other mutation authority.
     let serialized = serde_json::to_value(&preview).expect("the preview is a contract");
     let text = serialized.to_string();
-    assert!(!text.contains(&cache.to_string_lossy().into_owned()));
+    assert_eq!(
+        serialized["targets"][0]["path"],
+        cache.to_string_lossy().as_ref()
+    );
     assert!(!text.contains("strategy"));
 
     for mode in [CleanupMode::Preview, CleanupMode::Trash] {
@@ -2690,6 +2701,7 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
             &native_environment(),
             &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
         assert_eq!(result.failed_count, 1, "{mode:?} must be refused");
@@ -2789,6 +2801,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         &native_environment(),
         &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
         &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        &zenith_platform::MockTrashBackend::new(),
         |_| {},
     );
     assert_eq!(result.skipped_count, 1);
@@ -3266,7 +3279,7 @@ fn a_plan_carries_the_scan_time_expectations() {
         &no_owner_providers(),
     )
     .expect("the catalog signature authorizes the fixture path");
-    assert_eq!(plan.mode, CleanupMode::PermanentDelete);
+    assert_eq!(plan.mode, CleanupMode::Trash);
     let target = &plan.targets[0];
     assert_eq!(target.target_kind, EntryKind::Directory);
     assert_eq!(target.unit.kind, CleanupUnitKind::FixedPath);

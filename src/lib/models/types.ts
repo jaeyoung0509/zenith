@@ -48,6 +48,7 @@ export type {
   CleanupFailureScope,
   CleanupDisposition,
   CleanupEligibility,
+  CleanupMode,
   ControlCenterQuickSummary,
   DashboardTab_Deserialize,
   DashboardTab_Serialize,

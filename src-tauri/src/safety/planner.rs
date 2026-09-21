@@ -1,6 +1,6 @@
 use crate::cleaner::OwnerProviderRegistry;
 use crate::models::{
-    CleanFailureReason, CleanStrategy, CleanupMode, CleanupUnitIdentity, DeletePlan, DeleteTarget,
+    CleanFailureReason, CleanStrategy, CleanupUnitIdentity, DeletePlan, DeleteTarget,
     OwnerProviderSelection, PathIdentity, PlanItemRefusal, RiskSummary, RiskTier, ScanItem,
     ScanResult, Signature, UnitRelationship, ZenithError,
 };
@@ -539,6 +539,8 @@ impl SafetyPlanner {
             .unwrap_or_default()
             .as_secs();
 
+        let mode = DeletePlan::mode_for(&targets, &owner_authorizations);
+
         Ok(DeletePlan {
             id: Uuid::new_v4(),
             scan_id: String::new(),
@@ -548,7 +550,7 @@ impl SafetyPlanner {
             expected_reclaim_bytes,
             risk: risk_summary,
             created_at: now,
-            mode: CleanupMode::PermanentDelete,
+            mode,
         })
     }
 }

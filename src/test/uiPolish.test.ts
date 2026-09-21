@@ -220,6 +220,30 @@ describe('cleanup result feedback', () => {
     expect(rendered.body).toContain('1 item(s) failed');
   });
 
+  it('reports Trash moves without claiming that disk space was reclaimed', () => {
+    const moved: CleanResult = {
+      ...result('success', true),
+      total_reclaimed_bytes: 0,
+      total_moved_to_trash_bytes: 1024,
+      actual_disk_free_delta: 0,
+      items: [
+        {
+          ...result('success', true).items[0],
+          bytes_reclaimed: 0,
+          moved_to_trash_bytes: 1024,
+        },
+      ],
+    };
+
+    const rendered = render(CleanResultModal, {
+      props: { result: moved, onClose: () => undefined },
+    });
+
+    expect(rendered.body).toContain('Moved to the recoverable-delete location');
+    expect(rendered.body).toContain('Disk space is reclaimed after');
+    expect(rendered.body).not.toContain('Storage has been safely reclaimed');
+  });
+
   it('reflects intensive cleanup capability availability honestly in Settings', async () => {
     try {
       platformCapabilitiesStore.capabilities = {

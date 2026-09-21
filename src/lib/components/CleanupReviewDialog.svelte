@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { ScanItem } from '../models/types';
+  import type { PlanPreview, ScanItem } from '../models/types';
   import { formatBytes } from '../utils/format';
   import Button from './Button.svelte';
   import RiskBadge from './RiskBadge.svelte';
   import { isFocusable, restoreFocus } from '../utils/focus';
+  import { platformContextStore } from '../stores/platformContext.svelte';
 
-  let { items, disabled = false, onCancel, onConfirm, returnFocusTarget }: {
-    items: ScanItem[];
+  let { plan, items = [], disabled = false, onCancel, onConfirm, returnFocusTarget }: {
+    plan: PlanPreview;
+    items?: ScanItem[];
     disabled?: boolean;
     onCancel: () => void;
     onConfirm: () => void;
@@ -15,7 +17,17 @@
   } = $props();
   const id = $props.id();
   let dialog: HTMLDialogElement;
-  let hasRebuild = $derived(items.some(item => item.risk === 'rebuild'));
+  let hasRebuild = $derived(plan.targets.some(target => target.risk === 'rebuild'));
+  let consequenceById = $derived(
+    new Map(items.map(item => [item.id, item.cache_metadata?.consequence ?? null]))
+  );
+  let actionSummary = $derived(
+    plan.mode === 'trash'
+      ? `These items move to ${platformContextStore.trashLabel} and remain recoverable until it is emptied.`
+      : plan.mode === 'mixed'
+        ? `Some targets are permanently cleaned; recoverable filesystem targets move to ${platformContextStore.trashLabel}.`
+        : `These actions do not use ${platformContextStore.trashLabel} and cannot be restored through Zenith.`
+  );
   let isConfirmed = false;
 
   onMount(() => {
@@ -55,21 +67,22 @@
 >
   <h2 id={id + '-title'} class="text-base font-semibold">Review cleanup</h2>
   <p id={id + '-description'} class="mt-2 text-sm text-muted-foreground">
-    Review these {items.length} selected items before continuing. Cache cleanup cannot be undone in Zenith.
+    Review these {plan.targets.length} backend-verified targets before continuing. {actionSummary}
   </p>
   {#if hasRebuild}
     <p class="mt-2 text-sm text-warning">Rebuild items may require downloads or recompilation the next time you use the tool.</p>
   {/if}
   <ul class="my-4 divide-y divide-border">
-    {#each items as item (item.id)}
+    {#each plan.targets as target (target.item_id)}
       <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-        <div class="min-w-0 break-words">
-          <span>{item.name}</span>
-          {#if item.cache_metadata?.consequence}
-            <span class="mt-0.5 block text-meta text-muted-foreground">{item.cache_metadata.consequence}</span>
+        <div class="min-w-0 flex-1 break-words">
+          <span>{target.name}</span>
+          <code class="mt-0.5 block break-all text-meta text-muted-foreground">{target.path}</code>
+          {#if consequenceById.get(target.item_id)}
+            <span class="mt-0.5 block text-meta text-muted-foreground">{consequenceById.get(target.item_id)}</span>
           {/if}
         </div>
-        <span class="flex items-center gap-2"><RiskBadge risk={item.risk} /><span class="font-mono whitespace-nowrap">{formatBytes(item.size.allocated ?? item.size.logical)}</span></span>
+        <span class="flex items-center gap-2"><span class="text-meta text-muted-foreground">{target.mode === 'trash' ? platformContextStore.trashLabel : 'Permanent'}</span><RiskBadge risk={target.risk} /><span class="font-mono whitespace-nowrap">{formatBytes(target.expected_bytes)}</span></span>
       </li>
     {/each}
   </ul>
@@ -78,6 +91,6 @@
   {/if}
   <div class="flex flex-wrap justify-end gap-2">
     <Button variant="secondary" onclick={handleCancel}>Cancel</Button>
-    <Button variant="destructive" disabled={disabled || items.length === 0} onclick={handleConfirm}>Clean reviewed items</Button>
+    <Button variant="destructive" disabled={disabled || plan.targets.length === 0} onclick={handleConfirm}>{plan.mode === 'trash' ? `Move to ${platformContextStore.trashLabel}` : 'Clean reviewed items'}</Button>
   </div>
 </dialog>

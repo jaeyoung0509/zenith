@@ -136,6 +136,9 @@ pub struct CleanupService {
     docker_status_cache: Arc<DockerStatusCache>,
     lifecycle_providers: Arc<LifecycleProviderRegistry>,
     owner_providers: Arc<OwnerProviderRegistry>,
+    /// Native Trash / Recycle Bin adapter used only after the cleanup safety
+    /// guard minted a validated non-Safe filesystem target.
+    trash_backend: Arc<dyn zenith_platform::TrashBackend>,
     /// The cancellation handles of the scans this service is running, keyed by
     /// the id each scan reports so `cancel_scan` can reach one in flight.
     scan_cancellations: Arc<CancellationRegistry>,
@@ -156,6 +159,7 @@ impl CleanupService {
         docker_status_cache: Arc<DockerStatusCache>,
         lifecycle_providers: Arc<LifecycleProviderRegistry>,
         owner_providers: Arc<OwnerProviderRegistry>,
+        trash_backend: Arc<dyn zenith_platform::TrashBackend>,
         platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
     ) -> Self {
         Self {
@@ -169,6 +173,7 @@ impl CleanupService {
             docker_status_cache,
             lifecycle_providers,
             owner_providers,
+            trash_backend,
             scan_cancellations: Arc::new(CancellationRegistry::for_scans()),
             platform_capabilities,
         }
@@ -491,6 +496,7 @@ impl CleanupService {
         let docker_status_cache = self.docker_status_cache.clone();
         let lifecycle_providers = self.lifecycle_providers.clone();
         let owner_providers = self.owner_providers.clone();
+        let trash_backend = self.trash_backend.clone();
 
         crate::blocking::run_blocking(
             move || -> Result<CleanResult, CleanupFailure> {
@@ -544,6 +550,7 @@ impl CleanupService {
                                     started_at: now,
                                     finished_at: now,
                                     total_reclaimed_bytes: 0,
+                                    total_moved_to_trash_bytes: 0,
                                     total_failed_bytes: 0,
                                     partial_count: 0,
                                     failed_count: 0,
@@ -608,6 +615,7 @@ impl CleanupService {
                         &environment,
                         &lifecycle_providers,
                         &owner_providers,
+                        trash_backend.as_ref(),
                         move |event: CleanEvent| {
                             progress.emit(event);
                         },
@@ -805,6 +813,7 @@ mod tests {
             Arc::new(DockerStatusCache::new()),
             providers,
             owner_providers,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         ));
 
@@ -865,6 +874,7 @@ mod tests {
             Arc::new(DockerStatusCache::new()),
             lifecycle,
             owners,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
         let progress: Arc<dyn ScanProgressSink> = Arc::new(|_: ScanEvent| {});
@@ -938,6 +948,7 @@ mod tests {
             docker_cache,
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             owner_providers,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             capabilities,
         );
 
@@ -1011,6 +1022,7 @@ mod tests {
             Arc::new(DockerStatusCache::new()),
             providers.clone(),
             owner_providers,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -1116,6 +1128,7 @@ mod tests {
             Arc::new(DockerStatusCache::new()),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             owner_providers,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -1216,6 +1229,7 @@ mod tests {
             Arc::new(DockerStatusCache::new()),
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             owner_providers,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
@@ -1286,6 +1300,7 @@ mod tests {
             docker_cache,
             Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new())),
             owner_providers,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
             capabilities,
         );
 

@@ -6,7 +6,7 @@ use crate::signatures::SignatureLoader;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use zenith_platform::{PathFlavor, PlatformEnvironment};
 
 #[cfg(unix)]
@@ -33,6 +33,18 @@ impl TreeDeleteReport {
 }
 
 pub struct SafeTreeDeleter;
+
+/// The lexical and canonical boundary captured once before a cleanup walk.
+///
+/// The canonical root is a value, not a path that gets resolved again while
+/// entries are being removed. If an ancestor is renamed or replaced during
+/// cleanup, later checks therefore continue to compare against the object the
+/// execution guard approved instead of following the replacement.
+#[derive(Debug, Clone)]
+struct VerifiedCleanupScope {
+    lexical_root: PathBuf,
+    canonical_root: Option<PathBuf>,
+}
 
 /// Records the directory identity and mode before cleanup temporarily adds the
 /// owner permissions needed to remove a read-only tree.
@@ -337,9 +349,16 @@ impl SafeTreeDeleter {
             }
         };
         if root_is_link || !root_metadata.is_dir() {
+            let verified_scope = match Self::capture_verified_scope(root) {
+                Ok(scope) => scope,
+                Err(error) => {
+                    report.errors.push(error);
+                    return report;
+                }
+            };
             Self::delete_entry(
                 root,
-                root,
+                &verified_scope,
                 exclusions,
                 environment,
                 stale_policy,
@@ -362,6 +381,13 @@ impl SafeTreeDeleter {
             report.errors.push(e.to_string());
             return report;
         }
+        let verified_scope = match Self::capture_verified_scope(root) {
+            Ok(scope) => scope,
+            Err(error) => {
+                report.errors.push(error);
+                return report;
+            }
+        };
 
         let permissions = match Self::prepare_directory(root, &root_metadata) {
             Ok(snapshot) => snapshot,
@@ -382,7 +408,7 @@ impl SafeTreeDeleter {
                 Self::delete_dir_contents_via_fd(
                     root,
                     dir_file,
-                    root,
+                    &verified_scope,
                     exclusions,
                     environment,
                     stale_policy,
@@ -406,7 +432,7 @@ impl SafeTreeDeleter {
             match entry {
                 Ok(ent) => Self::delete_entry(
                     &ent.path(),
-                    root,
+                    &verified_scope,
                     exclusions,
                     environment,
                     stale_policy,
@@ -462,9 +488,16 @@ impl SafeTreeDeleter {
             report.errors.push(e.to_string());
             return report;
         }
+        let verified_scope = match Self::capture_verified_scope(root) {
+            Ok(scope) => scope,
+            Err(error) => {
+                report.errors.push(error);
+                return report;
+            }
+        };
         Self::delete_entry(
             root,
-            root,
+            &verified_scope,
             exclusions,
             environment,
             stale_policy,
@@ -532,6 +565,209 @@ impl SafeTreeDeleter {
         )
     }
 
+    /// Moves a reviewed, non-Safe filesystem target through the platform
+    /// Trash adapter instead of permanently unlinking it.
+    ///
+    /// `DeleteDirectory` moves the authorized unit as one object. Content
+    /// strategies walk without following links and move only entries they
+    /// authorize, preserving exclusions, recent entries, and structured state.
+    pub fn move_to_trash_validated(
+        target: &super::ValidatedTarget,
+        environment: &PlatformEnvironment,
+        backend: &dyn zenith_platform::TrashBackend,
+    ) -> TreeDeleteReport {
+        let mut report = TreeDeleteReport {
+            protect_structured_state: true,
+            ..Default::default()
+        };
+        let scope = match Self::capture_verified_scope(target.path()) {
+            Ok(scope) => scope,
+            Err(error) => {
+                report.errors.push(error);
+                return report;
+            }
+        };
+
+        match target.strategy() {
+            crate::models::CleanStrategy::DeleteDirectory => {
+                if let Err(error) = Self::validate_trash_entry(
+                    target.path(),
+                    &scope,
+                    target.exclusions(),
+                    environment,
+                    None,
+                ) {
+                    report.errors.push(error);
+                    return report;
+                }
+                match backend.move_to_trash(target.path()) {
+                    Ok(()) => {
+                        report.reclaimed_bytes = target.expected_bytes();
+                        report.deleted_files = 1;
+                    }
+                    Err(error) => report.errors.push(error),
+                }
+            }
+            crate::models::CleanStrategy::DeleteContents
+            | crate::models::CleanStrategy::DeleteStaleContents => {
+                Self::move_directory_contents_to_trash(
+                    target.path(),
+                    &scope,
+                    target.exclusions(),
+                    environment,
+                    target.stale_policy(),
+                    backend,
+                    &mut report,
+                );
+            }
+            _ => report.errors.push(
+                "Target strategy does not authorize a recoverable filesystem mutation".to_string(),
+            ),
+        }
+        report
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn move_directory_contents_to_trash(
+        directory: &Path,
+        scope: &VerifiedCleanupScope,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+        stale_policy: Option<super::StaleEntryPolicy>,
+        backend: &dyn zenith_platform::TrashBackend,
+        report: &mut TreeDeleteReport,
+    ) {
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries.collect::<Vec<_>>(),
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("{}: {}", directory.display(), error));
+                return;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    report.errors.push(error.to_string());
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let metadata = match Self::validate_trash_entry(
+                &path,
+                scope,
+                exclusions,
+                environment,
+                stale_policy,
+            ) {
+                Ok(Some(metadata)) => metadata,
+                Ok(None) => {
+                    report.skipped_files += 1;
+                    continue;
+                }
+                Err(error) => {
+                    report.errors.push(error);
+                    continue;
+                }
+            };
+
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                Self::move_directory_contents_to_trash(
+                    &path,
+                    scope,
+                    exclusions,
+                    environment,
+                    stale_policy,
+                    backend,
+                    report,
+                );
+                match fs::read_dir(&path) {
+                    Ok(mut remaining) => {
+                        if remaining.next().is_none() {
+                            if let Err(error) = Self::validate_verified_scope(&path, scope) {
+                                report.errors.push(error);
+                                continue;
+                            }
+                            match backend.move_to_trash(&path) {
+                                Ok(()) => report.deleted_files += 1,
+                                Err(error) => report.errors.push(error),
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        report.skipped_files += 1;
+                    }
+                    Err(error) => report.errors.push(format!("{}: {}", path.display(), error)),
+                }
+                continue;
+            }
+
+            let bytes = allocated_bytes(&metadata);
+            match backend.move_to_trash(&path) {
+                Ok(()) => {
+                    report.reclaimed_bytes = report.reclaimed_bytes.saturating_add(bytes);
+                    report.deleted_files += 1;
+                }
+                Err(error) => report.errors.push(error),
+            }
+        }
+    }
+
+    /// Returns metadata for an entry that may move, `None` for a deliberate
+    /// policy skip, and an error for an incomplete safety check.
+    fn validate_trash_entry(
+        path: &Path,
+        scope: &VerifiedCleanupScope,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+        stale_policy: Option<super::StaleEntryPolicy>,
+    ) -> Result<Option<fs::Metadata>, String> {
+        if Self::is_excluded(path, exclusions, environment)
+            || Blacklist::is_blacklisted_with(path, environment)
+        {
+            return Ok(None);
+        }
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("{}: {}", path.display(), error)),
+        };
+        if let Some((kind, _)) = super::structured_state_at(path) {
+            return Err(format!(
+                "{} is {}; refusing structured state",
+                path.display(),
+                kind.display_name()
+            ));
+        }
+        Self::validate_verified_scope(path, scope)?;
+        SymlinkGuard::validate_canonical_blacklist_strict(path, environment)
+            .map_err(|error| format!("{}: {}", path.display(), error))?;
+        Self::validate_entry_owner(path, &metadata)?;
+        Self::verify_entry_identity(path, &metadata)?;
+
+        if !metadata.is_dir() {
+            if let Some(policy) = stale_policy {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if !policy.allows(
+                    &name,
+                    super::stale::entry_kind(&metadata),
+                    super::stale::is_executable(&metadata),
+                    metadata.modified().ok(),
+                    std::time::SystemTime::now(),
+                ) {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(metadata))
+    }
+
     /// Deletes directory children using the already-verified parent directory
     /// descriptor. The final unlink for every child goes through `unlinkat`
     /// on that descriptor, so replacing or redirecting any parent component
@@ -540,7 +776,7 @@ impl SafeTreeDeleter {
     fn delete_dir_contents_via_fd(
         dir_path: &Path,
         dir_file: &fs::File,
-        verified_root: &Path,
+        verified_scope: &VerifiedCleanupScope,
         exclusions: &[String],
         environment: &PlatformEnvironment,
         stale_policy: Option<super::StaleEntryPolicy>,
@@ -610,7 +846,7 @@ impl SafeTreeDeleter {
                 continue;
             }
 
-            if let Err(error) = Self::validate_verified_scope(&child_path, verified_root) {
+            if let Err(error) = Self::validate_verified_scope(&child_path, verified_scope) {
                 report.errors.push(error);
                 continue;
             }
@@ -695,7 +931,7 @@ impl SafeTreeDeleter {
                 Self::delete_dir_contents_via_fd(
                     &child_path,
                     child_file,
-                    verified_root,
+                    verified_scope,
                     exclusions,
                     environment,
                     stale_policy,
@@ -767,7 +1003,7 @@ impl SafeTreeDeleter {
     #[allow(clippy::too_many_arguments)]
     fn delete_entry(
         path: &Path,
-        verified_root: &Path,
+        verified_scope: &VerifiedCleanupScope,
         exclusions: &[String],
         environment: &PlatformEnvironment,
         stale_policy: Option<super::StaleEntryPolicy>,
@@ -807,7 +1043,7 @@ impl SafeTreeDeleter {
             return;
         }
 
-        if let Err(error) = Self::validate_verified_scope(path, verified_root) {
+        if let Err(error) = Self::validate_verified_scope(path, verified_scope) {
             report.errors.push(error);
             return;
         }
@@ -935,7 +1171,7 @@ impl SafeTreeDeleter {
             Self::delete_dir_contents_via_fd(
                 path,
                 _dir_file,
-                verified_root,
+                verified_scope,
                 exclusions,
                 environment,
                 stale_policy,
@@ -989,7 +1225,7 @@ impl SafeTreeDeleter {
             match entry {
                 Ok(ent) => Self::delete_entry(
                     &ent.path(),
-                    verified_root,
+                    verified_scope,
                     exclusions,
                     environment,
                     stale_policy,
@@ -1334,15 +1570,23 @@ impl SafeTreeDeleter {
     fn verify_directory_identity(path: &Path, snapshot: &PermissionSnapshot) -> Result<(), String> {
         #[cfg(unix)]
         {
-            let current = fs::symlink_metadata(path).map_err(|error| {
+            let directory = snapshot.directory.as_ref().ok_or_else(|| {
+                format!(
+                    "Verified directory handle is unavailable: {}",
+                    path.display()
+                )
+            })?;
+            // `File::metadata` is an fstat of the descriptor opened with
+            // O_DIRECTORY | O_NOFOLLOW. It verifies the object we hold rather
+            // than resolving `path` again after an ancestor may have moved.
+            let current = directory.metadata().map_err(|error| {
                 format!(
                     "Could not re-verify cleanup directory {}: {}",
                     path.display(),
                     error
                 )
             })?;
-            if current.file_type().is_symlink()
-                || !current.is_dir()
+            if !current.is_dir()
                 || current.dev() != snapshot.device
                 || current.ino() != snapshot.inode
             {
@@ -1393,10 +1637,37 @@ impl SafeTreeDeleter {
         Ok(())
     }
 
-    fn validate_verified_scope(path: &Path, verified_root: &Path) -> Result<(), String> {
+    fn capture_verified_scope(root: &Path) -> Result<VerifiedCleanupScope, String> {
+        let lexical_root = zenith_platform::path_algebra::normalize_lexical(root);
+        let is_link = SymlinkGuard::is_symlink_strict(root).map_err(|error| error.to_string())?;
+        let canonical_root = if is_link {
+            // A final link is removed as a link and never traversed. Following
+            // it while capturing the boundary would grant authority over its
+            // target, which is exactly what the link rule forbids.
+            None
+        } else {
+            Some(fs::canonicalize(root).map_err(|error| {
+                format!(
+                    "Could not verify cleanup root {}: {}",
+                    root.display(),
+                    error
+                )
+            })?)
+        };
+        Ok(VerifiedCleanupScope {
+            lexical_root,
+            canonical_root,
+        })
+    }
+
+    fn validate_verified_scope(
+        path: &Path,
+        verified_scope: &VerifiedCleanupScope,
+    ) -> Result<(), String> {
         let normalized_path = zenith_platform::path_algebra::normalize_lexical(path);
-        let normalized_root = zenith_platform::path_algebra::normalize_lexical(verified_root);
-        if normalized_path != normalized_root && !normalized_path.starts_with(&normalized_root) {
+        if normalized_path != verified_scope.lexical_root
+            && !normalized_path.starts_with(&verified_scope.lexical_root)
+        {
             return Err(format!(
                 "Path escaped the verified cleanup target: {}",
                 path.display()
@@ -1411,11 +1682,10 @@ impl SafeTreeDeleter {
         if is_link {
             return Ok(());
         }
-        let canonical_root = fs::canonicalize(verified_root).map_err(|error| {
+        let canonical_root = verified_scope.canonical_root.as_ref().ok_or_else(|| {
             format!(
-                "Could not verify cleanup root {}: {}",
-                verified_root.display(),
-                error
+                "Cleanup root changed from a final link to a traversable path: {}",
+                path.display()
             )
         })?;
         let canonical_path = fs::canonicalize(path).map_err(|error| {
@@ -1425,7 +1695,9 @@ impl SafeTreeDeleter {
                 error
             )
         })?;
-        if canonical_path != canonical_root && !canonical_path.starts_with(&canonical_root) {
+        if canonical_path.as_path() != canonical_root.as_path()
+            && !canonical_path.starts_with(canonical_root)
+        {
             return Err(format!(
                 "Path escaped the verified cleanup target: {}",
                 path.display()
@@ -1573,6 +1845,53 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn pinned_scope_does_not_follow_a_replaced_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let moved_root = dir.path().join("moved-root");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("inside.bin"), b"inside").unwrap();
+        let outside_target = outside.join("outside.bin");
+        std::fs::write(&outside_target, b"outside").unwrap();
+
+        let scope = SafeTreeDeleter::capture_verified_scope(&root).unwrap();
+        std::fs::rename(&root, &moved_root).unwrap();
+        std::os::unix::fs::symlink(&outside, &root).unwrap();
+
+        let redirected = root.join("outside.bin");
+        assert!(SafeTreeDeleter::validate_verified_scope(&redirected, &scope).is_err());
+        let mut report = TreeDeleteReport::default();
+        SafeTreeDeleter::delete_entry(&redirected, &scope, &[], &environment(), None, &mut report);
+
+        assert_eq!(std::fs::read(&outside_target).unwrap(), b"outside");
+        assert!(moved_root.join("inside.bin").exists());
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("escaped the verified cleanup target")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_identity_is_verified_through_the_open_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let moved_root = dir.path().join("moved-root");
+        std::fs::create_dir_all(&root).unwrap();
+        let metadata = std::fs::symlink_metadata(&root).unwrap();
+        let snapshot = SafeTreeDeleter::prepare_directory(&root, &metadata).unwrap();
+
+        std::fs::rename(&root, &moved_root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+
+        assert!(SafeTreeDeleter::verify_directory_identity(&root, &snapshot).is_ok());
+        drop(snapshot);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn descriptor_relative_file_removal_deletes_inside_target() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("root");
@@ -1610,7 +1929,8 @@ mod tests {
         let missing = dir.path().join("vanished.bin");
 
         let mut report = TreeDeleteReport::default();
-        SafeTreeDeleter::delete_entry(&missing, dir.path(), &[], &environment(), None, &mut report);
+        let scope = SafeTreeDeleter::capture_verified_scope(dir.path()).unwrap();
+        SafeTreeDeleter::delete_entry(&missing, &scope, &[], &environment(), None, &mut report);
 
         assert!(report.is_success(), "errors: {:?}", report.errors);
         assert_eq!(report.skipped_files, 1);
@@ -1930,12 +2250,20 @@ mod tests {
             protect_structured_state: true,
             ..Default::default()
         };
-        SafeTreeDeleter::delete_entry(&recent, &dir, &[], &environment, Some(policy), &mut report);
+        let scope = SafeTreeDeleter::capture_verified_scope(&dir).unwrap();
+        SafeTreeDeleter::delete_entry(
+            &recent,
+            &scope,
+            &[],
+            &environment,
+            Some(policy),
+            &mut report,
+        );
         assert!(recent.exists(), "a recent entry is refused");
         assert_eq!(report.skipped_files, 1);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-        SafeTreeDeleter::delete_entry(&old, &dir, &[], &environment, Some(policy), &mut report);
+        SafeTreeDeleter::delete_entry(&old, &scope, &[], &environment, Some(policy), &mut report);
         assert!(!old.exists(), "a stale entry on the same route is removed");
         assert_eq!(report.deleted_files, 1);
     }
