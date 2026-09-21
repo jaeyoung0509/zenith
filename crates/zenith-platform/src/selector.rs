@@ -493,9 +493,8 @@ impl PathSelector {
                     None => {
                         return Err(ContinuationLost {
                             parent: static_path_buf,
-                            reason:
-                                "the position the continued scan stopped at is no longer there"
-                                    .to_string(),
+                            reason: "the position the continued scan stopped at is no longer there"
+                                .to_string(),
                         })
                     }
                 }
@@ -666,7 +665,10 @@ impl PathSelector {
         }
         names.sort_by(|left, right| Self::compare_names(left, right, flavor));
         let names_digest = digest_names(names.iter().map(String::as_str));
-        Ok(SortedNames { names, names_digest })
+        Ok(SortedNames {
+            names,
+            names_digest,
+        })
     }
 
     /// The order one enumeration is visited in, so a resumed page covers the

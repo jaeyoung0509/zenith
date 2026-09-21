@@ -95,10 +95,9 @@ fn owner_unit_result(outcome: &OwnerUnitOutcome, name: &str, path: &str) -> Clea
     let (status, reason) = match outcome.status {
         ProviderStatus::Cleaned => (CleanStatus::Success, None),
         ProviderStatus::PartiallyCleaned => (CleanStatus::Partial, None),
-        ProviderStatus::PrerequisiteNotMet => (
-            CleanStatus::Failed,
-            Some(CleanFailureReason::InUse),
-        ),
+        ProviderStatus::PrerequisiteNotMet => {
+            (CleanStatus::Failed, Some(CleanFailureReason::InUse))
+        }
         ProviderStatus::Unsupported => (
             CleanStatus::Failed,
             Some(CleanFailureReason::ProviderUnavailable),

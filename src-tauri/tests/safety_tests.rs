@@ -17,7 +17,7 @@ use zenith_lib::safety::{
 };
 use zenith_lib::scanner::{ScanEngine, SizeCalculator};
 use zenith_lib::signatures::SignatureRegistry;
-use zenith_platform::path_algebra::{self, PathFlavor};
+use zenith_platform::path_algebra::PathFlavor;
 use zenith_platform::paths::SimulatedPaths;
 use zenith_platform::{KnownFolder, NativePlatformPaths, PlatformEnvironment};
 
@@ -552,7 +552,8 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         2,
     );
 
-    let plan = SafetyPlanner::create_plan(&[scan_item], &registry, &no_owner_providers()).expect("create plan");
+    let plan = SafetyPlanner::create_plan(&[scan_item], &registry, &no_owner_providers())
+        .expect("create plan");
     assert_eq!(plan.targets.len(), 1);
 
     let clean_res = CleanExecutor::execute(
@@ -1181,7 +1182,8 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         temp_child.to_string_lossy().into_owned(),
     );
 
-    let plan = SafetyPlanner::create_plan(&[scan_item], &registry, &no_owner_providers()).expect("create plan");
+    let plan = SafetyPlanner::create_plan(&[scan_item], &registry, &no_owner_providers())
+        .expect("create plan");
     assert_eq!(plan.targets[0].min_age_days, Some(3));
 
     let clean_res = CleanExecutor::execute(
@@ -1577,8 +1579,11 @@ fn test_partial_scan_byte_semantics_and_cleanup_gate() {
     assert!(!unavailable_item.allows_cleanup());
 
     let registry = SignatureRegistry::load_embedded().unwrap();
-    let unavailable_plan_res =
-        SafetyPlanner::create_plan(std::slice::from_ref(&unavailable_item), &registry, &no_owner_providers());
+    let unavailable_plan_res = SafetyPlanner::create_plan(
+        std::slice::from_ref(&unavailable_item),
+        &registry,
+        &no_owner_providers(),
+    );
     assert!(
         matches!(unavailable_plan_res, Err(ZenithError::InvalidPlan(_))),
         "SafetyPlanner must reject unavailable items"
@@ -1902,8 +1907,12 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
     item.entry_kind = EntryKind::Directory;
     item.unit = CleanupUnit::fixed_path(cache.to_string_lossy().into_owned());
 
-    let plan = SafetyPlanner::create_plan(std::slice::from_ref(&item), &registry, &no_owner_providers())
-        .expect("the first plan is authorized");
+    let plan = SafetyPlanner::create_plan(
+        std::slice::from_ref(&item),
+        &registry,
+        &no_owner_providers(),
+    )
+    .expect("the first plan is authorized");
     let first = CleanExecutor::execute(
         plan.clone(),
         &PlatformEnvironment::native(),
@@ -2413,7 +2422,7 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
             ScanEngine::scan(
                 &registry,
                 &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
-        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+                &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 Some(&order),
                 &[],
                 intensive,
@@ -2456,7 +2465,12 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
             surviving.overlaps
         );
         assert!(
-            SafetyPlanner::create_plan(std::slice::from_ref(&surviving), &registry, &no_owner_providers()).is_err(),
+            SafetyPlanner::create_plan(
+                std::slice::from_ref(&surviving),
+                &registry,
+                &no_owner_providers()
+            )
+            .is_err(),
             "a location blocked by an overlapping rule cannot be planned"
         );
         assert_eq!(
@@ -2572,7 +2586,8 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
 
     let mut selected = item.clone();
     selected.is_selected = true;
-    let plan = SafetyPlanner::create_plan(&[selected], &registry, &no_owner_providers()).expect("plan");
+    let plan =
+        SafetyPlanner::create_plan(&[selected], &registry, &no_owner_providers()).expect("plan");
     assert_eq!(plan.expected_reclaim_bytes, cleanable);
     let result = CleanExecutor::execute(
         plan.clone(),
@@ -2674,7 +2689,7 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
             refused_plan,
             &native_environment(),
             &zenith_lib::cleaner::LifecycleProviderRegistry::new(Vec::new()),
-        &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_lib::cleaner::OwnerProviderRegistry::new(Vec::new()),
             |_| {},
         );
         assert_eq!(result.failed_count, 1, "{mode:?} must be refused");
@@ -3308,7 +3323,9 @@ fn cargo_package_stores_are_inventoried_and_never_plannable() {
                     .with_temp_dir(fixture.path()),
             ));
         let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
-        let signature = registry.get(signature_id).expect("the catalog entry exists");
+        let signature = registry
+            .get(signature_id)
+            .expect("the catalog entry exists");
         assert_eq!(
             signature.strategy,
             CleanStrategy::OwnerProvider,

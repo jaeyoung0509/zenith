@@ -21,16 +21,16 @@
 //! an archive, so what a crate ships is opaque to it, while the source provider
 //! never removes anything at all.
 
-use crate::safety::{SymlinkGuard, ToctouGuard};
 use crate::models::PlatformKind;
+use crate::safety::{SymlinkGuard, ToctouGuard};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zenith_core::domain::cleanup::{
     OwnerProviderAuthorization, OwnerProviderExecution, OwnerProviderRefusal,
     OwnerProviderSelection, OwnerProviderUnit, OwnerStoreObservation, OwnerUnitMeasurement,
-    OwnerUnitMeasurer, OwnerUnitObservation, OwnerUnitOutcome, ProviderStatus, RunningProcessPolicy,
-    RunningProcessProbe,
+    OwnerUnitMeasurer, OwnerUnitObservation, OwnerUnitOutcome, ProviderStatus,
+    RunningProcessPolicy, RunningProcessProbe,
 };
 use zenith_platform::PlatformEnvironment;
 
@@ -61,7 +61,6 @@ impl CargoStore {
     fn removes_units(self) -> bool {
         matches!(self, Self::RegistryArchive)
     }
-
 }
 
 /// One store-specific mutation policy, implemented once per store.
@@ -355,12 +354,7 @@ impl CargoStoreProvider {
     }
 
     /// Measures one unit and, for a removable store, verifies its contents.
-    fn observe_unit(
-        &self,
-        _root: &Path,
-        unit_key: &str,
-        path: &Path,
-    ) -> OwnerUnitObservation {
+    fn observe_unit(&self, _root: &Path, unit_key: &str, path: &Path) -> OwnerUnitObservation {
         let measurement = self.measuring.measure(path);
         if !self.store.removes_units() {
             // The owner decides when an advisory store's units go. An
@@ -391,13 +385,9 @@ impl CargoStoreProvider {
             );
         }
         match self.verify_archive_entries(path) {
-            Ok((logical, allocated, count)) => OwnerUnitObservation::ready(
-                unit_key,
-                path.to_path_buf(),
-                logical,
-                allocated,
-                count,
-            ),
+            Ok((logical, allocated, count)) => {
+                OwnerUnitObservation::ready(unit_key, path.to_path_buf(), logical, allocated, count)
+            }
             Err(reason) => OwnerUnitObservation::blocked(
                 unit_key,
                 path.to_path_buf(),
@@ -519,7 +509,8 @@ impl CargoStoreProvider {
 
         for selection in selections {
             let found = observation.units.iter().find(|unit| {
-                unit.path == selection.path && unit.state == zenith_core::domain::cleanup::OwnerUnitState::Ready
+                unit.path == selection.path
+                    && unit.state == zenith_core::domain::cleanup::OwnerUnitState::Ready
             });
             let Some(unit) = found else {
                 // The store was re-read and this unit is not one the provider
@@ -729,7 +720,11 @@ impl CargoStoreProvider {
             Err(_) => false,
         };
         if removed_directory && failures.is_empty() {
-            return OwnerUnitOutcome::cleaned(unit.item_id.clone(), unit.unit_key.clone(), reclaimed);
+            return OwnerUnitOutcome::cleaned(
+                unit.item_id.clone(),
+                unit.unit_key.clone(),
+                reclaimed,
+            );
         }
         let remaining = self.measuring.measure(&unit.path);
         let detail = if failures.is_empty() {
@@ -900,7 +895,12 @@ mod tests {
         bytes
     }
 
-    fn fixture_archive(profile: &Path, registry: &str, crate_name: &str, payload: &[u8]) -> PathBuf {
+    fn fixture_archive(
+        profile: &Path,
+        registry: &str,
+        crate_name: &str,
+        payload: &[u8],
+    ) -> PathBuf {
         let unit = cargo_home(profile).join("registry/cache").join(registry);
         fs::create_dir_all(&unit).unwrap();
         let path = unit.join(crate_name);
@@ -929,7 +929,12 @@ mod tests {
             "uds_windows-1.2.1.crate",
             payload,
         );
-        fixture_archive(fixture.path(), "github.com-1ecc6299db9ec823", "git-dep-0.1.0.crate", payload);
+        fixture_archive(
+            fixture.path(),
+            "github.com-1ecc6299db9ec823",
+            "git-dep-0.1.0.crate",
+            payload,
+        );
 
         let provider = archive_provider(idle());
         let observation = provider.scan(&environment, &RunningProcessPolicy::none());
@@ -938,8 +943,7 @@ mod tests {
         assert_eq!(observation.units.len(), 2);
         assert!(observation.units.iter().all(|unit| unit.is_ready()));
         assert_eq!(
-            observation.units[0].unit_key,
-            "github.com-1ecc6299db9ec823",
+            observation.units[0].unit_key, "github.com-1ecc6299db9ec823",
             "units are ordered by key"
         );
         let bytes = observation
@@ -1010,10 +1014,8 @@ mod tests {
         fs::write(cache.join("stray.crate"), gzip_bytes(b"payload")).unwrap();
 
         let provider = archive_provider(idle());
-        let observation = provider.scan(
-            &environment(fixture.path()),
-            &RunningProcessPolicy::none(),
-        );
+        let observation =
+            provider.scan(&environment(fixture.path()), &RunningProcessPolicy::none());
         assert_eq!(observation.status, ProviderStatus::Blocked);
         assert!(observation.units.is_empty());
         assert!(observation
@@ -1227,8 +1229,8 @@ mod tests {
         fs::create_dir_all(&source_unit).unwrap();
         fs::write(source_unit.join("Cargo.lock"), b"version = 3").unwrap();
         fs::write(source_unit.join("flake.lock"), b"locked").unwrap();
-        let checkout = cargo_home(fixture.path())
-            .join("git/checkouts/example-0123456789abcdef/abcdef0");
+        let checkout =
+            cargo_home(fixture.path()).join("git/checkouts/example-0123456789abcdef/abcdef0");
         fs::create_dir_all(&checkout).unwrap();
         fs::write(checkout.join("build.sh"), b"#!/bin/sh\n").unwrap();
         let database = cargo_home(fixture.path()).join("git/db/example-0123456789abcdef.git");
@@ -1265,7 +1267,10 @@ mod tests {
             observation.units[0].unit_key, "checkouts/example-0123456789abcdef",
             "a multi-root store prefixes the unit key with its root"
         );
-        assert_eq!(observation.units[1].unit_key, "db/example-0123456789abcdef.git");
+        assert_eq!(
+            observation.units[1].unit_key,
+            "db/example-0123456789abcdef.git"
+        );
         assert!(observation
             .units
             .iter()
@@ -1293,13 +1298,7 @@ mod tests {
             Arc::new(CargoGitProvider::new(idle(), measuring())),
         ]);
 
-        let items = providers.scan_items(
-            &registry,
-            Category::Developer,
-            false,
-            &[],
-            &environment,
-        );
+        let items = providers.scan_items(&registry, Category::Developer, false, &[], &environment);
         assert!(
             items
                 .iter()
@@ -1307,7 +1306,9 @@ mod tests {
             "the archive store is enumerated through its provider"
         );
         assert!(
-            items.iter().all(|item| item.signature_id != "dev.cargo.registry.src"),
+            items
+                .iter()
+                .all(|item| item.signature_id != "dev.cargo.registry.src"),
             "an advisory store is not enumerated by the archive provider"
         );
 

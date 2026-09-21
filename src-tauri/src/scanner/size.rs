@@ -181,15 +181,13 @@ impl zenith_core::domain::cleanup::OwnerUnitMeasurer for SizeCalculatorMeasureme
                 continue;
             }
             logical = logical.saturating_add(metadata.len());
-            allocated = allocated.saturating_add(
-                get_allocated_size(&current).unwrap_or_else(|| metadata.len()),
-            );
+            allocated =
+                allocated.saturating_add(get_allocated_size(&current).unwrap_or(metadata.len()));
             entries = entries.saturating_add(1);
         }
         zenith_core::domain::cleanup::OwnerUnitMeasurement::complete(logical, allocated, entries)
     }
 }
-
 
 #[cfg(not(windows))]
 pub fn get_allocated_size(path: &Path) -> Option<u64> {

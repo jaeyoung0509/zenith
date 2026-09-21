@@ -153,7 +153,7 @@ impl CleanupService {
         registry: Arc<SignatureRegistry>,
         docker_status_cache: Arc<DockerStatusCache>,
         lifecycle_providers: Arc<LifecycleProviderRegistry>,
-    owner_providers: Arc<OwnerProviderRegistry>,
+        owner_providers: Arc<OwnerProviderRegistry>,
         platform_capabilities: Arc<dyn PlatformCapabilitiesProvider>,
     ) -> Self {
         Self {

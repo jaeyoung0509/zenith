@@ -148,9 +148,9 @@ impl<P: OneShotPlan> PlanStore<P> {
             .lock()
             .map_err(|_| PlanStoreError::Unusable("Plan store lock poisoned".to_string()))?;
 
-        let stored = plans.remove(&plan_id).ok_or_else(|| {
-            PlanStoreError::Unavailable(self.lifecycle.not_found.to_string())
-        })?;
+        let stored = plans
+            .remove(&plan_id)
+            .ok_or_else(|| PlanStoreError::Unavailable(self.lifecycle.not_found.to_string()))?;
 
         if !self.is_valid(&stored, now) {
             return Err(PlanStoreError::Unavailable(

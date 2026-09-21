@@ -187,7 +187,11 @@ impl OwnerStoreObservation {
     }
 
     /// A store the provider cannot enumerate, and why.
-    pub fn refused(status: ProviderStatus, root: Option<PathBuf>, detail: impl Into<String>) -> Self {
+    pub fn refused(
+        status: ProviderStatus,
+        root: Option<PathBuf>,
+        detail: impl Into<String>,
+    ) -> Self {
         debug_assert!(
             status.is_probe_state() && !status.is_ready(),
             "a refused store observation states a probe status that is not `Ready`"
@@ -281,9 +285,9 @@ impl OwnerProviderAuthorization {
 
     /// The bytes the authorization expects to reclaim.
     pub fn expected_bytes(&self) -> u64 {
-        self.units
-            .iter()
-            .fold(0u64, |total, unit| total.saturating_add(unit.expected_bytes))
+        self.units.iter().fold(0u64, |total, unit| {
+            total.saturating_add(unit.expected_bytes)
+        })
     }
 }
 
@@ -341,7 +345,11 @@ pub struct OwnerUnitOutcome {
 
 impl OwnerUnitOutcome {
     /// The unit was removed and verification observed nothing left.
-    pub fn cleaned(item_id: impl Into<String>, unit_key: impl Into<String>, reclaimed_bytes: u64) -> Self {
+    pub fn cleaned(
+        item_id: impl Into<String>,
+        unit_key: impl Into<String>,
+        reclaimed_bytes: u64,
+    ) -> Self {
         Self {
             item_id: item_id.into(),
             unit_key: unit_key.into(),
@@ -416,9 +424,9 @@ pub struct OwnerProviderExecution {
 impl OwnerProviderExecution {
     /// The bytes every unit's own verification measured as reclaimed.
     pub fn reclaimed_bytes(&self) -> u64 {
-        self.units
-            .iter()
-            .fold(0u64, |total, unit| total.saturating_add(unit.reclaimed_bytes))
+        self.units.iter().fold(0u64, |total, unit| {
+            total.saturating_add(unit.reclaimed_bytes)
+        })
     }
 
     /// The bytes the units that were not removed had been expected to hold.

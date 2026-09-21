@@ -1298,7 +1298,7 @@ mod tests {
             ScanEngine::scan(
                 &registry,
                 &LifecycleProviderRegistry::new(Vec::new()),
-            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+                &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 None,
                 &[],
                 false,

@@ -3,11 +3,12 @@ import { render } from 'svelte/server';
 import { readFileSync } from 'node:fs';
 import StorageView from '../routes/dashboard/StorageView.svelte';
 import CategoryDetailView from '../routes/dashboard/CategoryDetailView.svelte';
+import ItemRow from '../lib/components/ItemRow.svelte';
 import CleanResultModal from '../lib/components/CleanResultModal.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
 import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
 import { mockApi } from '../lib/api/mock';
-import type { CategoryResult, CleanResult } from '../lib/models/types';
+import type { CategoryResult, CleanResult, ScanItem } from '../lib/models/types';
 
 afterEach(() => {
   platformCapabilitiesStore.reset();
@@ -21,11 +22,74 @@ afterEach(() => {
   scanStore.foundItemCount = 0;
   scanStore.isCancelling = false;
   scanStore.error = null;
+  scanStore.refusedItems = {};
+  scanStore.refusalMessage = null;
 });
 
 /** The Stop control's own tag, so only its disabled state is asserted. */
 function stopControl(body: string): string {
   return body.match(/<button[^>]*aria-label="Stop scan"[^>]*>/)?.[0] ?? '';
+}
+
+/** Every button element Svelte rendered, so one control's state can be read alone. */
+function buttonTags(body: string): string[] {
+  return body.match(/<button[^>]*>[\s\S]*?<\/button>/g) ?? [];
+}
+
+function scanItem(overrides: Partial<ScanItem> & { id: string }): ScanItem {
+  return {
+    signature_id: overrides.id,
+    name: overrides.id,
+    category: 'developer',
+    risk: 'safe',
+    path: `/tmp/${overrides.id}`,
+    size: { logical: 1024, allocated: 1024 },
+    file_count: 1,
+    description: 'Fixture row',
+    is_selected: false,
+    last_modified: null,
+    exists: true,
+    quality: 'fresh',
+    incomplete_reason: null,
+    ...overrides,
+  } as ScanItem;
+}
+
+/**
+ * Publishes a fresh scan for one category, so the copy under test is about
+ * current eligibility rather than the age of the measurement.
+ */
+function publishScan(items: ScanItem[], scanId: string): CategoryResult {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const totalBytes = items.reduce(
+    (sum, entry) => sum + (entry.size.allocated ?? entry.size.logical),
+    0
+  );
+  const category: CategoryResult = {
+    category: 'developer',
+    display_name: 'Developer',
+    items,
+    total_bytes: totalBytes,
+    safe_bytes: 0,
+    rebuild_bytes: 0,
+    manual_bytes: 0,
+  };
+  scanStore.lastScan = {
+    scan_id: scanId,
+    valid_for_seconds: 300,
+    started_at: nowSeconds - 1,
+    finished_at: nowSeconds,
+    categories: [category],
+    total_bytes: totalBytes,
+    safe_bytes: 0,
+    rebuild_bytes: 0,
+    manual_bytes: 0,
+    quality: 'fresh',
+    incomplete_reasons: [],
+  };
+  scanStore.syncSelectionFromScan(scanStore.lastScan);
+  scanStore.updateFreshness();
+  return category;
 }
 
 describe('StorageView CTA and responsive toolbar layout', () => {
@@ -650,5 +714,170 @@ describe('StorageView scan remediation', () => {
     expect(rendered.body).toContain('Grant Full Disk Access to Zenith');
     expect(rendered.body).toContain('Open System Settings');
     expect(rendered.body).not.toContain('Partial scan completed');
+  });
+});
+
+describe('risk classification versus current eligibility', () => {
+  function renderCategory(category: CategoryResult) {
+    return render(CategoryDetailView, {
+      props: { categoryResult: category, onBack: vi.fn(), onNavigateTab: vi.fn() },
+    });
+  }
+
+  it('shows a tab of recent and advisory rows as zero selectable inventory, not as broken', () => {
+    const category = publishScan(
+      [
+        scanItem({
+          id: 'recent-cache',
+          name: 'Recent cache',
+          disposition: {
+            eligibility: 'recent',
+            reason: 'Last used 2 days ago; the age policy needs 7',
+            cleanable_bytes: null,
+          },
+        }),
+        scanItem({
+          id: 'advisory-cache',
+          name: 'Advisory cache',
+          disposition: {
+            eligibility: 'advisory',
+            reason: 'Managed by its own tool',
+            cleanable_bytes: null,
+          },
+        }),
+      ],
+      'scan-eligibility'
+    );
+
+    const { body } = renderCategory(category);
+
+    // The tab keeps the risk vocabulary and still counts what was detected.
+    expect(body).toContain('All (2)');
+    expect(body).toContain('2 detected (2 KB)');
+    expect(body).toContain('0 cleanable now (0 B)');
+    // Nothing here is selectable, and the reason is the rows' own state.
+    expect(body).toContain('No rows in this tab are cleanable now: 1 advisory, 1 recently used.');
+    const selectFiltered = buttonTags(body).find((button) => button.includes('Select Filtered')) ?? '';
+    expect(selectFiltered).toContain('disabled');
+    expect(selectFiltered).toContain(
+      'title="No rows in this tab are cleanable now: 1 advisory, 1 recently used."'
+    );
+    expect(body).toContain('role="group"');
+    expect(body).toContain('aria-label="Filter cleanup items by risk"');
+    expect(body).toContain('aria-pressed="true"');
+    expect(body).toContain('aria-label="Filter cleanup items by name or path"');
+    // Inventory that is not cleanable yet is not a failure.
+    expect(body).not.toContain('Scan again');
+    expect(body).not.toContain('bg-destructive/15');
+    expect(body).toContain('Recent cache');
+    expect(body).toContain('Advisory cache');
+  });
+
+  it('states the currently cleanable count and bytes beside the detected ones only when they differ', () => {
+    const mixed = publishScan(
+      [
+        scanItem({
+          id: 'cleanable-cache',
+          size: { logical: 4096, allocated: 4096 },
+          disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 4096 },
+        }),
+        scanItem({
+          id: 'recent-cache',
+          size: { logical: 2048, allocated: 2048 },
+          disposition: { eligibility: 'recent', reason: 'Too new', cleanable_bytes: null },
+        }),
+      ],
+      'scan-mixed'
+    );
+
+    const mixedBody = renderCategory(mixed).body;
+    expect(mixedBody).toContain('2 detected (6 KB)');
+    expect(mixedBody).toContain('1 cleanable now (4 KB)');
+    expect(mixedBody).not.toContain('No rows in this tab are cleanable now');
+    expect(
+      buttonTags(mixedBody).find((button) => button.includes('Select Filtered')) ?? ''
+    ).not.toContain('disabled');
+
+    // Every detected row is cleanable: there is nothing to qualify.
+    const uniform = publishScan(
+      [
+        scanItem({
+          id: 'cleanable-cache',
+          size: { logical: 4096, allocated: 4096 },
+          disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 4096 },
+        }),
+      ],
+      'scan-uniform'
+    );
+    expect(renderCategory(uniform).body).not.toContain('cleanable now');
+  });
+
+  it('does not claim every visible Rebuild row is removable when some are not', () => {
+    const category = publishScan(
+      [
+        scanItem({
+          id: 'rebuild-removable',
+          risk: 'rebuild',
+          size: { logical: 2048, allocated: 2048 },
+          disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 2048 },
+        }),
+        scanItem({
+          id: 'rebuild-recent',
+          risk: 'rebuild',
+          size: { logical: 1024, allocated: 1024 },
+          disposition: { eligibility: 'recent', reason: 'Used yesterday', cleanable_bytes: null },
+        }),
+      ],
+      'scan-rebuild-mixed'
+    );
+
+    expect(renderCategory(category).body).toContain(
+      'Some Rebuild rows here are not removable right now (1 recently used) and stay counted, not selectable.'
+    );
+
+    const allRemovable = publishScan(
+      [
+        scanItem({
+          id: 'rebuild-removable',
+          risk: 'rebuild',
+          size: { logical: 2048, allocated: 2048 },
+          disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 2048 },
+        }),
+      ],
+      'scan-rebuild-uniform'
+    );
+    expect(renderCategory(allRemovable).body).not.toContain('not removable right now');
+  });
+});
+
+describe('item-scoped cleanup refusals', () => {
+  it('renders the recorded refusal on its own row and leaves the row selectable', () => {
+    const refused = scanItem({
+      id: 'refused-cache',
+      size: { logical: 4096, allocated: 4096 },
+      disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 4096 },
+    });
+    const unrelated = scanItem({
+      id: 'unrelated-cache',
+      size: { logical: 4096, allocated: 4096 },
+      disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 4096 },
+    });
+    publishScan([refused, unrelated], 'scan-refusal');
+    scanStore.refusedItems = {
+      'refused-cache': 'Refused: this row is in use by another process.',
+    };
+
+    const { body } = render(ItemRow, { props: { item: refused } });
+
+    expect(body).toContain('Refused: this row is in use by another process.');
+    expect(body).toContain('title="Refused: this row is in use by another process."');
+    // The refusal is a reason, never a block: the row keeps its own selection.
+    const checkbox = body.match(/<input[^>]*type="checkbox"[^>]*>/)?.[0] ?? '';
+    expect(checkbox).not.toContain('disabled');
+
+    // A row the refusal does not name stays unmarked.
+    expect(render(ItemRow, { props: { item: unrelated } }).body).not.toContain(
+      'in use by another process'
+    );
   });
 });

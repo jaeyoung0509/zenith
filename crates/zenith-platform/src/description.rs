@@ -681,8 +681,8 @@ mod tests {
 
         // The join follows the described flavor, so a Windows profile is not
         // spelled with the host's separators.
-        let windows = PlatformEnvironment::simulated(PathFlavor::Windows)
-            .with_home(r"D:\Users\tester");
+        let windows =
+            PlatformEnvironment::simulated(PathFlavor::Windows).with_home(r"D:\Users\tester");
         assert_eq!(
             windows.cargo_home(),
             Some(PathBuf::from(r"D:\Users\tester\.cargo"))

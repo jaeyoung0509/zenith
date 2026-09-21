@@ -147,11 +147,8 @@ impl DirectoryScanner {
             // large namespace is reachable. Cancellation stops between pages,
             // and what was covered before it did stays a lower bound the scan
             // reports as one.
-            let (roots, failures, incomplete) = Self::signature_roots(
-                &path_buf,
-                context.environment,
-                context.cancellation,
-            );
+            let (roots, failures, incomplete) =
+                Self::signature_roots(&path_buf, context.environment, context.cancellation);
             selector_incomplete |= incomplete;
 
             for (fail_idx, failure) in failures.iter().enumerate() {
@@ -1575,37 +1572,25 @@ mod tests {
         }
 
         let environment = environment().with_home(fixture.path());
-        let signature = Signature {
-            id: "system.test.container-caches".into(),
-            name: "Container caches".into(),
-            category: Category::System,
-            risk: RiskTier::Safe,
-            strategy: CleanStrategy::DeleteContents,
-            // The signature the issue reports: a wildcard parent whose cache
-            // root only exists beyond the first page of containers.
-            paths: vec![format!(
-                "{}/*/Data/Library/Caches",
-                containers.to_string_lossy()
-            )],
-            exclusions: vec![],
-            description: "Container cache fixture".into(),
-            min_age_days: None,
-            include_prefixes: vec![],
-            exclude_prefixes: vec![],
-            intensive_only: false,
-            platforms: vec![],
-            discovery: Default::default(),
-            unit: None,
-            owner: String::new(),
-            priority: 0,
-            fail_if_running: Vec::new(),
-            provider: String::new(),
-            provider_id: None,
-            management_mode: Default::default(),
-            artifact_kind: Default::default(),
-            consequence: String::new(),
-            reclaimable_is_lower_bound: false,
-        };
+        let registry = crate::signatures::SignatureRegistry::load_embedded_with(&environment)
+            .expect("the shipped catalog loads");
+        let mut signature = registry
+            .get("system.intensive.containers_caches")
+            .expect("the shipped container-cache signature exists")
+            .clone();
+        assert_eq!(
+            signature.paths,
+            vec!["~/Library/Containers/*/Data/Library/Caches"],
+            "the regression follows the actual selector that exposed the blind spot"
+        );
+        // Keep the shipped risk, strategy, unit and age policy. Only relocate
+        // its trusted root into a temporary fixture: tests never inspect the
+        // developer's real Library/Containers tree.
+        signature.paths = vec![format!(
+            "{}/*/Data/Library/Caches",
+            containers.to_string_lossy()
+        )];
+        signature.platforms.clear();
 
         let items = DirectoryScanner::scan_signature(&signature, &environment, &NeverCancelled);
 

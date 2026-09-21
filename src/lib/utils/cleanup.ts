@@ -213,6 +213,106 @@ export function riskCounts(
   return counts;
 }
 
+export interface RowTotals {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * Detected versus currently cleanable totals for one row set (a tab's rows).
+ *
+ * A tab counts risk classification while the actions act on current
+ * eligibility, so the two numbers can disagree: a tab can hold twelve safe rows
+ * and authorize none of them. Both sides read the same predicates the actions
+ * use, so a view can state the difference without re-deriving backend policy.
+ */
+export interface CleanableTotals {
+  detected: RowTotals;
+  cleanable: RowTotals;
+}
+
+export function cleanableTotals(items: ScanItem[]): CleanableTotals {
+  const totals: CleanableTotals = {
+    detected: { count: 0, bytes: 0 },
+    cleanable: { count: 0, bytes: 0 },
+  };
+  for (const item of items) {
+    totals.detected.count++;
+    totals.detected.bytes += observedBytes(item);
+    if (isCleanable(item)) {
+      totals.cleanable.count++;
+      totals.cleanable.bytes += cleanableBytes(item);
+    }
+  }
+  return totals;
+}
+
+/** The eligibility states that keep a discovered row out of the cleanup actions. */
+export type IneligibleState = 'blocked' | 'advisory' | 'recent' | 'outside_scope' | 'incomplete';
+
+export interface IneligibleStateCount {
+  state: IneligibleState;
+  /** How the state reads inside a sentence, e.g. "recently used". */
+  label: string;
+  count: number;
+}
+
+const INELIGIBLE_LABELS: Record<IneligibleState, string> = {
+  blocked: 'blocked',
+  advisory: 'advisory',
+  recent: 'recently used',
+  outside_scope: 'outside the current scope',
+  incomplete: 'not fully measured',
+};
+
+const INELIGIBLE_ORDER: IneligibleState[] = [
+  'blocked',
+  'advisory',
+  'recent',
+  'outside_scope',
+  'incomplete',
+];
+
+/**
+ * The one state that keeps this row out of cleanup, or `null` when it is
+ * cleanable. One state per row, read in the order the disposition is read
+ * everywhere else, so a row that is both blocked and unmeasured is counted once.
+ */
+function ineligibleState(item: ScanItem): IneligibleState | null {
+  if (isCleanable(item)) return null;
+  if (isBlocked(item)) return 'blocked';
+  if (isAdvisory(item)) return 'advisory';
+  if (isRecent(item)) return 'recent';
+  if (isPolicyGated(item)) return 'outside_scope';
+  if (item.quality !== 'fresh' || item.incomplete_reason) return 'incomplete';
+  return null;
+}
+
+/**
+ * The states keeping rows out of the cleanup actions, counted by state.
+ *
+ * A set with at least one cleanable row has something to select; this is what a
+ * view states when it does not, and which rows a warning is about when it does.
+ */
+export function ineligibleStates(items: ScanItem[]): IneligibleStateCount[] {
+  const counts: Partial<Record<IneligibleState, number>> = {};
+  for (const item of items) {
+    const state = ineligibleState(item);
+    if (!state) continue;
+    counts[state] = (counts[state] ?? 0) + 1;
+  }
+  return INELIGIBLE_ORDER.filter((state) => counts[state]).map((state) => ({
+    state,
+    label: INELIGIBLE_LABELS[state],
+    count: counts[state] ?? 0,
+  }));
+}
+
+/** How ineligible states read in one sentence, e.g. "3 recently used, 1 advisory". */
+export function describeIneligibleStates(states: IneligibleStateCount[]): string {
+  return states.map((entry) => `${entry.count} ${entry.label}`).join(', ');
+}
+
 export function filterAndSortCleanupItems(
   items: ScanItem[],
   risk: RiskTier | 'all',

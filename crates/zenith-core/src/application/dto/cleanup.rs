@@ -202,12 +202,17 @@ impl DeletePlan {
                 expected_bytes: unit.expected_bytes,
                 risk: authorization.risk,
             }));
-            refused.extend(authorization.refusals.iter().map(|refusal| PlanRefusalPreview {
-                item_id: refusal.item_id.clone(),
-                name: refusal.item_name.clone(),
-                reason: refusal.reason,
-                message: refusal.detail.clone(),
-            }));
+            refused.extend(
+                authorization
+                    .refusals
+                    .iter()
+                    .map(|refusal| PlanRefusalPreview {
+                        item_id: refusal.item_id.clone(),
+                        name: refusal.item_name.clone(),
+                        reason: refusal.reason,
+                        message: refusal.detail.clone(),
+                    }),
+            );
         }
         refused.extend(self.refusals.iter().map(|refusal| PlanRefusalPreview {
             item_id: refusal.item_id.clone(),

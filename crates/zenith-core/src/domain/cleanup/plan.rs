@@ -186,17 +186,14 @@ impl DeletePlan {
 
     /// Every owner-provider unit this plan authorizes, provider included.
     pub fn owner_units(&self) -> impl Iterator<Item = (&str, &OwnerProviderUnit)> {
-        self.owner_authorizations
-            .iter()
-            .flat_map(|authorization| {
-                authorization
-                    .units
-                    .iter()
-                    .map(move |unit| (authorization.provider_id.as_str(), unit))
-            })
+        self.owner_authorizations.iter().flat_map(|authorization| {
+            authorization
+                .units
+                .iter()
+                .map(move |unit| (authorization.provider_id.as_str(), unit))
+        })
     }
 }
-
 
 /// Why one cleanup step did not happen, in the closed vocabulary the interface
 /// derives its copy from.

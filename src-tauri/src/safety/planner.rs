@@ -102,7 +102,8 @@ impl SafetyPlanner {
         for item in &mut trusted_items {
             item.is_selected = true;
         }
-        let mut plan = Self::create_plan_for(&trusted_items, registry, environment, owner_providers)?;
+        let mut plan =
+            Self::create_plan_for(&trusted_items, registry, environment, owner_providers)?;
         plan.scan_id = scan_id.to_string();
         Ok(plan)
     }
@@ -117,7 +118,12 @@ impl SafetyPlanner {
         registry: &SignatureRegistry,
         owner_providers: &OwnerProviderRegistry,
     ) -> Result<DeletePlan, ZenithError> {
-        Self::create_plan_for(items, registry, &PlatformEnvironment::native(), owner_providers)
+        Self::create_plan_for(
+            items,
+            registry,
+            &PlatformEnvironment::native(),
+            owner_providers,
+        )
     }
 
     /// Creates a plan with the same environment that produced the scan.
@@ -602,12 +608,16 @@ mod tests {
             skipped_entry_count: 0,
         };
 
-        let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new(), &no_owner_providers());
+        let result =
+            SafetyPlanner::create_plan(&[item], &SignatureRegistry::new(), &no_owner_providers());
         match result {
             Err(ZenithError::RefusedSelection(refusals)) => {
                 assert_eq!(refusals.len(), 1);
                 assert_eq!(refusals[0].item_name, "OrbStack VM Storage");
-                assert_eq!(refusals[0].reason, crate::models::CleanFailureReason::OwnerManaged);
+                assert_eq!(
+                    refusals[0].reason,
+                    crate::models::CleanFailureReason::OwnerManaged
+                );
             }
             other => panic!("a manual observation is refused per item: {other:?}"),
         }
@@ -690,7 +700,11 @@ mod tests {
         filesystem_signature.strategy = CleanStrategy::DeleteContents;
         filesystem_signature.risk = RiskTier::Manual;
         filesystem_registry.register(filesystem_signature);
-        let refused = SafetyPlanner::create_plan(&[item.clone()], &filesystem_registry, &no_owner_providers());
+        let refused = SafetyPlanner::create_plan(
+            &[item.clone()],
+            &filesystem_registry,
+            &no_owner_providers(),
+        );
         assert!(
             matches!(&refused, Err(ZenithError::ChangedSinceScan(message)) if message.contains("disagrees with the catalog")),
             "a manual unit cannot claim provider authority the catalog does not declare: {refused:?}"
@@ -791,8 +805,12 @@ mod tests {
         );
         let child_item = selected("child-item", "test.child", "Nested cache", &child, 8_192);
 
-        let plan = SafetyPlanner::create_plan(&[child_item, parent_item], &registry, &no_owner_providers())
-            .expect("the plan is built");
+        let plan = SafetyPlanner::create_plan(
+            &[child_item, parent_item],
+            &registry,
+            &no_owner_providers(),
+        )
+        .expect("the plan is built");
 
         assert_eq!(
             plan.targets.len(),
@@ -886,7 +904,11 @@ mod tests {
         child_item.rederive_disposition();
         child_item.is_selected = true;
 
-        let result = SafetyPlanner::create_plan(&[child_item, parent_item], &registry, &no_owner_providers());
+        let result = SafetyPlanner::create_plan(
+            &[child_item, parent_item],
+            &registry,
+            &no_owner_providers(),
+        );
 
         match &result {
             Ok(plan) => {
@@ -981,8 +1003,12 @@ mod tests {
         let first_item = selected("first-item", "test.first", "First cache", &first);
         let second_item = selected("second-item", "test.second", "Second cache", &second);
 
-        let plan = SafetyPlanner::create_plan(&[first_item, second_item], &registry, &no_owner_providers())
-            .expect("two separate units are plannable");
+        let plan = SafetyPlanner::create_plan(
+            &[first_item, second_item],
+            &registry,
+            &no_owner_providers(),
+        )
+        .expect("two separate units are plannable");
 
         assert_eq!(
             plan.targets.len(),
@@ -1072,7 +1098,8 @@ mod tests {
         item.quality = ObservationQuality::Unavailable;
         item.incomplete_reason = Some("Access was revoked".into());
 
-        let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new(), &no_owner_providers());
+        let result =
+            SafetyPlanner::create_plan(&[item], &SignatureRegistry::new(), &no_owner_providers());
         assert!(matches!(
             result,
             Err(ZenithError::ChangedSinceScan(message))

@@ -33,11 +33,10 @@
 pub mod cargo;
 
 use crate::models::{
-    derive_cleanup_disposition, CacheManagementMode, CacheSizeSemantics, CleanStrategy, CleanupUnit,
-    CleanupUnitKind,
-    DispositionFacts, EligibilityGate, EntryKind, FileSize, ObservationQuality, OwnerProviderRefusal,
-    OwnerProviderSelection, OwnerProviderUnit, OwnerStoreObservation, OwnerUnitObservation,
-    OwnerUnitState, PlatformKind, RiskTier, ScanItem, Signature,
+    derive_cleanup_disposition, CacheManagementMode, CacheSizeSemantics, CleanStrategy,
+    CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind, FileSize,
+    ObservationQuality, OwnerProviderRefusal, OwnerProviderSelection, OwnerProviderUnit,
+    OwnerStoreObservation, OwnerUnitObservation, OwnerUnitState, PlatformKind, ScanItem, Signature,
 };
 use crate::signatures::SignatureRegistry;
 use std::collections::BTreeMap;
@@ -556,7 +555,7 @@ pub fn plan_unit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Category, CleanStrategy, Signature};
+    use crate::models::{Category, CleanStrategy, RiskTier, Signature};
     use crate::signatures::SignatureRegistry;
     use std::path::PathBuf;
     use zenith_core::domain::cleanup::{
@@ -692,7 +691,9 @@ mod tests {
         }
     }
 
-    fn catalog(provider: Arc<dyn OwnerScopedProvider>) -> (SignatureRegistry, OwnerProviderRegistry) {
+    fn catalog(
+        provider: Arc<dyn OwnerScopedProvider>,
+    ) -> (SignatureRegistry, OwnerProviderRegistry) {
         let mut registry = SignatureRegistry::new();
         registry.register(catalog_signature());
         (registry, OwnerProviderRegistry::new(vec![provider]))
@@ -702,21 +703,12 @@ mod tests {
         PlatformEnvironment::simulated(PathFlavor::current())
     }
 
-    fn discover(
-        registry: &SignatureRegistry,
-        providers: &OwnerProviderRegistry,
-    ) -> Vec<ScanItem> {
+    fn discover(registry: &SignatureRegistry, providers: &OwnerProviderRegistry) -> Vec<ScanItem> {
         providers.scan_items(registry, Category::Developer, false, &[], &environment())
     }
 
     fn unit(key: &str, bytes: u64) -> OwnerUnitObservation {
-        OwnerUnitObservation::ready(
-            key,
-            PathBuf::from("/store").join(key),
-            bytes,
-            bytes,
-            2,
-        )
+        OwnerUnitObservation::ready(key, PathBuf::from("/store").join(key), bytes, bytes, 2)
     }
 
     /// Every enumerated unit becomes one item with its own identity and its own
@@ -824,14 +816,18 @@ mod tests {
             items[0].disposition.eligibility,
             crate::models::CleanupEligibility::Blocked
         );
-        assert_eq!(items[0].incomplete_reason.as_deref(), Some("cargo is running"));
+        assert_eq!(
+            items[0].incomplete_reason.as_deref(),
+            Some("cargo is running")
+        );
     }
 
     /// A catalog entry naming a provider this build does not implement offers
     /// nothing, and an id nothing implements cannot execute.
     #[test]
     fn an_unimplemented_provider_offers_nothing_and_cannot_execute() {
-        let (registry, providers) = catalog(StatedProvider::enumerating("test.other", vec![]).shared());
+        let (registry, providers) =
+            catalog(StatedProvider::enumerating("test.other", vec![]).shared());
         assert!(discover(&registry, &providers).is_empty());
 
         let outcome = providers.execute(
@@ -867,7 +863,8 @@ mod tests {
     /// process guard the catalog does not state.
     #[test]
     fn preparing_stamps_the_catalog_facts_onto_the_authorization() {
-        let (registry, providers) = catalog(StatedProvider::enumerating("test.owner", vec![]).shared());
+        let (registry, providers) =
+            catalog(StatedProvider::enumerating("test.owner", vec![]).shared());
 
         let prepared = providers
             .prepare(
