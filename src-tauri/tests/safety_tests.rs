@@ -169,12 +169,12 @@ fn test_blacklist_root_and_home_rejection() {
             "Expected {app_data} to be denied"
         );
     }
-    // The rule is driven by the stated home: without one this location is not
-    // recognized as a profile, while the filesystem root still is.
+    // Without a stated home, cleanup fails closed rather than losing profile protection.
+    // System-root rejection still reports its more specific reason.
     let without_home = windows_classifier(None, "/var/folders/zenith/T");
     assert_eq!(
         classify_windows(stated_home, &without_home),
-        BlacklistVerdict::Allowed
+        BlacklistVerdict::Denied("user home is unavailable")
     );
     assert_eq!(
         classify_windows("/", &without_home),

@@ -102,6 +102,11 @@ const ANCHOR_BYTES: u64 = 4_096;
 /// reports the fixture's own signatures and nothing the host happens to have.
 fn environment() -> PlatformEnvironment {
     PlatformEnvironment::simulated(PathFlavor::current())
+        .with_home(if cfg!(windows) {
+            r"Z:\ZenithFixtureHome"
+        } else {
+            "/zenith-fixture-home"
+        })
         .with_missing_tool("docker")
         .with_missing_tool("npm")
         .with_missing_tool("pnpm")

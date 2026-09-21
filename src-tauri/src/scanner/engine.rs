@@ -843,6 +843,11 @@ mod tests {
     /// test only reports the fixture signatures it was given.
     fn scan_environment() -> PlatformEnvironment {
         PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            })
             .with_missing_tool("docker")
             .with_missing_tool("npm")
             .with_missing_tool("pnpm")

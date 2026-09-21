@@ -807,7 +807,13 @@ mod tests {
 
     #[test]
     fn windows_flavor_refuses_app_uninstall_with_a_reason() {
-        let environment = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(
+            if PathFlavor::Windows.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let inspection = AppInspectionRecord {
             inspection: crate::models::AppUninstallInspection {
                 inspection_id: "inspection".to_string(),
@@ -1082,8 +1088,13 @@ mod tests {
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
         std::fs::remove_file(marker).unwrap();
         let mut move_attempts = 0;
-        let environment =
-            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(temp.path());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            })
+            .with_temp_dir(temp.path());
         let result = TrashExecutor::execute_with(&environment, plan, |_| {
             move_attempts += 1;
             Ok(())
@@ -1148,8 +1159,13 @@ mod tests {
         };
         let plan =
             TrashPlanner::from_developer_artifacts(&inventory, &["artifact".to_string()]).unwrap();
-        let environment =
-            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(temp.path());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            })
+            .with_temp_dir(temp.path());
         let result = TrashExecutor::execute_with(&environment, plan, |approved| {
             assert_eq!(approved.path(), target);
             std::fs::rename(approved.path(), &trashed).map_err(|error| error.to_string())
@@ -1250,7 +1266,13 @@ mod tests {
                 },
             ],
         };
-        let environment = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let environment = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(
+            if PathFlavor::Posix.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let mut move_attempts = 0;
         let result = TrashExecutor::execute_with(&environment, plan, |_| {
             move_attempts += 1;
@@ -1350,8 +1372,13 @@ mod tests {
                 kind: DeveloperArtifactKind::CargoTarget,
             },
         };
-        let environment =
-            PlatformEnvironment::simulated(PathFlavor::current()).with_temp_dir(dir.path());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_home(if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            })
+            .with_temp_dir(dir.path());
         let err = validate_target(&environment, &target_item).unwrap_err();
         assert!(
             err.contains("zero identity"),
