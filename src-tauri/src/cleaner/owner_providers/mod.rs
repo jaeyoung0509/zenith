@@ -729,7 +729,11 @@ mod tests {
         assert_eq!(items[0].size.observed_bytes(), 2_048);
         assert_eq!(items[0].file_count, 2);
         assert_eq!(items[0].unit.root, "/store");
-        assert_eq!(items[0].unit.path, "/store/a");
+        assert_eq!(
+            std::path::Path::new(&items[0].unit.path),
+            PathBuf::from("/store").join("a"),
+            "the provider path uses the separators of the stated platform"
+        );
         assert!(items.iter().all(|item| item.disposition.is_cleanable()));
         assert!(
             items.iter().all(|item| !item.is_selected),

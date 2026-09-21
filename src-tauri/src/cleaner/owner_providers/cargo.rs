@@ -960,7 +960,25 @@ mod tests {
     /// whose contents are not one.
     #[test]
     fn any_entry_the_contract_does_not_describe_refuses_the_unit() {
-        for case in ["injected-lock", "special-file", "link", "not-an-archive"] {
+        #[cfg(unix)]
+        let cases = [
+            ("injected-lock", "app.lock"),
+            ("special-file", "server.pid"),
+            ("not-an-archive", "forged.crate"),
+            ("link", "link.crate"),
+        ];
+        // Creating a link without elevated privileges is not portable on
+        // Windows CI. Reparse-point refusal is covered by the Windows-specific
+        // safety suite; this fixture exercises a real symlink where creating
+        // one is an ordinary unprivileged operation.
+        #[cfg(not(unix))]
+        let cases = [
+            ("injected-lock", "app.lock"),
+            ("special-file", "server.pid"),
+            ("not-an-archive", "forged.crate"),
+        ];
+
+        for (case, refused_entry) in cases {
             let fixture = tempdir().unwrap();
             let environment = environment(fixture.path());
             let good = fixture_archive(
@@ -997,7 +1015,7 @@ mod tests {
                 observation.units[0]
                     .detail
                     .as_deref()
-                    .is_some_and(|detail| detail.contains(&unit.display().to_string())),
+                    .is_some_and(|detail| detail.contains(refused_entry)),
                 "{case} names the entry it refused: {:?}",
                 observation.units[0].detail
             );
