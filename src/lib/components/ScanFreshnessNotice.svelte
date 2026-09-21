@@ -36,7 +36,7 @@
   });
 </script>
 
-{#if scanStore.freshness !== 'fresh'}
+{#if scanStore.freshness !== 'fresh' || scanStore.discovery.status !== 'exhausted'}
   <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs" role="status">
     <span class="min-w-0 flex-1">
       {#if scanStore.freshness === 'refreshing'}
@@ -45,6 +45,10 @@
         {:else}
           Refreshing scan. Previous amounts are historical until this finishes.
         {/if}
+      {:else if scanStore.discovery.status === 'paused'}
+        This scan reached its bounded work slice. Continue Scan resumes from the retained backend checkpoint without revisiting completed categories. Cleaning stays disabled until discovery finishes.
+      {:else if scanStore.discovery.status === 'stopped'}
+        {scanStore.discovery.reason}
       {:else if scanStore.freshness === 'partial' && scanStore.cancelledScanNotice}
         {scanStore.cancelledScanNotice}
       {:else if scanStore.freshness === 'partial'}
@@ -79,9 +83,15 @@
           Open System Settings
         </Button>
       {/if}
-      <Button size="sm" variant="outline" disabled={scanStore.isScanning || scanStore.isCleaning} onclick={() => scanStore.runScan()}>
-        {scanStore.isScanning ? 'Scanning…' : 'Scan Again'}
-      </Button>
+      {#if scanStore.canContinue}
+        <Button size="sm" variant="outline" onclick={() => scanStore.continueScan()}>
+          Continue Scan
+        </Button>
+      {:else}
+        <Button size="sm" variant="outline" disabled={scanStore.isScanning || scanStore.isCleaning} onclick={() => scanStore.runScan()}>
+          {scanStore.isScanning ? 'Scanning…' : 'Scan Again'}
+        </Button>
+      {/if}
     </span>
   </div>
 {/if}

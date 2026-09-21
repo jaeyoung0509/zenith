@@ -35,7 +35,9 @@ export const commands = {
 	consumeAiRecommendationPreview: (previewId: string) => typedError<RecommendationPreview_Serialize, string>(__TAURI_INVOKE("consume_ai_recommendation_preview", { previewId })),
 	getAiControlGitDiff: (projectId: string) => typedError<string, string>(__TAURI_INVOKE("get_ai_control_git_diff", { projectId })),
 	connectOpenrouterOauth: () => typedError<null, string>(__TAURI_INVOKE("connect_openrouter_oauth")),
-	startScan: (onEvent: Channel<ScanEvent_Deserialize>, categories: Category[] | null) => typedError<ScanResult_Serialize, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
+	startScan: (onEvent: Channel<ScanEvent_Deserialize>, categories: Category[] | null) => typedError<PublishedScan_Serialize, string>(__TAURI_INVOKE("start_scan", { onEvent, categories })),
+	/**  Resumes the one-shot checkpoint owned by the current backend scan. */
+	resumeScan: (onEvent: Channel<ScanEvent_Deserialize>, scanId: string, continuationId: string) => typedError<PublishedScan_Serialize, string>(__TAURI_INVOKE("resume_scan", { onEvent, scanId, continuationId })),
 	/**
 	 *  Requests cancellation of the scan that reports `scan_id`.
 	 * 
@@ -46,59 +48,8 @@ export const commands = {
 	 */
 	cancelScan: (scanId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_scan", { scanId })),
 	getLastScan: () => __TAURI_INVOKE<{
-	scan_id: string,
-	/**  Backend-owned lifetime of a cleanup observation, not a deletion lease. */
-	valid_for_seconds: number,
-	started_at: number,
-	finished_at: number,
-	categories: CategoryResult_Serialize[],
-	total_bytes: number,
-	cleanable_bytes: number,
-	safe_bytes: number,
-	rebuild_bytes: number,
-	manual_bytes: number,
-	quality: ObservationQuality,
-	incomplete_reasons: string[],
-	/**
-	 *  Stable categories for locations the scan could not fully inspect.
-	 *  This is intentionally separate from `incomplete_reasons`: callers may
-	 *  display the latter, but must use this field for typed remediation and
-	 *  analytics instead of matching localized/free-form text.
-	 */
-	gaps: ScanGap_Serialize[],
-	/**  Sum of the categories' skipped-entry counts. */
-	skipped_entry_count: number,
-	/**  Retained items whose observation is not `Fresh`. */
-	incomplete_item_count: number,
-	/**
-	 *  Observed and cleanable bytes per eligibility state, summed over the
-	 *  categories.
-	 */
-	eligibility: EligibilitySummary_Serialize,
-	/**  Units suppressed as duplicates of an already-counted unit. */
-	suppressed_duplicate_count: number,
-	suppressed_duplicate_bytes: number,
-	/**  Units whose bytes a broader unit already accounts for. */
-	suppressed_overlap_count: number,
-	suppressed_overlap_bytes: number,
-	/**
-	 *  Units that may be inside a broader unit's observation without proof:
-	 *  `total_bytes` is an upper bound of the observed union, and the union is
-	 *  at least `total_bytes - ambiguous_overlap_bytes`.
-	 */
-	ambiguous_overlap_count: number,
-	ambiguous_overlap_bytes: number,
-	/**
-	 *  Whether this scan stopped because it was cancelled.
-	 * 
-	 *  A cancelled scan is incomplete for a stated reason, and the interface
-	 *  must be able to say *which* reason without reading prose: a user who
-	 *  pressed Stop sees a cancelled scan, not a scan that failed. Every other
-	 *  incompleteness leaves this `false` and keeps its own reason.
-	 */
-	cancelled: boolean,
-	/**  What the scan observed about its own work. */
-	metrics: ScanMetrics_Serialize,
+	result: ScanResult_Serialize,
+	discovery: ScanDiscovery,
 } | null>("get_last_scan"),
 	createDeletePlan: (scanId: string, selectedItemIds: string[]) => typedError<PlanPreview_Serialize, CleanupFailure>(__TAURI_INVOKE("create_delete_plan", { scanId, selectedItemIds })),
 	executeClean: (planId: string, confirmed: boolean, onEvent: Channel<CleanEvent_Deserialize>) => typedError<CleanResult_Serialize, CleanupFailure>(__TAURI_INVOKE("execute_clean", { planId, confirmed, onEvent })),
@@ -2493,6 +2444,21 @@ export type ProviderObservation_Serialize = {
 	model_identity?: string | null,
 };
 
+/**  The latest backend-owned inventory and its discovery state. */
+export type PublishedScan = PublishedScan_Serialize | PublishedScan_Deserialize;
+
+/**  The latest backend-owned inventory and its discovery state. */
+export type PublishedScan_Deserialize = {
+	result: ScanResult_Deserialize,
+	discovery?: ScanDiscovery,
+};
+
+/**  The latest backend-owned inventory and its discovery state. */
+export type PublishedScan_Serialize = {
+	result: ScanResult_Serialize,
+	discovery: ScanDiscovery,
+};
+
 export type QuickPanelSection = "storage" | "cleanup" | "ai_usage" | "categories" | "memory" | "ai_control" | "agent_activity";
 
 export type Recommendation = Recommendation_Serialize | Recommendation_Deserialize;
@@ -2678,6 +2644,13 @@ export type SafetySnapshot_Serialize = {
 	unreached_roots: string[],
 	status_message: string,
 };
+
+/**
+ *  Whether the backend exhausted discovery or retained an in-memory checkpoint.
+ *  A continuation id is discovery authority only. It never contains a path and
+ *  never authorizes cleanup.
+ */
+export type ScanDiscovery = { status: "exhausted" } | { status: "paused"; continuation_id: string } | { status: "stopped"; reason: string };
 
 /**
  *  A scan's progress, streamed one event at a time.

@@ -31,6 +31,7 @@ import type {
   PlatformContext,
   ProviderDescriptor,
   ProviderId,
+  PublishedScan,
   RecommendationPreview,
   SafetySnapshot,
   ScanEvent,
@@ -781,7 +782,7 @@ export const mockApi = {
   async startScan(
     onEvent: (event: ScanEvent) => void,
     _categories?: Category[]
-  ): Promise<ScanResult> {
+  ): Promise<PublishedScan> {
     return new Promise((resolve) => {
       const scanId = 'mock-scan-' + Date.now();
       activeMockScanId = scanId;
@@ -1261,7 +1262,7 @@ export const mockApi = {
           activeMockScanId = null;
           lastMockScan = stopped;
           onEvent({ type: 'Finished', result: stopped });
-          resolve(stopped);
+          resolve({ result: stopped, discovery: { status: 'stopped', reason: 'Scan was cancelled.' } });
           return;
         }
 
@@ -1305,9 +1306,17 @@ export const mockApi = {
         activeMockScanId = null;
         lastMockScan = result;
         onEvent({ type: 'Finished', result });
-        resolve(result);
+        resolve({ result, discovery: { status: 'exhausted' } });
       }, 450);
     });
+  },
+
+  async resumeScan(
+    _onEvent: (event: ScanEvent) => void,
+    _scanId: string,
+    _continuationId: string
+  ): Promise<PublishedScan> {
+    throw new Error('The preview scan has no retained continuation. Start a new scan.');
   },
 
   async cancelScan(scanId: string): Promise<void> {
@@ -1317,8 +1326,10 @@ export const mockApi = {
     if (activeMockScanId === scanId) mockScanCancelled = true;
   },
 
-  async getLastScan(): Promise<ScanResult | null> {
-    return lastMockScan;
+  async getLastScan(): Promise<PublishedScan | null> {
+    return lastMockScan
+      ? { result: lastMockScan, discovery: { status: 'exhausted' } }
+      : null;
   },
 
   async createPlan(_scanId: string, items: ScanItem[]): Promise<PlanPreview> {

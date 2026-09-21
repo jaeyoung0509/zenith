@@ -45,6 +45,7 @@ import type {
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
+  ScanDiscovery,
   ScanItem,
   ScanResult,
   SelectedApplication,
@@ -58,6 +59,8 @@ import type {
 } from '../models/types';
 
 export { isTauri, refusalForPreview };
+
+let latestScanDiscovery: ScanDiscovery = { status: 'exhausted' };
 
 export function tauriGetProjectContext(force = false): Promise<AgentActivitySnapshot> {
   return api.getProjectContext(force);
@@ -146,11 +149,27 @@ export function tauriDisconnectAiProvider(provider: ProviderId): Promise<void> {
   return api.deleteAiProviderCredential(provider);
 }
 
-export function tauriScan(
+export async function tauriScan(
   onEvent: (event: ScanEvent) => void,
   categories?: Category[]
 ): Promise<ScanResult> {
-  return api.startScan(onEvent, categories);
+  const published = await api.startScan(onEvent, categories);
+  latestScanDiscovery = published.discovery ?? { status: 'exhausted' };
+  return published.result;
+}
+
+export async function tauriResumeScan(
+  onEvent: (event: ScanEvent) => void,
+  scanId: string,
+  continuationId: string
+): Promise<ScanResult> {
+  const published = await api.resumeScan(onEvent, scanId, continuationId);
+  latestScanDiscovery = published.discovery ?? { status: 'exhausted' };
+  return published.result;
+}
+
+export function tauriScanDiscovery(): ScanDiscovery {
+  return latestScanDiscovery;
 }
 
 /** Stops the scan that reported `scanId`; the scan's own result states the outcome. */
@@ -158,8 +177,10 @@ export function tauriCancelScan(scanId: string): Promise<void> {
   return api.cancelScan(scanId);
 }
 
-export function tauriGetLastScan(): Promise<ScanResult | null> {
-  return api.getLastScan();
+export async function tauriGetLastScan(): Promise<ScanResult | null> {
+  const published = await api.getLastScan();
+  latestScanDiscovery = published?.discovery ?? { status: 'exhausted' };
+  return published?.result ?? null;
 }
 
 export function tauriCreatePlan(scanId: string, items: ScanItem[]): Promise<PlanPreview> {
