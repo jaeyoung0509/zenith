@@ -52,7 +52,7 @@ describe('browser preview scan cancellation', () => {
       await mockApi.cancelScan(await startedScanId(events));
       await vi.advanceTimersByTimeAsync(450);
 
-      const result = await scan;
+      const result = (await scan).result;
       expect(result.cancelled).toBe(true);
       expect(result.quality).toBe('partial');
       expect(result.incomplete_reasons?.some((reason) => reason.includes('cancelled'))).toBe(true);
@@ -77,7 +77,7 @@ describe('browser preview scan cancellation', () => {
         events.push(event);
       });
       await vi.advanceTimersByTimeAsync(450);
-      const result = await scan;
+      const result = (await scan).result;
 
       await expect(mockApi.cancelScan(result.scan_id)).resolves.toBeUndefined();
 

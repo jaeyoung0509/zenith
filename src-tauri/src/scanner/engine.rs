@@ -673,6 +673,128 @@ impl ScanEngine {
 
         result
     }
+
+    /// Rebuilds one authoritative snapshot from completed scan slices.
+    ///
+    /// Slices are never added as byte deltas. Their retained rows are combined
+    /// first and the normal cross-category overlap and aggregate rules are run
+    /// again, so a later category can still suppress or conflict with an
+    /// earlier observation.
+    pub fn merge_slices(
+        registry: &SignatureRegistry,
+        environment: &PlatformEnvironment,
+        slices: &[ScanResult],
+    ) -> Option<ScanResult> {
+        let latest = slices.last()?.clone();
+        let mut categories = slices
+            .iter()
+            .flat_map(|slice| slice.categories.clone())
+            .collect::<Vec<_>>();
+        let overlap = resolve_unit_overlaps_with(
+            &mut categories,
+            &[],
+            PathIdentity::CaseSensitive,
+            |candidate, container| scan_unit_relationship(candidate, container, registry),
+        );
+
+        let mut total_bytes = 0u64;
+        let mut cleanable_bytes = 0u64;
+        let mut safe_bytes = 0u64;
+        let mut rebuild_bytes = 0u64;
+        let mut manual_bytes = 0u64;
+        let mut skipped_entry_count = 0u64;
+        let mut incomplete_item_count = 0u64;
+        let mut eligibility = EligibilitySummary::default();
+        let mut suppressed_duplicate_count = 0u64;
+        let mut suppressed_duplicate_bytes = 0u64;
+        let mut incomplete_reasons = Vec::new();
+        let mut gaps = Vec::new();
+        for category in &categories {
+            total_bytes = total_bytes.saturating_add(category.total_bytes);
+            cleanable_bytes = cleanable_bytes.saturating_add(category.cleanable_bytes);
+            safe_bytes = safe_bytes.saturating_add(category.safe_bytes);
+            rebuild_bytes = rebuild_bytes.saturating_add(category.rebuild_bytes);
+            manual_bytes = manual_bytes.saturating_add(category.manual_bytes);
+            skipped_entry_count = skipped_entry_count.saturating_add(category.skipped_entry_count);
+            incomplete_item_count =
+                incomplete_item_count.saturating_add(category.incomplete_item_count);
+            eligibility.merge(&category.eligibility);
+            suppressed_duplicate_count =
+                suppressed_duplicate_count.saturating_add(category.suppressed_duplicate_count);
+            suppressed_duplicate_bytes =
+                suppressed_duplicate_bytes.saturating_add(category.suppressed_duplicate_bytes);
+            for item in &category.items {
+                if let Some(reason) = &item.incomplete_reason {
+                    if !incomplete_reasons.contains(reason) {
+                        incomplete_reasons.push(reason.clone());
+                    }
+                }
+                if let Some(kind) = scan_gap_kind(environment, item) {
+                    add_scan_gap(&mut gaps, kind, 1);
+                }
+            }
+        }
+        let cancelled = slices.iter().any(|slice| slice.cancelled);
+        if cancelled {
+            incomplete_reasons.push("Scan was cancelled before completion".to_string());
+            add_scan_gap(&mut gaps, ScanGapKind::Cancelled, 1);
+        }
+        let quality = if cancelled {
+            ObservationQuality::Partial
+        } else {
+            aggregate_quality(categories.iter().map(|category| category.quality))
+        };
+        let metrics = ScanMetrics {
+            duration_ms: slices
+                .iter()
+                .map(|slice| slice.metrics.duration_ms)
+                .fold(0u64, u64::saturating_add),
+            visited_entries: slices
+                .iter()
+                .map(|slice| slice.metrics.visited_entries)
+                .fold(0u64, u64::saturating_add),
+            directories_read: slices
+                .iter()
+                .map(|slice| slice.metrics.directories_read)
+                .fold(0u64, u64::saturating_add),
+            peak_outstanding_directory_tasks: slices
+                .iter()
+                .map(|slice| slice.metrics.peak_outstanding_directory_tasks)
+                .max()
+                .unwrap_or_default(),
+        };
+
+        Some(ScanResult {
+            scan_id: latest.scan_id,
+            valid_for_seconds: latest.valid_for_seconds,
+            started_at: slices
+                .iter()
+                .map(|slice| slice.started_at)
+                .min()
+                .unwrap_or(latest.started_at),
+            finished_at: latest.finished_at,
+            categories,
+            total_bytes,
+            cleanable_bytes,
+            safe_bytes,
+            rebuild_bytes,
+            manual_bytes,
+            quality,
+            incomplete_reasons,
+            gaps,
+            skipped_entry_count,
+            incomplete_item_count,
+            eligibility,
+            suppressed_duplicate_count,
+            suppressed_duplicate_bytes,
+            suppressed_overlap_count: overlap.suppressed_count,
+            suppressed_overlap_bytes: overlap.suppressed_bytes,
+            ambiguous_overlap_count: overlap.ambiguous_count,
+            ambiguous_overlap_bytes: overlap.ambiguous_bytes,
+            cancelled,
+            metrics,
+        })
+    }
 }
 
 /// The scan's single event channel.

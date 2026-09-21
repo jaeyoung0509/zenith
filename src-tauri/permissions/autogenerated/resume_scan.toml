@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-scan"
+description = "Enables the resume_scan command without any pre-configured scope."
+commands.allow = ["resume_scan"]
+
+[[permission]]
+identifier = "deny-resume-scan"
+description = "Denies the resume_scan command without any pre-configured scope."
+commands.deny = ["resume_scan"]

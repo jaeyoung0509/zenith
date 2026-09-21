@@ -114,6 +114,14 @@ impl CancellationRegistry {
         }
     }
 
+    /// Cancels every currently registered worker when a new inventory
+    /// generation supersedes them.
+    pub fn request_all(&self) {
+        for entry in self.lock().values() {
+            entry.signal.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// TTL expires only abandoned bookkeeping. While a scan is running its
     /// worker/probe owns another Arc to the same signal, so age alone must not
     /// make a still-running scan impossible to stop.
@@ -220,6 +228,20 @@ mod tests {
         assert!(registry.request("scan-3"));
         registry.remove("scan-3");
         assert!(probe.is_cancelled());
+    }
+
+    #[test]
+    fn superseding_generation_cancels_every_registered_worker() {
+        let registry = CancellationRegistry::for_scans();
+        let first = Arc::new(AtomicBool::new(false));
+        let second = Arc::new(AtomicBool::new(false));
+        registry.register("scan-a".to_string(), first.clone());
+        registry.register("scan-b".to_string(), second.clone());
+
+        registry.request_all();
+
+        assert!(ScanCancellation::new(first).is_cancelled());
+        assert!(ScanCancellation::new(second).is_cancelled());
     }
 
     /// The registry is bounded: past its cap the oldest entry is evicted, so a

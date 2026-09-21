@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScanStore } from '../lib/stores/scan.svelte';
 import { CleanupRefusalError } from '../lib/api/native';
 import type { ScanEvent, ScanResult } from '../lib/models/types';
-import { tauriCancelScan, tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriQuickCleanSafe, tauriScan } from '../lib/utils/tauri';
+import { tauriCancelScan, tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriQuickCleanSafe, tauriResumeScan, tauriScan, tauriScanDiscovery } from '../lib/utils/tauri';
 
 vi.mock('../lib/utils/tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/utils/tauri')>();
@@ -13,7 +13,9 @@ vi.mock('../lib/utils/tauri', async (importOriginal) => {
     tauriExecuteClean: vi.fn(),
     tauriGetLastScan: vi.fn(),
     tauriQuickCleanSafe: vi.fn(),
+    tauriResumeScan: vi.fn(),
     tauriScan: vi.fn(),
+    tauriScanDiscovery: vi.fn(),
   };
 });
 
@@ -43,6 +45,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1000_000);
   vi.resetAllMocks();
+  vi.mocked(tauriScanDiscovery).mockReturnValue({ status: 'exhausted' });
   // The cleanup paths below exercise the native flow. Preview mode refuses a
   // destructive dispatch before it reaches the command layer, which is covered
   // in previewRefusal.test.ts.
@@ -58,6 +61,33 @@ async function loaded() {
 }
 
 describe('cleanup freshness and recovery', () => {
+  it('continues only from the published one-shot checkpoint and enables cleanup after exhaustion', async () => {
+    const store = new ScanStore();
+    vi.mocked(tauriScan).mockResolvedValue(fixture('slice'));
+    vi.mocked(tauriScanDiscovery).mockReturnValueOnce({
+      status: 'paused',
+      continuation_id: 'continuation-1',
+    });
+
+    await store.runScan();
+
+    expect(store.canContinue).toBe(true);
+    expect(store.canClean).toBe(false);
+    vi.mocked(tauriResumeScan).mockResolvedValue(fixture('complete'));
+    vi.mocked(tauriScanDiscovery).mockReturnValueOnce({ status: 'exhausted' });
+
+    await store.continueScan();
+
+    expect(tauriResumeScan).toHaveBeenCalledWith(
+      expect.any(Function),
+      'slice',
+      'continuation-1'
+    );
+    expect(store.canContinue).toBe(false);
+    expect(store.canClean).toBe(true);
+    expect(store.lastScan?.scan_id).toBe('complete');
+  });
+
   it('treats an unavailable scan as non-cleanable and leaves every item unselected', async () => {
     const unavailable = fixture();
     unavailable.quality = 'unavailable';

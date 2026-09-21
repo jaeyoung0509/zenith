@@ -31,6 +31,7 @@
     "allow-get-ai-control-git-diff",
     "allow-connect-openrouter-oauth",
     "allow-start-scan",
+    "allow-resume-scan",
     "allow-cancel-scan",
     "allow-get-last-scan",
     "allow-create-delete-plan",

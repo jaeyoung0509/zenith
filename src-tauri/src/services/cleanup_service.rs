@@ -5,14 +5,15 @@ use uuid::Uuid;
 use super::cancellation::{CancellationRegistry, ScanCancellation};
 use super::plan_store::{PlanStore, PlanStoreError};
 use super::scan_service::ScanService;
-use super::scan_store::ScanStore;
+use super::scan_store::{ScanCheckpoint, ScanStore};
 use crate::cleaner::{CleanExecutor, LifecycleProviderRegistry, OwnerProviderRegistry};
 use crate::execution_budget::ExecutionBudgets;
 use crate::models::{
     CleanEvent, CleanFailureReason, CleanResult, CleanStrategy, CleanupEligibility, CleanupFailure,
     CleanupFailureScope, CleanupProgressSink, DeletePlan, ObservationQuality, PlanPreview,
-    PlanRefusalPreview, PlatformCapabilitiesProvider, PlatformFeature, ScanEvent, ScanProgressSink,
-    ScanRequest, ScanResult, ZenithError, ZenithSettings,
+    PlanRefusalPreview, PlatformCapabilitiesProvider, PlatformFeature, PublishedScan,
+    ResumeScanRequest, ScanEvent, ScanProgressSink, ScanRequest, ScanResult, ZenithError,
+    ZenithSettings,
 };
 use crate::operation_gate::StorageOperationGate;
 use crate::safety::SafetyPlanner;
@@ -142,6 +143,7 @@ pub struct CleanupService {
 }
 
 impl CleanupService {
+    const SCAN_CATEGORY_SLICE_LIMIT: usize = 2;
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         scan_service: Arc<ScanService>,
@@ -177,7 +179,28 @@ impl CleanupService {
         &self,
         request: ScanRequest,
         progress: Arc<dyn ScanProgressSink>,
-    ) -> Result<ScanResult, String> {
+    ) -> Result<PublishedScan, String> {
+        self.start_scan_with_limit(request, progress, Self::SCAN_CATEGORY_SLICE_LIMIT)
+            .await
+    }
+
+    /// Runs to exhaustion for a surface that is intentionally not granted the
+    /// resume command, such as the Quick Panel.
+    pub async fn start_scan_complete(
+        &self,
+        request: ScanRequest,
+        progress: Arc<dyn ScanProgressSink>,
+    ) -> Result<PublishedScan, String> {
+        self.start_scan_with_limit(request, progress, usize::MAX)
+            .await
+    }
+
+    async fn start_scan_with_limit(
+        &self,
+        request: ScanRequest,
+        progress: Arc<dyn ScanProgressSink>,
+        slice_limit: usize,
+    ) -> Result<PublishedScan, String> {
         self.platform_capabilities
             .capabilities()
             .require(
@@ -196,21 +219,108 @@ impl CleanupService {
                 .map_err(|e| e.to_string())?;
         }
 
-        let permit = self.budgets.acquire_storage_read().await?;
+        self.scan_cancellations.request_all();
+        let lease = self.scan_store.begin();
+        let mut categories = request.categories.clone().unwrap_or_else(|| {
+            vec![
+                crate::models::Category::Ai,
+                crate::models::Category::Developer,
+                crate::models::Category::Container,
+                crate::models::Category::System,
+            ]
+        });
+        let remaining = if categories.len() > slice_limit {
+            categories.split_off(slice_limit)
+        } else {
+            Vec::new()
+        };
+        let mut pass_request = request.clone();
+        pass_request.categories = Some(categories);
+        let result = match self.run_scan_pass(pass_request, progress).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.scan_store.stop(lease, error.clone());
+                return Err(error);
+            }
+        };
+        let checkpoint = (!result.cancelled && !remaining.is_empty()).then(|| ScanCheckpoint {
+            request,
+            remaining_categories: remaining,
+            slices: vec![result.clone()],
+            freshness_anchor: result.finished_at,
+        });
+        if result.cancelled {
+            self.scan_store
+                .publish_stopped(lease, result, "Scan was cancelled before completion.")
+        } else {
+            self.scan_store.publish(lease, result, checkpoint)
+        }
+    }
 
+    /// Continues exactly the backend checkpoint named by the current scan.
+    pub async fn resume_scan(
+        &self,
+        request: ResumeScanRequest,
+        progress: Arc<dyn ScanProgressSink>,
+    ) -> Result<PublishedScan, String> {
+        self.platform_capabilities
+            .capabilities()
+            .require(
+                PlatformFeature::Cleanup,
+                crate::models::CapabilityAccess::Inspect,
+            )
+            .map_err(|error| error.to_string())?;
+        let claimed = self.scan_store.claim(&request, unix_timestamp())?;
+        let mut checkpoint = claimed.checkpoint;
+        let mut categories = std::mem::take(&mut checkpoint.remaining_categories);
+        let remaining = if categories.len() > Self::SCAN_CATEGORY_SLICE_LIMIT {
+            categories.split_off(Self::SCAN_CATEGORY_SLICE_LIMIT)
+        } else {
+            Vec::new()
+        };
+        let mut pass_request = checkpoint.request.clone();
+        pass_request.categories = Some(categories);
+        let result = match self.run_scan_pass(pass_request, progress).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.scan_store.stop(claimed.lease, error.clone());
+                return Err(error);
+            }
+        };
+        checkpoint.slices.push(result.clone());
+        let Some(mut merged) = self.scan_service.merge_slices(&checkpoint.slices) else {
+            let error = "The retained scan contained no observations.".to_string();
+            self.scan_store.stop(claimed.lease, error.clone());
+            return Err(error);
+        };
+        merged.finished_at = checkpoint.freshness_anchor;
+        checkpoint.remaining_categories = remaining;
+        let next = (!result.cancelled && !checkpoint.remaining_categories.is_empty())
+            .then_some(checkpoint);
+        if result.cancelled {
+            self.scan_store.publish_stopped(
+                claimed.lease,
+                merged,
+                "Scan was cancelled before completion.",
+            )
+        } else {
+            self.scan_store.publish(claimed.lease, merged, next)
+        }
+    }
+
+    async fn run_scan_pass(
+        &self,
+        request: ScanRequest,
+        progress: Arc<dyn ScanProgressSink>,
+    ) -> Result<ScanResult, String> {
+        let permit = self.budgets.acquire_storage_read().await?;
         let scan_service = self.scan_service.clone();
-        let scan_store = self.scan_store.clone();
         let operation_gate = self.operation_gate.clone();
         let cancellations = self.scan_cancellations.clone();
-
-        let result = crate::blocking::run_blocking(
+        crate::blocking::run_blocking(
             move || -> Result<_, String> {
                 let _permit = permit;
                 Ok(operation_gate.run_read(|| {
-                    // The interface cannot cancel a scan it has not been told
-                    // about, so the signal is registered the moment the scan
-                    // reports its id — before it has walked anything — under
-                    // that same id.
                     let signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let registered: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
                     let probe = ScanCancellation::new(signal.clone());
@@ -224,11 +334,7 @@ impl CleanupService {
                         }
                         progress.emit(event);
                     };
-
                     let result = scan_service.scan(&request, &sink, &probe);
-
-                    // A finished scan keeps no way to be cancelled: success,
-                    // cancellation, and error all leave the same way.
                     let finished = registered
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -236,21 +342,17 @@ impl CleanupService {
                     if let Some(scan_id) = finished.as_deref() {
                         cancellations.remove(scan_id);
                     }
-
-                    scan_store.set(result.clone());
                     result
                 }))
             },
             "Scan worker panicked",
         )
-        .await?;
-
-        Ok(result)
+        .await
     }
 
     /// Returns the current cached scan result if available.
-    pub fn get_last_scan(&self) -> Option<ScanResult> {
-        self.scan_store.get()
+    pub fn get_last_scan(&self) -> Option<PublishedScan> {
+        self.scan_store.get_published()
     }
 
     /// Requests cancellation of the scan reporting `scan_id`.
@@ -523,7 +625,7 @@ mod tests {
     use super::*;
     use crate::models::{
         Category, CategoryResult, FileSize, ObservationQuality, PlatformCapabilities, RiskTier,
-        ScanItem, Signature,
+        ScanDiscovery, ScanItem, Signature,
     };
     use zenith_platform::path_algebra::PathFlavor;
 
@@ -721,22 +823,90 @@ mod tests {
             .expect("a cancelled scan still returns its partial result");
 
         assert!(
-            result.cancelled,
+            result.result.cancelled,
             "the result states that it was cancelled: {result:?}"
         );
-        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert_eq!(result.result.quality, ObservationQuality::Partial);
         assert!(result
+            .result
             .incomplete_reasons
             .iter()
             .any(|reason| reason.contains("cancelled")));
         assert!(
-            result.categories.is_empty(),
+            result.result.categories.is_empty(),
             "the cancelled scan stopped before finishing any category: {result:?}"
         );
 
         // The finished scan keeps no cancellation handle: requesting it again
         // is a no-op rather than a second cancel of something else.
-        assert!(service.cancel_scan(&result.scan_id).is_ok());
+        assert!(service.cancel_scan(&result.result.scan_id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_bounded_scan_resumes_forward_and_publishes_one_merged_snapshot() {
+        let environment = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let registry = Arc::new(SignatureRegistry::new());
+        let lifecycle = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new()));
+        let owners = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
+        let scan_service = Arc::new(ScanService::new(
+            registry.clone(),
+            lifecycle.clone(),
+            owners.clone(),
+            environment.clone(),
+        ));
+        let service = CleanupService::new(
+            scan_service,
+            Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup())),
+            Arc::new(ScanStore::new()),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            environment,
+            registry,
+            Arc::new(DockerStatusCache::new()),
+            lifecycle,
+            owners,
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        );
+        let progress: Arc<dyn ScanProgressSink> = Arc::new(|_: ScanEvent| {});
+
+        let first = service
+            .start_scan(ScanRequest::default(), progress.clone())
+            .await
+            .expect("the first bounded pass publishes");
+        let ScanDiscovery::Paused { continuation_id } = first.discovery else {
+            panic!("the default four-category scan should pause after two categories")
+        };
+        assert_eq!(first.result.categories.len(), 2);
+        let freshness_anchor = first.result.finished_at;
+
+        let completed = service
+            .resume_scan(
+                ResumeScanRequest {
+                    scan_id: first.result.scan_id,
+                    continuation_id,
+                },
+                progress,
+            )
+            .await
+            .expect("the retained pass resumes");
+
+        assert_eq!(completed.discovery, ScanDiscovery::Exhausted);
+        assert_eq!(completed.result.categories.len(), 4);
+        assert_eq!(completed.result.finished_at, freshness_anchor);
+        assert_eq!(
+            completed
+                .result
+                .categories
+                .iter()
+                .map(|category| category.category)
+                .collect::<Vec<_>>(),
+            vec![
+                Category::Ai,
+                Category::Developer,
+                Category::Container,
+                Category::System,
+            ]
+        );
     }
 
     #[tokio::test]
@@ -776,7 +946,7 @@ mod tests {
         let scan = make_test_scan(vec![item]);
         scan_store.set(scan.clone());
 
-        assert_eq!(service.get_last_scan().unwrap().scan_id, "scan_123");
+        assert_eq!(service.get_last_scan().unwrap().result.scan_id, "scan_123");
 
         // Requesting plan with unknown item fails
         let err = service

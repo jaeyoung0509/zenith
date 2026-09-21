@@ -51,4 +51,8 @@ impl ScanService {
             move |event| progress.emit(event),
         )
     }
+
+    pub fn merge_slices(&self, slices: &[ScanResult]) -> Option<ScanResult> {
+        ScanEngine::merge_slices(&self.registry, &self.environment, slices)
+    }
 }

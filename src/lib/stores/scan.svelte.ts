@@ -4,6 +4,7 @@ import type {
   CleanResult,
   PlanRefusalPreview,
   ScanEvent,
+  ScanDiscovery,
   ScanItem,
   ScanResult,
   ZenithSettings,
@@ -16,7 +17,9 @@ import {
   tauriExecuteClean,
   tauriGetLastScan,
   tauriQuickCleanSafe,
+  tauriResumeScan,
   tauriScan,
+  tauriScanDiscovery,
 } from '../utils/tauri';
 import { cleanableBytes, isActionable, isAutoCleanable, isCleanable, isProviderBacked } from '../utils/cleanup';
 
@@ -37,6 +40,7 @@ export class ScanStore {
   /** Whether a stop request is in flight; the scan's own result ends it. */
   isCancelling = $state(false);
   lastScan = $state<ScanResult | null>(null);
+  discovery = $state<ScanDiscovery>({ status: 'exhausted' });
   cleanProgress = $state<{
     currentItem: string;
     index: number;
@@ -115,7 +119,13 @@ export class ScanStore {
   }
 
   get canClean(): boolean {
-    return (this.freshness === 'fresh' || this.freshness === 'partial') && !this.isCleaning;
+    return this.discovery.status === 'exhausted'
+      && (this.freshness === 'fresh' || this.freshness === 'partial')
+      && !this.isCleaning;
+  }
+
+  get canContinue(): boolean {
+    return this.discovery.status === 'paused' && !this.isScanning && !this.isCleaning;
   }
 
   /**
@@ -196,6 +206,7 @@ export class ScanStore {
 
   private acceptScan(scan: ScanResult) {
     this.lastScan = scan;
+    this.discovery = tauriScanDiscovery();
     this.invalidated = false;
     // A successfully accepted scan supersedes any earlier message, so an
     // item-level gap never survives as a stale destructive banner. The durable
@@ -519,6 +530,77 @@ export class ScanStore {
       return result;
     } catch (e: any) {
       this.error = e?.toString() || 'Scan failed';
+      return null;
+    } finally {
+      this.isScanning = false;
+      this.isCancelling = false;
+      this.scanId = null;
+      this.currentCategory = null;
+      this.currentScanningItem = null;
+      this.currentRoot = null;
+    }
+  }
+
+  continueScan(): Promise<ScanResult | null> {
+    if (this.scanRequest || !this.lastScan || this.discovery.status !== 'paused') {
+      return Promise.resolve(null);
+    }
+    const scanId = this.lastScan.scan_id;
+    const continuationId = this.discovery.continuation_id;
+    this.scanRequest = this.performContinuation(scanId, continuationId).finally(() => {
+      this.scanRequest = null;
+    });
+    return this.scanRequest;
+  }
+
+  private async performContinuation(
+    scanId: string,
+    continuationId: string
+  ): Promise<ScanResult | null> {
+    this.generation++;
+    this.isScanning = true;
+    this.error = null;
+    this.discovery = { status: 'stopped', reason: 'Continuation is in progress.' };
+    this.scanId = null;
+    this.currentRoot = null;
+    this.foundItemCount = 0;
+    this.isCancelling = false;
+    try {
+      const result = await tauriResumeScan((event: ScanEvent) => {
+        switch (event.type) {
+          case 'Started':
+            this.scanId = event.scan_id;
+            this.currentCategory = null;
+            this.currentRoot = null;
+            this.foundItemCount = 0;
+            break;
+          case 'CategoryStarted':
+            this.currentCategory = event.category;
+            break;
+          case 'RootStarted':
+            this.currentRoot = { name: event.name, path: event.root };
+            break;
+          case 'ItemFound':
+            this.currentScanningItem = event.item.name;
+            this.foundItemCount++;
+            break;
+          case 'CategoryFinished':
+            break;
+          case 'Finished':
+            this.currentCategory = null;
+            this.currentScanningItem = null;
+            this.currentRoot = null;
+            break;
+        }
+      }, scanId, continuationId);
+      this.acceptScan(result);
+      return result;
+    } catch (cause: unknown) {
+      this.discovery = {
+        status: 'stopped',
+        reason: cause instanceof Error ? cause.message : String(cause),
+      };
+      this.error = this.discovery.reason;
       return null;
     } finally {
       this.isScanning = false;

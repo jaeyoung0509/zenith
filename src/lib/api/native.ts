@@ -35,13 +35,13 @@ import type {
   PlatformContext,
   ProviderDescriptor,
   ProviderId_Deserialize,
+  PublishedScan,
   RecommendationPreview,
   SafetySnapshot,
   ReleaseDevelopmentListenerResult,
   ReleaseMode,
   ScanEvent,
   ScanItem,
-  ScanResult,
   SelectedApplication,
   ZenithSettings,
   ZenithSettings_Serialize,
@@ -193,7 +193,7 @@ export const nativeApi = {
   async startScan(
     onEvent: (event: ScanEvent) => void,
     categories?: Category[]
-  ): Promise<ScanResult> {
+  ): Promise<PublishedScan> {
     const channel = new Channel<ScanEvent>();
     channel.onmessage = (event) => {
       onEvent(event);
@@ -201,11 +201,23 @@ export const nativeApi = {
     return await unwrap(commands.startScan(channel, categories ?? null));
   },
 
+  async resumeScan(
+    onEvent: (event: ScanEvent) => void,
+    scanId: string,
+    continuationId: string
+  ): Promise<PublishedScan> {
+    const channel = new Channel<ScanEvent>();
+    channel.onmessage = (event) => {
+      onEvent(event);
+    };
+    return await unwrap(commands.resumeScan(channel, scanId, continuationId));
+  },
+
   async cancelScan(scanId: string): Promise<void> {
     await unwrap(commands.cancelScan(scanId));
   },
 
-  async getLastScan(): Promise<ScanResult | null> {
+  async getLastScan(): Promise<PublishedScan | null> {
     return await commands.getLastScan();
   },
 
