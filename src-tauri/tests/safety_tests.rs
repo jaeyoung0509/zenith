@@ -2687,7 +2687,10 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
     // but never the strategy or any other mutation authority.
     let serialized = serde_json::to_value(&preview).expect("the preview is a contract");
     let text = serialized.to_string();
-    assert!(text.contains(&cache.to_string_lossy().into_owned()));
+    assert_eq!(
+        serialized["targets"][0]["path"],
+        cache.to_string_lossy().as_ref()
+    );
     assert!(!text.contains("strategy"));
 
     for mode in [CleanupMode::Preview, CleanupMode::Trash] {
