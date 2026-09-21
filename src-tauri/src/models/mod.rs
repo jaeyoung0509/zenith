@@ -51,7 +51,8 @@ pub use zenith_core::application::dto::cleanup::{
     CleanupFailureScope, CleanupProgressSink, PlanPreview, PlanRefusalPreview, PlanTargetPreview,
 };
 pub use zenith_core::application::dto::scan::{
-    CancellationProbe, NeverCancelled, ScanEvent, ScanProgressSink, ScanRequest,
+    CancellationProbe, NeverCancelled, PublishedScan, ResumeScanRequest, ScanDiscovery, ScanEvent,
+    ScanProgressSink, ScanRequest,
 };
 pub use zenith_core::application::dto::storage::{
     AppRelatedItem, AppUninstallInspection, InstalledApp, InstalledAppInventory, LargeFileItem,

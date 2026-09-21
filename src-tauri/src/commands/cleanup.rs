@@ -5,14 +5,14 @@
 
 use std::sync::Arc;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{State, Window};
 
 use super::state::DesktopState;
 use crate::events::cleanup::TauriCleanupProgress;
 use crate::events::scan::TauriScanProgress;
 use crate::models::{
-    Category, CleanEvent, CleanResult, CleanupFailure, CleanupProgressSink, PlanPreview, ScanEvent,
-    ScanProgressSink, ScanRequest, ScanResult,
+    Category, CleanEvent, CleanResult, CleanupFailure, CleanupProgressSink, PlanPreview,
+    PublishedScan, ResumeScanRequest, ScanDiscovery, ScanEvent, ScanProgressSink, ScanRequest,
 };
 
 pub use crate::services::select_quick_clean_safe_candidates;
@@ -22,8 +22,9 @@ pub use crate::services::select_quick_clean_safe_candidates;
 pub async fn start_scan(
     on_event: Channel<ScanEvent>,
     categories: Option<Vec<Category>>,
+    window: Window,
     state: State<'_, DesktopState>,
-) -> Result<ScanResult, String> {
+) -> Result<PublishedScan, String> {
     if let Some(refusal) = state.catalog_failure() {
         return Err(refusal);
     }
@@ -34,7 +35,36 @@ pub async fn start_scan(
         intensive_cleanup: settings.intensive_cleanup,
     };
     let progress: Arc<dyn ScanProgressSink> = Arc::new(TauriScanProgress::new(on_event));
-    state.cleanup.start_scan(request, progress).await
+    if window.label() == "quick" {
+        state.cleanup.start_scan_complete(request, progress).await
+    } else {
+        state.cleanup.start_scan(request, progress).await
+    }
+}
+
+/// Resumes the one-shot checkpoint owned by the current backend scan.
+#[tauri::command]
+#[specta::specta]
+pub async fn resume_scan(
+    on_event: Channel<ScanEvent>,
+    scan_id: String,
+    continuation_id: String,
+    state: State<'_, DesktopState>,
+) -> Result<PublishedScan, String> {
+    if let Some(refusal) = state.catalog_failure() {
+        return Err(refusal);
+    }
+    let progress: Arc<dyn ScanProgressSink> = Arc::new(TauriScanProgress::new(on_event));
+    state
+        .cleanup
+        .resume_scan(
+            ResumeScanRequest {
+                scan_id,
+                continuation_id,
+            },
+            progress,
+        )
+        .await
 }
 
 /// Requests cancellation of the scan that reports `scan_id`.
@@ -51,8 +81,12 @@ pub fn cancel_scan(scan_id: String, state: State<'_, DesktopState>) -> Result<()
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_last_scan(state: State<'_, DesktopState>) -> Option<ScanResult> {
-    state.cleanup.get_last_scan()
+pub fn get_last_scan(window: Window, state: State<'_, DesktopState>) -> Option<PublishedScan> {
+    let published = state.cleanup.get_last_scan()?;
+    if window.label() == "quick" && !matches!(published.discovery, ScanDiscovery::Exhausted) {
+        return None;
+    }
+    Some(published)
 }
 
 #[tauri::command]

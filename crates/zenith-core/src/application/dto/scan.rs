@@ -8,6 +8,37 @@
 use crate::domain::{Category, ScanItem, ScanResult};
 use serde::{Deserialize, Serialize};
 
+/// Whether the backend exhausted discovery or retained an in-memory checkpoint.
+/// A continuation id is discovery authority only. It never contains a path and
+/// never authorizes cleanup.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ScanDiscovery {
+    #[default]
+    Exhausted,
+    Paused {
+        continuation_id: String,
+    },
+    Stopped {
+        reason: String,
+    },
+}
+
+/// The latest backend-owned inventory and its discovery state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PublishedScan {
+    pub result: ScanResult,
+    #[serde(default)]
+    pub discovery: ScanDiscovery,
+}
+
+/// The only facts a caller may submit to resume discovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct ResumeScanRequest {
+    pub scan_id: String,
+    pub continuation_id: String,
+}
+
 /// A scan's progress, streamed one event at a time.
 ///
 /// `ItemFound` carries the measured item by value: the event exists to be

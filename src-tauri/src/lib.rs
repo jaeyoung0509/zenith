@@ -534,6 +534,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::get_ai_control_git_diff,
             commands::connect_openrouter_oauth,
             commands::start_scan,
+            commands::resume_scan,
             commands::cancel_scan,
             commands::get_last_scan,
             commands::create_delete_plan,
