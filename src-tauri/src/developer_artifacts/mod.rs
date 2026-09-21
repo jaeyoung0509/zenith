@@ -1,3 +1,6 @@
+mod rules;
+pub(crate) use rules::artifact_relative_is_allowed;
+
 use crate::large_files::identity_from_path;
 use crate::models::{
     DeveloperArtifact, DeveloperArtifactKind, DeveloperArtifactScanEvent,
@@ -873,23 +876,7 @@ fn recognize_artifact(
     project_root: &Path,
     child_name: &str,
 ) -> Option<Candidate> {
-    let artifact_match = match child_name {
-        "target" => recognize_target(project_root),
-        "node_modules" => recognize_node(project_root),
-        ".venv" | "venv" => recognize_python(project_root, child_name),
-        "vendor" => recognize_vendor(project_root),
-        "build" => recognize_build(project_root, child_name),
-        ".gradle" => recognize_gradle(project_root, child_name),
-        "bin" | "obj" => recognize_dotnet(project_root, child_name),
-        ".build" => recognize_swift(project_root, child_name),
-        ".dart_tool" => recognize_flutter(project_root, child_name),
-        "_build" | "deps" => recognize_beam(project_root, child_name),
-        ".stack-work" | "dist-newstyle" => recognize_haskell(project_root, child_name),
-        ".zig-cache" => recognize_zig(project_root, child_name),
-        ".terraform" => recognize_terraform(project_root, child_name),
-        "pkg" => None,
-        _ => None,
-    }?;
+    let artifact_match = rules::recognize(project_root, child_name)?;
     let candidate_path = project_root.join(&artifact_match.artifact_relative);
     if !candidate_path.is_dir() {
         return None;
@@ -969,52 +956,6 @@ fn candidate_from_match(
         evidence: artifact_match.evidence,
         rebuild_hint: artifact_match.rebuild_hint,
     }
-}
-
-fn recognize_target(project_root: &Path) -> Option<ArtifactMatch> {
-    if let Some(marker) = find_named_marker(project_root, &["Cargo.toml"]) {
-        return Some(ArtifactMatch {
-            ecosystem: DeveloperEcosystem::Rust,
-            kind: DeveloperArtifactKind::CargoTarget,
-            project_root: project_root.to_path_buf(),
-            artifact_relative: PathBuf::from("target"),
-            marker_paths: vec![marker],
-            evidence: vec!["Cargo.toml".to_string()],
-            rebuild_hint: Some("cargo build".to_string()),
-        });
-    }
-    if let Some(marker) = find_named_marker(project_root, &["pom.xml"]) {
-        return Some(ArtifactMatch {
-            ecosystem: DeveloperEcosystem::Java,
-            kind: DeveloperArtifactKind::MavenTarget,
-            project_root: project_root.to_path_buf(),
-            artifact_relative: PathBuf::from("target"),
-            marker_paths: vec![marker],
-            evidence: vec!["pom.xml".to_string()],
-            rebuild_hint: Some("mvn clean package".to_string()),
-        });
-    }
-    if let Some(marker) = find_named_marker(project_root, &["build.sbt"]) {
-        return Some(ArtifactMatch {
-            ecosystem: DeveloperEcosystem::Scala,
-            kind: DeveloperArtifactKind::SbtTarget,
-            project_root: project_root.to_path_buf(),
-            artifact_relative: PathBuf::from("target"),
-            marker_paths: vec![marker],
-            evidence: vec!["build.sbt".to_string()],
-            rebuild_hint: Some("sbt compile".to_string()),
-        });
-    }
-    let marker = find_named_marker(project_root, &["project.clj", "deps.edn"])?;
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Clojure,
-        kind: DeveloperArtifactKind::ClojureTarget,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from("target"),
-        marker_paths: vec![marker.clone()],
-        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
-        rebuild_hint: Some("clojure -T:build compile".to_string()),
-    })
 }
 
 fn recognize_node(project_root: &Path) -> Option<ArtifactMatch> {
@@ -1191,148 +1132,6 @@ fn recognize_build(project_root: &Path, child_name: &str) -> Option<ArtifactMatc
     })
 }
 
-fn recognize_gradle(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(
-        project_root,
-        &[
-            "build.gradle.kts",
-            "build.gradle",
-            "settings.gradle.kts",
-            "settings.gradle",
-            "gradlew",
-        ],
-    )?;
-    let marker_name = marker.file_name()?.to_string_lossy().into_owned();
-    let is_kotlin = marker_name.ends_with(".kts");
-    Some(ArtifactMatch {
-        ecosystem: if is_kotlin {
-            DeveloperEcosystem::Kotlin
-        } else {
-            DeveloperEcosystem::Java
-        },
-        kind: DeveloperArtifactKind::GradleCache,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker.clone()],
-        evidence: vec![marker_name],
-        rebuild_hint: Some("./gradlew build".to_string()),
-    })
-}
-
-fn recognize_dotnet(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker =
-        find_project_extension_marker(project_root, &["csproj", "fsproj", "vbproj", "sln"])?;
-    let kind = if child_name == "bin" {
-        DeveloperArtifactKind::DotnetBin
-    } else {
-        DeveloperArtifactKind::DotnetObj
-    };
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Dotnet,
-        kind,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker.clone()],
-        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
-        rebuild_hint: Some("dotnet restore".to_string()),
-    })
-}
-
-fn recognize_swift(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &["Package.swift"])?;
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Swift,
-        kind: DeveloperArtifactKind::SwiftBuild,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker],
-        evidence: vec!["Package.swift".to_string()],
-        rebuild_hint: Some("swift build".to_string()),
-    })
-}
-
-fn recognize_flutter(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &["pubspec.yaml"])?;
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Dart,
-        kind: DeveloperArtifactKind::FlutterTooling,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker],
-        evidence: vec!["pubspec.yaml".to_string()],
-        rebuild_hint: Some("flutter pub get".to_string()),
-    })
-}
-
-fn recognize_beam(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &["mix.exs", "rebar.config"])?;
-    let is_erlang = marker.file_name()?.to_string_lossy() == "rebar.config";
-    if child_name == "deps" && is_erlang {
-        return None;
-    }
-    let kind = if child_name == "_build" {
-        if is_erlang {
-            DeveloperArtifactKind::ErlangBuild
-        } else {
-            DeveloperArtifactKind::ElixirBuild
-        }
-    } else {
-        DeveloperArtifactKind::ElixirDeps
-    };
-    Some(ArtifactMatch {
-        ecosystem: if is_erlang {
-            DeveloperEcosystem::Erlang
-        } else {
-            DeveloperEcosystem::Elixir
-        },
-        kind,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker.clone()],
-        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
-        rebuild_hint: Some(
-            if is_erlang {
-                "rebar3 compile"
-            } else {
-                "mix deps.get"
-            }
-            .to_string(),
-        ),
-    })
-}
-
-fn recognize_haskell(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &["stack.yaml", "cabal.project"])
-        .or_else(|| find_project_extension_marker(project_root, &["cabal"]))?;
-    let (kind, hint) = if child_name == ".stack-work" {
-        (DeveloperArtifactKind::HaskellStackWork, "stack build")
-    } else {
-        (DeveloperArtifactKind::HaskellDistNewstyle, "cabal build")
-    };
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Haskell,
-        kind,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker.clone()],
-        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
-        rebuild_hint: Some(hint.to_string()),
-    })
-}
-
-fn recognize_zig(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &["build.zig"])?;
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Zig,
-        kind: DeveloperArtifactKind::ZigCache,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker],
-        evidence: vec!["build.zig".to_string()],
-        rebuild_hint: Some("zig build".to_string()),
-    })
-}
-
 fn native_cmake_ecosystem(project_root: &Path) -> DeveloperEcosystem {
     let Ok(entries) = fs::read_dir(project_root) else {
         return DeveloperEcosystem::Cpp;
@@ -1352,20 +1151,6 @@ fn native_cmake_ecosystem(project_root: &Path) -> DeveloperEcosystem {
     }
 }
 
-fn recognize_terraform(project_root: &Path, child_name: &str) -> Option<ArtifactMatch> {
-    let marker = find_named_marker(project_root, &[".terraform.lock.hcl"])
-        .or_else(|| find_project_extension_marker(project_root, &["tf"]))?;
-    Some(ArtifactMatch {
-        ecosystem: DeveloperEcosystem::Terraform,
-        kind: DeveloperArtifactKind::TerraformCache,
-        project_root: project_root.to_path_buf(),
-        artifact_relative: PathBuf::from(child_name),
-        marker_paths: vec![marker.clone()],
-        evidence: vec![marker.file_name()?.to_string_lossy().into_owned()],
-        rebuild_hint: Some("terraform init".to_string()),
-    })
-}
-
 fn find_named_marker(project_root: &Path, names: &[&str]) -> Option<PathBuf> {
     names
         .iter()
@@ -1374,6 +1159,9 @@ fn find_named_marker(project_root: &Path, names: &[&str]) -> Option<PathBuf> {
 }
 
 fn find_project_extension_marker(project_root: &Path, extensions: &[&str]) -> Option<PathBuf> {
+    if extensions.is_empty() {
+        return None;
+    }
     let entries = fs::read_dir(project_root).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -1398,31 +1186,7 @@ fn is_regular_file(path: &Path) -> bool {
 }
 
 fn should_skip_discovery_directory(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | "target"
-            | "node_modules"
-            | ".venv"
-            | "venv"
-            | "build"
-            | ".gradle"
-            | "vendor"
-            | "bin"
-            | "obj"
-            | ".build"
-            | ".dart_tool"
-            | "_build"
-            | "deps"
-            | ".stack-work"
-            | "dist-newstyle"
-            | ".zig-cache"
-            | ".terraform"
-            | "dist"
-            | "out"
-            | ".next"
-            | ".nuxt"
-    )
+    name == ".git" || rules::is_artifact_directory(name)
 }
 
 /// True when the walk reached the platform's Downloads folder.
@@ -1825,6 +1589,35 @@ mod tests {
             identity,
             created_at: unix_timestamp(),
             whole_home: false,
+        }
+    }
+
+    #[test]
+    fn scanner_descends_into_unrecognized_output_wrappers() {
+        let temp = tempfile::tempdir().unwrap();
+        let environment = environment_with_home(temp.path());
+        let root = temp.path().join("workspace");
+        for wrapper in ["dist", "out", ".next", ".nuxt"] {
+            let project = root.join(wrapper).join("real-project");
+            fs::create_dir_all(project.join("target")).unwrap();
+            fs::write(project.join("Cargo.toml"), "[package]\nname='fixture'\n").unwrap();
+            fs::write(project.join("target/output.bin"), [1u8; 128]).unwrap();
+            assert!(!should_skip_discovery_directory(wrapper));
+        }
+        let workspace = workspace_record(&root);
+        let inventory = DeveloperArtifactScanner::scan_workspaces(
+            &environment,
+            &[workspace],
+            FolderAccess::NotGated,
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(inventory.records.len(), 4);
+        for record in inventory.records.values() {
+            assert_eq!(record.artifact.kind, DeveloperArtifactKind::CargoTarget);
+            assert_eq!(record.artifact_relative, Path::new("target"));
+            assert_eq!(record.project_root.file_name().unwrap(), "real-project");
         }
     }
 
