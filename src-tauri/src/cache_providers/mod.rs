@@ -695,8 +695,9 @@ mod tests {
         // the other.
         for root in &relocated {
             assert!(
-                crate::safety::Blacklist::validate_with(root, &environment).is_ok(),
-                "the approved relocated root {} must stay cleanable",
+                crate::safety::Blacklist::validate_with(&root.join("uv/cache"), &environment)
+                    .is_ok(),
+                "a cache below the relocated container {} must stay cleanable",
                 root.display()
             );
         }
