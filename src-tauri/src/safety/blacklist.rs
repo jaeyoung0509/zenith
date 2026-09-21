@@ -337,15 +337,50 @@ impl Blacklist {
         // normalizing first would strip `\\?\GLOBALROOT\...` into a harmless
         // looking relative path before that rule could see it.
         Self::windows_with_alias_resolution(path, described, |path| {
-            std::fs::canonicalize(path).ok()
+            zenith_platform::paths::canonicalize_existing_prefix(path).ok()
         })
     }
 
     fn windows_with_alias_resolution(
         path: &Path,
         described: &BlacklistEnvironment,
-        resolve: impl FnOnce(&Path) -> Option<PathBuf>,
+        mut resolve: impl FnMut(&Path) -> Option<PathBuf>,
     ) -> bool {
+        let has_alias = described
+            .home
+            .iter()
+            .chain(std::iter::once(&described.temp_dir))
+            .chain(&described.known_content_dirs)
+            .chain(&described.system_roots)
+            .chain(described.local_app_data.iter())
+            .chain(described.roaming_app_data.iter())
+            .any(|path| path_algebra::contains_short_name(path, WINDOWS));
+        let mut normalized = None;
+        if has_alias {
+            let mut facts = described.clone();
+            for fact in facts
+                .home
+                .iter_mut()
+                .chain(std::iter::once(&mut facts.temp_dir))
+                .chain(facts.known_content_dirs.iter_mut())
+                .chain(facts.system_roots.iter_mut())
+                .chain(facts.local_app_data.iter_mut())
+                .chain(facts.roaming_app_data.iter_mut())
+            {
+                if path_algebra::contains_short_name(fact, WINDOWS) {
+                    let Some(resolved) = resolve(Path::new(fact)) else {
+                        return true;
+                    };
+                    let text = resolved.to_string_lossy().into_owned();
+                    if path_algebra::contains_short_name(&text, WINDOWS) {
+                        return true;
+                    }
+                    *fact = text;
+                }
+            }
+            normalized = Some(facts);
+        }
+        let described = normalized.as_ref().unwrap_or(described);
         let text = path.to_string_lossy();
         // Windows itself can supply an 8.3 profile in TEMP. Resolve an existing
         // alias before classification; unresolved or still-ambiguous names stay
@@ -390,9 +425,6 @@ impl Blacklist {
         else {
             return true;
         };
-        if !path_algebra::is_absolute(raw_path, PathFlavor::Posix) {
-            return true;
-        }
         let path = key(raw_path);
         let home = key(home);
         if path == Path::new("/") || path == home || path == key(&described.temp_dir) {
@@ -530,6 +562,24 @@ mod tests {
             alias,
             &environment,
             |_| Some(alias.into())
+        ));
+    }
+
+    #[test]
+    fn resolved_candidates_are_compared_against_resolved_profile_facts() {
+        let mut environment = windows_environment();
+        environment.home = Some(r"D:\Users\ME~1".into());
+        environment.known_content_dirs = vec![r"D:\Users\ME~1\Downloads".into()];
+        let candidate = Path::new(r"D:\Users\me\Downloads\personal.bin");
+        assert!(Blacklist::windows_with_alias_resolution(
+            candidate,
+            &environment,
+            |path| { Some(PathBuf::from(path.to_string_lossy().replace("ME~1", "me"))) }
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            candidate,
+            &environment,
+            |_| None
         ));
     }
 

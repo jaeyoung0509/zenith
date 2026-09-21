@@ -570,16 +570,19 @@ mod tests {
         }
         command.env("ZENITH_UNRELATED_FIXTURE", "preserved");
         strip_cache_environment(&mut command);
-        let variables: std::collections::HashMap<_, _> = command.get_envs().collect();
+        let variables: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_string_lossy().to_ascii_lowercase(), value))
+            .collect();
         for variable in CACHE_PATH_ENVIRONMENT {
             assert_eq!(
-                variables.get(std::ffi::OsStr::new(variable)),
+                variables.get(&variable.to_ascii_lowercase()),
                 Some(&None),
                 "{variable}"
             );
         }
         assert_eq!(
-            variables.get(std::ffi::OsStr::new("ZENITH_UNRELATED_FIXTURE")),
+            variables.get("zenith_unrelated_fixture"),
             Some(&Some(std::ffi::OsStr::new("preserved")))
         );
     }
