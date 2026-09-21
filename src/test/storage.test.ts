@@ -686,6 +686,20 @@ describe('detected versus reclaimable storage copy', () => {
 });
 
 describe('StorageView scan remediation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    scanStore.updateFreshness();
+    // Reproduce a scan completing after the store's last clock observation.
+    vi.advanceTimersByTime(2_000);
+  });
+
+  afterEach(() => {
+    scanStore.lastScan = null;
+    vi.useRealTimers();
+    scanStore.updateFreshness();
+  });
+
   it('surfaces Full Disk Access guidance on the main cleanup view', () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     scanStore.lastScan = {
@@ -703,6 +717,8 @@ describe('StorageView scan remediation', () => {
       gaps: [{ kind: 'full_disk_access', count: 248 }],
       cancelled: false,
     };
+    scanStore.updateFreshness();
+    expect(scanStore.freshness).toBe('unavailable');
 
     const rendered = render(StorageView, {
       props: {
