@@ -4,7 +4,7 @@
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import ScanFreshnessNotice from '../../lib/components/ScanFreshnessNotice.svelte';
   import { onMount, untrack } from 'svelte';
-  import type { CategoryResult } from '../../lib/models/types';
+  import type { CategoryResult, PlanPreview, ScanItem } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { memoryStore } from '../../lib/stores/memory.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
@@ -84,7 +84,8 @@
   let disk = $derived(memoryStore.disk);
   let scan = $derived(scanStore.lastScan);
   let showResultModal = $state(false);
-  let review = $state<{ scanId: string; items: import('../../lib/models/types').ScanItem[] } | null>(null);
+  let review = $state<{ scanId: string; items: ScanItem[]; plan: PlanPreview } | null>(null);
+  let isPreparingReview = $state(false);
   const storagePanelId = $props.id();
   const baseStorageTabs = [
     { id: 'cleanup', label: 'Cleanup', icon: Trash2 },
@@ -108,18 +109,25 @@
     untrack(() => { void memoryStore.refreshDisk(); });
   });
 
-  function handleCleanSelected() {
+  async function handleCleanSelected() {
     if (!scan || !scanStore.canClean) return;
-    review = {
-      scanId: scan.scan_id,
-      items: scan.categories.flatMap(category => category.items)
-        .filter(item => scanStore.selectedMap[item.id] && isActionable(item)),
-    };
+    const scanId = scan.scan_id;
+    const items = scan.categories.flatMap(category => category.items)
+      .filter(item => scanStore.selectedMap[item.id] && isActionable(item));
+    isPreparingReview = true;
+    try {
+      const plan = await scanStore.prepareCleanup(items);
+      if (plan && scanStore.lastScan?.scan_id === scanId && scanStore.canClean) {
+        review = { scanId, items, plan };
+      }
+    } finally {
+      isPreparingReview = false;
+    }
   }
 
   function confirmCleanup() {
     if (!review || review.scanId !== scan?.scan_id || !scanStore.canClean) return;
-    const items = review.items;
+    const plan = review.plan;
     review = null;
     // The review trigger becomes disabled while cleanup runs. After the
     // native dialog unmounts, move focus to the still-enabled active tab
@@ -127,7 +135,7 @@
     queueMicrotask(() => restoreFocus());
     // Execute only the reviewed selection, even if another consumer selected
     // additional items while the review was open. Backend plans revalidate it.
-    scanStore.cleanItems(items, true).then((res) => {
+    scanStore.executePreparedPlan(plan, true).then((res) => {
       if (res) {
         showResultModal = true;
       } else {
@@ -347,8 +355,8 @@
         onDeselectAll={() => scanStore.deselectAll()}
         actionLabel="Review cleanup"
         onAction={handleCleanSelected}
-        isActionDisabled={!scanStore.canClean || scanStore.reclaimableBytes === 0}
-        isActionLoading={scanStore.isCleaning}
+        isActionDisabled={!scanStore.canClean || scanStore.reclaimableBytes === 0 || isPreparingReview}
+        isActionLoading={scanStore.isCleaning || isPreparingReview}
         isSelectionDisabled={!scanStore.canClean}
         class="mt-4"
       >
@@ -467,6 +475,7 @@
 
   {#if review}
     <CleanupReviewDialog
+      plan={review.plan}
       items={review.items}
       disabled={review.scanId !== scan?.scan_id || !scanStore.canClean}
       onCancel={() => (review = null)}

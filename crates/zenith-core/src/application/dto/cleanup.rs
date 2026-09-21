@@ -2,8 +2,9 @@
 //!
 //! These types are intentionally serializable. They describe a plan or a run;
 //! they cannot reconstruct one. In particular [`PlanPreview`] carries the plan
-//! ID, target item IDs, and byte totals — never a path, a strategy, or a
-//! captured filesystem identity.
+//! ID, reviewed target paths, item IDs, and byte totals — never a strategy or
+//! captured filesystem identity. Paths are backend-derived display evidence;
+//! they are not accepted back as mutation authority.
 
 pub use crate::domain::cleanup::CleanFailureReason;
 
@@ -16,6 +17,13 @@ use uuid::Uuid;
 pub struct PlanTargetPreview {
     pub item_id: String,
     pub name: String,
+    /// The backend-resolved path the user is about to affect. Execution still
+    /// consumes only the opaque plan id and revalidates its private target.
+    pub path: String,
+    /// The mutation channel this individual target will use. A mixed plan can
+    /// therefore state which reviewed paths are recoverable instead of asking
+    /// the frontend to infer policy from a risk badge.
+    pub mode: CleanupMode,
     pub requires_confirmation: bool,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
@@ -177,10 +185,9 @@ pub struct PlanPreview {
 
 impl DeletePlan {
     /// Reduces authorization state to the disposable facts the interface may
-    /// show. The projection drops `path`, `strategy`, and `identity` by
-    /// construction rather than by a `skip_serializing` attribute, so a
-    /// future field on [`crate::domain::cleanup::DeleteTarget`] cannot leak
-    /// through this call by accident.
+    /// show. The projection copies the resolved path as review evidence, but
+    /// drops `strategy` and `identity` by construction. Execution accepts only
+    /// the opaque plan id, so displaying a path never turns it into authority.
     pub fn preview(&self, ttl_secs: u64) -> PlanPreview {
         let mut targets: Vec<PlanTargetPreview> = self
             .targets
@@ -188,6 +195,8 @@ impl DeletePlan {
             .map(|target| PlanTargetPreview {
                 item_id: target.item_id.clone(),
                 name: target.name.clone(),
+                path: target.path.to_string_lossy().into_owned(),
+                mode: target.execution_mode(),
                 requires_confirmation: target.requires_confirmation,
                 expected_bytes: target.expected_bytes,
                 risk: target.risk,
@@ -198,6 +207,8 @@ impl DeletePlan {
             targets.extend(authorization.units.iter().map(|unit| PlanTargetPreview {
                 item_id: unit.item_id.clone(),
                 name: unit.name.clone(),
+                path: unit.path.to_string_lossy().into_owned(),
+                mode: CleanupMode::PermanentDelete,
                 requires_confirmation: authorization.requires_confirmation,
                 expected_bytes: unit.expected_bytes,
                 risk: authorization.risk,
@@ -268,6 +279,12 @@ pub struct CleanItemResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub bytes_reclaimed: u64,
+    /// Bytes moved out of their reviewed location into the platform's
+    /// recoverable Trash. These bytes are not reclaimed disk space until the
+    /// user empties Trash, so they never contribute to `bytes_reclaimed`.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub moved_to_trash_bytes: u64,
     pub failure_reason: Option<CleanFailureReason>,
     pub error_message: Option<String>,
 }
@@ -284,6 +301,12 @@ pub struct CleanResult {
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub total_reclaimed_bytes: u64,
+    /// Bytes moved to the recoverable Trash during this run. Kept separate
+    /// from reclaimed bytes so the interface does not claim free space that
+    /// the filesystem still occupies.
+    #[serde(default, with = "crate::ipc_numeric::u64")]
+    #[specta(type = u64)]
+    pub total_moved_to_trash_bytes: u64,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub total_failed_bytes: u64,
@@ -350,5 +373,30 @@ where
 {
     fn emit(&self, event: CleanEvent) {
         self(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_target_preview_serializes_backend_resolved_path() {
+        let preview = PlanTargetPreview {
+            item_id: "cache".to_string(),
+            name: "Build cache".to_string(),
+            path: "/Users/example/Library/Caches/build".to_string(),
+            mode: CleanupMode::Trash,
+            requires_confirmation: true,
+            expected_bytes: 4096,
+            risk: RiskTier::Rebuild,
+        };
+
+        let value = serde_json::to_value(preview).unwrap();
+        assert_eq!(
+            value["path"],
+            serde_json::Value::String("/Users/example/Library/Caches/build".to_string())
+        );
+        assert_eq!(value["expected_bytes"], 4096);
     }
 }

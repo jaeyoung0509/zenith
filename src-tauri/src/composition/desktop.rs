@@ -74,9 +74,11 @@ pub fn desktop_state_with_catalog(
     // plan store, and the Trash executor, so a handler never orchestrates
     // them. The executor is not kept separately: the raw port stays inside the
     // service.
-    let trash_executor = Arc::new(crate::trash_manager::TrashExecutor::new(Arc::new(
-        zenith_platform::NativeTrashBackend,
-    )));
+    let trash_backend: Arc<dyn zenith_platform::TrashBackend> =
+        Arc::new(zenith_platform::NativeTrashBackend);
+    let trash_executor = Arc::new(crate::trash_manager::TrashExecutor::new(
+        trash_backend.clone(),
+    ));
     let storage_service = Arc::new(StorageService::new(
         operation_gate.clone(),
         budgets.clone(),
@@ -120,6 +122,7 @@ pub fn desktop_state_with_catalog(
         docker_status.clone(),
         lifecycle_providers.clone(),
         owner_providers.clone(),
+        trash_backend,
         platform_capabilities.clone(),
     ));
 

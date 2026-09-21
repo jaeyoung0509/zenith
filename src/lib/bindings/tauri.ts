@@ -881,6 +881,12 @@ export type CleanItemResult_Deserialize = {
 	estimated_bytes?: number,
 	/**  What this run actually reclaimed, measured after the mutation. */
 	bytes_reclaimed: number,
+	/**
+	 *  Bytes moved out of their reviewed location into the platform's
+	 *  recoverable Trash. These bytes are not reclaimed disk space until the
+	 *  user empties Trash, so they never contribute to `bytes_reclaimed`.
+	 */
+	moved_to_trash_bytes?: number,
 	failure_reason: CleanFailureReason | null,
 	error_message: string | null,
 };
@@ -898,6 +904,12 @@ export type CleanItemResult_Serialize = {
 	estimated_bytes: number,
 	/**  What this run actually reclaimed, measured after the mutation. */
 	bytes_reclaimed: number,
+	/**
+	 *  Bytes moved out of their reviewed location into the platform's
+	 *  recoverable Trash. These bytes are not reclaimed disk space until the
+	 *  user empties Trash, so they never contribute to `bytes_reclaimed`.
+	 */
+	moved_to_trash_bytes: number,
 	failure_reason: CleanFailureReason | null,
 	error_message: string | null,
 };
@@ -909,6 +921,12 @@ export type CleanResult_Deserialize = {
 	started_at: number,
 	finished_at: number,
 	total_reclaimed_bytes: number,
+	/**
+	 *  Bytes moved to the recoverable Trash during this run. Kept separate
+	 *  from reclaimed bytes so the interface does not claim free space that
+	 *  the filesystem still occupies.
+	 */
+	total_moved_to_trash_bytes?: number,
 	total_failed_bytes: number,
 	/**
 	 *  Targets that reclaimed some bytes but were not fully cleaned. They keep
@@ -932,6 +950,12 @@ export type CleanResult_Serialize = {
 	started_at: number,
 	finished_at: number,
 	total_reclaimed_bytes: number,
+	/**
+	 *  Bytes moved to the recoverable Trash during this run. Kept separate
+	 *  from reclaimed bytes so the interface does not claim free space that
+	 *  the filesystem still occupies.
+	 */
+	total_moved_to_trash_bytes: number,
 	total_failed_bytes: number,
 	/**
 	 *  Targets that reclaimed some bytes but were not fully cleaned. They keep
@@ -1074,7 +1098,12 @@ export type CleanupMode =
 /**  Targets are removed from the filesystem. */
 "permanent_delete" | 
 /**  Targets are moved to the platform's recoverable location. */
-"trash";
+"trash" |
+/**
+ *  Safe targets are permanently removed while reviewed rebuildable
+ *  filesystem targets move to the platform's recoverable location.
+ */
+"mixed";
 
 /**
  *  One other catalog rule that named the same location.
@@ -2153,6 +2182,17 @@ export type PlanTargetPreview = PlanTargetPreview_Serialize | PlanTargetPreview_
 export type PlanTargetPreview_Deserialize = {
 	item_id: string,
 	name: string,
+	/**
+	 *  The backend-resolved path the user is about to affect. Execution still
+	 *  consumes only the opaque plan id and revalidates its private target.
+	 */
+	path: string,
+	/**
+	 *  The mutation channel this individual target will use. A mixed plan can
+	 *  therefore state which reviewed paths are recoverable instead of asking
+	 *  the frontend to infer policy from a risk badge.
+	 */
+	mode: CleanupMode,
 	requires_confirmation: boolean,
 	expected_bytes: number,
 	risk: RiskTier,
@@ -2161,6 +2201,17 @@ export type PlanTargetPreview_Deserialize = {
 export type PlanTargetPreview_Serialize = {
 	item_id: string,
 	name: string,
+	/**
+	 *  The backend-resolved path the user is about to affect. Execution still
+	 *  consumes only the opaque plan id and revalidates its private target.
+	 */
+	path: string,
+	/**
+	 *  The mutation channel this individual target will use. A mixed plan can
+	 *  therefore state which reviewed paths are recoverable instead of asking
+	 *  the frontend to infer policy from a risk badge.
+	 */
+	mode: CleanupMode,
 	requires_confirmation: boolean,
 	expected_bytes: number,
 	risk: RiskTier,
@@ -3339,4 +3390,3 @@ async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; dat
         return { status: "error", error: e as any };
     }
 }
-

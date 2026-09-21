@@ -117,6 +117,7 @@ fn outcome(
         success: matches!(status, CleanStatus::Success | CleanStatus::Partial),
         estimated_bytes: target.expected_bytes,
         bytes_reclaimed: 0,
+        moved_to_trash_bytes: 0,
         failure_reason: reason,
         error_message: message,
     }

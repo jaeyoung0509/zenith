@@ -6,6 +6,7 @@
   import Button from './Button.svelte';
   import { CheckCircle2, AlertTriangle, X, AlertCircle, CircleMinus } from '@lucide/svelte';
   import { restoreFocus } from '../utils/focus';
+  import { platformContextStore } from '../stores/platformContext.svelte';
 
   interface Props {
     result: CleanResult;
@@ -36,6 +37,11 @@
   let partialCount = $derived(result.partial_count ?? partialItems.length);
   let failedCount = $derived(result.failed_count ?? failedItems.length);
   let skippedCount = $derived(result.skipped_count ?? skippedItems.length);
+  let movedToTrashBytes = $derived(
+    result.total_moved_to_trash_bytes ??
+      result.items.reduce((total, item) => total + (item.moved_to_trash_bytes ?? 0), 0)
+  );
+  let movedOnly = $derived(movedToTrashBytes > 0 && result.total_reclaimed_bytes === 0);
   // One string, so the summary line reads as a single sentence rather than
   // three fragments stitched by conditional markup.
   let targetCounts = $derived(
@@ -142,9 +148,15 @@
         </h3>
         <p id={id + '-description'} class="text-xs text-muted-foreground">
           {outcome === 'success'
-            ? 'Storage has been safely reclaimed'
+            ? movedOnly
+              ? `Items were moved to ${platformContextStore.trashLabel}`
+              : movedToTrashBytes > 0
+                ? `Items were cleaned or moved to ${platformContextStore.trashLabel}`
+                : 'Storage has been safely reclaimed'
             : outcome === 'partial'
-              ? 'Some storage was reclaimed; review the remaining items'
+              ? movedToTrashBytes > 0
+                ? `Some items were cleaned or moved to ${platformContextStore.trashLabel}; review the remaining items`
+                : 'Some storage was reclaimed; review the remaining items'
               : 'No storage was reclaimed; review the errors below'}
         </p>
       </div>
@@ -157,22 +169,38 @@
   <div class="py-4 space-y-4">
     <div class="p-3 bg-secondary/50 rounded-lg text-center">
       <div class="text-2xl font-bold font-mono text-foreground">
-        {formatBytes(result.total_reclaimed_bytes)}
+        {formatBytes(movedOnly ? movedToTrashBytes : result.total_reclaimed_bytes)}
       </div>
       <div class="text-xs text-muted-foreground mt-0.5">
-        Disk Space Reclaimed
-        {#if outcome !== 'failed' && result.actual_disk_free_delta != null && result.actual_disk_free_delta > 0}
+        {movedOnly ? `Moved to ${platformContextStore.trashLabel}` : 'Disk Space Reclaimed'}
+        {#if !movedOnly && outcome !== 'failed' && result.actual_disk_free_delta != null && result.actual_disk_free_delta > 0}
           <span class="text-success ml-1">
             (Free space delta: +{formatBytes(result.actual_disk_free_delta)})
           </span>
         {/if}
       </div>
+      {#if movedOnly}
+        <div class="mt-1 text-meta text-muted-foreground">
+          Disk space is reclaimed after {platformContextStore.trashLabel} is emptied.
+        </div>
+      {/if}
       {#if partialCount > 0 || failedCount > 0 || skippedCount > 0}
         <div class="mt-1 text-meta font-mono text-muted-foreground">
           {targetCounts}
         </div>
       {/if}
     </div>
+
+    {#if !movedOnly && movedToTrashBytes > 0}
+      <div class="p-3 bg-secondary/50 rounded-lg text-center">
+        <div class="text-xl font-bold font-mono text-foreground">
+          {formatBytes(movedToTrashBytes)}
+        </div>
+        <div class="text-xs text-muted-foreground mt-0.5">
+          Moved to {platformContextStore.trashLabel}; recoverable until it is emptied
+        </div>
+      </div>
+    {/if}
 
     <!-- Failed Items -->
     {#if failedItems.length > 0}
@@ -226,7 +254,7 @@
             <div class="p-2 rounded bg-warning/10 border border-warning/20 text-xs">
               <div class="flex items-center justify-between">
                 <span class="font-medium text-foreground">{item.name}</span>
-                <span class="font-mono text-warning text-meta">+{formatBytes(item.bytes_reclaimed)}</span>
+                <span class="font-mono text-warning text-meta">+{formatBytes((item.moved_to_trash_bytes ?? 0) || item.bytes_reclaimed)}</span>
               </div>
               <div class="text-meta text-warning/80 mt-0.5">
                 {item.error_message || 'Some files were locked or in use'}
@@ -246,7 +274,7 @@
             <div class="flex items-center justify-between">
               <span class="truncate text-foreground max-w-[240px]">{item.name}</span>
               <span class="font-mono text-muted-foreground">
-                {formatBytes(item.bytes_reclaimed)}
+                {formatBytes((item.moved_to_trash_bytes ?? 0) || item.bytes_reclaimed)}
               </span>
             </div>
             {#if item.error_message}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { CategoryResult, RiskTier, ScanItem } from '../../lib/models/types';
+  import type { CategoryResult, PlanPreview, RiskTier, ScanItem } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import {
@@ -47,7 +47,8 @@
   let selectedRiskFilter = $state<RiskTier | 'all'>('all');
   let sortMode = $state<CleanupSortMode>('size');
   let showResultModal = $state(false);
-  let review = $state<{ scanId: string; items: ScanItem[] } | null>(null);
+  let review = $state<{ scanId: string; items: ScanItem[]; plan: PlanPreview } | null>(null);
+  let isPreparingReview = $state(false);
 
   let filteredItems = $derived.by(() => {
     return filterAndSortCleanupItems(
@@ -111,21 +112,30 @@
     }
   }
 
-  function cleanSelected() {
+  async function cleanSelected() {
     const scan = scanStore.lastScan;
     if (!scan || !scanStore.canClean) return;
     const items = categoryResult.items.filter(
       (item) => scanStore.selectedMap[item.id] && isCleanable(item)
     );
     if (items.length === 0) return;
-    review = { scanId: scan.scan_id, items };
+    const scanId = scan.scan_id;
+    isPreparingReview = true;
+    try {
+      const plan = await scanStore.prepareCleanup(items);
+      if (plan && scanStore.lastScan?.scan_id === scanId && scanStore.canClean) {
+        review = { scanId, items, plan };
+      }
+    } finally {
+      isPreparingReview = false;
+    }
   }
 
   function confirmCleanup() {
     if (!review || review.scanId !== scanStore.lastScan?.scan_id || !scanStore.canClean) return;
-    const items = review.items;
+    const plan = review.plan;
     review = null;
-    scanStore.cleanItems(items, true).then((result) => {
+    scanStore.executePreparedPlan(plan, true).then((result) => {
       if (result) showResultModal = true;
     });
   }
@@ -178,12 +188,12 @@
         variant="primary"
         size="sm"
         class="gap-1.5 min-w-[90px]"
-        disabled={categorySelectedBytes === 0 || !scanStore.canClean}
+        disabled={categorySelectedBytes === 0 || !scanStore.canClean || isPreparingReview}
         onclick={cleanSelected}
       >
-        {#if scanStore.isCleaning}
+        {#if scanStore.isCleaning || isPreparingReview}
           <DeletingDots size="xs" />
-          <span>Cleaning…</span>
+          <span>{isPreparingReview ? 'Reviewing…' : 'Cleaning…'}</span>
         {:else}
           <Trash2 size={13} />
           <span>Clean {formatBytes(categorySelectedBytes)}</span>
@@ -377,6 +387,7 @@
 
   {#if review}
     <CleanupReviewDialog
+      plan={review.plan}
       items={review.items}
       disabled={review.scanId !== scanStore.lastScan?.scan_id || !scanStore.canClean}
       onCancel={() => (review = null)}

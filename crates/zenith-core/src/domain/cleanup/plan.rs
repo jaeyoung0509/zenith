@@ -25,12 +25,15 @@ pub enum CleanupMode {
     PermanentDelete,
     /// Targets are moved to the platform's recoverable location.
     Trash,
+    /// Safe targets are permanently removed while reviewed rebuildable
+    /// filesystem targets move to the platform's recoverable location.
+    Mixed,
 }
 
 impl CleanupMode {
     /// Whether this mode authorizes a destructive filesystem operation.
     pub fn is_mutating(&self) -> bool {
-        matches!(self, Self::PermanentDelete | Self::Trash)
+        matches!(self, Self::PermanentDelete | Self::Trash | Self::Mixed)
     }
 
     pub fn display_name(&self) -> &'static str {
@@ -38,6 +41,7 @@ impl CleanupMode {
             Self::Preview => "Preview only",
             Self::PermanentDelete => "Permanently deletes",
             Self::Trash => "Moves to Trash",
+            Self::Mixed => "Deletes Safe targets and moves Rebuild targets to Trash",
         }
     }
 }
@@ -135,6 +139,27 @@ pub struct DeleteTarget {
     pub requires_confirmation: bool,
 }
 
+impl DeleteTarget {
+    /// The mutation channel this target requires.
+    ///
+    /// Only generic filesystem strategies can be made recoverable by moving
+    /// their entries to Trash. Tool- and owner-managed actions retain their
+    /// reviewed adapter semantics even when their risk tier is Rebuild.
+    pub fn execution_mode(&self) -> CleanupMode {
+        let filesystem_strategy = matches!(
+            self.strategy,
+            CleanStrategy::DeleteContents
+                | CleanStrategy::DeleteDirectory
+                | CleanStrategy::DeleteStaleContents
+        );
+        if filesystem_strategy && self.risk != RiskTier::Safe {
+            CleanupMode::Trash
+        } else {
+            CleanupMode::PermanentDelete
+        }
+    }
+}
+
 /// Backend-private authorization state for one cleanup run.
 ///
 /// This type is never serialized. The frontend submits a scan ID, selected
@@ -172,6 +197,32 @@ pub struct DeletePlan {
 }
 
 impl DeletePlan {
+    /// Derives the only mutation mode that matches these backend-owned
+    /// authorities. The executor checks this again so a malformed internal
+    /// plan cannot route a target through a different mutation channel.
+    pub fn mode_for(
+        targets: &[DeleteTarget],
+        owner_authorizations: &[OwnerProviderAuthorization],
+    ) -> CleanupMode {
+        let has_trash_targets = targets
+            .iter()
+            .any(|target| target.execution_mode() == CleanupMode::Trash);
+        let has_permanent_targets = !owner_authorizations.is_empty()
+            || targets
+                .iter()
+                .any(|target| target.execution_mode() == CleanupMode::PermanentDelete);
+
+        match (has_permanent_targets, has_trash_targets) {
+            (true, true) => CleanupMode::Mixed,
+            (false, true) => CleanupMode::Trash,
+            _ => CleanupMode::PermanentDelete,
+        }
+    }
+
+    pub fn expected_mode(&self) -> CleanupMode {
+        Self::mode_for(&self.targets, &self.owner_authorizations)
+    }
+
     /// Whether any target or provider authorization in this plan requires an
     /// explicit confirmation token at the destructive boundary.
     pub fn requires_confirmation(&self) -> bool {

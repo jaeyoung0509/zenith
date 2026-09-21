@@ -2,6 +2,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  PlanPreview,
   PlanRefusalPreview,
   ScanEvent,
   ScanDiscovery,
@@ -699,7 +700,12 @@ export class ScanStore {
     return this.cleanItems(this.lastScan.categories.flatMap((category) => category.items));
   }
 
-  async cleanItems(items: ScanItem[], confirmed = false): Promise<CleanResult | null> {
+  /**
+   * Builds the backend-owned one-shot plan before the confirmation dialog is
+   * shown. The returned paths are display evidence only; execution sends the
+   * opaque plan id back and never accepts a frontend path.
+   */
+  async prepareCleanup(items: ScanItem[]): Promise<PlanPreview | null> {
     if (this.isCleaning || this.isScanning) return null;
     const refusal = refusalForPreview('Cleaning');
     if (refusal) {
@@ -720,12 +726,9 @@ export class ScanStore {
       return null;
     }
 
-    this.isCleaning = true;
     this.error = null;
-    this.lastCleanResult = null;
 
     try {
-      // 1. Create and verify safety plan
       if (!this.lastScan) throw new Error('Scan result is no longer available');
       const plan = await tauriCreatePlan(this.lastScan.scan_id, selectedItems);
 
@@ -735,8 +738,33 @@ export class ScanStore {
       // does cover: the refusals name the rows it left out, and the inventory
       // the user is looking at stays.
       this.recordRefusals(plan.refused);
+      return plan;
+    } catch (cause: unknown) {
+      this.refuseCleanup(cause);
+      return null;
+    }
+  }
 
-      // 2. Execute clean
+  async executePreparedPlan(
+    plan: PlanPreview,
+    confirmed = false
+  ): Promise<CleanResult | null> {
+    if (this.isCleaning || this.isScanning) return null;
+    this.updateFreshness();
+    if (!this.canClean || this.isStale()) {
+      this.error = 'Scan results are out of date. Scan again and review the new results before cleaning.';
+      return null;
+    }
+
+    this.isCleaning = true;
+    this.error = null;
+    this.lastCleanResult = null;
+
+    try {
+      if (Math.floor(Date.now() / 1000) > plan.expires_at) {
+        throw new Error('Cleanup review expired. Scan again and review the new plan before cleaning.');
+      }
+
       if (plan.requires_confirmation && !confirmed) {
         throw new Error('This cleanup requires explicit confirmation. Review the selected action before cleaning.');
       }
@@ -782,6 +810,12 @@ export class ScanStore {
     } finally {
       this.isCleaning = false;
     }
+  }
+
+  async cleanItems(items: ScanItem[], confirmed = false): Promise<CleanResult | null> {
+    const plan = await this.prepareCleanup(items);
+    if (!plan) return null;
+    return this.executePreparedPlan(plan, confirmed);
   }
 }
 

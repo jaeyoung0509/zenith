@@ -55,9 +55,22 @@ fn item_result(
         success: matches!(status, CleanStatus::Success | CleanStatus::Partial),
         estimated_bytes: target.expected_bytes,
         bytes_reclaimed,
+        moved_to_trash_bytes: 0,
         failure_reason: reason,
         error_message: message,
     }
+}
+
+fn trash_item_result(
+    target: &DeleteTarget,
+    status: CleanStatus,
+    reason: Option<CleanFailureReason>,
+    moved_to_trash_bytes: u64,
+    message: Option<String>,
+) -> CleanItemResult {
+    let mut result = item_result(target, status, reason, 0, message);
+    result.moved_to_trash_bytes = moved_to_trash_bytes;
+    result
 }
 
 /// Counts targets that did not do what the plan expected, as
@@ -119,6 +132,7 @@ fn owner_unit_result(outcome: &OwnerUnitOutcome, name: &str, path: &str) -> Clea
         success: matches!(status, CleanStatus::Success | CleanStatus::Partial),
         estimated_bytes: 0,
         bytes_reclaimed: outcome.reclaimed_bytes,
+        moved_to_trash_bytes: 0,
         failure_reason: reason,
         error_message: (status != CleanStatus::Success).then(|| outcome.message()),
     }
@@ -196,6 +210,7 @@ impl CleanExecutor {
         environment: &PlatformEnvironment,
         providers: &crate::cleaner::LifecycleProviderRegistry,
         owner_providers: &crate::cleaner::OwnerProviderRegistry,
+        trash_backend: &dyn zenith_platform::TrashBackend,
         mut on_event: F,
     ) -> CleanResult
     where
@@ -222,7 +237,10 @@ impl CleanExecutor {
 
         let mut item_results = Vec::new();
         let mut total_reclaimed_bytes = 0u64;
+        let mut total_moved_to_trash_bytes = 0u64;
         let mut total_failed_bytes = 0u64;
+        let plan_authorizes_execution =
+            plan.mode.is_mutating() && plan.mode == plan.expected_mode();
 
         for (index, target) in plan.targets.iter().enumerate() {
             on_event(CleanEvent::ItemStarted {
@@ -232,27 +250,36 @@ impl CleanExecutor {
                 total: total_count,
             });
 
-            // The executor is the destructive boundary. A future caller may
-            // build a Preview or Trash plan without passing through the current
-            // service, so only the implemented deletion mode may reach an adapter.
-            let result = if plan.mode == CleanupMode::PermanentDelete {
-                Self::clean_target(target, environment, providers)
+            // The executor is the destructive boundary. Preview authority can
+            // never mutate; every mutating plan then routes each target through
+            // the channel its backend-owned target requires.
+            let result = if plan_authorizes_execution {
+                Self::clean_target(target, environment, providers, trash_backend)
             } else {
+                let message = if plan.mode.is_mutating() {
+                    format!(
+                        "{} does not match the mutation channels required by this plan; refusing to mutate",
+                        plan.mode.display_name()
+                    )
+                } else {
+                    format!(
+                        "{} is not implemented by this executor; refusing to mutate",
+                        plan.mode.display_name()
+                    )
+                };
                 item_result(
                     target,
                     CleanStatus::Failed,
                     Some(CleanFailureReason::Unknown),
                     0,
-                    Some(format!(
-                        "{} is not implemented by this executor; refusing to mutate",
-                        plan.mode.display_name()
-                    )),
+                    Some(message),
                 )
             };
 
             match result.status {
                 CleanStatus::Success | CleanStatus::Partial => {
                     total_reclaimed_bytes += result.bytes_reclaimed;
+                    total_moved_to_trash_bytes += result.moved_to_trash_bytes;
                 }
                 // A skipped target reclaimed nothing because there was nothing
                 // left to remove: its estimate is not a failed amount.
@@ -279,7 +306,7 @@ impl CleanExecutor {
         // them, one authorization at a time. Nothing here decides what a unit
         // is: the provider re-reads its own store, refuses what it cannot
         // verify now, and reports per unit what its measurement observed.
-        if plan.mode == CleanupMode::PermanentDelete {
+        if plan_authorizes_execution {
             let mut index = plan.targets.len();
             for authorization in &plan.owner_authorizations {
                 let expected: std::collections::BTreeMap<&str, u64> = authorization
@@ -312,6 +339,7 @@ impl CleanExecutor {
                     match result.status {
                         CleanStatus::Success | CleanStatus::Partial => {
                             total_reclaimed_bytes += result.bytes_reclaimed;
+                            total_moved_to_trash_bytes += result.moved_to_trash_bytes;
                         }
                         CleanStatus::Skipped => {}
                         CleanStatus::Failed => {
@@ -355,6 +383,7 @@ impl CleanExecutor {
             started_at,
             finished_at,
             total_reclaimed_bytes,
+            total_moved_to_trash_bytes,
             total_failed_bytes,
             partial_count,
             failed_count,
@@ -374,6 +403,7 @@ impl CleanExecutor {
         target: &DeleteTarget,
         environment: &PlatformEnvironment,
         providers: &crate::cleaner::LifecycleProviderRegistry,
+        trash_backend: &dyn zenith_platform::TrashBackend,
     ) -> CleanItemResult {
         // The classification decides what the target authorizes: a container
         // prune runs through the runtime's own CLI, a provider prune runs
@@ -469,7 +499,9 @@ impl CleanExecutor {
             CleanupOperation::LifecycleProvider(action) => {
                 provider_result(target, providers.execute(&action, environment))
             }
-            CleanupOperation::Filesystem(_) => Self::clean_filesystem_target(target, environment),
+            CleanupOperation::Filesystem(_) => {
+                Self::clean_filesystem_target(target, environment, trash_backend)
+            }
         }
     }
 
@@ -483,6 +515,7 @@ impl CleanExecutor {
     fn clean_filesystem_target(
         target: &DeleteTarget,
         environment: &PlatformEnvironment,
+        trash_backend: &dyn zenith_platform::TrashBackend,
     ) -> CleanItemResult {
         let path = &target.path;
 
@@ -496,43 +529,60 @@ impl CleanExecutor {
             crate::safety::RevalidationOutcome::Failed(result) => return result,
         };
 
-        let report = match validated_target.strategy() {
-            CleanStrategy::DeleteContents => {
-                SafeTreeDeleter::delete_contents_validated(&validated_target, environment)
-            }
-            CleanStrategy::DeleteDirectory => {
-                SafeTreeDeleter::delete_path_validated(&validated_target, environment)
-            }
-            CleanStrategy::DeleteStaleContents => {
-                SafeTreeDeleter::prune_stale_contents_validated(&validated_target, environment)
-            }
-            // The classification above produced a filesystem operation from one
-            // of these strategies, and `ValidatedTarget` carries the planned
-            // strategy unchanged, so no other arm is reachable. Refusing
-            // explicitly keeps a future strategy from silently deleting.
-            CleanStrategy::OwnerProvider
-            | CleanStrategy::ExternalCommand
-            | CleanStrategy::DockerPrune
-            | CleanStrategy::LifecycleProvider
-            | CleanStrategy::Manual => {
-                return item_result(
-                    target,
-                    CleanStatus::Failed,
-                    Some(CleanFailureReason::Unknown),
-                    0,
-                    Some("Target strategy does not authorize a filesystem mutation".to_string()),
-                );
+        let moves_to_trash = target.execution_mode() == CleanupMode::Trash;
+        let report = if moves_to_trash {
+            SafeTreeDeleter::move_to_trash_validated(&validated_target, environment, trash_backend)
+        } else {
+            match validated_target.strategy() {
+                CleanStrategy::DeleteContents => {
+                    SafeTreeDeleter::delete_contents_validated(&validated_target, environment)
+                }
+                CleanStrategy::DeleteDirectory => {
+                    SafeTreeDeleter::delete_path_validated(&validated_target, environment)
+                }
+                CleanStrategy::DeleteStaleContents => {
+                    SafeTreeDeleter::prune_stale_contents_validated(&validated_target, environment)
+                }
+                // The classification above produced a filesystem operation from one
+                // of these strategies, and `ValidatedTarget` carries the planned
+                // strategy unchanged, so no other arm is reachable. Refusing
+                // explicitly keeps a future strategy from silently deleting.
+                CleanStrategy::OwnerProvider
+                | CleanStrategy::ExternalCommand
+                | CleanStrategy::DockerPrune
+                | CleanStrategy::LifecycleProvider
+                | CleanStrategy::Manual => {
+                    return item_result(
+                        target,
+                        CleanStatus::Failed,
+                        Some(CleanFailureReason::Unknown),
+                        0,
+                        Some(
+                            "Target strategy does not authorize a filesystem mutation".to_string(),
+                        ),
+                    );
+                }
             }
         };
 
         if report.is_success() {
-            item_result(
-                target,
-                CleanStatus::Success,
-                None,
-                report.reclaimed_bytes,
-                None,
-            )
+            if moves_to_trash {
+                trash_item_result(
+                    target,
+                    CleanStatus::Success,
+                    None,
+                    report.reclaimed_bytes,
+                    None,
+                )
+            } else {
+                item_result(
+                    target,
+                    CleanStatus::Success,
+                    None,
+                    report.reclaimed_bytes,
+                    None,
+                )
+            }
         } else if report.reclaimed_bytes > 0 {
             // Partial success: accurately record partial status and reclaimed bytes
             let error_msg = if report.errors.is_empty() {
@@ -544,13 +594,23 @@ impl CleanExecutor {
                     report.errors.join("; ")
                 )
             };
-            item_result(
-                target,
-                CleanStatus::Partial,
-                None,
-                report.reclaimed_bytes,
-                Some(error_msg),
-            )
+            if moves_to_trash {
+                trash_item_result(
+                    target,
+                    CleanStatus::Partial,
+                    None,
+                    report.reclaimed_bytes,
+                    Some(error_msg),
+                )
+            } else {
+                item_result(
+                    target,
+                    CleanStatus::Partial,
+                    None,
+                    report.reclaimed_bytes,
+                    Some(error_msg),
+                )
+            }
         } else {
             let error_str = report.errors.join("; ");
             let failure_reason =
@@ -650,6 +710,7 @@ mod tests {
             } else {
                 512
             },
+            moved_to_trash_bytes: 0,
             failure_reason: None,
             error_message: None,
         }
@@ -733,6 +794,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
 
@@ -748,6 +810,69 @@ mod tests {
         assert!(
             !cache_root.join("data.bin").exists(),
             "delete_contents removes the entries and leaves the root"
+        );
+    }
+
+    #[test]
+    fn rebuild_filesystem_target_uses_trash_instead_of_permanent_delete() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("rebuild-cache");
+        std::fs::create_dir(&cache_root).unwrap();
+        let payload = cache_root.join("payload.bin");
+        std::fs::write(&payload, vec![1u8; 4096]).unwrap();
+        let plan = DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-rebuild-trash".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
+            targets: vec![DeleteTarget {
+                item_id: "rebuild-target".to_string(),
+                signature_id: "test.rebuild".to_string(),
+                name: "Rebuild cache".to_string(),
+                path: cache_root.clone(),
+                strategy: CleanStrategy::DeleteContents,
+                expected_bytes: 4096,
+                risk: crate::models::RiskTier::Rebuild,
+                identity: ToctouGuard::capture(&cache_root),
+                exclusions: vec![],
+                min_age_days: None,
+                unit: crate::models::CleanupUnit::fixed_path(
+                    cache_root.to_string_lossy().to_string(),
+                ),
+                target_kind: crate::models::EntryKind::Directory,
+                owner: crate::models::CleanupOwnership::unknown(),
+                process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: None,
+                requires_confirmation: false,
+            }],
+            expected_reclaim_bytes: 4096,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+            mode: CleanupMode::Trash,
+        };
+        let backend = zenith_platform::MockTrashBackend::new();
+
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &backend,
+            |_| {},
+        );
+
+        assert_eq!(result.items[0].status, CleanStatus::Success);
+        assert_eq!(result.items[0].bytes_reclaimed, 0);
+        assert!(result.items[0].moved_to_trash_bytes > 0);
+        assert_eq!(result.total_reclaimed_bytes, 0);
+        assert_eq!(
+            result.total_moved_to_trash_bytes,
+            result.items[0].moved_to_trash_bytes
+        );
+        assert_eq!(backend.moved(), vec![payload.clone()]);
+        assert!(
+            payload.exists(),
+            "the recording backend proves the permanent deleter was not used"
         );
     }
 
@@ -806,6 +931,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
 
@@ -1010,6 +1136,7 @@ mod tests {
             &environment,
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
 
@@ -1043,6 +1170,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
         assert_eq!(result.failed_count, 0);
@@ -1074,6 +1202,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
         assert_eq!(result.failed_count, 0);
@@ -1106,6 +1235,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
         assert_eq!(result.failed_count, 0);
@@ -1174,6 +1304,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &providers,
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
 
@@ -1217,6 +1348,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &providers,
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
 
@@ -1242,6 +1374,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &empty,
             &owner_providers,
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
         let item = &result.items[0];
@@ -1265,6 +1398,7 @@ mod tests {
             &PlatformEnvironment::native(),
             &providers,
             &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &zenith_platform::MockTrashBackend::new(),
             |_| {},
         );
         let item = &result.items[0];
