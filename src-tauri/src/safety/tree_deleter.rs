@@ -1761,12 +1761,24 @@ mod tests {
     /// Deletion tests exercise argument threading, not path resolution: no
     /// exclusion in these tests needs the environment to expand.
     fn environment() -> PlatformEnvironment {
-        PlatformEnvironment::simulated(PathFlavor::current())
+        PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        )
     }
 
     #[test]
     fn exclusion_matching_uses_the_stated_path_flavor() {
-        let environment = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let environment = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(
+            if PathFlavor::Windows.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let exclusions = vec![r"C:\Users\Alice\Cache".to_string()];
 
         assert!(SafeTreeDeleter::is_excluded(

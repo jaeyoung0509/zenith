@@ -1077,7 +1077,13 @@ mod tests {
         std::fs::create_dir_all(root.join("nested")).unwrap();
         std::fs::write(root.join("first.bin"), vec![1u8; 100]).unwrap();
         std::fs::write(root.join("nested/second.bin"), vec![2u8; 200]).unwrap();
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
 
         // The same tree measures completely when nothing cancels, which is what
         // makes the cancelled result below attributable to the probe.
@@ -1113,7 +1119,13 @@ mod tests {
     #[test]
     fn metadata_errors_are_not_mistaken_for_missing_zero_byte_paths() {
         let root = tempfile::tempdir().unwrap();
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
 
         let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
         let measurement = measurement_for_metadata_error(root.path(), &denied);
@@ -1152,7 +1164,13 @@ mod tests {
             symlink(outside.path(), root.path().join("outside-link")).unwrap();
         }
 
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let exclusions = vec!["excluded".to_string()];
         let sequential = SizeCalculator::measure_path_full(root.path(), &exclusions, &environment);
         let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
@@ -1195,7 +1213,13 @@ mod tests {
         std::fs::create_dir_all(clean.join(".git")).unwrap();
         std::fs::write(clean.join("content.bin"), vec![3u8; 1_024]).unwrap();
 
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let bounded = SizeCalculator::measure_path_logged(&cache, &[], &environment);
         assert!(
             !bounded.complete,
@@ -1241,7 +1265,13 @@ mod tests {
         std::fs::write(cache.join("content.bin"), vec![4u8; 4_096]).unwrap();
 
         let exclusions = vec!["keep".to_string()];
-        let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(
+            if PathFlavor::Windows.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let measured = SizeCalculator::measure_path_full(&cache, &exclusions, &windows);
 
         assert_eq!(measured.file_count, 1, "only the readable file is counted");
@@ -1258,7 +1288,13 @@ mod tests {
 
         // The same tree on a POSIX machine has no reserved-device rule, so the
         // stated flavor is what decided the third boundary.
-        let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(
+            if PathFlavor::Posix.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let measured = SizeCalculator::measure_path_full(&cache, &exclusions, &posix);
         assert_eq!(
             measured.skipped_entries, 2,
@@ -1286,7 +1322,13 @@ mod tests {
         std::fs::create_dir(&clean).unwrap();
         std::fs::write(clean.join("content.bin"), vec![3u8; 1_024]).unwrap();
 
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let bounded = SizeCalculator::measure_path_full(&cache, &[], &environment);
         let complete = SizeCalculator::measure_path_full(&clean, &[], &environment);
         assert!(!bounded.complete);
@@ -1344,21 +1386,24 @@ mod tests {
         let exclusions = vec!["~/Downloads/keep".to_string()];
 
         let redirected_environment = simulated(true);
-        let redirected =
-            SizeCalculator::measure_path_full(&scanned, &exclusions, &redirected_environment);
-        assert_eq!(
-            redirected.file_count, 2,
-            "the redirect moves the exclusion out of this tree, so both files are measured"
-        );
+        assert!(!SizeCalculator::is_excluded(
+            &kept,
+            &exclusions,
+            &redirected_environment,
+        ));
 
-        // Without a stated redirect the literal profile spelling is excluded.
+        // Exclusion resolution still follows the stated folder. Generic cache
+        // measurement must independently refuse the now-protected Downloads tree.
         let literal_environment = simulated(false);
+        assert!(SizeCalculator::is_excluded(
+            &kept,
+            &exclusions,
+            &literal_environment
+        ));
         let literal =
             SizeCalculator::measure_path_full(&scanned, &exclusions, &literal_environment);
-        assert_eq!(
-            literal.file_count, 1,
-            "the literal profile spelling excludes `~/Downloads/keep`"
-        );
+        assert_eq!(literal.file_count, 0);
+        assert!(literal.skipped_entries > 0);
     }
 
     /// A wide tree is measured within the traversal's stated bound, and the
@@ -1376,7 +1421,13 @@ mod tests {
                 std::fs::write(path.join(format!("entry-{file}.bin")), vec![1u8; 1_024]).unwrap();
             }
         }
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
 
         // One outstanding directory task is the smallest bound that still makes
@@ -1465,7 +1516,13 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("deep.bin"), vec![2u8; 2_048]).unwrap();
 
-        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         for pool in [
             None,
             Some(ThreadPoolBuilder::new().num_threads(4).build().unwrap()),

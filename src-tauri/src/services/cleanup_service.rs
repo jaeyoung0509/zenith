@@ -760,7 +760,15 @@ mod tests {
         std::fs::write(first_root.join("data.bin"), vec![1u8; 512]).unwrap();
         std::fs::write(second_root.join("data.bin"), vec![2u8; 512]).unwrap();
 
-        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let env = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let mut registry = SignatureRegistry::new();
         for (id, name, path) in [
             ("test.cancel.first", "First cache", first_root),
@@ -853,7 +861,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_bounded_scan_resumes_forward_and_publishes_one_merged_snapshot() {
-        let environment = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let environment = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let registry = Arc::new(SignatureRegistry::new());
         let lifecycle = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new()));
         let owners = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
@@ -921,7 +937,15 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_service_plan_and_execution_lifecycle() {
-        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let env = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let registry = Arc::new(SignatureRegistry::new());
         let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(
@@ -970,7 +994,15 @@ mod tests {
     async fn a_confirmation_required_provider_cannot_execute_without_confirmation() {
         use crate::cleaner::providers::test_support::StatedProvider;
 
-        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let env = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let mut registry = SignatureRegistry::new();
         registry.register(Signature {
             id: "test.stated.store".to_string(),
@@ -1078,7 +1110,15 @@ mod tests {
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(cache.join("payload.bin"), vec![7u8; 512]).unwrap();
 
-        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let env = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let mut registry = SignatureRegistry::new();
         registry.register(Signature {
             id: "test_sig".to_string(),
@@ -1179,7 +1219,15 @@ mod tests {
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(cache.join("payload.bin"), vec![9u8; 256]).unwrap();
 
-        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let env = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let mut registry = SignatureRegistry::new();
         registry.register(Signature {
             id: "test_sig".to_string(),
@@ -1273,7 +1321,15 @@ mod tests {
 
     #[tokio::test]
     async fn quick_clean_safe_handles_empty_candidates_gracefully() {
-        let env = Arc::new(PlatformEnvironment::simulated(PathFlavor::current()));
+        let env = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
         let registry = Arc::new(SignatureRegistry::new());
         let owner_providers = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
         let scan_service = Arc::new(ScanService::new(

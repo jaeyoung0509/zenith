@@ -617,7 +617,7 @@ pub fn looks_like_short_name(component: &str) -> bool {
         return false;
     }
     let digits: String = tail.chars().take_while(|ch| ch.is_ascii_digit()).collect();
-    if digits.is_empty() {
+    if digits.is_empty() || stem.len() + 1 + digits.len() > 8 {
         return false;
     }
     let rest: String = tail.chars().skip(digits.len()).collect();
@@ -964,6 +964,7 @@ mod tests {
         assert!(looks_like_short_name("PROGRA~1"));
         assert!(looks_like_short_name("DOCUME~1"));
         assert!(!looks_like_short_name("Program Files"));
+        assert!(!looks_like_short_name("notes~2024"));
         assert!(!looks_like_short_name("~"));
         assert_eq!(
             protected_root(r"C:\PROGRA~1\Zenith", W),

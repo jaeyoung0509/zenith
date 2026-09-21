@@ -1528,7 +1528,13 @@ mod tests {
     use zenith_platform::PlatformEnvironment;
 
     fn environment() -> PlatformEnvironment {
-        PlatformEnvironment::simulated(PathFlavor::current())
+        PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+            if PathFlavor::current().is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        )
     }
 
     /// A shared helper for the aged-child fixtures: an empty root, plus the
@@ -2205,7 +2211,13 @@ mod tests {
         }
         std::fs::write(candidate.join("data.bin"), vec![3u8; 4_096]).unwrap();
 
-        let windows = PlatformEnvironment::simulated(PathFlavor::Windows);
+        let windows = PlatformEnvironment::simulated(PathFlavor::Windows).with_home(
+            if PathFlavor::Windows.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let stats =
             DirectoryScanner::measure_tree_stats(&test_context(&windows), &candidate, &[], 0, None);
 
@@ -2221,7 +2233,13 @@ mod tests {
             "`.git` and, where the host holds one, the reserved device name are not measured"
         );
 
-        let posix = PlatformEnvironment::simulated(PathFlavor::Posix);
+        let posix = PlatformEnvironment::simulated(PathFlavor::Posix).with_home(
+            if PathFlavor::Posix.is_windows() {
+                r"Z:\ZenithFixtureHome"
+            } else {
+                "/zenith-fixture-home"
+            },
+        );
         let stats =
             DirectoryScanner::measure_tree_stats(&test_context(&posix), &candidate, &[], 0, None);
         assert_eq!(stats.skipped_entries, 1, "only `.git` is a POSIX boundary");

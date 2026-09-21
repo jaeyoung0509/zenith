@@ -350,10 +350,19 @@ impl DeveloperArtifactScanner {
                 }),
                 MeasurementMessage::Finished { candidate, stats } => {
                     measured_count = measured_count.saturating_add(1);
-                    let Some(record) = record_from_measurement(*candidate, stats) else {
+                    let Some(mut record) = record_from_measurement(*candidate, stats) else {
                         skipped_entries = skipped_entries.saturating_add(1);
                         continue;
                     };
+                    if Blacklist::is_blacklisted_with(Path::new(&record.artifact.path), environment)
+                    {
+                        record.artifact.status = DeveloperArtifactStatus::SafetyBlocked;
+                        record.artifact.incomplete_reason = Some(
+                            "This artifact is inside a protected location; cleanup is blocked."
+                                .into(),
+                        );
+                    }
+
                     if record.artifact.status != DeveloperArtifactStatus::Complete {
                         skipped_entries = skipped_entries.saturating_add(1);
                     }
@@ -1479,7 +1488,16 @@ fn should_skip_protected_discovery_path(
     if !workspace.whole_home {
         return false;
     }
-    if Blacklist::is_blacklisted_with(path, environment) {
+    // Downloads discovery is read-only and reports denied consent explicitly.
+    // Its artifacts remain blocked for deletion by the policy check on the record.
+    let inside_downloads = environment.content_dir("downloads").is_some_and(|root| {
+        path_algebra::contains(
+            &root.to_string_lossy(),
+            &path.to_string_lossy(),
+            environment.flavor(),
+        )
+    });
+    if !inside_downloads && Blacklist::is_blacklisted_with(path, environment) {
         return true;
     }
     let credential_names = [
@@ -2049,6 +2067,7 @@ mod tests {
 
         assert_eq!(inventory.records.len(), 1);
         let artifact = &inventory.records.values().next().unwrap().artifact;
+        assert_eq!(artifact.status, DeveloperArtifactStatus::SafetyBlocked);
         assert_eq!(artifact.project_name, "cloned-app");
         assert_eq!(artifact.kind, DeveloperArtifactKind::NodeModules);
         assert!(artifact.allocated_bytes > 0);

@@ -1,5 +1,6 @@
 use crate::models::ZenithError;
 use std::path::{Path, PathBuf};
+use unicode_normalization::UnicodeNormalization;
 use zenith_platform::path_algebra::{self, PathFlavor};
 use zenith_platform::PlatformPathsProvider;
 
@@ -114,7 +115,7 @@ const WINDOWS: PathFlavor = PathFlavor::Windows;
 /// Home-relative directories holding credentials, personal communication, or
 /// user documents. The Windows profile carries the same names as the POSIX one,
 /// so both branches refuse the same relative locations.
-const SENSITIVE_RELATIVE: [&str; 22] = [
+const SENSITIVE_RELATIVE: [&str; 23] = [
     ".ssh",
     ".gnupg",
     ".aws",
@@ -127,6 +128,7 @@ const SENSITIVE_RELATIVE: [&str; 22] = [
     "Library/Messages",
     "Library/IdentityServices",
     "Library/Containers/com.apple.mail",
+    "Downloads",
     "Desktop",
     "Documents",
     "Pictures",
@@ -180,6 +182,10 @@ pub fn classify_windows(path: &str, environment: &BlacklistEnvironment) -> Black
         return BlacklistVerdict::Denied(root.reason());
     }
 
+    if path_algebra::contains_short_name(path, WINDOWS) {
+        return BlacklistVerdict::Denied("unresolvable 8.3 short name");
+    }
+
     // On the resolved spelling, so a `..` component is not mistaken for a
     // trailing dot.
     if path_algebra::has_trailing_dot_or_space(&normalized, WINDOWS) {
@@ -203,6 +209,9 @@ pub fn classify_windows(path: &str, environment: &BlacklistEnvironment) -> Black
     }
 
     let home = environment.home.as_deref().filter(|home| !home.is_empty());
+    if home.is_none() {
+        return BlacklistVerdict::Denied("user home is unavailable");
+    }
     if let Some(home) = home {
         if path_algebra::equal(path, home, WINDOWS) {
             return BlacklistVerdict::Denied("user home");
@@ -243,15 +252,12 @@ pub fn classify_windows(path: &str, environment: &BlacklistEnvironment) -> Black
                     return BlacklistVerdict::Denied("sensitive user directory");
                 }
             }
-            // A path inside the profile that is not one of the protected
-            // subdirectories stays cleanable: the redirected-folder and
-            // system-root rules below must not re-open the profile.
-            return BlacklistVerdict::Allowed;
+            // Resolved content folders and system roots below also apply inside the profile.
         }
     }
 
     // Known Folder Move and administrator redirection put a content folder
-    // outside the literal profile; the resolved location wins over its spelling.
+    // inside or outside the literal profile; the resolved location wins over its spelling.
     for directory in &environment.known_content_dirs {
         if path_algebra::contains(directory, path, WINDOWS) {
             return BlacklistVerdict::Denied("resolved content folder");
@@ -315,7 +321,11 @@ impl Blacklist {
         if environment.flavor().is_windows() {
             Self::is_blacklisted_windows(path, &described)
         } else {
-            Self::is_blacklisted_posix(path, &described)
+            Self::is_blacklisted_posix(
+                path,
+                &described,
+                environment.platform() == zenith_core::domain::platform::PlatformKind::Macos,
+            )
         }
     }
 
@@ -326,181 +336,164 @@ impl Blacklist {
         // prefix that wraps a drive or UNC path and refuses the rest, and
         // normalizing first would strip `\\?\GLOBALROOT\...` into a harmless
         // looking relative path before that rule could see it.
-        classify_windows(&path.to_string_lossy(), described).is_denied()
+        Self::windows_with_alias_resolution(path, described, |path| {
+            zenith_platform::paths::canonicalize_existing_prefix(path).ok()
+        })
     }
 
-    /// POSIX classification keeps byte-exact `Path` semantics.
-    fn is_blacklisted_posix(path: &Path, described: &BlacklistEnvironment) -> bool {
-        let home = described.home.as_deref().map(PathBuf::from);
-
-        // 1. Exact forbidden root & home
-        if path == Path::new("/") {
-            return true;
-        }
-
-        // Drive roots like C:\ or D:\
-        if let Some(path_str) = path.to_str() {
-            let trimmed = path_str.trim_end_matches(['\\', '/']);
-            if trimmed.len() == 2 && trimmed.ends_with(':') {
-                return true;
-            }
-        }
-
-        if let Some(h) = &home {
-            if path == h.as_path() {
-                return true;
-            }
-            // Whole AppData itself or Local/Roaming themselves
-            if path == h.join("AppData").as_path()
-                || path == h.join("AppData/Local").as_path()
-                || path == h.join("AppData\\Local").as_path()
-                || path == h.join("AppData/Roaming").as_path()
-                || path == h.join("AppData\\Roaming").as_path()
+    fn windows_with_alias_resolution(
+        path: &Path,
+        described: &BlacklistEnvironment,
+        mut resolve: impl FnMut(&Path) -> Option<PathBuf>,
+    ) -> bool {
+        let has_alias = described
+            .home
+            .iter()
+            .chain(std::iter::once(&described.temp_dir))
+            .chain(&described.known_content_dirs)
+            .chain(&described.system_roots)
+            .chain(described.local_app_data.iter())
+            .chain(described.roaming_app_data.iter())
+            .any(|path| path_algebra::contains_short_name(path, WINDOWS));
+        let mut normalized = None;
+        if has_alias {
+            let mut facts = described.clone();
+            for fact in facts
+                .home
+                .iter_mut()
+                .chain(std::iter::once(&mut facts.temp_dir))
+                .chain(facts.known_content_dirs.iter_mut())
+                .chain(facts.system_roots.iter_mut())
+                .chain(facts.local_app_data.iter_mut())
+                .chain(facts.roaming_app_data.iter_mut())
             {
-                return true;
-            }
-        }
-
-        // Whole temp dir itself
-        let temp = PathBuf::from(&described.temp_dir);
-        if path == temp.as_path() {
-            return true;
-        }
-
-        // 2. Universal Git protection, ADS, and trailing alias defense
-        let path_str = path.to_string_lossy();
-        for part in path_str.split(['/', '\\']) {
-            if part == ".git" {
-                return true;
-            }
-            if part.ends_with('.') || part.ends_with(' ') {
-                return true;
-            }
-        }
-
-        // Reject alternate data streams (e.g. file.txt:stream or C:\path\file.txt:stream)
-        if let Some(colon_pos) = path_str.rfind(':') {
-            if colon_pos != 1 {
-                return true;
-            }
-        }
-
-        // 3. User sensitive directories (credentials, keychains, user content)
-        if let Some(h) = &home {
-            if path.starts_with(h) {
-                let sensitive_relative = [
-                    ".ssh",
-                    ".gnupg",
-                    ".aws",
-                    ".azure",
-                    ".kube",
-                    ".config/gcloud",
-                    "Library/Keychains",
-                    "Library/Accounts",
-                    "Library/Mail",
-                    "Library/Messages",
-                    "Library/IdentityServices",
-                    "Library/Containers/com.apple.mail",
-                    "Desktop",
-                    "Documents",
-                    "Pictures",
-                    "Movies",
-                    "Music",
-                    "Videos",
-                    "Contacts",
-                    "Searches",
-                    "Links",
-                    "Saved Games",
-                ];
-
-                for rel in &sensitive_relative {
-                    let sensitive_path = h.join(rel);
-                    if path == sensitive_path.as_path() || path.starts_with(&sensitive_path) {
+                if path_algebra::contains_short_name(fact, WINDOWS) {
+                    let Some(resolved) = resolve(Path::new(fact)) else {
+                        return true;
+                    };
+                    let text = resolved.to_string_lossy().into_owned();
+                    if path_algebra::contains_short_name(&text, WINDOWS) {
                         return true;
                     }
+                    *fact = text;
                 }
+            }
+            normalized = Some(facts);
+        }
+        let described = normalized.as_ref().unwrap_or(described);
+        let text = path.to_string_lossy();
+        // Windows itself can supply an 8.3 profile in TEMP. Resolve an existing
+        // alias before classification; unresolved or still-ambiguous names stay
+        // refused. The independent symlink and identity guards still apply.
+        let verdict = classify_windows(&text, described);
+        if matches!(
+            verdict.reason(),
+            Some("unresolvable 8.3 short name" | "unresolvable 8.3 short name under a drive root")
+        ) {
+            let Some(resolved) = resolve(path) else {
+                return true;
+            };
+            return classify_windows(&resolved.to_string_lossy(), described).is_denied();
+        }
+        verdict.is_denied()
+    }
 
+    /// macOS protection uses a conservative comparison key even on case-sensitive
+    /// volumes: refusing an alias is preferable to missing protected user state.
+    /// Linux keeps byte-exact names. This key never grants deletion authority.
+    fn is_blacklisted_posix(path: &Path, described: &BlacklistEnvironment, macos: bool) -> bool {
+        let key = |value: &str| -> PathBuf {
+            let normalized = path_algebra::normalize(value, PathFlavor::Posix);
+            if macos {
+                PathBuf::from(
+                    normalized
+                        .nfd()
+                        .flat_map(char::to_lowercase)
+                        .collect::<String>(),
+                )
+            } else {
+                PathBuf::from(normalized)
+            }
+        };
+        let Some(raw_path) = path.to_str() else {
+            return true;
+        };
+        let Some(home) = described
+            .home
+            .as_deref()
+            .filter(|home| home.starts_with('/'))
+        else {
+            return true;
+        };
+        let path = key(raw_path);
+        let home = key(home);
+        if path == Path::new("/") || path == home || path == key(&described.temp_dir) {
+            return true;
+        }
+        if path.components().any(|part| part.as_os_str() == ".git") {
+            return true;
+        }
+        // Known folders may be redirected inside OR outside the home directory.
+        for root in described
+            .known_content_dirs
+            .iter()
+            .chain(&described.system_roots)
+        {
+            if path.starts_with(key(root)) {
+                return true;
+            }
+        }
+        for relative in SENSITIVE_RELATIVE {
+            if path.starts_with(home.join(key(relative))) {
+                return true;
+            }
+        }
+        for root in [&described.local_app_data, &described.roaming_app_data]
+            .into_iter()
+            .flatten()
+        {
+            if path == key(root) {
+                return true;
+            }
+        }
+        if ["AppData", "AppData/Local", "AppData/Roaming"]
+            .iter()
+            .any(|relative| path == home.join(key(relative)))
+        {
+            return true;
+        }
+        // Mount containers and each mounted volume itself are never cleanup units.
+        for root in ["/Volumes", "/mnt", "/media"] {
+            let root = key(root);
+            if path == root || path.parent() == Some(root.as_path()) {
+                return true;
+            }
+        }
+        // The current home can reside under /var or on a mounted volume.
+        if path.starts_with(&home) {
+            return false;
+        }
+        for root in ["/Users", "/home"] {
+            if path.starts_with(key(root)) {
+                return true;
+            }
+        }
+        // Component comparisons prevent /tmp-neighbor from inheriting /tmp's exception.
+        for root in [
+            "/tmp",
+            "/private/tmp",
+            "/var/folders",
+            "/private/var/folders",
+        ] {
+            let root = key(root);
+            if path == root {
+                return true;
+            }
+            if path.starts_with(root) {
                 return false;
             }
         }
-
-        // 3b. Dynamically resolved known folders (e.g. OneDrive Known Folder Move, redirected Documents/Desktop)
-        for known_dir in &described.known_content_dirs {
-            let norm_known = PathBuf::from(known_dir);
-            if path == norm_known.as_path() || path.starts_with(&norm_known) {
-                return true;
-            }
-        }
-
-        // 4. Allow safe temp directories (/tmp, /private/tmp, /var/folders, /private/var/folders)
-        let path_str = path.to_string_lossy();
-        if path_str.starts_with("/var/folders")
-            || path_str.starts_with("/private/var/folders")
-            || path_str.starts_with("/tmp")
-            || path_str.starts_with("/private/tmp")
-        {
-            // Protect root temp folders themselves from direct deletion
-            if path == Path::new("/tmp")
-                || path == Path::new("/private/tmp")
-                || path == Path::new("/var/folders")
-                || path == Path::new("/private/var/folders")
-            {
-                return true;
-            }
-            return false;
-        }
-
-        // 5. Exact users root directory
-        let normalized_path_str = path.to_string_lossy().replace('\\', "/");
-        if normalized_path_str.eq_ignore_ascii_case("C:/Users") || path == Path::new("/Users") {
-            return true;
-        }
-
-        // Drive-agnostic protection for Windows system roots on any drive
-        // letter. Only the `X:\Users` root itself is protected; its
-        // descendants (temp directories, projects, caches) must remain
-        // scannable and cleanable.
-        let path_normalized_str = normalized_path_str.trim_end_matches('/');
-        if path_normalized_str.len() >= 2 && path_normalized_str.as_bytes()[1] == b':' {
-            let tail = &path_normalized_str[2..];
-            if tail.eq_ignore_ascii_case("/Users") {
-                return true;
-            }
-            for denied in [
-                "/Windows",
-                "/Program Files",
-                "/Program Files (x86)",
-                "/ProgramData",
-            ] {
-                if tail.eq_ignore_ascii_case(denied)
-                    || tail
-                        .to_ascii_lowercase()
-                        .starts_with(&format!("{}/", denied.to_ascii_lowercase()))
-                {
-                    return true;
-                }
-            }
-        }
-
-        // Environment-derived system roots
-        for env_var in [
-            "SystemRoot",
-            "windir",
-            "ProgramFiles",
-            "ProgramFiles(x86)",
-            "ProgramW6432",
-            "ProgramData",
-        ] {
-            if let Some(val) = std::env::var_os(env_var).map(PathBuf::from) {
-                let norm_sys = zenith_platform::NativePlatformPaths::normalize_verbatim_path(&val);
-                if path == norm_sys.as_path() || path.starts_with(&norm_sys) {
-                    return true;
-                }
-            }
-        }
-
-        // 6. System critical prefixes outside user home and temp
-        let system_prefixes = [
+        [
             "/System",
             "/bin",
             "/sbin",
@@ -514,22 +507,13 @@ impl Blacklist {
             "/dev",
             "/cores",
             "/opt",
-        ];
-
-        for sys in &system_prefixes {
-            let sys_path = Path::new(sys);
-            let normalized_system = sys.to_ascii_lowercase();
-            let normalized_candidate = normalized_path_str.to_ascii_lowercase();
-            if path == sys_path
-                || path.starts_with(sys_path)
-                || normalized_candidate == normalized_system
-                || normalized_candidate.starts_with(&format!("{normalized_system}/"))
-            {
-                return true;
-            }
-        }
-
-        false
+            "/proc",
+            "/sys",
+            "/boot",
+            "/run",
+        ]
+        .iter()
+        .any(|root| path.starts_with(key(root)))
     }
 
     /// Verifies that a target path is completely safe from the blacklist for
@@ -554,6 +538,148 @@ impl Blacklist {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_aliases_require_resolution_and_recheck_the_resolved_location() {
+        let environment = windows_environment();
+        let alias = Path::new(r"D:\Users\ME~1\AppData\Local\Temp\cache");
+        assert!(!Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| { Some(PathBuf::from(r"D:\Users\me\AppData\Local\Temp\cache")) }
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| None
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| { Some(PathBuf::from(r"D:\Users\me\Documents\private")) }
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            alias,
+            &environment,
+            |_| Some(alias.into())
+        ));
+    }
+
+    #[test]
+    fn resolved_candidates_are_compared_against_resolved_profile_facts() {
+        let mut environment = windows_environment();
+        environment.home = Some(r"D:\Users\ME~1".into());
+        environment.known_content_dirs = vec![r"D:\Users\ME~1\Downloads".into()];
+        let candidate = Path::new(r"D:\Users\me\Downloads\personal.bin");
+        assert!(Blacklist::windows_with_alias_resolution(
+            candidate,
+            &environment,
+            |path| { Some(PathBuf::from(path.to_string_lossy().replace("ME~1", "me"))) }
+        ));
+        assert!(Blacklist::windows_with_alias_resolution(
+            candidate,
+            &environment,
+            |_| None
+        ));
+    }
+
+    fn posix_environment() -> BlacklistEnvironment {
+        BlacklistEnvironment {
+            home: Some("/Users/José".into()),
+            temp_dir: "/private/tmp/zenith-user".into(),
+            known_content_dirs: vec!["/Users/José/OneDrive/Personal".into()],
+            system_roots: vec![],
+            local_app_data: None,
+            roaming_app_data: None,
+        }
+    }
+
+    #[test]
+    fn macos_protection_handles_case_and_canonical_unicode_equivalence() {
+        let environment = posix_environment();
+        for path in [
+            "/users/JOSE\u{301}/documents/private.txt",
+            "/Users/José/ONEDRIVE/personal/letter.txt",
+            "/Users/José/downloads/archive.zip",
+            "/Users/José/.SSH/id_ed25519",
+            "/Users/José/work/.GIT/config",
+        ] {
+            assert!(
+                Blacklist::is_blacklisted_posix(Path::new(path), &environment, true),
+                "{path}"
+            );
+        }
+        assert!(!Blacklist::is_blacklisted_posix(
+            Path::new("/Users/José/Library/Caches/tool/data"),
+            &environment,
+            true
+        ));
+    }
+
+    #[test]
+    fn unix_names_do_not_inherit_windows_alias_rules() {
+        let environment = posix_environment();
+        for path in [
+            "/Users/José/cache/2026-09-21T12:00:00",
+            "/Users/José/cache/entry.",
+            "/Users/José/cache/entry ",
+        ] {
+            assert!(
+                !Blacklist::is_blacklisted_posix(Path::new(path), &environment, false),
+                "{path}"
+            );
+        }
+        assert!(!Blacklist::is_blacklisted_posix(
+            Path::new("/Users/José/documents/cache"),
+            &environment,
+            false
+        ));
+    }
+
+    #[test]
+    fn missing_home_and_mount_roots_fail_closed() {
+        let mut environment = posix_environment();
+        for path in [
+            "/Volumes",
+            "/Volumes/Data",
+            "/mnt",
+            "/mnt/disk",
+            "/media/drive",
+            "/home/other/data",
+            "/Users/other/data",
+        ] {
+            assert!(
+                Blacklist::is_blacklisted_posix(Path::new(path), &environment, true),
+                "{path}"
+            );
+        }
+        environment.home = None;
+        assert!(Blacklist::is_blacklisted_posix(
+            Path::new("/tmp/cache"),
+            &environment,
+            true
+        ));
+        let mut windows = windows_environment();
+        windows.home = None;
+        assert_eq!(
+            classify_windows(r"D:\cache\item", &windows),
+            BlacklistVerdict::Denied("user home is unavailable")
+        );
+    }
+
+    #[test]
+    fn windows_resolved_content_inside_home_remains_protected() {
+        let mut environment = windows_environment();
+        environment.known_content_dirs = vec![r"D:\Users\me\OneDrive\Personal".into()];
+        assert_eq!(
+            classify_windows(r"d:\users\ME\onedrive\PERSONAL\letter.txt", &environment),
+            BlacklistVerdict::Denied("resolved content folder")
+        );
+        assert_eq!(
+            classify_windows(r"D:\Users\me\AppData\Local\tool\cache", &environment),
+            BlacklistVerdict::Allowed
+        );
+    }
 
     /// A machine whose system drive is not `C:` and whose Documents folder was
     /// redirected outside the profile. Every expectation below is stated in
@@ -697,6 +823,10 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            denied(r"D:\Users\me\DOCUME~1\file.txt"),
+            "unresolvable 8.3 short name"
+        );
         // A long name that merely contains a tilde is not an alias.
         allowed(r"D:\Users\me\projects\notes~2024\file.txt");
     }

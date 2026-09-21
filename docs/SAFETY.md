@@ -334,6 +334,21 @@ signature's `unit` declaration: `named_subtree` treats each match as one object
 that is aged and deleted whole, `child_namespace` ages each child separately.
 The unit you age is the unit you delete, in both shapes.
 
+## Protected-path comparison
+
+Generic cleanup requires a known user home. Resolved content folders are
+protected both inside and outside that home, including redirected Downloads.
+Credential and application-state names supplement the platform's known folders.
+On macOS the backstop compares decomposed Unicode and lowercase component keys;
+this deliberately errs on the side of refusal on case-sensitive volumes. Linux
+keeps case-sensitive names. Windows uses the shared path algebra, refusing ADS,
+trailing aliases, and unresolved 8.3 names. Unix colons and trailing dots/spaces
+are ordinary names. Mount-container and volume roots are never cleanup units.
+
+Cache providers remove cache-path environment overrides before both discovery
+and pruning. Executable validation, rediscovery, and cache-root checks still
+apply; this does not make arbitrary provider configuration trusted.
+
 ## Large Files Inspector
 
 Large Files is intentionally not generic cleanup. User content is protected by
@@ -394,7 +409,9 @@ The whole-home scope prunes protected paths before traversal. It bypasses
 `.kube`, user media/content roots protected by the global blacklist, installed
 `.app` bundles, and known top-level package-manager/runtime state directories.
 Symlinks are not followed. These bypassed paths do not become candidates and
-do not consume recursive measurement work.
+do not consume recursive measurement work. Downloads retains its explicit
+read-only discovery and consent reporting; artifacts found there are shown as
+`SafetyBlocked` and cannot be submitted as deletable artifacts.
 
 Discovery uses reviewed ecosystem evidence before a directory becomes a
 candidate. Project markers must be direct children of the exact project root;

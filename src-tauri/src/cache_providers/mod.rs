@@ -283,8 +283,32 @@ fn run_provider(
     validate_executable(&executable, environment)?;
     let mut command = Command::new(executable);
     command.args(args);
+    strip_cache_environment(&mut command);
     zenith_platform::subprocess::run_with_timeout(command, PROVIDER_TIMEOUT)
         .map_err(|error| error.to_string())
+}
+
+// Discovery and mutation must see the same cache configuration. Explicitly
+// remove both npm spellings: environment keys are case-sensitive on Unix.
+const CACHE_PATH_ENVIRONMENT: &[&str] = &[
+    "UV_CACHE_DIR",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "PNPM_HOME",
+    "npm_config_store_dir",
+    "NPM_CONFIG_STORE_DIR",
+    "npm_config_cache",
+    "NPM_CONFIG_CACHE",
+    "npm_config_userconfig",
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_globalconfig",
+    "NPM_CONFIG_GLOBALCONFIG",
+];
+
+fn strip_cache_environment(command: &mut Command) {
+    for variable in CACHE_PATH_ENVIRONMENT {
+        command.env_remove(variable);
+    }
 }
 
 fn discover_path(
@@ -529,13 +553,39 @@ fn bounded_message(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ProviderKind;
     use super::{cache_location_approved, node_manager_roots, parse_discovered_path, AbsolutePath};
+    use super::{strip_cache_environment, ProviderKind, CACHE_PATH_ENVIRONMENT};
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
     use zenith_platform::path_algebra::PathFlavor;
     use zenith_platform::paths::SimulatedPaths;
     use zenith_platform::PlatformEnvironment;
+
+    #[test]
+    fn provider_command_removes_cache_path_overrides() {
+        let mut command = Command::new("provider-fixture");
+        for variable in CACHE_PATH_ENVIRONMENT {
+            command.env(variable, "/untrusted/cache");
+        }
+        command.env("ZENITH_UNRELATED_FIXTURE", "preserved");
+        strip_cache_environment(&mut command);
+        let variables: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_string_lossy().to_ascii_lowercase(), value))
+            .collect();
+        for variable in CACHE_PATH_ENVIRONMENT {
+            assert_eq!(
+                variables.get(&variable.to_ascii_lowercase()),
+                Some(&None),
+                "{variable}"
+            );
+        }
+        assert_eq!(
+            variables.get("zenith_unrelated_fixture"),
+            Some(&Some(std::ffi::OsStr::new("preserved")))
+        );
+    }
 
     #[test]
     fn npm_provider_is_wired_to_its_signature_and_commands() {
@@ -645,8 +695,9 @@ mod tests {
         // the other.
         for root in &relocated {
             assert!(
-                crate::safety::Blacklist::validate_with(root, &environment).is_ok(),
-                "the approved relocated root {} must stay cleanable",
+                crate::safety::Blacklist::validate_with(&root.join("uv/cache"), &environment)
+                    .is_ok(),
+                "a cache below the relocated container {} must stay cleanable",
                 root.display()
             );
         }

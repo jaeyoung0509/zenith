@@ -1314,3 +1314,49 @@ mod tests {
         assert_eq!(spoofed.expand_placeholder("${SYSTEM_ROOT}"), None);
     }
 }
+
+/// Resolve the existing prefix of a path, retaining missing literal descendants.
+/// This lets a Windows TEMP path supplied as an 8.3 alias remain comparable even
+/// when a cache entry disappeared. Permission and other I/O failures stay errors.
+pub fn canonicalize_existing_prefix(path: &Path) -> std::io::Result<PathBuf> {
+    let mut ancestor = path;
+    let mut tail = Vec::new();
+    loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(mut resolved) => {
+                for component in tail.into_iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = ancestor.file_name() else {
+                    return Err(error);
+                };
+                let Some(parent) = ancestor.parent() else {
+                    return Err(error);
+                };
+                tail.push(name.to_owned());
+                ancestor = parent;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod existing_prefix_tests {
+    #[test]
+    fn missing_descendants_keep_their_names_below_a_resolved_existing_parent() {
+        let fixture = tempfile::tempdir().unwrap();
+        let candidate = fixture.path().join("not-created/child.bin");
+        assert_eq!(
+            super::canonicalize_existing_prefix(&candidate).unwrap(),
+            fixture
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("not-created/child.bin")
+        );
+    }
+}
