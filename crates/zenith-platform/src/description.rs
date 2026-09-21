@@ -238,7 +238,16 @@ impl PlatformEnvironment {
     /// provider at a store that is not the one Cargo uses.
     pub fn cargo_home(&self) -> Option<PathBuf> {
         if let Some(stated) = &self.cargo_home {
-            return stated.is_absolute().then(|| stated.clone());
+            // Native paths stay byte-exact, including non-UTF-8 names. A
+            // foreign fixture must use its stated flavor, not the host OS.
+            let absolute = if self.flavor == PathFlavor::current() {
+                stated.is_absolute()
+            } else {
+                stated
+                    .to_str()
+                    .is_some_and(|path| super::path_algebra::is_absolute(path, self.flavor))
+            };
+            return absolute.then(|| stated.clone());
         }
         self.user_home()
             .map(|home| super::paths::join_with_flavor(home, ".cargo", self.flavor))
@@ -694,6 +703,59 @@ mod tests {
             None,
             "an environment that resolves no profile resolves no default"
         );
+    }
+
+    #[test]
+    fn stated_cargo_homes_follow_their_flavor_on_every_host() {
+        for (flavor, home, stated) in [
+            (PathFlavor::Posix, "/Users/tester", "/Volumes/toolchains/cargo"),
+            (PathFlavor::Posix, "/home/tester", "/srv/홍 길동/cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", r"E:\Tools\cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", "E:/Tools/cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", r"E:\홍 길동\cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", r"\\server\share\cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", r"\\?\E:\Tools\cargo"),
+            (
+                PathFlavor::Windows,
+                r"D:\Users\tester",
+                r"\\?\UNC\server\share\cargo",
+            ),
+        ] {
+            let environment = PlatformEnvironment::simulated(flavor)
+                .with_home(home)
+                .with_cargo_home(stated);
+            assert_eq!(
+                environment.cargo_home(),
+                Some(PathBuf::from(stated)),
+                "the stated {flavor} Cargo home must survive unchanged: {stated:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_stated_cargo_homes_do_not_fall_back_to_the_profile() {
+        for (flavor, home, stated) in [
+            (PathFlavor::Posix, "/Users/tester", ""),
+            (PathFlavor::Posix, "/Users/tester", "."),
+            (PathFlavor::Posix, "/Users/tester", "relative/cargo"),
+            (PathFlavor::Posix, "/Users/tester", r"D:\Tools\cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", ""),
+            (PathFlavor::Windows, r"D:\Users\tester", "."),
+            (PathFlavor::Windows, r"D:\Users\tester", "relative/cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", "D:relative"),
+            (PathFlavor::Windows, r"D:\Users\tester", "D:"),
+            (PathFlavor::Windows, r"D:\Users\tester", r"\cargo"),
+            (PathFlavor::Windows, r"D:\Users\tester", "/cargo"),
+        ] {
+            let environment = PlatformEnvironment::simulated(flavor)
+                .with_home(home)
+                .with_cargo_home(stated);
+            assert_eq!(
+                environment.cargo_home(),
+                None,
+                "an invalid {flavor} override must not select the default store: {stated:?}"
+            );
+        }
     }
 
     #[test]
