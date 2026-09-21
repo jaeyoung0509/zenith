@@ -235,6 +235,7 @@ mod tests {
             deleted_files: 1,
             skipped_files: 1,
             errors: vec!["locked shard".to_string()],
+            skip_reasons: vec![],
             os_error_codes: vec![],
             protect_structured_state: false,
         });

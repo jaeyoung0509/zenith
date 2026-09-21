@@ -565,7 +565,30 @@ impl CleanExecutor {
             }
         };
 
-        if report.is_success() {
+        if report.is_success() && report.deleted_files == 0 && report.skipped_files > 0 {
+            let message = if report.skip_reasons.is_empty() {
+                "Cleanup policy skipped the target before mutation".to_string()
+            } else {
+                report.skip_reasons.join("; ")
+            };
+            if moves_to_trash {
+                trash_item_result(
+                    target,
+                    CleanStatus::Skipped,
+                    Some(CleanFailureReason::SafetyBoundary),
+                    0,
+                    Some(message),
+                )
+            } else {
+                item_result(
+                    target,
+                    CleanStatus::Skipped,
+                    Some(CleanFailureReason::SafetyBoundary),
+                    0,
+                    Some(message),
+                )
+            }
+        } else if report.is_success() {
             if moves_to_trash {
                 trash_item_result(
                     target,
@@ -674,6 +697,12 @@ pub fn classify_cleanup_failure_with_codes(
         || lower.contains("os error 5:")
     {
         CleanFailureReason::PermissionDenied
+    } else if lower.contains("excluded")
+        || lower.contains("protected location")
+        || lower.contains("safety boundary")
+        || lower.contains("refusing structured state")
+    {
+        CleanFailureReason::SafetyBoundary
     } else if lower.contains("changed during cleanup") {
         CleanFailureReason::ChangedSinceScan
     } else if lower.contains("no such file")
@@ -713,6 +742,41 @@ mod tests {
             moved_to_trash_bytes: 0,
             failure_reason: None,
             error_message: None,
+        }
+    }
+
+    fn trash_directory_plan(
+        path: &std::path::Path,
+        expected_bytes: u64,
+        exclusions: Vec<String>,
+    ) -> DeletePlan {
+        DeletePlan {
+            id: uuid::Uuid::new_v4(),
+            scan_id: "scan-trash-directory".to_string(),
+            refusals: Vec::new(),
+            owner_authorizations: Vec::new(),
+            targets: vec![DeleteTarget {
+                item_id: "trash-directory-target".to_string(),
+                signature_id: "test.trash-directory".to_string(),
+                name: "Trash directory".to_string(),
+                path: path.to_path_buf(),
+                strategy: CleanStrategy::DeleteDirectory,
+                expected_bytes,
+                risk: crate::models::RiskTier::Rebuild,
+                identity: ToctouGuard::capture(path),
+                exclusions,
+                min_age_days: None,
+                unit: crate::models::CleanupUnit::fixed_path(path.to_string_lossy().to_string()),
+                target_kind: crate::models::EntryKind::Directory,
+                owner: crate::models::CleanupOwnership::unknown(),
+                process_guard: crate::models::RunningProcessPolicy::none(),
+                provider_id: None,
+                requires_confirmation: false,
+            }],
+            expected_reclaim_bytes: expected_bytes,
+            risk: crate::models::RiskSummary::default(),
+            created_at: 0,
+            mode: CleanupMode::Trash,
         }
     }
 
@@ -874,6 +938,135 @@ mod tests {
             payload.exists(),
             "the recording backend proves the permanent deleter was not used"
         );
+    }
+
+    #[test]
+    fn trash_directory_refuses_a_reachable_excluded_child() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("whole-cache");
+        std::fs::create_dir(&cache_root).unwrap();
+        let keep = cache_root.join("keep.bin");
+        std::fs::write(&keep, b"must remain").unwrap();
+        let backend = zenith_platform::MockTrashBackend::new();
+        let plan = trash_directory_plan(
+            &cache_root,
+            1_048_576,
+            vec![keep.to_string_lossy().to_string()],
+        );
+
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &backend,
+            |_| {},
+        );
+
+        assert!(
+            backend.moved().is_empty(),
+            "Trash must not receive the root"
+        );
+        assert!(cache_root.exists());
+        assert!(keep.exists());
+        assert_eq!(result.items[0].status, CleanStatus::Failed);
+        assert_eq!(
+            result.items[0].failure_reason,
+            Some(CleanFailureReason::SafetyBoundary)
+        );
+        assert_eq!(result.items[0].moved_to_trash_bytes, 0);
+    }
+
+    #[test]
+    fn trash_directory_treats_a_top_level_policy_skip_as_skipped() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("excluded-cache");
+        std::fs::create_dir(&cache_root).unwrap();
+        std::fs::write(cache_root.join("payload.bin"), b"must remain").unwrap();
+        let backend = zenith_platform::MockTrashBackend::new();
+        let plan = trash_directory_plan(
+            &cache_root,
+            4096,
+            vec![cache_root.to_string_lossy().to_string()],
+        );
+
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &backend,
+            |_| {},
+        );
+
+        assert!(backend.moved().is_empty());
+        assert!(cache_root.exists());
+        assert_eq!(result.items[0].status, CleanStatus::Skipped);
+        assert_eq!(
+            result.items[0].failure_reason,
+            Some(CleanFailureReason::SafetyBoundary)
+        );
+        assert_eq!(result.items[0].moved_to_trash_bytes, 0);
+    }
+
+    #[test]
+    fn trash_directory_refuses_a_protected_descendant() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("cache-parent");
+        let protected = cache_root.join("redirected-documents");
+        std::fs::create_dir_all(&protected).unwrap();
+        std::fs::write(protected.join("document.bin"), b"must remain").unwrap();
+        let environment =
+            PlatformEnvironment::simulated(zenith_platform::path_algebra::PathFlavor::current())
+                .with_home(fixture.path().join("profile"))
+                .with_temp_dir(fixture.path().join("temp"))
+                .with_known_folder(zenith_platform::KnownFolder::Documents, &protected);
+        let backend = zenith_platform::MockTrashBackend::new();
+        let plan = trash_directory_plan(&cache_root, 4096, vec![]);
+
+        let result = CleanExecutor::execute(
+            plan,
+            &environment,
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &backend,
+            |_| {},
+        );
+
+        assert!(backend.moved().is_empty());
+        assert!(protected.join("document.bin").exists());
+        assert_eq!(result.items[0].status, CleanStatus::Failed);
+        assert_eq!(
+            result.items[0].failure_reason,
+            Some(CleanFailureReason::SafetyBoundary)
+        );
+        assert_eq!(result.items[0].moved_to_trash_bytes, 0);
+    }
+
+    #[test]
+    fn trash_directory_reports_measured_movement_not_the_plan_estimate() {
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_root = fixture.path().join("measured-cache");
+        std::fs::create_dir(&cache_root).unwrap();
+        std::fs::write(cache_root.join("payload.bin"), vec![3u8; 8_192]).unwrap();
+        let backend = zenith_platform::MockTrashBackend::new();
+        let plan = trash_directory_plan(&cache_root, 8 * 1_048_576, vec![]);
+
+        let result = CleanExecutor::execute(
+            plan,
+            &PlatformEnvironment::native(),
+            &crate::cleaner::LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            &backend,
+            |_| {},
+        );
+
+        let item = &result.items[0];
+        assert_eq!(item.status, CleanStatus::Success);
+        assert_eq!(item.bytes_reclaimed, 0);
+        assert!(item.moved_to_trash_bytes > 0);
+        assert!(item.moved_to_trash_bytes < item.estimated_bytes);
+        assert_eq!(backend.moved(), vec![cache_root]);
     }
 
     #[cfg(unix)]
