@@ -1,4 +1,5 @@
 use crate::applications::AppInspectionRecord;
+use crate::developer_artifacts::artifact_relative_is_allowed;
 use crate::developer_artifacts::DeveloperArtifactInventory;
 use crate::large_files::{
     allowed_large_file_root, identity_from_path, is_allowed_large_file_path, LargeFileInventory,
@@ -561,37 +562,6 @@ fn same_directory_identity(path: &Path, expected: &ReviewedFileIdentity) -> bool
         return false;
     };
     current.same_entity(expected) && path.is_dir()
-}
-
-fn artifact_relative_is_allowed(relative: &Path, kind: DeveloperArtifactKind) -> bool {
-    let expected = match kind {
-        DeveloperArtifactKind::CargoTarget
-        | DeveloperArtifactKind::MavenTarget
-        | DeveloperArtifactKind::SbtTarget
-        | DeveloperArtifactKind::ClojureTarget => "target",
-        DeveloperArtifactKind::NodeModules => "node_modules",
-        DeveloperArtifactKind::PythonVenv => {
-            return relative == Path::new(".venv") || relative == Path::new("venv")
-        }
-        DeveloperArtifactKind::DotnetBin => "bin",
-        DeveloperArtifactKind::DotnetObj => "obj",
-        DeveloperArtifactKind::GradleBuild => "build",
-        DeveloperArtifactKind::GradleCache => ".gradle",
-        DeveloperArtifactKind::ComposerVendor => "vendor",
-        DeveloperArtifactKind::RubyBundle => return relative == Path::new("vendor/bundle"),
-        DeveloperArtifactKind::CMakeBuild => "build",
-        DeveloperArtifactKind::SwiftBuild => ".build",
-        DeveloperArtifactKind::FlutterTooling => ".dart_tool",
-        DeveloperArtifactKind::ElixirBuild => "_build",
-        DeveloperArtifactKind::ElixirDeps => "deps",
-        DeveloperArtifactKind::ErlangBuild => "_build",
-        DeveloperArtifactKind::HaskellStackWork => ".stack-work",
-        DeveloperArtifactKind::HaskellDistNewstyle => "dist-newstyle",
-        DeveloperArtifactKind::ZigCache => ".zig-cache",
-        DeveloperArtifactKind::TerraformCache => ".terraform",
-        DeveloperArtifactKind::GoModuleCache => return relative == Path::new("pkg/mod"),
-    };
-    relative == Path::new(expected)
 }
 
 /// The reviewed macOS application root containing `path`, when one does.

@@ -707,3 +707,14 @@ AI Control Center enforces strict safety and privacy boundaries:
   512 KiB, sanitized before persistence, and retained for 1–365 days. Zenith
   collects zero telemetry or analytics. Full details are in
   [AI_CONTROL_CENTER.md](AI_CONTROL_CENTER.md).
+
+### Developer artifact rule ownership
+
+The developer-artifact rule catalog owns marker recognition, directory descent
+boundaries, and the kind-specific relative paths accepted by Trash. Ordinary
+wrapper names (`dist`, `out`, `.next`, `.nuxt`) do not stop discovery. Simple
+marker rules require a regular file directly in the project root; Python,
+Composer, Ruby, Node, and CMake keep their specialized evidence checks. The Go
+module cache remains a separately scoped home adapter and never makes every
+`pkg` directory a discovery boundary. Identity, marker, symlink, and execution
+revalidation remain required after recognition.
