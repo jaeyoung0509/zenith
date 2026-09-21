@@ -37,13 +37,16 @@ consequence = "Modules may need to be downloaded again."
 id = "dev.cargo.registry.cache"
 name = "Cargo Registry Cache"
 category = "developer"
+# Owner-scoped: Cargo's downloaded archives are enumerated and removed by the
+# provider that owns the store. The signature names the owner; it grants no
+# filesystem authority, and the provider re-derives every unit it removes.
 risk = "rebuild"
-strategy = "delete_contents"
-paths = [
-    "~/.cargo/registry/cache"
-]
+strategy = "owner_provider"
+provider_id = "cargo.registry.archive"
+paths = []
+platforms = ["macos", "windows", "linux"]
 fail_if_running = ["cargo", "cargo.exe", "rustc", "rustc.exe"]
-description = "Downloaded .crate archive files from crates.io."
+description = "Downloaded .crate archive files Cargo keeps per registry index."
 provider = "Cargo"
 artifact_kind = "download_cache"
 consequence = "Crates may need to be downloaded again."
@@ -52,32 +55,42 @@ consequence = "Crates may need to be downloaded again."
 id = "dev.cargo.registry.src"
 name = "Cargo Registry Source"
 category = "developer"
-risk = "rebuild"
-strategy = "delete_contents"
-paths = [
-    "~/.cargo/registry/src"
-]
+# Owner-managed store: Cargo writes and reuses these trees while it resolves
+# dependencies, and their downloaded contents legitimately contain names
+# (`Cargo.lock`, package lockfiles, scripts, configuration, database-like
+# fixtures) that generic cleanup must keep protecting in an ordinary tree. The
+# store stays inventoried — its bytes are real — and is never submitted to
+# generic recursive deletion.
+risk = "manual"
+strategy = "owner_provider"
+provider_id = "cargo.registry.source"
+paths = []
+platforms = ["macos", "windows", "linux"]
 fail_if_running = ["cargo", "cargo.exe", "rustc", "rustc.exe"]
-description = "Extracted source code of downloaded crates dependencies."
+description = "Extracted source trees Cargo owns for downloaded crates. Cargo's own cache garbage collection decides whether they are stale."
 provider = "Cargo"
+management_mode = "advisory"
 artifact_kind = "package_store"
-consequence = "Crate sources must be extracted or downloaded again."
+consequence = "Cargo re-extracts a crate from its archive when a build needs it again."
 
 [[signatures]]
 id = "dev.cargo.git"
 name = "Cargo Git Checkouts"
 category = "developer"
-risk = "rebuild"
-strategy = "delete_contents"
-paths = [
-    "~/.cargo/git/checkouts",
-    "~/.cargo/git/db"
-]
+# Same owner boundary as `dev.cargo.registry.src`: a checkout is a working tree
+# with its own locks and local modifications, so neither an age rule nor a
+# filename rule can decide what inside it is disposable.
+risk = "manual"
+strategy = "owner_provider"
+provider_id = "cargo.git"
+paths = []
+platforms = ["macos", "windows", "linux"]
 fail_if_running = ["cargo", "cargo.exe", "rustc", "rustc.exe"]
-description = "Git repositories checked out and indexed by Cargo for git dependencies."
+description = "Git checkouts and bare databases Cargo owns for git dependencies. Cargo decides when they are unreferenced."
 provider = "Cargo"
+management_mode = "advisory"
 artifact_kind = "package_store"
-consequence = "Git dependencies must be cloned again."
+consequence = "Cargo clones a git dependency again when a build needs it."
 
 [[signatures]]
 id = "dev.rustup.downloads"

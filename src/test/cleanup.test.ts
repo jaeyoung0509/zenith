@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { ScanItem, ZenithSettings } from '../lib/models/types';
 import {
   cleanableBytes,
+  cleanableTotals,
+  describeIneligibleStates,
   filterAndSortCleanupItems,
+  ineligibleStates,
   isActionable,
   isAutoCleanable,
   isBlocked,
@@ -817,5 +820,152 @@ describe('summarizeCategory invariants and explicit population', () => {
     expect(summaryAll.selected_bytes).toBe(3000);
     expect(summaryAll.can_select_all).toBe(false);
     expect(summaryAll.is_all_cleanable_selected).toBe(true);
+  });
+});
+
+describe('detected versus currently cleanable row totals', () => {
+  it('counts the rows cleanup may act on separately from the rows it can see', () => {
+    const items = [
+      item({
+        id: 'cleanable',
+        risk: 'safe',
+        size: { logical: 4096, allocated: 4096 },
+        disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 4096 },
+      }),
+      item({
+        id: 'recent',
+        risk: 'safe',
+        size: { logical: 2048, allocated: 2048 },
+        disposition: { eligibility: 'recent', reason: 'Too new', cleanable_bytes: null },
+      }),
+      item({
+        id: 'advisory',
+        risk: 'safe',
+        size: { logical: 1024, allocated: 1024 },
+        disposition: { eligibility: 'advisory', reason: 'Tool managed', cleanable_bytes: null },
+      }),
+    ];
+
+    const totals = cleanableTotals(items);
+
+    // A tab can count three safe rows and authorize one of them.
+    expect(totals.detected).toEqual({ count: 3, bytes: 4096 + 2048 + 1024 });
+    expect(totals.cleanable).toEqual({ count: 1, bytes: 4096 });
+    expect(riskCounts(items)).toEqual({ all: 3, safe: 3, rebuild: 0, manual: 0 });
+  });
+
+  it('reports the two totals as equal when every row is cleanable', () => {
+    const items = [
+      item({
+        id: 'cleanable',
+        size: { logical: 4096, allocated: 4096 },
+        disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 4096 },
+      }),
+      item({
+        id: 'reviewable',
+        risk: 'rebuild',
+        size: { logical: 2048, allocated: 2048 },
+        disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 2048 },
+      }),
+    ];
+
+    expect(cleanableTotals(items)).toEqual({
+      detected: { count: 2, bytes: 6144 },
+      cleanable: { count: 2, bytes: 6144 },
+    });
+  });
+
+  it('never lets a partially measured row add its unmeasured bytes to the cleanable total', () => {
+    const totals = cleanableTotals([
+      item({
+        id: 'partial',
+        size: { logical: 100, allocated: 100 },
+        quality: 'partial',
+        incomplete_reason: 'Some files inaccessible',
+        disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 40 },
+      }),
+    ]);
+
+    expect(totals.detected).toEqual({ count: 1, bytes: 100 });
+    expect(totals.cleanable).toEqual({ count: 1, bytes: 40 });
+  });
+});
+
+describe('ineligibleStates', () => {
+  const recent = () =>
+    item({
+      id: 'recent',
+      size: { logical: 10, allocated: 10 },
+      disposition: { eligibility: 'recent', reason: 'Too new', cleanable_bytes: null },
+    });
+  const advisory = () =>
+    item({
+      id: 'advisory',
+      size: { logical: 10, allocated: 10 },
+      disposition: { eligibility: 'advisory', reason: 'Tool managed', cleanable_bytes: null },
+    });
+  const blocked = () =>
+    item({
+      id: 'blocked',
+      size: { logical: 10, allocated: 10 },
+      disposition: { eligibility: 'blocked', reason: 'Protected bundle', cleanable_bytes: null },
+    });
+  const cleanable = () =>
+    item({
+      id: 'cleanable',
+      size: { logical: 10, allocated: 10 },
+      disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 10 },
+    });
+
+  it('states the rows that keep a set out of cleanup, in the disposition order', () => {
+    const items = [recent(), advisory(), blocked(), recent()];
+
+    expect(ineligibleStates(items)).toEqual([
+      { state: 'blocked', label: 'blocked', count: 1 },
+      { state: 'advisory', label: 'advisory', count: 1 },
+      { state: 'recent', label: 'recently used', count: 2 },
+    ]);
+    expect(describeIneligibleStates(ineligibleStates(items))).toBe(
+      '1 blocked, 1 advisory, 2 recently used'
+    );
+  });
+
+  it('counts an unmeasured row once and never as a cleanable one', () => {
+    const partial = item({
+      id: 'partial',
+      size: { logical: 10, allocated: 10 },
+      quality: 'partial',
+      incomplete_reason: 'Some files inaccessible',
+      disposition: { eligibility: 'reviewable', reason: null, cleanable_bytes: 10 },
+    });
+
+    // A reviewable partial row is cleanable, so it is not a reason a tab holds
+    // nothing selectable.
+    expect(ineligibleStates([partial])).toEqual([]);
+
+    const gated = item({
+      id: 'gated',
+      size: { logical: 10, allocated: 10 },
+      disposition: { eligibility: 'policy_gated', reason: 'Scope is off', cleanable_bytes: null },
+    });
+    const unmeasured = item({
+      id: 'unmeasured',
+      size: { logical: 10, allocated: 10 },
+      quality: 'unavailable',
+      incomplete_reason: 'Permission denied',
+      disposition: { eligibility: 'blocked', reason: 'Permission denied', cleanable_bytes: null },
+    });
+
+    expect(ineligibleStates([gated, unmeasured])).toEqual([
+      { state: 'blocked', label: 'blocked', count: 1 },
+      { state: 'outside_scope', label: 'outside the current scope', count: 1 },
+    ]);
+  });
+
+  it('lists cleanable rows alongside the states that remain, so a warning names only the rest', () => {
+    expect(ineligibleStates([cleanable(), advisory()])).toEqual([
+      { state: 'advisory', label: 'advisory', count: 1 },
+    ]);
+    expect(ineligibleStates([cleanable(), cleanable()])).toEqual([]);
   });
 });

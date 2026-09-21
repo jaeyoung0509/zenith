@@ -104,7 +104,9 @@ impl StorageWorkflowState {
     /// The store owns TTL, capacity, and eviction, so this workflow cannot
     /// drift from the cleanup plan lifecycle by editing a map directly.
     fn store_plan(&self, plan: TrashPlan) -> Result<(), String> {
-        self.trash_plans.insert(plan, unix_timestamp())
+        self.trash_plans
+            .insert(plan, unix_timestamp())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -373,7 +375,7 @@ impl StorageService {
         let downloads_access = if workspaces.iter().any(|workspace| workspace.whole_home) {
             let environment = self.environment.clone();
             crate::blocking::run_blocking(
-                move || {
+                move || -> Result<_, String> {
                     Ok(crate::developer_artifacts::probe_downloads_access(
                         &environment,
                     ))
@@ -488,7 +490,7 @@ impl StorageService {
         let environment = self.environment.clone();
         let permit = self.budgets.acquire_storage_read().await?;
         let inventory = crate::blocking::run_blocking(
-            move || {
+            move || -> Result<_, String> {
                 let _permit = permit;
                 Ok(operation_gate.run_read(|| ApplicationScanner::scan(&environment)))
             },
@@ -652,7 +654,10 @@ fn execute_trash_plan_in_gate(
     now: impl FnOnce() -> u64,
 ) -> Result<TrashResult, String> {
     operation_gate.run_write(|| {
-        let plan = state.trash_plans.take_valid(plan_id, now())?;
+        let plan = state
+            .trash_plans
+            .take_valid(plan_id, now())
+            .map_err(|error| error.to_string())?;
         Ok(executor.execute(environment, plan))
     })
 }

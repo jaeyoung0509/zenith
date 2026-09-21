@@ -427,7 +427,7 @@ impl SystemService {
                 // The published list was already validated before the write,
                 // so this application step cannot refuse it anymore.
                 awake.set_rules(published.awake_rules)?;
-                Ok(change)
+                Ok::<_, String>(change)
             },
             "Settings save worker panicked",
         )

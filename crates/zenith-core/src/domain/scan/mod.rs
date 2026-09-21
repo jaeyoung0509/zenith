@@ -48,7 +48,6 @@ fn unavailable_observation_quality() -> ObservationQuality {
 pub enum ScanGapKind {
     PermissionDenied,
     FullDiskAccess,
-    SelectorTruncated,
     DepthLimit,
     Cancelled,
     IoError,

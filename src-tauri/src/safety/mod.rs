@@ -1,5 +1,4 @@
 pub mod blacklist;
-pub mod cargo_policy;
 pub mod planner;
 pub mod stale;
 pub mod symlink;
@@ -14,8 +13,8 @@ pub use symlink::SymlinkGuard;
 pub use toctou::ToctouGuard;
 pub use tree_deleter::{SafeTreeDeleter, TreeDeleteReport};
 pub use validator::{
-    entry_kind_at, structured_state_at, structured_state_at_with_policy, FilesystemDeleteAuthority,
-    RevalidationOutcome, SafetyValidator, ValidatedTarget,
+    entry_kind_at, structured_state_at, FilesystemDeleteAuthority, RevalidationOutcome,
+    SafetyValidator, ValidatedTarget,
 };
 
 use crate::models::ZenithError;

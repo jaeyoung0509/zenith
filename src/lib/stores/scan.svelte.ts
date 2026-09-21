@@ -2,11 +2,13 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  PlanRefusalPreview,
   ScanEvent,
   ScanItem,
   ScanResult,
   ZenithSettings,
 } from '../models/types';
+import { CleanupRefusalError } from '../api/native';
 import {
   refusalForPreview,
   tauriCancelScan,
@@ -48,6 +50,17 @@ export class ScanStore {
   });
   lastCleanResult = $state<CleanResult | null>(null);
   error = $state<string | null>(null);
+  /**
+   * Rows a cleanup outcome refused by name, mapped to the reason it stated.
+   *
+   * A refusal that is not `inventory_stale` changes the rows it names, not the
+   * inventory: the scan and every other selection stay usable, so the refusal
+   * is recorded against those rows instead of being flattened into a failed
+   * operation. Cleared when a new scan is accepted.
+   */
+  refusedItems = $state<Record<string, string>>({});
+  /** The typed outcome's own message from the last item-shaped refusal. */
+  refusalMessage = $state<string | null>(null);
   lastScanTrigger = $state<ScanTrigger | null>(null);
   private clock = $state(Date.now());
   private invalidated = $state(false);
@@ -189,8 +202,47 @@ export class ScanStore {
     // `quality`/`incomplete_reasons` state is the warning surface for a partial
     // result; `error` stays reserved for a refused or failed operation.
     this.error = null;
+    // The refusals named rows of the measurement this scan replaces, so they go
+    // with it and each row falls back to its own eligibility reason.
+    this.clearRefusals();
     this.syncSelectionFromScan(scan);
     this.updateFreshness();
+  }
+
+  /** Records the rows a refusal named; an empty set changes nothing. */
+  private recordRefusals(refusals: PlanRefusalPreview[]) {
+    if (refusals.length === 0) return;
+    const next = { ...this.refusedItems };
+    for (const refusal of refusals) next[refusal.item_id] = refusal.message;
+    this.refusedItems = next;
+  }
+
+  private clearRefusals() {
+    if (this.refusalMessage === null && Object.keys(this.refusedItems).length === 0) return;
+    this.refusedItems = {};
+    this.refusalMessage = null;
+  }
+
+  /**
+   * Reacts to a refused cleanup using the scope its own contract states.
+   *
+   * `inventory_stale` retires the measurement, so the selection goes with it and
+   * the next step is a new scan. Every other scope names rows: the scan and the
+   * remaining selection stay usable, and the refusal is recorded against the
+   * rows it names. Copy comes from the typed outcome, never from `String(error)`
+   * plus a guess, so a deterministic refusal never reads as "Scan again".
+   */
+  private refuseCleanup(cause: unknown): null {
+    if (cause instanceof CleanupRefusalError && !cause.invalidatesInventory) {
+      this.recordRefusals(cause.items);
+      this.refusalMessage = cause.message || 'The cleanup was refused for the rows it names.';
+      this.error = this.refusalMessage;
+      return null;
+    }
+    const message = cause instanceof Error ? cause.message : String(cause ?? '');
+    this.invalidate();
+    this.error = `${message || 'Clean failed'} Scan again and review the results before retrying.`;
+    return null;
   }
 
   // Selected item IDs mapped to item objects
@@ -553,10 +605,8 @@ export class ScanStore {
       await this.runScan();
 
       return result;
-    } catch (e: any) {
-      this.invalidate();
-      this.error = `${e?.toString() || 'Clean failed'} Scan again and review the results before retrying.`;
-      return null;
+    } catch (cause: unknown) {
+      return this.refuseCleanup(cause);
     } finally {
       this.isCleaning = false;
     }
@@ -599,6 +649,11 @@ export class ScanStore {
 
       if (this.isStale()) throw new Error('Scan expired. Scan again before cleaning.');
 
+      // A plan that does not cover every selection still runs for the rows it
+      // does cover: the refusals name the rows it left out, and the inventory
+      // the user is looking at stays.
+      this.recordRefusals(plan.refused);
+
       // 2. Execute clean
       if (plan.requires_confirmation && !confirmed) {
         throw new Error('This cleanup requires explicit confirmation. Review the selected action before cleaning.');
@@ -640,10 +695,8 @@ export class ScanStore {
       await this.runScan();
 
       return result;
-    } catch (e: any) {
-      this.invalidate();
-      this.error = `${e?.toString() || 'Clean failed'} Scan again and review the results before retrying.`;
-      return null;
+    } catch (cause: unknown) {
+      return this.refuseCleanup(cause);
     } finally {
       this.isCleaning = false;
     }

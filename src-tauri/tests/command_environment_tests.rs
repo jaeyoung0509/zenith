@@ -83,15 +83,17 @@ fn app_state_builds_every_shared_handle_from_the_stated_environment() {
 
     // The catalog was loaded against the stated machine, so its signatures
     // resolve through the stated profile rather than the host's.
-    let cargo = state
+    let home_relative = state
         .registry
-        .get("dev.cargo.registry.cache")
+        .get("dev.go.mod")
         .expect("the embedded catalog is loaded");
-    let resolved = state.registry.resolve_paths(cargo, &state.environment);
+    let resolved = state
+        .registry
+        .resolve_paths(home_relative, &state.environment);
     assert_eq!(
         resolved,
         vec![std::path::PathBuf::from(
-            r"D:\Users\tester\.cargo\registry\cache"
+            r"D:\Users\tester\go\pkg\mod\cache"
         )],
         "the stated profile decides where a home-relative path resolves"
     );

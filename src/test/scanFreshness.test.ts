@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScanStore } from '../lib/stores/scan.svelte';
+import { CleanupRefusalError } from '../lib/api/native';
 import type { ScanEvent, ScanResult } from '../lib/models/types';
-import { tauriCancelScan, tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriScan } from '../lib/utils/tauri';
+import { tauriCancelScan, tauriCreatePlan, tauriExecuteClean, tauriGetLastScan, tauriQuickCleanSafe, tauriScan } from '../lib/utils/tauri';
 
 vi.mock('../lib/utils/tauri', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/utils/tauri')>();
@@ -11,6 +12,7 @@ vi.mock('../lib/utils/tauri', async (importOriginal) => {
     tauriCreatePlan: vi.fn(),
     tauriExecuteClean: vi.fn(),
     tauriGetLastScan: vi.fn(),
+    tauriQuickCleanSafe: vi.fn(),
     tauriScan: vi.fn(),
   };
 });
@@ -151,7 +153,7 @@ describe('cleanup freshness and recovery', () => {
     const store = await loaded();
     vi.mocked(tauriCreatePlan).mockImplementation(async () => {
       vi.setSystemTime(1300_000);
-      return { id: 'plan', targets: [], expected_reclaim_bytes: 10, requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete', risk: {
+      return { id: 'plan', targets: [], refused: [], expected_reclaim_bytes: 10, requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete', risk: {
         safe_count: 1, rebuild_count: 0, manual_count: 0, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0,
       } };
     });
@@ -199,7 +201,7 @@ describe('cleanup freshness and recovery', () => {
     expect(store.selectionSummary.manualSelectedCount).toBe(1);
 
     vi.mocked(tauriCreatePlan).mockResolvedValue({
-      id: 'plan', targets: [], expected_reclaim_bytes: 2010, requires_confirmation: true, expires_at: 1600, mode: 'permanent_delete',
+      id: 'plan', targets: [], refused: [], expected_reclaim_bytes: 2010, requires_confirmation: true, expires_at: 1600, mode: 'permanent_delete',
       risk: { safe_count: 1, rebuild_count: 0, manual_count: 1, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 2000 },
     });
     vi.mocked(tauriExecuteClean).mockResolvedValue({
@@ -588,5 +590,167 @@ describe('scan progress and cancellation', () => {
     expect(tauriCancelScan).toHaveBeenCalledWith('scan-new');
     second.completion.resolve(fixture('scan-new'));
     await secondRun;
+  });
+});
+
+describe('cleanup refusal scope', () => {
+  /** A scan whose two rows are both cleanable and both selected. */
+  async function twoRowStore() {
+    const scan = fixture('refusal', Math.floor(Date.now() / 1000));
+    const safe = scan.categories[0].items[0];
+    scan.categories[0].items = [
+      safe,
+      {
+        ...safe,
+        id: 'second-item',
+        signature_id: 'fixture.second',
+        name: 'Second Fixture',
+        size: { logical: 20, allocated: 20 },
+        disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 20 },
+      },
+    ];
+    vi.mocked(tauriGetLastScan).mockResolvedValue(scan);
+    const store = new ScanStore();
+    await store.init();
+    store.selectedMap = { 'refusal-item': true, 'second-item': true };
+    return { store, scan };
+  }
+
+  it('records an item-shaped refusal without discarding the scan or the other selections', async () => {
+    const { store, scan } = await twoRowStore();
+    vi.mocked(tauriCreatePlan).mockRejectedValue(
+      new CleanupRefusalError({
+        scope: 'items',
+        reason: 'in_use',
+        message: '2 selected rows were refused.',
+        items: [
+          {
+            item_id: 'refusal-item',
+            name: 'Fixture',
+            reason: 'in_use',
+            message: 'Fixture is in use by another process.',
+          },
+        ],
+      })
+    );
+
+    await expect(store.cleanItems(scan.categories[0].items, true)).resolves.toBeNull();
+
+    // The inventory the user is looking at survives, and so does every
+    // selection: the refusal changed one row, not the measurement.
+    expect(store.lastScan?.scan_id).toBe('refusal');
+    expect(store.canClean).toBe(true);
+    expect(store.selectedMap).toEqual({ 'refusal-item': true, 'second-item': true });
+    expect(store.refusedItems).toEqual({
+      'refusal-item': 'Fixture is in use by another process.',
+    });
+    expect(store.refusalMessage).toBe('2 selected rows were refused.');
+    expect(store.error).toBe('2 selected rows were refused.');
+    expect(store.error).not.toContain('Scan again');
+    expect(tauriExecuteClean).not.toHaveBeenCalled();
+    expect(tauriScan).not.toHaveBeenCalled();
+  });
+
+  it('clears the recorded refusals when a new scan is accepted', async () => {
+    const { store, scan } = await twoRowStore();
+    vi.mocked(tauriCreatePlan).mockRejectedValue(
+      new CleanupRefusalError({
+        scope: 'items',
+        reason: 'in_use',
+        message: 'The selected rows were refused.',
+        items: [
+          { item_id: 'refusal-item', name: 'Fixture', reason: 'in_use', message: 'Fixture is in use.' },
+        ],
+      })
+    );
+    await store.cleanItems(scan.categories[0].items, true);
+    expect(store.refusedItems).toEqual({ 'refusal-item': 'Fixture is in use.' });
+
+    vi.mocked(tauriScan).mockResolvedValue(fixture('after', Math.floor(Date.now() / 1000)));
+    await store.runScan();
+
+    expect(store.refusedItems).toEqual({});
+    expect(store.refusalMessage).toBeNull();
+  });
+
+  it('retires the inventory and asks for a scan only when the refusal says inventory_stale', async () => {
+    const { store, scan } = await twoRowStore();
+    vi.mocked(tauriCreatePlan).mockRejectedValue(
+      new CleanupRefusalError({
+        scope: 'inventory_stale',
+        reason: 'changed_since_scan',
+        message: 'The scan this plan named has been replaced.',
+        items: [],
+      })
+    );
+
+    await expect(store.cleanItems(scan.categories[0].items, true)).resolves.toBeNull();
+
+    expect(store.error).toContain('The scan this plan named has been replaced.');
+    expect(store.error).toContain('Scan again');
+    expect(store.canClean).toBe(false);
+    expect(store.selectedMap).toEqual({});
+    expect(store.selectedCount).toBe(0);
+    expect(store.refusedItems).toEqual({});
+  });
+
+  it('keeps the scan when a quick clean is refused for the rows it names', async () => {
+    const store = await loaded();
+    vi.mocked(tauriQuickCleanSafe).mockRejectedValue(
+      new CleanupRefusalError({
+        scope: 'items',
+        reason: 'in_use',
+        message: 'Fixture is in use.',
+        items: [
+          { item_id: 'scan-item', name: 'Fixture', reason: 'in_use', message: 'Fixture is in use.' },
+        ],
+      })
+    );
+
+    await expect(store.quickCleanSafe()).resolves.toBeNull();
+
+    expect(store.canClean).toBe(true);
+    expect(store.error).toBe('Fixture is in use.');
+    expect(store.refusedItems).toEqual({ 'scan-item': 'Fixture is in use.' });
+    expect(tauriScan).not.toHaveBeenCalled();
+  });
+
+  it('records the refusals a plan reports and still executes the rows it covers', async () => {
+    const store = await loaded();
+    vi.mocked(tauriCreatePlan).mockResolvedValue({
+      id: 'plan',
+      targets: [],
+      refused: [
+        {
+          item_id: 'scan-item',
+          name: 'Fixture',
+          reason: 'changed_since_scan',
+          message: 'Fixture changed since the scan.',
+        },
+      ],
+      expected_reclaim_bytes: 0,
+      risk: { safe_count: 1, rebuild_count: 0, manual_count: 0, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0 },
+      requires_confirmation: false,
+      expires_at: 1600,
+      mode: 'permanent_delete',
+    });
+    vi.mocked(tauriExecuteClean).mockResolvedValue({
+      plan_id: 'plan',
+      started_at: 1000,
+      finished_at: 1001,
+      items: [],
+      total_reclaimed_bytes: 0,
+    } as never);
+    // The refresh after the run fails, so the plan's own coverage notes are the
+    // only account of what the run did not cover.
+    vi.mocked(tauriScan).mockRejectedValue(new Error('Scan worker failed'));
+
+    const result = await store.cleanItems(store.lastScan!.categories[0].items, true);
+
+    expect(result).not.toBeNull();
+    expect(tauriExecuteClean).toHaveBeenCalledTimes(1);
+    expect(store.refusedItems).toEqual({
+      'scan-item': 'Fixture changed since the scan.',
+    });
   });
 });

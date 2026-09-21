@@ -5,6 +5,8 @@
 //! ID, target item IDs, and byte totals — never a path, a strategy, or a
 //! captured filesystem identity.
 
+pub use crate::domain::cleanup::CleanFailureReason;
+
 use crate::domain::cleanup::{CleanupMode, DeletePlan};
 use crate::domain::{RiskSummary, RiskTier};
 use serde::{Deserialize, Serialize};
@@ -21,10 +23,142 @@ pub struct PlanTargetPreview {
     pub risk: RiskTier,
 }
 
+/// One selected item a plan did not authorize, with the reason.
+///
+/// A refusal is stated per item rather than as a failed operation: the rest of
+/// the selection is still a plan, and the interface marks the rows this names
+/// instead of discarding the inventory the user was looking at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct PlanRefusalPreview {
+    pub item_id: String,
+    pub name: String,
+    /// The typed outcome the copy is derived from. The interface must not have
+    /// to read [`Self::message`] to decide whether the item can be retried or
+    /// the whole scan has to be redone.
+    pub reason: CleanFailureReason,
+    pub message: String,
+}
+
+/// What a refused cleanup operation is about.
+///
+/// The interface holds state — a scan, a selection — that a failure either
+/// invalidates or does not, and only the backend knows which. A single error
+/// string cannot say it: "this item is refused under a current policy" and
+/// "the inventory this names is gone" need opposite reactions, and treating
+/// the first like the second is what makes a correct refusal look like another
+/// broken selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupFailureScope {
+    /// The scan or plan this operation named is gone, expired, or was replaced.
+    /// The inventory it refers to must be rebuilt: an interface that keeps
+    /// showing it is showing a measurement of a machine that has changed.
+    InventoryStale,
+    /// One or more selected items were refused under a current policy. The
+    /// inventory and every other selection remain usable, and the refusal is
+    /// stated for the items it names.
+    Items,
+    /// A store's owner is running, so the store is in use right now.
+    ProviderBusy,
+    /// The platform refused the operation for want of a permission the user
+    /// can grant.
+    Permission,
+    /// The user cancelled the operation.
+    Cancelled,
+    /// An unexpected backend failure.
+    Internal,
+}
+
+/// A refused cleanup operation, with the scope the interface reacts to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct CleanupFailure {
+    pub scope: CleanupFailureScope,
+    pub reason: CleanFailureReason,
+    pub message: String,
+    /// The items the refusal names, when the scope is item-shaped.
+    pub items: Vec<PlanRefusalPreview>,
+}
+
+impl CleanupFailure {
+    /// A failure about the items a policy or a provider refused.
+    pub fn items(message: impl Into<String>, items: Vec<PlanRefusalPreview>) -> Self {
+        let reason = items
+            .first()
+            .map(|item| item.reason)
+            .unwrap_or(CleanFailureReason::Unknown);
+        Self {
+            scope: CleanupFailureScope::Items,
+            reason,
+            message: message.into(),
+            items,
+        }
+    }
+
+    /// A failure that makes the inventory the caller holds unusable.
+    pub fn inventory_stale(message: impl Into<String>) -> Self {
+        Self {
+            scope: CleanupFailureScope::InventoryStale,
+            reason: CleanFailureReason::ChangedSinceScan,
+            message: message.into(),
+            items: Vec::new(),
+        }
+    }
+
+    /// A failure with a stated scope and no items of its own.
+    pub fn new(
+        scope: CleanupFailureScope,
+        reason: CleanFailureReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            scope,
+            reason,
+            message: message.into(),
+            items: Vec::new(),
+        }
+    }
+
+    /// Whether the inventory the interface holds is still usable.
+    pub fn invalidates_inventory(&self) -> bool {
+        matches!(self.scope, CleanupFailureScope::InventoryStale)
+    }
+
+    /// The failure for a worker that never returned its own result.
+    ///
+    /// A panicked or cancelled worker has no outcome of its own, so it is an
+    /// internal failure rather than an answer about the user's items.
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(
+            CleanupFailureScope::Internal,
+            CleanFailureReason::Unknown,
+            message,
+        )
+    }
+}
+
+impl std::fmt::Display for CleanupFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:?}: {}", self.scope, self.message)?;
+        for item in &self.items {
+            write!(formatter, "; {} `{}`", item.name, item.message)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<String> for CleanupFailure {
+    fn from(message: String) -> Self {
+        Self::internal(message)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct PlanPreview {
     pub id: Uuid,
     pub targets: Vec<PlanTargetPreview>,
+    /// Selected items this plan does not cover, and why. Empty when every
+    /// selection was authorized.
+    pub refused: Vec<PlanRefusalPreview>,
     #[serde(with = "crate::ipc_numeric::u64")]
     #[specta(type = u64)]
     pub expected_reclaim_bytes: u64,
@@ -48,114 +182,55 @@ impl DeletePlan {
     /// future field on [`crate::domain::cleanup::DeleteTarget`] cannot leak
     /// through this call by accident.
     pub fn preview(&self, ttl_secs: u64) -> PlanPreview {
+        let mut targets: Vec<PlanTargetPreview> = self
+            .targets
+            .iter()
+            .map(|target| PlanTargetPreview {
+                item_id: target.item_id.clone(),
+                name: target.name.clone(),
+                requires_confirmation: target.requires_confirmation,
+                expected_bytes: target.expected_bytes,
+                risk: target.risk,
+            })
+            .collect();
+        let mut refused = Vec::new();
+        for authorization in &self.owner_authorizations {
+            targets.extend(authorization.units.iter().map(|unit| PlanTargetPreview {
+                item_id: unit.item_id.clone(),
+                name: unit.name.clone(),
+                requires_confirmation: authorization.requires_confirmation,
+                expected_bytes: unit.expected_bytes,
+                risk: authorization.risk,
+            }));
+            refused.extend(
+                authorization
+                    .refusals
+                    .iter()
+                    .map(|refusal| PlanRefusalPreview {
+                        item_id: refusal.item_id.clone(),
+                        name: refusal.item_name.clone(),
+                        reason: refusal.reason,
+                        message: refusal.detail.clone(),
+                    }),
+            );
+        }
+        refused.extend(self.refusals.iter().map(|refusal| PlanRefusalPreview {
+            item_id: refusal.item_id.clone(),
+            name: refusal.item_name.clone(),
+            reason: refusal.reason,
+            message: refusal.message.clone(),
+        }));
+        targets.sort_by(|left, right| left.item_id.cmp(&right.item_id));
+        refused.sort_by(|left, right| left.item_id.cmp(&right.item_id));
         PlanPreview {
             id: self.id,
-            targets: self
-                .targets
-                .iter()
-                .map(|target| PlanTargetPreview {
-                    item_id: target.item_id.clone(),
-                    name: target.name.clone(),
-                    requires_confirmation: target.requires_confirmation,
-                    expected_bytes: target.expected_bytes,
-                    risk: target.risk,
-                })
-                .collect(),
+            targets,
+            refused,
             expected_reclaim_bytes: self.expected_reclaim_bytes,
             risk: self.risk.clone(),
             requires_confirmation: self.requires_confirmation(),
             expires_at: self.created_at.saturating_add(ttl_secs),
             mode: self.mode,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum CleanFailureReason {
-    PermissionDenied,
-    ChangedSinceScan,
-    NotFound,
-    InUse,
-    Blacklisted,
-    /// The target matched structured state (a database, its companions, a
-    /// lock, a credential, configuration, a bundle, or an executable) that
-    /// generic cleanup never removes.
-    StructuredStore,
-    /// The target is now a link, a reparse point, a junction, or a mount
-    /// boundary: traversal and deletion stop there.
-    SafetyBoundary,
-    ExternalCommandFailed,
-    /// A reviewed lifecycle provider was named for the target, and this build
-    /// has no adapter that can perform its action here.
-    ProviderUnavailable,
-    /// The provider ran (or re-checked itself) and did not reach the state its
-    /// action promises. Its own message states which prerequisite or refusal
-    /// applied.
-    ProviderRefused,
-    Unknown,
-}
-
-impl CleanFailureReason {
-    pub fn user_message(&self, target_name: &str) -> String {
-        match self {
-            CleanFailureReason::PermissionDenied => {
-                format!("The operating system denied permission to clean {}. Check your system's storage and privacy permissions.", target_name)
-            }
-            CleanFailureReason::ChangedSinceScan => {
-                format!("{} changed on disk since the last scan. Aborted cleaning to prevent data corruption.", target_name)
-            }
-            CleanFailureReason::NotFound => {
-                format!("{} was already removed or does not exist.", target_name)
-            }
-            CleanFailureReason::InUse => {
-                format!(
-                    "{} is currently locked or in use by another running process.",
-                    target_name
-                )
-            }
-            CleanFailureReason::Blacklisted => {
-                format!(
-                    "{} matches a protected system security rule and cannot be modified.",
-                    target_name
-                )
-            }
-            CleanFailureReason::StructuredStore => {
-                format!(
-                    "{} holds application state rather than regenerable cache data, so generic cleanup leaves it alone.",
-                    target_name
-                )
-            }
-            CleanFailureReason::SafetyBoundary => {
-                format!(
-                    "{} changed into a link, a mount point, or another indirection. Zenith refuses to delete through it.",
-                    target_name
-                )
-            }
-            CleanFailureReason::ExternalCommandFailed => {
-                format!(
-                    "Failed to execute external clean helper for {}.",
-                    target_name
-                )
-            }
-            CleanFailureReason::ProviderUnavailable => {
-                format!(
-                    "{} is cleaned through a dedicated provider, and no provider adapter for it is available on this platform.",
-                    target_name
-                )
-            }
-            CleanFailureReason::ProviderRefused => {
-                format!(
-                    "The dedicated provider for {} did not complete its action.",
-                    target_name
-                )
-            }
-            CleanFailureReason::Unknown => {
-                format!(
-                    "An unexpected error occurred while cleaning {}.",
-                    target_name
-                )
-            }
         }
     }
 }

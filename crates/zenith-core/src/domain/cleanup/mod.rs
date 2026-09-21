@@ -7,6 +7,7 @@
 //! and nothing a caller could replay into a mutation.
 
 pub mod operation;
+pub mod owner;
 pub mod plan;
 pub mod provider;
 pub mod strategy;
@@ -16,7 +17,16 @@ pub use operation::{
     CleanupOperation, ContainerCleanup, FilesystemCleanup, FilesystemMutation,
     LifecycleProviderCleanup, ProviderCleanup,
 };
-pub use plan::{CleanupMode, DeletePlan, DeleteTarget, RunningProcessPolicy};
+pub use owner::{
+    OwnerProviderAuthorization, OwnerProviderExecution, OwnerProviderRefusal,
+    OwnerProviderSelection, OwnerProviderUnit, OwnerStoreObservation, OwnerUnitMeasurement,
+    OwnerUnitMeasurer, OwnerUnitObservation, OwnerUnitOutcome, OwnerUnitRefusal, OwnerUnitState,
+    RunningProcessProbe,
+};
+pub use plan::{
+    CleanFailureReason, CleanupMode, DeletePlan, DeleteTarget, PlanItemRefusal,
+    RunningProcessPolicy,
+};
 pub use provider::{ProviderOutcome, ProviderProbe, ProviderStatus};
 pub use strategy::CleanStrategy;
 pub use structured::{classify_structured_state, EntryKind, PathFacts, StructuredStateKind};

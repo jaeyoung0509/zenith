@@ -1335,6 +1335,7 @@ export const mockApi = {
         expected_bytes: bytesFor(i),
         risk: i.risk,
       })),
+      refused: [],
       expected_reclaim_bytes: items.reduce((acc, i) => acc + bytesFor(i), 0),
       requires_confirmation: items.some((i) => i.requires_confirmation ?? false),
       risk: {

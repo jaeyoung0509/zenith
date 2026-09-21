@@ -351,6 +351,7 @@ impl ScanEngine {
     pub fn scan<F>(
         registry: &SignatureRegistry,
         lifecycle_providers: &LifecycleProviderRegistry,
+        owner_providers: &crate::cleaner::OwnerProviderRegistry,
         categories_filter: Option<&[Category]>,
         excluded_signatures: &[String],
         intensive_cleanup: bool,
@@ -393,6 +394,11 @@ impl ScanEngine {
         let mut skipped_entry_count = 0u64;
         let mut incomplete_item_count = 0u64;
         let mut was_cancelled = false;
+        // Traversals that stopped before covering every root they name. A
+        // cancellation is the only reason one stops today, and the scan states
+        // both facts: the typed gap says the scan was stopped, and this says
+        // which coverage it therefore does not have.
+        let mut scanned_incomplete_selectors = 0u64;
         let mut eligibility = EligibilitySummary::default();
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
@@ -444,11 +450,9 @@ impl ScanEngine {
                     gate,
                     &running_apps,
                 );
-                add_scan_gap(
-                    &mut gaps,
-                    ScanGapKind::SelectorTruncated,
-                    scanned.selector_truncated_count,
-                );
+                if scanned.selector_incomplete {
+                    scanned_incomplete_selectors = scanned_incomplete_selectors.saturating_add(1);
+                }
                 for item in scanned.items {
                     if let Some(retained) = accumulator.push(item) {
                         events.send(ScanEvent::ItemFound {
@@ -500,7 +504,31 @@ impl ScanEngine {
                 }
             }
 
-            // 4. Typed container adapters can report cleanable or observation-only storage.
+            // 4. Owner-scoped providers enumerate the units of a store whose
+            //    semantics only its owner knows. Their candidates are
+            //    discovered here — in the category their catalog entry declares
+            //    — and every one of them is offered for explicit selection.
+            if !was_cancelled {
+                for item in owner_providers.scan_items(
+                    registry,
+                    category,
+                    intensive_cleanup,
+                    excluded_signatures,
+                    environment,
+                ) {
+                    if cancellation.is_cancelled() {
+                        was_cancelled = true;
+                        break;
+                    }
+                    if let Some(retained) = accumulator.push(item) {
+                        events.send(ScanEvent::ItemFound {
+                            item: retained.clone(),
+                        });
+                    }
+                }
+            }
+
+            // 5. Typed container adapters can report cleanable or observation-only storage.
             if !was_cancelled && category == Category::Container {
                 let adapter_items = DockerAdapter::scan_items(environment)
                     .into_iter()
@@ -592,12 +620,10 @@ impl ScanEngine {
             incomplete_reasons.push("Scan was cancelled before completion".to_string());
             add_scan_gap(&mut gaps, ScanGapKind::Cancelled, 1);
         }
-        let has_selector_truncation = gaps
-            .iter()
-            .any(|gap| gap.kind == ScanGapKind::SelectorTruncated);
+        let has_selector_truncation = scanned_incomplete_selectors > 0;
         if has_selector_truncation {
             incomplete_reasons.push(
-                "A selector matched more roots than the bounded scan could inspect".to_string(),
+                "A pattern's traversal stopped before it covered every root it names".to_string(),
             );
         }
         // Item-derived gaps already contribute their own observation quality,
@@ -758,14 +784,14 @@ mod tests {
     #[test]
     fn scan_gap_counts_merge_without_requiring_frontend_prose_parsing() {
         let mut gaps = Vec::new();
-        add_scan_gap(&mut gaps, ScanGapKind::SelectorTruncated, 1);
-        add_scan_gap(&mut gaps, ScanGapKind::SelectorTruncated, 2);
+        add_scan_gap(&mut gaps, ScanGapKind::DepthLimit, 1);
+        add_scan_gap(&mut gaps, ScanGapKind::DepthLimit, 2);
         add_scan_gap(&mut gaps, ScanGapKind::PermissionDenied, 1);
         assert_eq!(
             gaps,
             vec![
                 crate::models::ScanGap {
-                    kind: ScanGapKind::SelectorTruncated,
+                    kind: ScanGapKind::DepthLimit,
                     count: 3,
                 },
                 crate::models::ScanGap {
@@ -842,6 +868,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &providers,
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::System]),
             &[],
             false,
@@ -912,6 +939,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1031,6 +1059,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1100,6 +1129,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1164,6 +1194,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1267,6 +1298,7 @@ mod tests {
             ScanEngine::scan(
                 &registry,
                 &LifecycleProviderRegistry::new(Vec::new()),
+                &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 None,
                 &[],
                 false,
@@ -1425,6 +1457,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1523,6 +1556,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1608,6 +1642,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -1691,6 +1726,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::System]),
             &[],
             false,
@@ -1796,6 +1832,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -1881,6 +1918,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -1925,6 +1963,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -1961,6 +2000,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,
@@ -2003,6 +2043,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             None,
             &[],
             false,
@@ -2060,6 +2101,7 @@ mod tests {
             ScanEngine::scan(
                 &registry,
                 &providers,
+                &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
                 Some(&[Category::Developer]),
                 &[],
                 false,
@@ -2161,6 +2203,7 @@ mod tests {
         let result = ScanEngine::scan(
             &registry,
             &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
             Some(&[Category::Developer]),
             &[],
             false,

@@ -18,6 +18,7 @@ import type {
   Category,
   CleanEvent,
   CleanResult,
+  CleanupFailure,
   DevelopmentListener,
   DiagnosticsSnapshot,
   EnvironmentReport,
@@ -48,9 +49,50 @@ import type {
 
 type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
 
+/**
+ * A refused cleanup operation, with the scope its own contract states.
+ *
+ * The backend distinguishes an inventory that is no longer current from an
+ * item a current policy refuses, and only the backend can: the first makes
+ * everything the interface holds stale, the second changes one row. Flattening
+ * both into a message is what made a correct refusal read as a broken
+ * selection, so the structured answer travels as one.
+ */
+export class CleanupRefusalError extends Error {
+  readonly scope: CleanupFailure['scope'];
+  readonly reason: CleanupFailure['reason'];
+  readonly items: CleanupFailure['items'];
+
+  constructor(failure: CleanupFailure) {
+    super(failure.message);
+    this.name = 'CleanupRefusalError';
+    this.scope = failure.scope;
+    this.reason = failure.reason;
+    this.items = failure.items;
+  }
+
+  /** Whether the inventory the interface holds is still usable. */
+  get invalidatesInventory(): boolean {
+    return this.scope === 'inventory_stale';
+  }
+}
+
+/** Whether a command error is the structured refusal a cleanup command returns. */
+function isCleanupFailure(error: unknown): error is CleanupFailure {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    typeof (error as CleanupFailure).scope === 'string' &&
+    typeof (error as CleanupFailure).message === 'string'
+  );
+}
+
 async function unwrap<T, E>(promise: Promise<Result<T, E>>): Promise<T> {
   const result = await promise;
   if (result.status === 'error') {
+    if (isCleanupFailure(result.error)) {
+      throw new CleanupRefusalError(result.error);
+    }
     throw new Error(String(result.error));
   }
   return result.data;

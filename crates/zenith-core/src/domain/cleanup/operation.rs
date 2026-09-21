@@ -67,6 +67,12 @@ impl<'a> CleanupOperation<'a> {
             CleanStrategy::LifecycleProvider => target.provider_id.as_deref().map(|provider_id| {
                 Self::LifecycleProvider(LifecycleProviderCleanup { provider_id })
             }),
+            // An owner-scoped provider authorization is a separate plan
+            // variant, not a target: the planner never builds a `DeleteTarget`
+            // for this strategy, so there is nothing here for a filesystem
+            // primitive to classify. Reaching this arm means a plan carried a
+            // target no reviewed operation describes, and `None` refuses it.
+            CleanStrategy::OwnerProvider => None,
             CleanStrategy::Manual => None,
         }
     }

@@ -23,12 +23,119 @@
 use crate::path_algebra::{self, PathFlavor, PathParts};
 use std::path::{Path, PathBuf};
 
-/// The most matches one pattern may produce.
+/// The most parents one page of an expansion visits.
 ///
-/// A pattern that matches more than this is describing a machine whose layout
-/// no catalog entry anticipated; the cap keeps a scan bounded and the outcome
-/// reports the truncation rather than silently covering part of it.
-pub const SELECTOR_MATCH_LIMIT: usize = 256;
+/// This is a bound on work in flight, not on coverage: a pattern that matches
+/// more parents than this returns a [`SelectorCursor`] and the caller asks for
+/// the next page, so every parent is evaluated and the tail of a large
+/// namespace is not permanently unreachable. Memory, buffering, and the number
+/// of results one page holds stay bounded; the traversal itself does not.
+pub const SELECTOR_PAGE_LIMIT: usize = 256;
+
+/// One page of a pattern's traversal: what it found, and where it stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SelectionPage {
+    /// Concrete directories the pattern matched, in visit order.
+    pub matches: Vec<PathBuf>,
+    /// Locations where enumeration failed because of permissions or I/O errors.
+    pub failures: Vec<SelectionFailure>,
+    /// Where the traversal continues, when it stopped before the end.
+    pub continuation: Option<SelectorCursor>,
+}
+
+impl SelectionPage {
+    /// Records an access or I/O failure once per path, ordered by path.
+    ///
+    /// The events arrive in filesystem order, which is not stable. The recorded
+    /// list is kept sorted by path so that an item derived from it —
+    /// `…unavailable.<index>` — has one identity per snapshot of the tree, no
+    /// matter which branch failed first.
+    pub fn record_failure(&mut self, path: PathBuf, error: String) {
+        if self.failures.iter().any(|failure| failure.path == path) {
+            return;
+        }
+        self.failures.push(SelectionFailure { path, error });
+        self.failures
+            .sort_by(|left, right| left.path.cmp(&right.path));
+    }
+}
+
+/// A resumable position inside one pattern's traversal.
+///
+/// The position is a name in a sorted enumeration rather than an index, and it
+/// carries a digest of that enumeration, so continuing from it either covers
+/// exactly the names the stopping pass had not reached or fails with
+/// [`ContinuationLost`]. A directory that changed under a passing scan is not
+/// something a position can be resumed into: the caller restarts and reports a
+/// coverage gap, because a resumed traversal that skipped a root inserted
+/// before the position would claim coverage it does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorCursor {
+    parent: PathBuf,
+    names_digest: u64,
+    after: String,
+    covered: u64,
+    emitted: u64,
+}
+
+impl SelectorCursor {
+    /// The directory this position enumerates.
+    pub fn parent(&self) -> &Path {
+        &self.parent
+    }
+
+    /// The last name this position covers.
+    pub fn after(&self) -> &str {
+        &self.after
+    }
+
+    /// Names this position has already covered.
+    pub fn covered(&self) -> u64 {
+        self.covered
+    }
+
+    /// Matches the covered names produced.
+    pub fn emitted(&self) -> u64 {
+        self.emitted
+    }
+}
+
+/// Why a traversal could not continue from a position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContinuationLost {
+    pub parent: PathBuf,
+    pub reason: String,
+}
+
+impl std::fmt::Display for ContinuationLost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.parent.display(), self.reason)
+    }
+}
+
+/// A sorted enumeration and the digest that identifies it.
+struct SortedNames {
+    names: Vec<String>,
+    names_digest: u64,
+}
+
+/// A stable digest of a name enumeration.
+///
+/// FNV-1a over the sorted names, each terminated, so a directory that gained,
+/// lost, or renamed an entry produces a different value and a directory that
+/// kept the same entries produces the same one.
+fn digest_names<'a>(names: impl IntoIterator<Item = &'a str>) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for name in names {
+        for byte in name.as_bytes().iter().chain(std::iter::once(&0u8)) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+    }
+    hash
+}
 
 /// A selector that could not be parsed, with the reason a manifest author needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,13 +367,12 @@ impl PathSelector {
         Some(key.join("-"))
     }
 
-    /// Expands the pattern to the directories it matches.
+    /// Expands the pattern, visiting at most one page of parents.
     ///
-    /// Each component is resolved against the real filesystem, one level at a
-    /// time, and the expansion **never descends through an indirection**: every
-    /// component that is not the last one must be a real directory — not a
-    /// symlink, and on Windows not a reparse point of any tag — or the branch
-    /// stops there.
+    /// Each component is resolved against the real filesystem, and the
+    /// expansion **never descends through an indirection**: every component
+    /// that is not the last one must be a real directory — not a symlink, and
+    /// on Windows not a reparse point of any tag — or the branch stops there.
     ///
     /// The rule covers literal components as well as `*` and `{a,b}`: a
     /// catalog pattern such as `.../User Data/*/Service Worker/CacheStorage`
@@ -287,8 +393,20 @@ impl PathSelector {
     /// directory: an entry that exists but is a link is reported by the scan as
     /// a blocked observation instead of being silently skipped, and a missing
     /// one yields no match at all.
-    pub fn expand(&self, flavor: PathFlavor, limit: usize) -> SelectionOutcome {
-        let mut outcome = SelectionOutcome::default();
+    ///
+    /// **The bound is work in flight, not coverage.** One call visits at most
+    /// [`SELECTOR_PAGE_LIMIT`] parents of the first selector component and
+    /// evaluates every remaining component beneath each of them, so the
+    /// components a pattern states after a wildcard are evaluated against every
+    /// parent rather than against the first page of them. When parents remain,
+    /// the page returns a [`SelectorCursor`] and the caller asks again: the
+    /// traversal is complete across pages, deterministic, and order-stable.
+    pub fn expand_page(
+        &self,
+        flavor: PathFlavor,
+        resume: Option<&SelectorCursor>,
+    ) -> Result<SelectionPage, ContinuationLost> {
+        let mut page = SelectionPage::default();
         // The frontier holds the path resolved so far. It starts at the
         // pattern's static root: joining the whole pattern would look for a
         // directory literally named `*`, and resolving the root's own literal
@@ -307,7 +425,7 @@ impl PathSelector {
             // A pattern that begins with a selector has no root to start from.
             // The manifest lint refuses one; an unmentioned one expands to
             // nothing rather than enumerating a filesystem root.
-            return outcome;
+            return Ok(page);
         }
 
         let static_parts = PathParts {
@@ -331,23 +449,104 @@ impl PathSelector {
                 } else {
                     "the pattern's static root is not a directory the scan can descend into"
                 };
-                outcome.record_failure(static_path_buf, reason.to_string());
-                return outcome;
+                page.record_failure(static_path_buf, reason.to_string());
+                return Ok(page);
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return outcome;
+                return Ok(page);
             }
             Err(err) => {
-                outcome.record_failure(static_path_buf, err.to_string());
-                return outcome;
+                page.record_failure(static_path_buf, err.to_string());
+                return Ok(page);
             }
         }
 
-        let mut frontier = vec![static_parts];
-        let mut truncated = false;
+        let component = &self.components[first_selector];
+        let enumeration = self.enumerate_parents(&static_path_buf, component, flavor, &mut page)?;
+        let resumed = match resume {
+            Some(cursor) => {
+                // The position names a prefix of the same enumeration. If the
+                // enumeration moved, the position no longer means what it did,
+                // and continuing would inspect a set nobody chose: the caller
+                // is told so instead of being handed a page that skips roots.
+                if cursor.parent != static_path_buf {
+                    return Err(ContinuationLost {
+                        parent: static_path_buf,
+                        reason:
+                            "the pattern now resolves to a different root than the continued scan did"
+                                .to_string(),
+                    });
+                }
+                if cursor.names_digest != enumeration.names_digest {
+                    return Err(ContinuationLost {
+                        parent: static_path_buf,
+                        reason: "the directory changed since the continued scan enumerated it"
+                            .to_string(),
+                    });
+                }
+                match enumeration
+                    .names
+                    .iter()
+                    .position(|name| name == &cursor.after)
+                {
+                    Some(index) => index + 1,
+                    None => {
+                        return Err(ContinuationLost {
+                            parent: static_path_buf,
+                            reason: "the position the continued scan stopped at is no longer there"
+                                .to_string(),
+                        })
+                    }
+                }
+            }
+            None => 0,
+        };
 
+        let mut covered = 0u64;
+        let mut last_covered: Option<String> = None;
+        for name in enumeration
+            .names
+            .iter()
+            .skip(resumed)
+            .take(SELECTOR_PAGE_LIMIT)
+        {
+            let mut parts = static_parts.clone();
+            parts.components.push(name.clone());
+            self.expand_beneath(parts, first_selector + 1, flavor, &mut page);
+            covered += 1;
+            last_covered = Some(name.clone());
+        }
+
+        let visited = resumed as u64 + covered;
+        let remaining = (enumeration.names.len() as u64).saturating_sub(visited);
+        page.continuation = match last_covered {
+            Some(after) if remaining > 0 => Some(SelectorCursor {
+                parent: static_path_buf,
+                names_digest: enumeration.names_digest,
+                after,
+                covered: visited,
+                emitted: page.matches.len() as u64,
+            }),
+            Some(_) => None,
+            // No parent was visited at all: the position is unchanged, and a
+            // caller that asks again gets the same answer rather than a page
+            // that silently skips what it could not read.
+            None => resume.cloned().filter(|_| remaining > 0),
+        };
+        Ok(page)
+    }
+
+    /// Evaluates every component from `from_index` down, beneath one parent.
+    fn expand_beneath(
+        &self,
+        start: PathParts,
+        from_index: usize,
+        flavor: PathFlavor,
+        page: &mut SelectionPage,
+    ) {
         let last_index = self.components.len().saturating_sub(1);
-        for (index, component) in self.components.iter().enumerate().skip(first_selector) {
+        let mut frontier = vec![start];
+        for (index, component) in self.components.iter().enumerate().skip(from_index) {
             let is_last = index == last_index;
             let mut next: Vec<PathParts> = Vec::new();
             for parts in &frontier {
@@ -358,12 +557,10 @@ impl PathSelector {
                         let joined = path_algebra::join_parts(&extended, flavor);
                         let candidate_path = std::path::Path::new(&joined);
                         match evaluate_entry(candidate_path, is_last) {
-                            EntryAcceptance::Accepted => {
-                                next.push(extended);
-                            }
+                            EntryAcceptance::Accepted => next.push(extended),
                             EntryAcceptance::Rejected => {}
                             EntryAcceptance::Failed(err) => {
-                                outcome.record_failure(candidate_path.to_path_buf(), err);
+                                page.record_failure(candidate_path.to_path_buf(), err);
                             }
                         }
                     }
@@ -374,7 +571,7 @@ impl PathSelector {
                             Ok(entries) => entries,
                             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                             Err(err) => {
-                                outcome.record_failure(base_path.to_path_buf(), err.to_string());
+                                page.record_failure(base_path.to_path_buf(), err.to_string());
                                 continue;
                             }
                         };
@@ -384,8 +581,7 @@ impl PathSelector {
                                 Ok(entry) => entry,
                                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
                                 Err(err) => {
-                                    outcome
-                                        .record_failure(base_path.to_path_buf(), err.to_string());
+                                    page.record_failure(base_path.to_path_buf(), err.to_string());
                                     continue;
                                 }
                             };
@@ -395,59 +591,92 @@ impl PathSelector {
                                 continue;
                             }
                             match evaluate_entry(&entry_path, is_last) {
-                                EntryAcceptance::Accepted => {
-                                    names.push(name);
-                                }
+                                EntryAcceptance::Accepted => names.push(name),
                                 EntryAcceptance::Rejected => {}
                                 EntryAcceptance::Failed(err) => {
-                                    outcome.record_failure(entry_path, err);
+                                    page.record_failure(entry_path, err);
                                 }
                             }
                         }
-                        names.sort_by(|left, right| {
-                            path_algebra::fold(left, flavor)
-                                .cmp(&path_algebra::fold(right, flavor))
-                                .then_with(|| left.cmp(right))
-                        });
+                        names.sort_by(|left, right| Self::compare_names(left, right, flavor));
                         for name in names {
-                            // One candidate past the cap is kept: it is what
-                            // proves the enumeration was cut short, so a
-                            // pattern with exactly `limit` matches is not
-                            // reported as truncated.
-                            if next.len() > limit {
-                                break;
-                            }
                             let mut extended = parts.clone();
                             extended.components.push(name);
                             next.push(extended);
                         }
                     }
                 }
-                if next.len() > limit {
-                    next.truncate(limit);
-                    truncated = true;
-                    break;
-                }
             }
             if next.is_empty() {
-                outcome.truncated = truncated;
-                return outcome;
+                return;
             }
             frontier = next;
         }
+        for parts in frontier {
+            page.matches
+                .push(PathBuf::from(path_algebra::join_parts(&parts, flavor)));
+        }
+    }
 
-        let mut matches: Vec<PathBuf> = frontier
-            .iter()
-            .map(|parts| PathBuf::from(path_algebra::join_parts(parts, flavor)))
-            .collect();
-        matches.sort_by(|left, right| {
-            path_algebra::fold(&left.to_string_lossy(), flavor)
-                .cmp(&path_algebra::fold(&right.to_string_lossy(), flavor))
-                .then_with(|| left.cmp(right))
-        });
-        outcome.matches = matches;
-        outcome.truncated = truncated;
-        outcome
+    /// The names the first selector component matches under the static root.
+    ///
+    /// A name the traversal may not descend through is not part of the
+    /// enumeration at all: the branch ends there, and the page moves past it
+    /// rather than leaving a position pointing at it forever.
+    fn enumerate_parents(
+        &self,
+        parent: &Path,
+        component: &SelectorComponent,
+        flavor: PathFlavor,
+        page: &mut SelectionPage,
+    ) -> Result<SortedNames, ContinuationLost> {
+        let entries = match std::fs::read_dir(parent) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(SortedNames {
+                    names: Vec::new(),
+                    names_digest: digest_names(std::iter::empty::<&str>()),
+                })
+            }
+            Err(err) => {
+                // A directory this process may not read is a recorded failure,
+                // not a position: there is nothing to continue *from*, and the
+                // scan reports what it could not inspect. Restarting is the
+                // answer to a permission, and the interface says so.
+                page.record_failure(parent.to_path_buf(), err.to_string());
+                return Ok(SortedNames {
+                    names: Vec::new(),
+                    names_digest: digest_names(std::iter::empty::<&str>()),
+                });
+            }
+        };
+        let mut names: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !component.matches(&name, flavor) {
+                continue;
+            }
+            match evaluate_entry(&path, false) {
+                EntryAcceptance::Accepted => names.push(name),
+                EntryAcceptance::Rejected => {}
+                EntryAcceptance::Failed(err) => page.record_failure(path, err),
+            }
+        }
+        names.sort_by(|left, right| Self::compare_names(left, right, flavor));
+        let names_digest = digest_names(names.iter().map(String::as_str));
+        Ok(SortedNames {
+            names,
+            names_digest,
+        })
+    }
+
+    /// The order one enumeration is visited in, so a resumed page covers the
+    /// same names in the same sequence.
+    fn compare_names(left: &str, right: &str, flavor: PathFlavor) -> std::cmp::Ordering {
+        path_algebra::fold(left, flavor)
+            .cmp(&path_algebra::fold(right, flavor))
+            .then_with(|| left.cmp(right))
     }
 
     /// Whether every match must be an existing directory (always true: the
@@ -733,7 +962,7 @@ mod tests {
 
         let pattern = format!("{}/*/GPUCache", support.to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
-        let outcome = selector.expand(POSIX, SELECTION_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
 
         let names: Vec<String> = outcome
             .matches
@@ -783,7 +1012,7 @@ mod tests {
         );
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
 
-        let direct = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+        let direct = expand_all(&selector, POSIX);
         assert_eq!(direct.matches.len(), 1, "the real subtree matches");
         assert!(direct.matches[0].starts_with(fixture.path()));
 
@@ -796,7 +1025,7 @@ mod tests {
         std::fs::create_dir_all(&linked_parent).expect("fixture");
         symlink(&outside, linked_parent.join("Service Worker")).expect("link fixture");
 
-        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
         assert_eq!(
             outcome.matches.len(),
             1,
@@ -824,27 +1053,109 @@ mod tests {
 
         let pattern = format!("{}/*/GPUCache", fixture.path().to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
-        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
         assert_eq!(outcome.matches.len(), 1);
         assert!(outcome.matches[0].ends_with("GPUCache"));
     }
 
+    /// A page is a bound on work in flight, not on coverage: the traversal
+    /// continues from the position it stopped at and covers every match
+    /// exactly once, however many parents the namespace holds.
     #[test]
-    fn a_capped_expansion_reports_the_truncation() {
+    fn a_page_is_work_in_flight_and_the_traversal_is_complete() {
         let fixture = tempfile::tempdir().expect("fixture");
-        for index in 0..4 {
-            std::fs::create_dir_all(fixture.path().join(format!("app{index}"))).expect("fixture");
+        // More parents than one page covers, so the tail of the namespace can
+        // only be reached by continuing.
+        let parents = SELECTOR_PAGE_LIMIT + 40;
+        for index in 0..parents {
+            let name = format!("app{index:04}");
+            std::fs::create_dir_all(fixture.path().join(&name).join("Cache")).expect("fixture");
+        }
+        // The pattern's later component is a literal, so a traversal that only
+        // ever evaluated the first page of parents would never reach these.
+        let pattern = format!("{}/*/Cache", fixture.path().to_string_lossy());
+        let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
+
+        let mut matches = Vec::new();
+        let mut cursor = None;
+        let mut pages = 0;
+        loop {
+            let page = selector
+                .expand_page(POSIX, cursor.as_ref())
+                .expect("the traversal continues from its own position");
+            pages += 1;
+            matches.extend(page.matches);
+            match page.continuation {
+                Some(next) => {
+                    assert!(
+                        next.covered() > 0,
+                        "a continuation covers the parents this page visited"
+                    );
+                    cursor = Some(next);
+                }
+                None => break,
+            }
+        }
+
+        assert!(pages > 1, "the traversal took more than one page");
+        assert_eq!(
+            matches.len(),
+            parents,
+            "every parent's literal child is a match, not only the first page's"
+        );
+        let mut sorted = matches.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), matches.len(), "no match is reported twice");
+        assert!(
+            matches.iter().any(|path| path
+                .to_string_lossy()
+                .contains(&format!("app{:04}", parents - 1))),
+            "the last parent is reached: {:?}",
+            matches.last()
+        );
+    }
+
+    /// A position is only resumable into the enumeration it was taken from.
+    #[test]
+    fn a_changed_directory_is_not_resumed_into() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        for index in 0..(SELECTOR_PAGE_LIMIT + 2) {
+            std::fs::create_dir_all(fixture.path().join(format!("app{index:04}")))
+                .expect("fixture");
         }
         let pattern = format!("{}/*", fixture.path().to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
 
-        let outcome = selector.expand(POSIX, 2);
-        assert_eq!(outcome.matches.len(), 2);
-        assert!(outcome.truncated);
+        let page = selector
+            .expand_page(POSIX, None)
+            .expect("the first page expands");
+        let cursor = page
+            .continuation
+            .clone()
+            .expect("more parents remain than one page covers");
 
-        let outcome = selector.expand(POSIX, SELECTION_LIMIT);
-        assert_eq!(outcome.matches.len(), 4);
-        assert!(!outcome.truncated);
+        // A namespace that changed under the traversal cannot be resumed into:
+        // a root inserted before the position would be skipped by a pass that
+        // claimed to cover everything after it.
+        std::fs::create_dir_all(fixture.path().join("aaa-inserted")).expect("fixture");
+        let lost = selector
+            .expand_page(POSIX, Some(&cursor))
+            .expect_err("a changed enumeration is not resumable");
+        assert!(lost.reason.contains("changed"), "{lost}");
+
+        // The unchanged enumeration resumes, and the position is honored.
+        std::fs::remove_dir_all(fixture.path().join("aaa-inserted")).expect("fixture");
+        let resumed = selector
+            .expand_page(POSIX, Some(&cursor))
+            .expect("an unchanged enumeration resumes");
+        assert!(
+            resumed.matches.iter().all(|path| path
+                .file_name()
+                .map(|name| name.to_string_lossy().as_ref() > cursor.after())
+                .unwrap_or(false)),
+            "a resumed page covers only what the position had not"
+        );
     }
 
     #[test]
@@ -852,7 +1163,7 @@ mod tests {
         let fixture = tempfile::tempdir().expect("fixture");
         let pattern = format!("{}/*/absent", fixture.path().to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
-        let outcome = selector.expand(POSIX, SELECTION_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
         assert!(outcome.matches.is_empty());
         assert!(!outcome.truncated);
         assert!(outcome.failures.is_empty());
@@ -877,7 +1188,7 @@ mod tests {
             fixture.path().to_string_lossy()
         );
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
-        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
 
         // Restore permission so tempdir cleanup succeeds
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -903,7 +1214,7 @@ mod tests {
 
         let pattern = format!("{}/*/GPUCache", linked.to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
-        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
 
         assert!(
             outcome.matches.is_empty(),
@@ -924,7 +1235,7 @@ mod tests {
         let pattern = format!("{}/*", fixture.path().to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
 
-        let outcome = selector.expand(POSIX, 2);
+        let outcome = expand_all(&selector, POSIX);
         assert_eq!(outcome.matches.len(), 2);
         assert!(
             !outcome.truncated,
@@ -951,7 +1262,7 @@ mod tests {
 
         let pattern = format!("{}/*", root.to_string_lossy());
         let selector = PathSelector::parse(&pattern, POSIX).expect("the pattern parses");
-        let outcome = selector.expand(POSIX, SELECTOR_MATCH_LIMIT);
+        let outcome = expand_all(&selector, POSIX);
 
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
@@ -967,5 +1278,28 @@ mod tests {
         );
     }
 
-    const SELECTION_LIMIT: usize = SELECTOR_MATCH_LIMIT;
+    /// The whole traversal, page by page, as one outcome.
+    ///
+    /// The tests that are about what a pattern matches — rather than about
+    /// where a bounded traversal stops — use this so they read the same way
+    /// they did when expansion was one call.
+    fn expand_all(selector: &PathSelector, flavor: PathFlavor) -> SelectionOutcome {
+        let mut outcome = SelectionOutcome::default();
+        let mut cursor = None;
+        loop {
+            let page = selector
+                .expand_page(flavor, cursor.as_ref())
+                .expect("the traversal continues from its own position");
+            outcome.matches.extend(page.matches);
+            for failure in page.failures {
+                outcome.record_failure(failure.path, failure.error);
+            }
+            match page.continuation {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        outcome.matches.sort();
+        outcome
+    }
 }

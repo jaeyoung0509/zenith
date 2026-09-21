@@ -30,6 +30,9 @@
   let isAdvisoryItem = $derived(isAdvisory(item));
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && cleanable);
   let blockedReason = $derived(item.disposition?.reason ?? item.incomplete_reason ?? 'Cleanup blocked');
+  // A refusal names this row and stays non-blocking: the row keeps its own
+  // eligibility, and the reason states what the last cleanup did not cover.
+  let refusalReason = $derived(scanStore.refusedItems[item.id] ?? null);
 
   // An item that cannot be cleaned must not present a reclaimable amount: its
   // size is informational, exactly like an `informational` size semantics.
@@ -115,7 +118,11 @@
         {/if}
       </div>
 
-      {#if item.disposition?.reason}
+      {#if refusalReason}
+        <p class="text-caption text-warning mt-0.5 line-clamp-1" title={refusalReason}>
+          {refusalReason}
+        </p>
+      {:else if item.disposition?.reason}
         <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.disposition.reason}>
           {item.disposition.reason}
         </p>

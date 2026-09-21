@@ -112,6 +112,83 @@ pub fn get_allocated_size(path: &Path) -> Option<u64> {
     Some(((high as u64) << 32) | (low as u64))
 }
 
+/// The measurement port an owner-scoped provider reads through.
+///
+/// The provider reports what its units occupy, and the allocated size of a
+/// file is a platform fact this module already implements. The port exists so a
+/// provider measures through the same rule the scan does instead of deriving a
+/// second one that could disagree with the totals it is compared against.
+pub struct SizeCalculatorMeasurement;
+
+impl zenith_core::domain::cleanup::OwnerUnitMeasurer for SizeCalculatorMeasurement {
+    fn measure(&self, path: &Path) -> zenith_core::domain::cleanup::OwnerUnitMeasurement {
+        let mut logical = 0u64;
+        let mut allocated = 0u64;
+        let mut entries = 0u64;
+        let mut pending = vec![path.to_path_buf()];
+        while let Some(current) = pending.pop() {
+            let metadata = match fs::symlink_metadata(&current) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    // A path that vanished between enumeration and measurement
+                    // is already gone; every other failure is unmeasurable and
+                    // is reported as such rather than as zero bytes.
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        continue;
+                    }
+                    return zenith_core::domain::cleanup::OwnerUnitMeasurement::partial(
+                        logical,
+                        allocated,
+                        entries,
+                        format!("{} could not be measured: {error}", current.display()),
+                    );
+                }
+            };
+            if metadata.file_type().is_symlink() {
+                logical = logical.saturating_add(metadata.len());
+                entries = entries.saturating_add(1);
+                continue;
+            }
+            if metadata.is_dir() {
+                match fs::read_dir(&current) {
+                    Ok(children) => {
+                        for child in children {
+                            match child {
+                                Ok(child) => pending.push(child.path()),
+                                Err(error) => {
+                                    return zenith_core::domain::cleanup::OwnerUnitMeasurement::partial(
+                                        logical,
+                                        allocated,
+                                        entries,
+                                        format!(
+                                            "{} could not be read: {error}",
+                                            current.display()
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        return zenith_core::domain::cleanup::OwnerUnitMeasurement::partial(
+                            logical,
+                            allocated,
+                            entries,
+                            format!("{} could not be read: {error}", current.display()),
+                        )
+                    }
+                }
+                continue;
+            }
+            logical = logical.saturating_add(metadata.len());
+            allocated =
+                allocated.saturating_add(get_allocated_size(&current).unwrap_or(metadata.len()));
+            entries = entries.saturating_add(1);
+        }
+        zenith_core::domain::cleanup::OwnerUnitMeasurement::complete(logical, allocated, entries)
+    }
+}
+
 #[cfg(not(windows))]
 pub fn get_allocated_size(path: &Path) -> Option<u64> {
     #[cfg(unix)]

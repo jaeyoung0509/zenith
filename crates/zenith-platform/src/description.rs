@@ -101,6 +101,8 @@ pub struct PlatformEnvironment {
     path_entries: Vec<PathBuf>,
     volumes: Option<Vec<VolumeIdentity>>,
     tools: BTreeMap<String, ToolResolution>,
+    /// A stated Cargo home. `None` means the default below the user profile.
+    cargo_home: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for PlatformEnvironment {
@@ -113,6 +115,7 @@ impl std::fmt::Debug for PlatformEnvironment {
             .field("path_entries", &self.path_entries)
             .field("volumes", &self.volumes)
             .field("tools", &self.tools)
+            .field("cargo_home", &self.cargo_home)
             .finish_non_exhaustive()
     }
 }
@@ -139,6 +142,7 @@ impl PlatformEnvironment {
             volumes: None,
             // `None` entries mean "resolve through the platform tool search".
             tools: BTreeMap::new(),
+            cargo_home: native_cargo_home(),
         }
     }
 
@@ -159,6 +163,7 @@ impl PlatformEnvironment {
             path_entries: Vec::new(),
             volumes: None,
             tools: BTreeMap::new(),
+            cargo_home: None,
         }
     }
 
@@ -211,6 +216,32 @@ impl PlatformEnvironment {
     pub fn with_path_entry(mut self, entry: impl Into<PathBuf>) -> Self {
         self.path_entries.push(entry.into());
         self
+    }
+
+    /// States the Cargo home a provider must resolve its roots below.
+    ///
+    /// Stating it is how a test or a fixture presents a machine whose Cargo
+    /// state is not the running profile's, without either side reading
+    /// `CARGO_HOME` for itself.
+    pub fn with_cargo_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.cargo_home = Some(path.into());
+        self
+    }
+
+    /// The Cargo home this environment resolves, or `None` when it has none.
+    ///
+    /// Cargo states where its state lives through `CARGO_HOME`; the default is
+    /// `<profile>/.cargo`, which is where Cargo puts it when the variable is
+    /// unset. A stated value that is not absolute is refused rather than
+    /// resolved: `CARGO_HOME=./target` names a directory relative to whatever
+    /// launched the process, and joining it onto the profile would point a
+    /// provider at a store that is not the one Cargo uses.
+    pub fn cargo_home(&self) -> Option<PathBuf> {
+        if let Some(stated) = &self.cargo_home {
+            return stated.is_absolute().then(|| stated.clone());
+        }
+        self.user_home()
+            .map(|home| super::paths::join_with_flavor(home, ".cargo", self.flavor))
     }
 
     pub fn with_volumes(mut self, volumes: Vec<VolumeIdentity>) -> Self {
@@ -300,6 +331,20 @@ impl PlatformEnvironment {
     pub fn expand_placeholder(&self, pattern: &str) -> Option<PathBuf> {
         PlatformPathsProvider::expand_placeholder(self, pattern)
     }
+}
+
+/// The Cargo home the running process's environment states, when it states one.
+///
+/// Read once while the environment is built — the same place `PATH` is read —
+/// so nothing downstream consults the process environment for a root. Cargo's
+/// own variable is authoritative when it is set: it is the only statement
+/// about where the tool actually keeps its state, and a launcher that exports a
+/// relative path is refused here rather than resolved against an unrelated
+/// working directory.
+fn native_cargo_home() -> Option<PathBuf> {
+    let stated = std::env::var_os("CARGO_HOME")?;
+    let path = PathBuf::from(stated);
+    (!path.as_os_str().is_empty() && path.is_absolute()).then_some(path)
 }
 
 /// How the user profile is rooted. Only the shape travels, never the path.
@@ -607,6 +652,49 @@ impl PlatformPathsProvider for PlatformEnvironment {
 mod tests {
     use super::*;
     use crate::path_algebra::{protected_root, PathFlavor, ProtectedRoot};
+
+    /// The Cargo home is either stated by the environment or the profile's
+    /// default, and a relative statement is refused rather than resolved
+    /// against whatever directory the process happens to run in.
+    #[test]
+    fn the_cargo_home_is_stated_or_the_profile_default_and_never_relative() {
+        let simulated = PlatformEnvironment::simulated(PathFlavor::Posix)
+            .with_home("/Users/tester")
+            .with_cargo_home("/Volumes/toolchains/cargo");
+        assert_eq!(
+            simulated.cargo_home(),
+            Some(PathBuf::from("/Volumes/toolchains/cargo")),
+            "a stated Cargo home wins over the profile default"
+        );
+        assert_eq!(
+            simulated.with_cargo_home("relative/cargo").cargo_home(),
+            None,
+            "a relative statement names no store this environment can trust"
+        );
+
+        let default = PlatformEnvironment::simulated(PathFlavor::Posix).with_home("/Users/tester");
+        assert_eq!(
+            default.cargo_home(),
+            Some(PathBuf::from("/Users/tester/.cargo")),
+            "without a statement the profile default applies"
+        );
+
+        // The join follows the described flavor, so a Windows profile is not
+        // spelled with the host's separators.
+        let windows =
+            PlatformEnvironment::simulated(PathFlavor::Windows).with_home(r"D:\Users\tester");
+        assert_eq!(
+            windows.cargo_home(),
+            Some(PathBuf::from(r"D:\Users\tester\.cargo"))
+        );
+
+        let rootless = PlatformEnvironment::simulated(PathFlavor::Posix);
+        assert_eq!(
+            rootless.cargo_home(),
+            None,
+            "an environment that resolves no profile resolves no default"
+        );
+    }
 
     #[test]
     fn simulated_profile_can_live_on_a_non_system_drive() {

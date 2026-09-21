@@ -47,8 +47,8 @@ pub use zenith_platform::PlatformCapabilitiesProvider;
 // ---------------------------------------------------------------------------
 
 pub use zenith_core::application::dto::cleanup::{
-    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanupProgressSink,
-    PlanPreview, PlanTargetPreview,
+    CleanEvent, CleanFailureReason, CleanItemResult, CleanResult, CleanStatus, CleanupFailure,
+    CleanupFailureScope, CleanupProgressSink, PlanPreview, PlanRefusalPreview, PlanTargetPreview,
 };
 pub use zenith_core::application::dto::scan::{
     CancellationProbe, NeverCancelled, ScanEvent, ScanProgressSink, ScanRequest,
@@ -61,8 +61,12 @@ pub use zenith_core::application::dto::storage::{
 pub use zenith_core::domain::category::Category;
 pub use zenith_core::domain::cleanup::{
     classify_structured_state, CleanStrategy, CleanupMode, CleanupOperation, ContainerCleanup,
-    DeletePlan, DeleteTarget, EntryKind, FilesystemCleanup, FilesystemMutation, PathFacts,
-    ProviderCleanup, RunningProcessPolicy, StructuredStateKind,
+    DeletePlan, DeleteTarget, EntryKind, FilesystemCleanup, FilesystemMutation,
+    OwnerProviderAuthorization, OwnerProviderExecution, OwnerProviderRefusal,
+    OwnerProviderSelection, OwnerProviderUnit, OwnerStoreObservation, OwnerUnitMeasurement,
+    OwnerUnitMeasurer, OwnerUnitObservation, OwnerUnitOutcome, OwnerUnitRefusal, OwnerUnitState,
+    PathFacts, PlanItemRefusal, ProviderCleanup, ProviderStatus, RunningProcessPolicy,
+    RunningProcessProbe, StructuredStateKind,
 };
 pub use zenith_core::domain::error::{ZenithError, ZenithResult};
 pub use zenith_core::domain::identity::{

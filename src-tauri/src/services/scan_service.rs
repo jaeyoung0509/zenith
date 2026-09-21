@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::cleaner::LifecycleProviderRegistry;
+use crate::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry};
 use crate::models::{CancellationProbe, ScanProgressSink, ScanRequest, ScanResult};
 use crate::scanner::ScanEngine;
 use crate::signatures::SignatureRegistry;
@@ -13,6 +13,7 @@ use zenith_platform::PlatformEnvironment;
 pub struct ScanService {
     registry: Arc<SignatureRegistry>,
     lifecycle_providers: Arc<LifecycleProviderRegistry>,
+    owner_providers: Arc<OwnerProviderRegistry>,
     environment: Arc<PlatformEnvironment>,
 }
 
@@ -20,11 +21,13 @@ impl ScanService {
     pub fn new(
         registry: Arc<SignatureRegistry>,
         lifecycle_providers: Arc<LifecycleProviderRegistry>,
+        owner_providers: Arc<OwnerProviderRegistry>,
         environment: Arc<PlatformEnvironment>,
     ) -> Self {
         Self {
             registry,
             lifecycle_providers,
+            owner_providers,
             environment,
         }
     }
@@ -39,6 +42,7 @@ impl ScanService {
         ScanEngine::scan(
             &self.registry,
             &self.lifecycle_providers,
+            &self.owner_providers,
             request.categories.as_deref(),
             &request.excluded_signatures,
             request.intensive_cleanup,

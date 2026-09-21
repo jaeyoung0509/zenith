@@ -124,7 +124,7 @@ impl DirectoryScanner {
     ) -> SignatureScan {
         let mut items = Vec::new();
         let mut scanned_roots = Vec::new();
-        let mut selector_truncated_count = 0u64;
+        let mut selector_incomplete = false;
 
         // If signature has no explicit file paths (e.g. Docker commands), return early or handle in Docker adapter
         if signature.paths.is_empty() {
@@ -141,11 +141,15 @@ impl DirectoryScanner {
                 continue;
             };
 
-            let (roots, failures, truncated) =
-                Self::signature_roots(&path_buf, context.environment);
-            if truncated {
-                selector_truncated_count += 1;
-            }
+            // The pattern's traversal is consumed page by page: a namespace
+            // larger than one page is walked across pages rather than cut off
+            // at the first one, so every parent is evaluated and the tail of a
+            // large namespace is reachable. Cancellation stops between pages,
+            // and what was covered before it did stays a lower bound the scan
+            // reports as one.
+            let (roots, failures, incomplete) =
+                Self::signature_roots(&path_buf, context.environment, context.cancellation);
+            selector_incomplete |= incomplete;
 
             for (fail_idx, failure) in failures.iter().enumerate() {
                 let reason = format!(
@@ -237,7 +241,7 @@ impl DirectoryScanner {
         SignatureScan {
             items,
             roots: scanned_roots,
-            selector_truncated_count,
+            selector_incomplete,
         }
     }
 
@@ -250,6 +254,7 @@ impl DirectoryScanner {
     fn signature_roots(
         expanded: &std::path::Path,
         environment: &PlatformEnvironment,
+        cancellation: &dyn crate::models::CancellationProbe,
     ) -> (
         Vec<SignatureRoot>,
         Vec<zenith_platform::selector::SelectionFailure>,
@@ -280,21 +285,42 @@ impl DirectoryScanner {
             return (Vec::new(), Vec::new(), false);
         };
 
-        let outcome = selector.expand(
-            environment.flavor(),
-            zenith_platform::selector::SELECTOR_MATCH_LIMIT,
-        );
-        if outcome.truncated {
-            crate::diagnostics::log_error(
-                "scanner",
-                &format!(
-                    "Pattern `{text}` matched more than {} roots; the scan reports the first ones",
-                    zenith_platform::selector::SELECTOR_MATCH_LIMIT
-                ),
-            );
+        let mut matches = Vec::new();
+        let mut failures = Vec::new();
+        let mut cursor = None;
+        let mut incomplete = false;
+        loop {
+            let page = match selector.expand_page(environment.flavor(), cursor.as_ref()) {
+                Ok(page) => page,
+                Err(lost) => {
+                    // A position that no longer names the same enumeration is
+                    // not resumed into: the scan reports what it could not
+                    // cover instead of claiming roots it never inspected.
+                    crate::diagnostics::log_error(
+                        "scanner",
+                        &format!("Could not continue the traversal of `{text}`: {lost}"),
+                    );
+                    incomplete = true;
+                    break;
+                }
+            };
+            matches.extend(page.matches);
+            failures.extend(page.failures);
+            match page.continuation {
+                Some(next) => {
+                    cursor = Some(next);
+                    if cancellation.is_cancelled() {
+                        // Stopping between pages is the only way a traversal
+                        // ends early, and the scan says so rather than
+                        // presenting a partial enumeration as the whole one.
+                        incomplete = true;
+                        break;
+                    }
+                }
+                None => break,
+            }
         }
-        let roots = outcome
-            .matches
+        let roots = matches
             .into_iter()
             .map(|path| {
                 let key = selector
@@ -306,7 +332,7 @@ impl DirectoryScanner {
                 }
             })
             .collect();
-        (roots, outcome.failures, outcome.truncated)
+        (roots, failures, incomplete)
     }
 
     /// Scans one root when the root itself is the cleanup unit.
@@ -1522,6 +1548,67 @@ mod tests {
             &COUNTERS,
             &super::super::observation::NoRootProgress,
         )
+    }
+
+    /// A wildcard namespace larger than one selector page is inventoried
+    /// completely: every parent is evaluated, including the ones a single page
+    /// cannot hold, and the components after the wildcard are evaluated against
+    /// each of them.
+    ///
+    /// This is the defect the paged traversal replaced: a bound on work in
+    /// flight used to decide which portion of a deterministic namespace could
+    /// ever be inventoried, so the same tail was unreachable on every rescan.
+    #[test]
+    fn a_namespace_larger_than_one_page_is_inventoried_completely() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let containers = fixture.path().join("Containers");
+        let parents = zenith_platform::selector::SELECTOR_PAGE_LIMIT + 12;
+        for index in 0..parents {
+            let cache = containers
+                .join(format!("com.example.app{index:04}"))
+                .join("Data/Library/Caches");
+            std::fs::create_dir_all(&cache).expect("fixture");
+            std::fs::write(cache.join("payload"), b"cache").expect("fixture");
+        }
+
+        let environment = environment().with_home(fixture.path());
+        let registry = crate::signatures::SignatureRegistry::load_embedded_with(&environment)
+            .expect("the shipped catalog loads");
+        let mut signature = registry
+            .get("system.intensive.containers_caches")
+            .expect("the shipped container-cache signature exists")
+            .clone();
+        assert_eq!(
+            signature.paths,
+            vec!["~/Library/Containers/*/Data/Library/Caches"],
+            "the regression follows the actual selector that exposed the blind spot"
+        );
+        // Keep the shipped risk, strategy, unit and age policy. Only relocate
+        // its trusted root into a temporary fixture: tests never inspect the
+        // developer's real Library/Containers tree.
+        signature.paths = vec![format!(
+            "{}/*/Data/Library/Caches",
+            containers.to_string_lossy()
+        )];
+        signature.platforms.clear();
+
+        let items = DirectoryScanner::scan_signature(&signature, &environment, &NeverCancelled);
+
+        assert_eq!(
+            items.len(),
+            parents,
+            "every container's cache root is inventoried, not only the first page's"
+        );
+        let mut ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), items.len(), "each root is one item");
+        assert!(
+            items
+                .iter()
+                .any(|item| item.path.contains(&format!("app{:04}", parents - 1))),
+            "the last container is reached"
+        );
     }
 
     fn child_signature(root: &std::path::Path, min_age_days: u32) -> Signature {

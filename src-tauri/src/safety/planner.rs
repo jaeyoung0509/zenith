@@ -1,6 +1,8 @@
+use crate::cleaner::OwnerProviderRegistry;
 use crate::models::{
-    CleanStrategy, CleanupMode, CleanupUnitIdentity, DeletePlan, DeleteTarget, PathIdentity,
-    RiskSummary, RiskTier, ScanItem, ScanResult, Signature, UnitRelationship, ZenithError,
+    CleanFailureReason, CleanStrategy, CleanupMode, CleanupUnitIdentity, DeletePlan, DeleteTarget,
+    OwnerProviderSelection, PathIdentity, PlanItemRefusal, RiskSummary, RiskTier, ScanItem,
+    ScanResult, Signature, UnitRelationship, ZenithError,
 };
 use crate::safety::{entry_kind_at, Blacklist, SymlinkGuard, ToctouGuard};
 use crate::scanner::relationship::unit_relationship;
@@ -34,6 +36,34 @@ fn ownership_is_derivable(item: &ScanItem, signature: &Signature) -> bool {
         .is_some_and(|name| name == item.ownership.owner)
 }
 
+/// The item-scoped refusal for a location this build only reports.
+///
+/// A manual entry is not broken and not blocked: it is a location whose owner
+/// — or whose absence of a reviewed operation — means Zenith inventories it and
+/// removes nothing. Stating that per item is what keeps a correct refusal from
+/// reading as a failed selection.
+fn manual_refusal(item: &ScanItem) -> PlanItemRefusal {
+    PlanItemRefusal {
+        item_id: item.id.clone(),
+        item_name: item.name.clone(),
+        reason: CleanFailureReason::OwnerManaged,
+        message: format!(
+            "`{}` is reported for information only; this build has no reviewed operation that removes it",
+            item.name
+        ),
+    }
+}
+
+/// The item-scoped refusal one provider refusal projects to.
+fn plan_refusal(refusal: &crate::models::OwnerUnitRefusal) -> PlanItemRefusal {
+    PlanItemRefusal {
+        item_id: refusal.item_id.clone(),
+        item_name: refusal.item_name.clone(),
+        reason: refusal.reason,
+        message: refusal.detail.clone(),
+    }
+}
+
 pub struct SafetyPlanner;
 
 impl SafetyPlanner {
@@ -43,6 +73,7 @@ impl SafetyPlanner {
         selected_item_ids: &[String],
         registry: &SignatureRegistry,
         environment: &PlatformEnvironment,
+        owner_providers: &OwnerProviderRegistry,
     ) -> Result<DeletePlan, ZenithError> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -71,7 +102,8 @@ impl SafetyPlanner {
         for item in &mut trusted_items {
             item.is_selected = true;
         }
-        let mut plan = Self::create_plan_for(&trusted_items, registry, environment)?;
+        let mut plan =
+            Self::create_plan_for(&trusted_items, registry, environment, owner_providers)?;
         plan.scan_id = scan_id.to_string();
         Ok(plan)
     }
@@ -84,8 +116,14 @@ impl SafetyPlanner {
     pub fn create_plan(
         items: &[ScanItem],
         registry: &SignatureRegistry,
+        owner_providers: &OwnerProviderRegistry,
     ) -> Result<DeletePlan, ZenithError> {
-        Self::create_plan_for(items, registry, &PlatformEnvironment::native())
+        Self::create_plan_for(
+            items,
+            registry,
+            &PlatformEnvironment::native(),
+            owner_providers,
+        )
     }
 
     /// Creates a plan with the same environment that produced the scan.
@@ -99,16 +137,22 @@ impl SafetyPlanner {
         items: &[ScanItem],
         registry: &SignatureRegistry,
         environment: &PlatformEnvironment,
+        owner_providers: &OwnerProviderRegistry,
     ) -> Result<DeletePlan, ZenithError> {
-        Self::create_plan_for(items, registry, environment)
+        Self::create_plan_for(items, registry, environment, owner_providers)
     }
 
     fn create_plan_for(
         items: &[ScanItem],
         registry: &SignatureRegistry,
         environment: &PlatformEnvironment,
+        owner_providers: &OwnerProviderRegistry,
     ) -> Result<DeletePlan, ZenithError> {
         let mut targets = Vec::new();
+        let mut refusals: Vec<PlanItemRefusal> = Vec::new();
+        let mut owner_authorizations = Vec::new();
+        let mut owner_selections: std::collections::BTreeMap<String, Vec<OwnerProviderSelection>> =
+            std::collections::BTreeMap::new();
         let mut expected_reclaim_bytes = 0u64;
         let mut risk_summary = RiskSummary::default();
 
@@ -173,18 +217,19 @@ impl SafetyPlanner {
             // host path either, and the signature below must still declare the
             // provider operation before it is allowed through.
             if item.risk == RiskTier::Manual && !item.lifecycle_provider_action {
-                return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
+                refusals.push(manual_refusal(item));
+                continue;
             }
 
             if !item.has_current_disposition() {
-                return Err(ZenithError::InvalidPlan(format!(
+                return Err(ZenithError::ChangedSinceScan(format!(
                     "Item '{}' cleanup eligibility changed since the scan; scan again",
                     item.name
                 )));
             }
 
             if !item.allows_cleanup() {
-                return Err(ZenithError::InvalidPlan(format!(
+                return Err(ZenithError::ChangedSinceScan(format!(
                     "Item '{}' was not completely inspected or is inaccessible and cannot be cleaned",
                     item.name
                 )));
@@ -194,13 +239,13 @@ impl SafetyPlanner {
             // name the unit that produced it, or names a different path than
             // the one it deletes, is not plannable.
             if !item.unit.is_declared() {
-                return Err(ZenithError::InvalidPlan(format!(
+                return Err(ZenithError::ChangedSinceScan(format!(
                     "Item '{}' does not name the cleanup unit that authorized it; scan again",
                     item.name
                 )));
             }
             if item.unit.path != item.path {
-                return Err(ZenithError::InvalidPlan(format!(
+                return Err(ZenithError::ChangedSinceScan(format!(
                     "Item '{}' names a cleanup unit that does not match its path; scan again",
                     item.name
                 )));
@@ -212,27 +257,33 @@ impl SafetyPlanner {
                 .ok_or_else(|| ZenithError::SignatureMismatch(item.signature_id.clone()))?;
 
             if signature.strategy == CleanStrategy::Manual {
-                return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
+                refusals.push(manual_refusal(item));
+                continue;
             }
 
             // A manual-tier item that claims a provider unit is executable only
-            // when the catalog entry declares the provider action: a discovery
-            // rule cannot carry the tier past the refusal above on its own.
-            let provider_action = signature.strategy == CleanStrategy::LifecycleProvider;
-            if item.lifecycle_provider_action != provider_action {
-                return Err(ZenithError::InvalidPlan(format!(
-                    "Item '{}' disagrees with the catalog about whether a lifecycle provider owns its cleanup; scan again",
+            // when the catalog entry declares a reviewed provider operation: a
+            // discovery rule cannot carry the tier past the refusal above on
+            // its own.
+            let provider_owned = matches!(
+                signature.strategy,
+                CleanStrategy::LifecycleProvider | CleanStrategy::OwnerProvider
+            );
+            if item.lifecycle_provider_action != provider_owned {
+                return Err(ZenithError::ChangedSinceScan(format!(
+                    "Item '{}' disagrees with the catalog about whether a reviewed provider owns its cleanup; scan again",
                     item.name
                 )));
             }
-            if item.risk == RiskTier::Manual && !provider_action {
-                return Err(ZenithError::UnsupportedManualOperation(item.name.clone()));
+            if item.risk == RiskTier::Manual && !provider_owned {
+                refusals.push(manual_refusal(item));
+                continue;
             }
 
             // A provider action is dispatched by the id the catalog named, so a
             // plan that cannot name one describes a target nothing can carry
             // out. It is refused here rather than discovered at execution time.
-            let provider_id = if provider_action {
+            let provider_id = if signature.strategy == CleanStrategy::LifecycleProvider {
                 match signature
                     .provider_id
                     .as_deref()
@@ -254,7 +305,7 @@ impl SafetyPlanner {
             // signature declares, so a discovery rule cannot widen what a
             // signature authorizes.
             if item.unit.kind != signature.unit_kind() {
-                return Err(ZenithError::InvalidPlan(format!(
+                return Err(ZenithError::ChangedSinceScan(format!(
                     "Item '{}' claims a cleanup unit the signature does not declare; scan again",
                     item.name
                 )));
@@ -266,7 +317,7 @@ impl SafetyPlanner {
             // own name. A message built from the plan then never describes a
             // location by a claim the catalog cannot support.
             if !ownership_is_derivable(item, signature) {
-                return Err(ZenithError::InvalidPlan(format!(
+                return Err(ZenithError::ChangedSinceScan(format!(
                     "Item '{}' reports ownership the catalog does not state; scan again",
                     item.name
                 )));
@@ -276,7 +327,49 @@ impl SafetyPlanner {
             let path = PathBuf::from(&item.path);
             let strategy = signature.strategy;
             let mut identity = None;
-            let mut allow_cargo_package_store_contents = false;
+
+            // An owner-scoped store is not a filesystem target at all. The
+            // provider enumerates and removes its own units, so the checks
+            // below — which exist to authorize a path — do not describe it;
+            // the provider re-derives every fact it mutates on. The selection
+            // is collected and handed over once, after the loop, so one store
+            // is read once instead of once per unit.
+            if strategy == CleanStrategy::OwnerProvider {
+                let Some(owner_provider_id) = signature
+                    .provider_id
+                    .as_deref()
+                    .filter(|provider_id| !provider_id.trim().is_empty())
+                else {
+                    return Err(ZenithError::InvalidPlan(format!(
+                        "Item '{}' belongs to an owner-scoped store whose signature names no provider; scan again",
+                        item.name
+                    )));
+                };
+                if owner_providers.get(owner_provider_id).is_none() {
+                    // An entry no build implements is a target nothing can
+                    // carry out, and it is refused for this item rather than
+                    // failing the rest of the selection.
+                    refusals.push(PlanItemRefusal {
+                        item_id: item.id.clone(),
+                        item_name: item.name.clone(),
+                        reason: CleanFailureReason::ProviderUnavailable,
+                        message: format!(
+                            "No provider in this build implements `{owner_provider_id}`, so this store cannot be cleaned here"
+                        ),
+                    });
+                    continue;
+                }
+                owner_selections
+                    .entry(signature.id.clone())
+                    .or_default()
+                    .push(OwnerProviderSelection {
+                        item_id: item.id.clone(),
+                        name: item.name.clone(),
+                        path: path.clone(),
+                        expected_bytes: item.cleanable_bytes(),
+                    });
+                continue;
+            }
 
             // A provider action is not a filesystem operation at all: it owns
             // no host path, so the pseudo location carries no deletion
@@ -301,14 +394,6 @@ impl SafetyPlanner {
                     if resolved_roots.is_empty() {
                         return Err(ZenithError::SignatureMismatch(item.signature_id.clone()));
                     }
-                    allow_cargo_package_store_contents =
-                        crate::safety::cargo_policy::allows_cargo_package_store_contents(
-                            signature,
-                            &path,
-                            &resolved_roots,
-                            environment,
-                        );
-
                     // 2b. Ancestor symlink escape protection: ensure no directory between anchor/root and path is a symlink
                     for root in &resolved_roots {
                         if path.starts_with(root) {
@@ -334,10 +419,7 @@ impl SafetyPlanner {
                 // 6. Structured state is not generic cleanup's to remove. The
                 //    execution guard refuses it too; refusing here keeps a plan
                 //    from offering a target that could never be cleaned.
-                if let Some((kind, _)) = crate::safety::validator::structured_state_at_with_policy(
-                    &path,
-                    allow_cargo_package_store_contents,
-                ) {
+                if let Some((kind, _)) = crate::safety::validator::structured_state_at(&path) {
                     return Err(ZenithError::InvalidPlan(format!(
                         "`{}` is {} and can only be handled by a dedicated provider, not by generic cleanup",
                         item.name,
@@ -349,10 +431,7 @@ impl SafetyPlanner {
                     CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
                 ) && path.is_dir()
                 {
-                    match crate::safety::validator::structured_descendant(
-                        &path,
-                        allow_cargo_package_store_contents,
-                    ) {
+                    match crate::safety::validator::structured_descendant(&path) {
                         Ok(Some((nested, kind))) => {
                             return Err(ZenithError::InvalidPlan(format!(
                                 "`{}` contains {} ({}); generic cleanup cannot remove this unit",
@@ -375,7 +454,7 @@ impl SafetyPlanner {
                 //    plan states the kind of object it intends to delete.
                 if let Some(current_kind) = entry_kind_at(&path) {
                     if current_kind != item.entry_kind {
-                        return Err(ZenithError::InvalidPlan(format!(
+                        return Err(ZenithError::ChangedSinceScan(format!(
                             "`{}` changed kind since the scan; scan again before cleaning",
                             item.name
                         )));
@@ -415,7 +494,41 @@ impl SafetyPlanner {
             });
         }
 
-        if targets.is_empty() {
+        // One store is read once, and the provider decides which of the
+        // selected units it can verify now. What it refuses is stated per item
+        // so the refusal never has to be read as a failed operation.
+        for (signature_id, selections) in owner_selections {
+            match owner_providers.prepare(registry, &signature_id, &selections, environment) {
+                Ok(authorization) => {
+                    let bytes = authorization.expected_bytes();
+                    expected_reclaim_bytes = expected_reclaim_bytes.saturating_add(bytes);
+                    risk_summary.add(authorization.risk, bytes);
+                    refusals.extend(authorization.refusals.iter().map(plan_refusal));
+                    owner_authorizations.push(authorization);
+                }
+                Err(refusal) => {
+                    let reason = crate::cleaner::owner_providers::refusal_reason(refusal.status);
+                    if refusal.refusals.is_empty() {
+                        refusals.extend(selections.iter().map(|selection| PlanItemRefusal {
+                            item_id: selection.item_id.clone(),
+                            item_name: selection.name.clone(),
+                            reason,
+                            message: refusal.detail.clone(),
+                        }));
+                    } else {
+                        refusals.extend(refusal.refusals.iter().map(plan_refusal));
+                    }
+                }
+            }
+        }
+
+        if targets.is_empty() && owner_authorizations.is_empty() {
+            if !refusals.is_empty() {
+                // The refusals are the answer, not a failure of the scan: they
+                // name the items a current policy would not authorize. The
+                // caller states them per item and keeps the inventory.
+                return Err(ZenithError::RefusedSelection(refusals));
+            }
             return Err(ZenithError::InvalidPlan(
                 "No valid cleanable targets were selected".to_string(),
             ));
@@ -430,6 +543,8 @@ impl SafetyPlanner {
             id: Uuid::new_v4(),
             scan_id: String::new(),
             targets,
+            refusals,
+            owner_authorizations,
             expected_reclaim_bytes,
             risk: risk_summary,
             created_at: now,
@@ -441,8 +556,15 @@ impl SafetyPlanner {
 #[cfg(test)]
 mod tests {
     use super::SafetyPlanner;
+    use crate::cleaner::OwnerProviderRegistry;
     use crate::models::{Category, FileSize, ObservationQuality, RiskTier, ScanItem, ZenithError};
     use crate::signatures::SignatureRegistry;
+
+    /// A registry with no owner-scoped provider, which is what a generic
+    /// cleanup assertion means: nothing in this build owns the store.
+    fn no_owner_providers() -> OwnerProviderRegistry {
+        OwnerProviderRegistry::new(Vec::new())
+    }
 
     #[test]
     fn rejects_manual_adapter_observations_before_signature_resolution() {
@@ -486,12 +608,19 @@ mod tests {
             skipped_entry_count: 0,
         };
 
-        let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());
-        assert!(matches!(
-            result,
-            Err(ZenithError::UnsupportedManualOperation(name))
-                if name == "OrbStack VM Storage"
-        ));
+        let result =
+            SafetyPlanner::create_plan(&[item], &SignatureRegistry::new(), &no_owner_providers());
+        match result {
+            Err(ZenithError::RefusedSelection(refusals)) => {
+                assert_eq!(refusals.len(), 1);
+                assert_eq!(refusals[0].item_name, "OrbStack VM Storage");
+                assert_eq!(
+                    refusals[0].reason,
+                    crate::models::CleanFailureReason::OwnerManaged
+                );
+            }
+            other => panic!("a manual observation is refused per item: {other:?}"),
+        }
     }
 
     /// A provider-backed unit is plannable by explicit selection, and the plan
@@ -553,7 +682,7 @@ mod tests {
         );
         item.is_selected = true;
 
-        let plan = SafetyPlanner::create_plan(&[item.clone()], &registry)
+        let plan = SafetyPlanner::create_plan(&[item.clone()], &registry, &no_owner_providers())
             .expect("an explicitly selected provider action is plannable");
         assert_eq!(plan.targets.len(), 1);
         assert_eq!(plan.targets[0].strategy, CleanStrategy::LifecycleProvider);
@@ -571,10 +700,14 @@ mod tests {
         filesystem_signature.strategy = CleanStrategy::DeleteContents;
         filesystem_signature.risk = RiskTier::Manual;
         filesystem_registry.register(filesystem_signature);
-        let refused = SafetyPlanner::create_plan(&[item.clone()], &filesystem_registry);
+        let refused = SafetyPlanner::create_plan(
+            &[item.clone()],
+            &filesystem_registry,
+            &no_owner_providers(),
+        );
         assert!(
-            matches!(&refused, Err(ZenithError::InvalidPlan(message)) if message.contains("disagrees with the catalog")),
-            "a manual unit cannot claim lifecycle-provider authority the catalog does not declare: {refused:?}"
+            matches!(&refused, Err(ZenithError::ChangedSinceScan(message)) if message.contains("disagrees with the catalog")),
+            "a manual unit cannot claim provider authority the catalog does not declare: {refused:?}"
         );
 
         // A catalog entry that names no provider describes an action nothing
@@ -582,7 +715,7 @@ mod tests {
         // the executor would have to guess about.
         let mut unnamed_registry = SignatureRegistry::new();
         unnamed_registry.register(provider_signature(None));
-        let refused = SafetyPlanner::create_plan(&[item], &unnamed_registry);
+        let refused = SafetyPlanner::create_plan(&[item], &unnamed_registry, &no_owner_providers());
         assert!(
             matches!(&refused, Err(ZenithError::InvalidPlan(message)) if message.contains("names no provider")),
             "a lifecycle signature without a provider id cannot be planned: {refused:?}"
@@ -672,8 +805,12 @@ mod tests {
         );
         let child_item = selected("child-item", "test.child", "Nested cache", &child, 8_192);
 
-        let plan = SafetyPlanner::create_plan(&[child_item, parent_item], &registry)
-            .expect("the plan is built");
+        let plan = SafetyPlanner::create_plan(
+            &[child_item, parent_item],
+            &registry,
+            &no_owner_providers(),
+        )
+        .expect("the plan is built");
 
         assert_eq!(
             plan.targets.len(),
@@ -767,13 +904,32 @@ mod tests {
         child_item.rederive_disposition();
         child_item.is_selected = true;
 
-        let result = SafetyPlanner::create_plan(&[child_item, parent_item], &registry);
+        let result = SafetyPlanner::create_plan(
+            &[child_item, parent_item],
+            &registry,
+            &no_owner_providers(),
+        );
 
         match &result {
-            Err(ZenithError::UnsupportedManualOperation(name)) => {
-                assert_eq!(name, "Nested cache");
+            Ok(plan) => {
+                assert_eq!(
+                    plan.refusals.len(),
+                    1,
+                    "the contained unit's refusal is reported, not skipped"
+                );
+                assert_eq!(plan.refusals[0].item_name, "Nested cache");
+                assert_eq!(
+                    plan.refusals[0].reason,
+                    crate::models::CleanFailureReason::OwnerManaged
+                );
+                assert_eq!(
+                    plan.targets.len(),
+                    1,
+                    "the parent the user also selected is still authorized"
+                );
+                assert_eq!(plan.targets[0].item_id, "parent-item");
             }
-            other => panic!("the contained unit's refusal is reported, not skipped: {other:?}"),
+            other => panic!("the plan reports the refusal and keeps the rest: {other:?}"),
         }
     }
 
@@ -847,8 +1003,12 @@ mod tests {
         let first_item = selected("first-item", "test.first", "First cache", &first);
         let second_item = selected("second-item", "test.second", "Second cache", &second);
 
-        let plan = SafetyPlanner::create_plan(&[first_item, second_item], &registry)
-            .expect("two separate units are plannable");
+        let plan = SafetyPlanner::create_plan(
+            &[first_item, second_item],
+            &registry,
+            &no_owner_providers(),
+        )
+        .expect("two separate units are plannable");
 
         assert_eq!(
             plan.targets.len(),
@@ -938,10 +1098,11 @@ mod tests {
         item.quality = ObservationQuality::Unavailable;
         item.incomplete_reason = Some("Access was revoked".into());
 
-        let result = SafetyPlanner::create_plan(&[item], &SignatureRegistry::new());
+        let result =
+            SafetyPlanner::create_plan(&[item], &SignatureRegistry::new(), &no_owner_providers());
         assert!(matches!(
             result,
-            Err(ZenithError::InvalidPlan(message))
+            Err(ZenithError::ChangedSinceScan(message))
                 if message.contains("eligibility changed since the scan")
         ));
     }
