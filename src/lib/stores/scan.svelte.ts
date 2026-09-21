@@ -420,7 +420,7 @@ export class ScanStore {
       case 'container':
         return settings.clean_docker;
       case 'model':
-        return settings.clean_local_models;
+        return false;
       case 'system':
         return true;
       default:

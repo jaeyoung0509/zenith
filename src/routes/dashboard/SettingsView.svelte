@@ -655,18 +655,6 @@
         />
       </div>
 
-      <!-- Local Models -->
-      <div class="flex items-center justify-between text-xs pt-3">
-        <div>
-          <div class="font-medium text-foreground">Local Models (Ollama / HuggingFace)</div>
-          <div class="text-meta text-muted-foreground">Always off by default to protect stateful weights.</div>
-        </div>
-        <Switch
-          checked={settings.clean_local_models}
-          onchange={() => handleToggle('clean_local_models')}
-          ariaLabel="Local Models"
-        />
-      </div>
     </Card>
   </div>
 

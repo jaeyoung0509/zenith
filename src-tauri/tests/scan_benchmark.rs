@@ -416,10 +416,8 @@ fn signature(
         fail_if_running: Vec::new(),
         provider: String::new(),
         provider_id: None,
-        management_mode: Default::default(),
         artifact_kind: Default::default(),
         consequence: String::new(),
-        reclaimable_is_lower_bound: false,
     }
 }
 

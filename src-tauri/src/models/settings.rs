@@ -122,7 +122,6 @@ pub struct ZenithSettings {
     pub clean_ai_tools: bool,
     pub clean_developer_tools: bool,
     pub clean_docker: bool,
-    pub clean_local_models: bool,
     pub include_rebuild_caches: bool,
     pub intensive_cleanup: bool,
     pub theme: String,
@@ -157,7 +156,6 @@ impl Default for ZenithSettings {
             clean_ai_tools: true,
             clean_developer_tools: true,
             clean_docker: true,
-            clean_local_models: false,
             include_rebuild_caches: false,
             intensive_cleanup: false,
             theme: "system".to_string(),
@@ -449,7 +447,7 @@ impl ZenithSettings {
             crate::models::Category::Ai => self.clean_ai_tools,
             crate::models::Category::Developer => self.clean_developer_tools,
             crate::models::Category::Container => self.clean_docker,
-            crate::models::Category::Model => self.clean_local_models,
+            crate::models::Category::Model => false,
             crate::models::Category::System => true,
         }
     }

@@ -1754,7 +1754,6 @@ export const mockApi = {
       clean_ai_tools: true,
       clean_developer_tools: true,
       clean_docker: true,
-      clean_local_models: false,
       include_rebuild_caches: false,
       intensive_cleanup: false,
       theme: 'system',

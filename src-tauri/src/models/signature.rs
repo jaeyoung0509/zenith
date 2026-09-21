@@ -24,6 +24,7 @@ pub enum DiscoveryScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
 pub struct Signature {
     pub id: String,
     pub name: String,
@@ -57,13 +58,9 @@ pub struct Signature {
     #[serde(default)]
     pub provider_id: Option<String>,
     #[serde(default)]
-    pub management_mode: CacheManagementMode,
-    #[serde(default)]
     pub artifact_kind: CacheArtifactKind,
     #[serde(default)]
     pub consequence: String,
-    #[serde(default)]
-    pub reclaimable_is_lower_bound: bool,
     /// Whether this signature is discovered outside its own scope.
     #[serde(default)]
     pub discovery: DiscoveryScope,
@@ -97,13 +94,27 @@ impl Signature {
             } else {
                 self.provider.clone()
             },
-            management_mode: self.management_mode,
+            management_mode: match self.strategy {
+                CleanStrategy::Manual => CacheManagementMode::Advisory,
+                CleanStrategy::ExternalCommand
+                | CleanStrategy::LifecycleProvider
+                | CleanStrategy::OwnerProvider
+                | CleanStrategy::DockerPrune => CacheManagementMode::ToolManaged,
+                CleanStrategy::DeleteContents
+                | CleanStrategy::DeleteDirectory
+                | CleanStrategy::DeleteStaleContents => CacheManagementMode::Zenith,
+            },
             artifact_kind: self.artifact_kind,
             consequence: self.consequence.clone(),
-            size_semantics: if self.reclaimable_is_lower_bound {
-                CacheSizeSemantics::ConservativeLowerBound
-            } else {
-                CacheSizeSemantics::PhysicalReclaimable
+            size_semantics: match self.strategy {
+                CleanStrategy::Manual => CacheSizeSemantics::Informational,
+                CleanStrategy::ExternalCommand
+                | CleanStrategy::LifecycleProvider
+                | CleanStrategy::OwnerProvider
+                | CleanStrategy::DockerPrune => CacheSizeSemantics::ConservativeLowerBound,
+                CleanStrategy::DeleteContents
+                | CleanStrategy::DeleteDirectory
+                | CleanStrategy::DeleteStaleContents => CacheSizeSemantics::PhysicalReclaimable,
             },
             last_used_confidence: if self.min_age_days.is_some() {
                 CacheUsageConfidence::Approximate

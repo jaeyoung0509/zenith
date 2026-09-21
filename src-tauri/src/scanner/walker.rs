@@ -124,6 +124,7 @@ impl DirectoryScanner {
     ) -> SignatureScan {
         let mut items = Vec::new();
         let mut scanned_roots = Vec::new();
+        let mut seen_roots = std::collections::HashSet::new();
         let mut selector_incomplete = false;
 
         // If signature has no explicit file paths (e.g. Docker commands), return early or handle in Docker adapter
@@ -181,6 +182,14 @@ impl DirectoryScanner {
                     break;
                 }
                 let root_path = root.path.clone();
+                let flavor = context.environment.flavor();
+                let key = zenith_platform::path_algebra::fold(
+                    &zenith_platform::path_algebra::normalize(&root_path.to_string_lossy(), flavor),
+                    flavor,
+                );
+                if !seen_roots.insert(key) {
+                    continue;
+                }
                 // The root is reported before it is read: a scan spends its
                 // time inside one root, so this is what lets the interface say
                 // where it is rather than only that it is running.
@@ -1631,10 +1640,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         }
     }
 
@@ -2155,10 +2162,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
@@ -2281,10 +2286,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
@@ -2502,10 +2505,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
@@ -2561,10 +2562,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);
@@ -2616,10 +2615,8 @@ mod tests {
             fail_if_running: Vec::new(),
             provider: String::new(),
             provider_id: None,
-            management_mode: Default::default(),
             artifact_kind: Default::default(),
             consequence: String::new(),
-            reclaimable_is_lower_bound: false,
         };
 
         let items = DirectoryScanner::scan_signature(&signature, &environment(), &NeverCancelled);

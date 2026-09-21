@@ -69,7 +69,6 @@ platforms = ["macos", "windows", "linux"]
 fail_if_running = ["cargo", "cargo.exe", "rustc", "rustc.exe"]
 description = "Extracted source trees Cargo owns for downloaded crates. Cargo's own cache garbage collection decides whether they are stale."
 provider = "Cargo"
-management_mode = "advisory"
 artifact_kind = "package_store"
 consequence = "Cargo re-extracts a crate from its archive when a build needs it again."
 
@@ -88,7 +87,6 @@ platforms = ["macos", "windows", "linux"]
 fail_if_running = ["cargo", "cargo.exe", "rustc", "rustc.exe"]
 description = "Git checkouts and bare databases Cargo owns for git dependencies. Cargo decides when they are unreferenced."
 provider = "Cargo"
-management_mode = "advisory"
 artifact_kind = "package_store"
 consequence = "Cargo clones a git dependency again when a build needs it."
 
@@ -117,10 +115,8 @@ strategy = "external_command"
 paths = []
 description = "Content-addressable package cache inspected and pruned by npm."
 provider = "npm"
-management_mode = "tool_managed"
 artifact_kind = "package_store"
 consequence = "A full cleanup can force package downloads on later installs."
-reclaimable_is_lower_bound = true
 
 [[signatures]]
 id = "dev.pnpm.store"
@@ -131,10 +127,8 @@ strategy = "external_command"
 paths = []
 description = "Global hard-link package repository inspected and pruned by pnpm."
 provider = "pnpm"
-management_mode = "tool_managed"
 artifact_kind = "package_store"
 consequence = "Unreferenced packages are removed and may be downloaded on a future install."
-reclaimable_is_lower_bound = true
 
 [[signatures]]
 id = "dev.yarn.cache"
@@ -152,7 +146,6 @@ paths = [
 ]
 description = "Package archives owned by Yarn. Cleanup remains advisory until a version-aware adapter is available."
 provider = "Yarn"
-management_mode = "advisory"
 artifact_kind = "package_store"
 consequence = "Packages may need to be downloaded again."
 
@@ -167,10 +160,8 @@ paths = [
 ]
 description = "Bun's global hard-linked package store. Zenith will not recursively delete it."
 provider = "Bun"
-management_mode = "advisory"
 artifact_kind = "package_store"
 consequence = "Packages may be shared with projects and may need to be downloaded again."
-reclaimable_is_lower_bound = true
 
 [[signatures]]
 id = "dev.pip.cache"
@@ -185,7 +176,6 @@ paths = [
 ]
 description = "Python wheels and distributions owned by pip. Use pip cache commands for cleanup."
 provider = "pip"
-management_mode = "advisory"
 artifact_kind = "download_cache"
 consequence = "Python packages may need to be downloaded and rebuilt."
 
@@ -198,10 +188,8 @@ strategy = "external_command"
 paths = []
 description = "High-speed package cache inspected and pruned by uv's supported cache command."
 provider = "uv"
-management_mode = "tool_managed"
 artifact_kind = "package_store"
 consequence = "Unused packages are pruned and may be downloaded again."
-reclaimable_is_lower_bound = true
 
 [[signatures]]
 id = "dev.xcode.derived_data"
@@ -224,7 +212,7 @@ id = "dev.xcode.archives"
 name = "Xcode Archives"
 category = "developer"
 risk = "manual"
-strategy = "delete_contents"
+strategy = "manual"
 platforms = ["macos"]
 paths = [
     "~/Library/Developer/Xcode/Archives"
@@ -232,7 +220,6 @@ paths = [
 fail_if_running = ["xcodebuild"]
 description = "Archived application builds and dSYMs exported for distribution."
 provider = "Xcode"
-management_mode = "advisory"
 artifact_kind = "build_artifact"
 consequence = "Archives may be required for symbolication or distribution."
 
@@ -264,10 +251,8 @@ paths = [
 ]
 description = "Gradle owns retention and locking for this shared cache; Zenith reports it as advisory only."
 provider = "Gradle"
-management_mode = "advisory"
 artifact_kind = "package_store"
 consequence = "Deleting entries can force dependency downloads and expensive task rebuilds."
-reclaimable_is_lower_bound = true
 
 [[signatures]]
 id = "dev.m2.repository"
@@ -280,7 +265,5 @@ paths = [
 ]
 description = "Maven's mixed local repository requires project-aware purge semantics; Zenith reports it only."
 provider = "Maven"
-management_mode = "advisory"
 artifact_kind = "package_store"
 consequence = "Dependencies and plugins may need to be downloaded again."
-reclaimable_is_lower_bound = true
