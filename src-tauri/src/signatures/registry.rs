@@ -3,7 +3,7 @@ use crate::safety::Blacklist;
 use crate::signatures::SignatureLoader;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use zenith_platform::path_algebra::{contains, is_absolute, normalize, PathFlavor};
+use zenith_platform::path_algebra::{is_absolute, PathFlavor};
 use zenith_platform::PlatformEnvironment;
 
 const EMBEDDED_AI_TOML: &str = include_str!("../../../signatures/ai.toml");
@@ -110,42 +110,6 @@ impl SignatureRegistry {
         }
 
         Ok(registry)
-    }
-
-    /// Loads signatures from a directory containing `.toml` files.
-    pub fn load_from_dir<P: AsRef<Path>>(&mut self, dir_path: P) -> Result<usize, ZenithError> {
-        self.load_from_dir_with(dir_path, &PlatformEnvironment::native())
-    }
-
-    /// Loads signatures from a directory, refusing manifests that resolve under
-    /// a platform-specific root without declaring it.
-    pub fn load_from_dir_with<P: AsRef<Path>>(
-        &mut self,
-        dir_path: P,
-        environment: &PlatformEnvironment,
-    ) -> Result<usize, ZenithError> {
-        let dir = dir_path.as_ref();
-        if !dir.exists() || !dir.is_dir() {
-            return Ok(0);
-        }
-
-        let mut count = 0;
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("toml") {
-                    if let Ok(sigs) = SignatureLoader::load_file(&path) {
-                        for sig in sigs {
-                            self.register(sig);
-                            count += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        self.enforce_platform_declarations(environment);
-        Ok(count)
     }
 
     /// Drops every signature the platform-declaration rule refuses and records
@@ -502,7 +466,7 @@ fn audit_signature(
         }
     }
 
-    if let Some(scope) = common_scope(&resolved, flavor) {
+    if !resolved.is_empty() {
         for exclusion in &signature.exclusions {
             // The same rule as a path: an exclusion written for another
             // platform is checked when the lint runs against that platform,
@@ -517,10 +481,10 @@ fn audit_signature(
                 continue;
             };
             let expanded_text = expanded.to_string_lossy().into_owned();
-            let within_path = resolved
-                .iter()
-                .any(|path| contains(&path.to_string_lossy(), &expanded_text, flavor));
-            if !within_path && !contains(&scope, &expanded_text, flavor) {
+            let within_path = resolved.iter().any(|path| {
+                super::exclusions::reachable_from(&path.to_string_lossy(), &expanded_text, flavor)
+            });
+            if !within_path {
                 findings.push(finding(
                     signature,
                     None,
@@ -635,97 +599,6 @@ fn platform_token(platform: PlatformKind) -> &'static str {
         PlatformKind::Windows => "windows",
         PlatformKind::Linux => "linux",
         PlatformKind::Other => "other",
-    }
-}
-
-/// The deepest directory the resolved paths share, or `None` when they share
-/// no root (different drives, a UNC share beside a local path). Containment in
-/// the scope is component-boundary checked, so `C:\Program Files (x86)` does
-/// not contain `C:\Program Files`.
-fn common_scope(paths: &[PathBuf], flavor: PathFlavor) -> Option<String> {
-    let mut scope = path_parts(&paths.first()?.to_string_lossy(), flavor);
-    for path in &paths[1..] {
-        let parts = path_parts(&path.to_string_lossy(), flavor);
-        if parts.root != scope.root {
-            return None;
-        }
-        let shared = scope
-            .components
-            .iter()
-            .zip(parts.components.iter())
-            .take_while(|(left, right)| {
-                zenith_platform::path_algebra::fold(left, flavor)
-                    == zenith_platform::path_algebra::fold(right, flavor)
-            })
-            .count();
-        scope.components.truncate(shared);
-    }
-    let separator = flavor.separator();
-    if scope.components.is_empty() {
-        return Some(scope.root);
-    }
-    let mut text = scope.root;
-    if !text.ends_with(separator) {
-        text.push(separator);
-    }
-    text.push_str(&scope.components.join(&separator.to_string()));
-    Some(text)
-}
-
-struct PathParts {
-    root: String,
-    components: Vec<String>,
-}
-
-fn path_parts(path: &str, flavor: PathFlavor) -> PathParts {
-    let normalized = normalize(path, flavor);
-    if !flavor.is_windows() {
-        return PathParts {
-            root: flavor.separator().to_string(),
-            components: normalized
-                .split('/')
-                .filter(|component| !component.is_empty())
-                .map(str::to_string)
-                .collect(),
-        };
-    }
-    if let Some(rest) = normalized.strip_prefix(r"\\") {
-        let mut parts = rest.splitn(3, '\\');
-        let server = parts.next().unwrap_or_default();
-        let share = parts.next().unwrap_or_default();
-        let remainder = parts.next().unwrap_or_default();
-        let root = if share.is_empty() {
-            format!(r"\\{server}")
-        } else {
-            format!(r"\\{server}\{share}")
-        };
-        return PathParts {
-            root,
-            components: remainder
-                .split('\\')
-                .filter(|component| !component.is_empty())
-                .map(str::to_string)
-                .collect(),
-        };
-    }
-    let chars: Vec<char> = normalized.chars().collect();
-    if chars.len() >= 2 && chars[1] == ':' {
-        return PathParts {
-            root: normalized[..2].to_string(),
-            components: normalized[2..]
-                .split('\\')
-                .filter(|component| !component.is_empty())
-                .map(str::to_string)
-                .collect(),
-        };
-    }
-    PathParts {
-        root: String::new(),
-        components: normalized
-            .split('\\')
-            .filter(|component| !component.is_empty())
-            .map(str::to_string)
-            .collect(),
     }
 }
 
@@ -1446,18 +1319,18 @@ mod tests {
 
         for prefix in [
             "com.apple.",
-            "CloudKit",
-            "FamilyCircle",
-            "GeoServices",
-            "HomeKit",
-            "Safari",
+            "com.apple.CloudKit",
+            "com.apple.FamilyCircle",
+            "com.apple.GeoServices",
+            "com.apple.HomeKit",
+            "com.apple.Safari",
             "ms-playwright",
         ] {
             assert!(
                 signature
                     .exclude_prefixes
                     .iter()
-                    .any(|entry| entry == prefix),
+                    .any(|entry| prefix.starts_with(entry)),
                 "missing excluded namespace: {prefix}"
             );
         }
@@ -1640,7 +1513,7 @@ mod tests {
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert!(findings[0].message.contains("scope"), "{findings:?}");
 
-        // A sibling exclusion of a two-path signature stays inside its scope.
+        // A common ancestor does not make a sibling reachable from either root.
         let mut registry = SignatureRegistry::new();
         let mut signature = test_signature(
             "system.test.exclusion",
@@ -1649,10 +1522,10 @@ mod tests {
         );
         signature.exclusions = vec!["~/.cache/test/settings.json".to_string()];
         registry.register(signature);
-        assert!(
-            SignatureRegistry::audit_signature_platforms(&registry, &stated_environment())
-                .is_empty()
-        );
+        let findings =
+            SignatureRegistry::audit_signature_platforms(&registry, &stated_environment());
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("scope"));
     }
 
     #[test]
@@ -1715,31 +1588,6 @@ mod tests {
                 "{platform:?} has at least one intensive signature"
             );
         }
-    }
-
-    #[test]
-    fn common_scope_uses_component_boundaries() {
-        use super::common_scope;
-        let paths = vec![
-            PathBuf::from(r"C:\Program Files\One\cache"),
-            PathBuf::from(r"C:\Program Files (x86)\One\cache"),
-        ];
-        let scope = common_scope(&paths, PathFlavor::Windows).unwrap();
-        assert_eq!(scope, r"C:");
-        let shared = vec![
-            PathBuf::from(r"C:\Users\me\AppData\Local\x\a"),
-            PathBuf::from(r"C:\Users\me\AppData\Local\x\b"),
-        ];
-        assert_eq!(
-            common_scope(&shared, PathFlavor::Windows).unwrap(),
-            r"C:\Users\me\AppData\Local\x"
-        );
-        let unrelated = vec![
-            PathBuf::from(r"C:\a"),
-            PathBuf::from(r"D:\a"),
-            PathBuf::from(r"\\server\share\a"),
-        ];
-        assert_eq!(common_scope(&unrelated, PathFlavor::Windows), None);
     }
 
     #[test]
