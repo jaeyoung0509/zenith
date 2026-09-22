@@ -1120,15 +1120,14 @@ mod tests {
 
     #[test]
     fn nuget_discovery_accepts_one_expected_labeled_path() {
-        let parsed = parse_provider_path(
-            ProviderKind::NugetHttp,
-            b"http-cache: /Users/tester/Library/Caches/NuGet/v3-cache\n",
-        )
-        .unwrap();
-        assert_eq!(
-            parsed.as_path(),
-            std::path::Path::new("/Users/tester/Library/Caches/NuGet/v3-cache")
-        );
+        let path = if cfg!(windows) {
+            r"C:\Users\tester\AppData\Local\NuGet\v3-cache"
+        } else {
+            "/Users/tester/Library/Caches/NuGet/v3-cache"
+        };
+        let output = format!("http-cache: {path}\n");
+        let parsed = parse_provider_path(ProviderKind::NugetHttp, output.as_bytes()).unwrap();
+        assert_eq!(parsed.as_path(), std::path::Path::new(path));
         assert!(parse_provider_path(
             ProviderKind::NugetHttp,
             b"global-packages: /Users/tester/.nuget/packages\n",
