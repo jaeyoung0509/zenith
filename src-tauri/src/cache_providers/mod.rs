@@ -12,7 +12,7 @@ use crate::scanner::{
 };
 use crate::signatures::SignatureRegistry;
 use crate::tooling;
-use catalog::ProviderKind;
+use catalog::{DiscoveryOutput, ProviderKind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
@@ -109,7 +109,9 @@ impl ProviderCommandRunner for NativeProviderCommandRunner {
         }
         let mut command = Command::new(executable);
         command.args(provider.discovery_args());
-        configure_provider_command(provider, &mut command);
+        if let Err(error) = configure_provider_command(provider, environment, &mut command) {
+            return ProviderCommandResult::Failed(error);
+        }
         match zenith_platform::subprocess::run_with_timeout_cancellable(
             command,
             PROVIDER_TIMEOUT,
@@ -300,7 +302,7 @@ impl CacheProviderRegistry {
                         ),
                     ));
                 }
-                let parsed = parse_discovered_path(&stdout).map_err(|reason| {
+                let parsed = parse_provider_path(provider, &stdout).map_err(|reason| {
                     CacheProviderFailure::new(
                         ScanGapKind::IoError,
                         format!("{}: {reason}", provider.executable()),
@@ -486,7 +488,7 @@ fn run_provider(
     validate_executable(&executable, environment)?;
     let mut command = Command::new(executable);
     command.args(args);
-    configure_provider_command(provider, &mut command);
+    configure_provider_command(provider, environment, &mut command)?;
     zenith_platform::subprocess::run_with_timeout(command, PROVIDER_TIMEOUT)
         .map_err(|error| error.to_string())
 }
@@ -499,6 +501,8 @@ const CACHE_PATH_ENVIRONMENT: &[&str] = &[
     "GOPATH",
     "GOENV",
     "UV_CACHE_DIR",
+    "PIP_CACHE_DIR",
+    "PIP_CONFIG_FILE",
     "XDG_CACHE_HOME",
     "XDG_DATA_HOME",
     "PNPM_HOME",
@@ -514,6 +518,9 @@ const CACHE_PATH_ENVIRONMENT: &[&str] = &[
     "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
     "COMPOSER_CACHE_DIR",
     "COMPOSER_HOME",
+    "NUGET_PACKAGES",
+    "NUGET_HTTP_CACHE_PATH",
+    "NUGET_PLUGINS_CACHE_PATH",
 ];
 
 fn strip_cache_environment(command: &mut Command) {
@@ -522,8 +529,38 @@ fn strip_cache_environment(command: &mut Command) {
     }
 }
 
-fn configure_provider_command(provider: ProviderKind, command: &mut Command) {
+fn configure_provider_command(
+    provider: ProviderKind,
+    environment: &PlatformEnvironment,
+    command: &mut Command,
+) -> Result<(), String> {
     strip_cache_environment(command);
+    let mut dependency_dirs = Vec::new();
+    for dependency in provider.runtime_dependencies() {
+        let executable = tooling::resolve_with(dependency, environment).ok_or_else(|| {
+            format!(
+                "{} requires {}, which was not detected in trusted tool locations",
+                provider.executable(),
+                dependency
+            )
+        })?;
+        validate_executable(&executable, environment)?;
+        let canonical = std::fs::canonicalize(executable)
+            .map_err(|_| format!("Could not validate the {dependency} runtime"))?;
+        let parent = canonical
+            .parent()
+            .ok_or_else(|| format!("Could not resolve the {dependency} runtime directory"))?;
+        dependency_dirs.push(parent.to_path_buf());
+    }
+    if !dependency_dirs.is_empty() {
+        // Script shims commonly use `/usr/bin/env node` or `/usr/bin/env php`.
+        // Give them only the verified runtime directories plus the OS command
+        // roots needed by `env`; never forward an arbitrary inherited PATH.
+        dependency_dirs.extend([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+        let path = std::env::join_paths(dependency_dirs)
+            .map_err(|_| "Could not construct the provider runtime PATH".to_string())?;
+        command.env("PATH", path);
+    }
     if provider.local_toolchain_only() {
         // Go's default `auto` toolchain mode may download a different toolchain
         // merely to answer `go env` or perform `go clean`. Inspection and
@@ -531,6 +568,7 @@ fn configure_provider_command(provider: ProviderKind, command: &mut Command) {
         // network as a side effect.
         command.env("GOTOOLCHAIN", "local");
     }
+    Ok(())
 }
 
 fn discover_path(
@@ -545,7 +583,36 @@ fn discover_path(
             bounded_message(&output.stderr)
         ));
     }
-    parse_discovered_path(&output.stdout).and_then(|path| validate_cache_path(path, environment))
+    parse_provider_path(provider, &output.stdout)
+        .and_then(|path| validate_cache_path(path, environment))
+}
+
+fn parse_provider_path(provider: ProviderKind, output: &[u8]) -> Result<AbsolutePath, String> {
+    match provider.discovery_output() {
+        DiscoveryOutput::BarePath => parse_discovered_path(output),
+        DiscoveryOutput::LabeledPath(expected_label) => {
+            if output.len() > MAX_DISCOVERY_OUTPUT {
+                return Err("Cache discovery output exceeded the safety limit".to_string());
+            }
+            let text = std::str::from_utf8(output)
+                .map_err(|_| "Cache discovery did not return UTF-8".to_string())?;
+            let lines = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>();
+            if lines.len() != 1 {
+                return Err("Cache discovery returned an ambiguous path".to_string());
+            }
+            let (label, path) = lines[0]
+                .split_once(':')
+                .ok_or_else(|| "Cache discovery did not return a labeled path".to_string())?;
+            if !label.trim().eq_ignore_ascii_case(expected_label) {
+                return Err("Cache discovery returned an unexpected resource label".to_string());
+            }
+            parse_discovered_path(path.trim().as_bytes())
+        }
+    }
 }
 
 fn parse_discovered_path(output: &[u8]) -> Result<AbsolutePath, String> {
@@ -626,9 +693,17 @@ fn relocated_cache_roots(environment: &PlatformEnvironment) -> Vec<PathBuf> {
     // are process environment variables with no environment representation, so
     // they stay host-derived like the tool search itself.
     let stated = [environment.local_app_data(), environment.roaming_app_data()];
-    let overrides = ["UV_CACHE_DIR", "PNPM_HOME", "NPM_CONFIG_CACHE"]
-        .into_iter()
-        .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from));
+    let overrides = [
+        "UV_CACHE_DIR",
+        "PIP_CACHE_DIR",
+        "PNPM_HOME",
+        "NPM_CONFIG_CACHE",
+        "NUGET_PACKAGES",
+        "NUGET_HTTP_CACHE_PATH",
+        "NUGET_PLUGINS_CACHE_PATH",
+    ]
+    .into_iter()
+    .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from));
     stated
         .into_iter()
         .flatten()
@@ -667,6 +742,8 @@ fn cache_location_approved(canonical: &Path, canonical_home: &Path, flavor: Path
         canonical_home.join(".npm"),
         canonical_home.join(".bun/install/cache"),
         canonical_home.join(".composer/cache"),
+        canonical_home.join(".nuget/packages"),
+        canonical_home.join(".local/share/NuGet"),
         canonical_home.join("go/pkg/mod"),
     ];
     broad_cache_roots.iter().any(|root| {
@@ -694,6 +771,11 @@ fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result
     let mut roots = vec![
         PathBuf::from("/usr/bin"),
         PathBuf::from("/usr/local/bin"),
+        // Microsoft's macOS package places the real host here and commonly
+        // exposes `/usr/local/bin/dotnet` as a symlink. Validation is applied
+        // to the canonical executable, so the documented target must be a
+        // trust root as well as the symlink directory.
+        PathBuf::from("/usr/local/share/dotnet"),
         PathBuf::from("/opt/homebrew"),
     ];
     roots.extend(zenith_platform::NativePlatformPaths::trusted_tool_roots(
@@ -710,6 +792,18 @@ fn validate_executable(path: &Path, environment: &PlatformEnvironment) -> Result
         ]);
         roots.extend(node_manager_roots(&home));
     }
+
+    // Compare canonical locations when a root exists. This matters on macOS,
+    // where `/var` resolves to `/private/var`, and for package-manager shims
+    // whose documented root may itself be reached through a link.
+    let roots = roots
+        .into_iter()
+        .map(|root| {
+            std::fs::canonicalize(&root)
+                .map(|path| zenith_platform::NativePlatformPaths::normalize_verbatim_path(&path))
+                .unwrap_or(root)
+        })
+        .collect::<Vec<_>>();
 
     if executable_under_roots(&canonical, &roots) {
         Ok(())
@@ -751,22 +845,24 @@ fn paths_match(left: &Path, right: &Path) -> bool {
 }
 
 fn matching_process_is_active(provider: ProviderKind) -> bool {
-    let expected = provider.executable();
+    let expected = provider.active_processes();
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All, true);
     system.processes().values().any(|process| {
         let name = process.name().to_string_lossy();
-        name.eq_ignore_ascii_case(expected)
-            || name.eq_ignore_ascii_case(&format!("{expected}.exe"))
-            || process.cmd().iter().take(3).any(|argument| {
-                Path::new(argument)
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|value| {
-                        value.eq_ignore_ascii_case(expected)
-                            || value.starts_with(&format!("{expected}."))
-                    })
-            })
+        expected.iter().any(|expected| {
+            name.eq_ignore_ascii_case(expected)
+                || name.eq_ignore_ascii_case(&format!("{expected}.exe"))
+                || process.cmd().iter().take(3).any(|argument| {
+                    Path::new(argument)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| {
+                            value.eq_ignore_ascii_case(expected)
+                                || value.starts_with(&format!("{expected}."))
+                        })
+                })
+        })
     })
 }
 
@@ -778,7 +874,10 @@ fn bounded_message(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_location_approved, node_manager_roots, parse_discovered_path, AbsolutePath};
+    use super::{
+        cache_location_approved, node_manager_roots, parse_discovered_path, parse_provider_path,
+        AbsolutePath,
+    };
     use super::{
         configure_provider_command, strip_cache_environment, NativeProviderMeasurer,
         ProviderCommandResult, ProviderCommandRunner, ProviderKind, ProviderMeasurer,
@@ -916,7 +1015,12 @@ mod tests {
         let mut command = Command::new("go-fixture");
         command.env("GOTOOLCHAIN", "auto");
         command.env("GOMODCACHE", "/untrusted/mod-cache");
-        configure_provider_command(ProviderKind::GoModule, &mut command);
+        configure_provider_command(
+            ProviderKind::GoModule,
+            &PlatformEnvironment::native(),
+            &mut command,
+        )
+        .unwrap();
         let variables: std::collections::HashMap<_, _> = command
             .get_envs()
             .map(|(key, value)| (key.to_string_lossy().into_owned(), value))
@@ -956,12 +1060,85 @@ mod tests {
             &["env", "GOMODCACHE"]
         );
         assert_eq!(ProviderKind::GoModule.prune_args(), &["clean", "-modcache"]);
-        assert_eq!(ProviderKind::Bun.discovery_args(), &["pm", "cache"]);
-        assert_eq!(ProviderKind::Bun.prune_args(), &["pm", "cache", "rm"]);
+        assert_eq!(ProviderKind::Pip.discovery_args(), &["cache", "dir"]);
+        assert_eq!(ProviderKind::Pip.prune_args(), &["cache", "purge"]);
+        assert_eq!(
+            ProviderKind::NugetHttp.discovery_args(),
+            &[
+                "nuget",
+                "locals",
+                "http-cache",
+                "--list",
+                "--force-english-output"
+            ]
+        );
+        assert_eq!(
+            ProviderKind::NugetGlobalPackages.prune_args(),
+            &[
+                "nuget",
+                "locals",
+                "global-packages",
+                "--clear",
+                "--force-english-output"
+            ]
+        );
         assert_eq!(
             ProviderKind::Composer.prune_args(),
             &["--no-interaction", "--no-plugins", "clear-cache"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn script_providers_receive_only_a_validated_runtime_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let node = bin.join("node");
+        std::fs::write(&node, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = std::fs::metadata(&node).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&node, permissions).unwrap();
+
+        let environment = fixture_environment(home.path()).with_tool("node", &node);
+        let mut command = Command::new("npm-fixture");
+        command.env("PATH", "/untrusted/bin");
+        configure_provider_command(ProviderKind::Npm, &environment, &mut command).unwrap();
+        let path = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .unwrap()
+            .to_string_lossy();
+
+        assert!(path.contains(".local/bin"));
+        assert!(path.contains("/usr/bin"));
+        assert!(!path.contains("/untrusted/bin"));
+    }
+
+    #[test]
+    fn nuget_discovery_accepts_one_expected_labeled_path() {
+        let parsed = parse_provider_path(
+            ProviderKind::NugetHttp,
+            b"http-cache: /Users/tester/Library/Caches/NuGet/v3-cache\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.as_path(),
+            std::path::Path::new("/Users/tester/Library/Caches/NuGet/v3-cache")
+        );
+        assert!(parse_provider_path(
+            ProviderKind::NugetHttp,
+            b"global-packages: /Users/tester/.nuget/packages\n",
+        )
+        .is_err());
+        assert!(parse_provider_path(
+            ProviderKind::NugetHttp,
+            b"http-cache: /one\nhttp-cache: /two\n",
+        )
+        .is_err());
     }
 
     #[test]
@@ -983,6 +1160,16 @@ mod tests {
             flavor
         ));
         assert!(cache_location_approved(&home.join(".npm"), &home, flavor));
+        assert!(cache_location_approved(
+            &home.join(".nuget/packages"),
+            &home,
+            flavor
+        ));
+        assert!(cache_location_approved(
+            &home.join(".local/share/NuGet/v3-cache"),
+            &home,
+            flavor
+        ));
         // Broad roots still match strict subdirectories only.
         assert!(cache_location_approved(
             &home.join(".cache/npm/_cacache"),
@@ -1093,6 +1280,53 @@ mod tests {
         assert!(super::validate_cache_path(rooted(unapproved), &environment).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn nuget_provider_executes_fixed_commands_against_an_isolated_store() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        let cache = home.path().join(".nuget/packages");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("package.bin"), vec![1_u8; 4096]).unwrap();
+
+        let executable = bin.join("dotnet");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+set -eu
+fixture_home=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
+cache="$fixture_home/.nuget/packages"
+case "$*" in
+  "nuget locals global-packages --list --force-english-output")
+    printf 'global-packages: %s\n' "$cache"
+    ;;
+  "nuget locals global-packages --clear --force-english-output")
+    find "$cache" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let environment = fixture_environment(home.path()).with_tool("dotnet", &executable);
+        let reclaimed =
+            super::CacheProviderRegistry::prune("dev.nuget.global_packages", &cache, &environment)
+                .unwrap();
+
+        assert!(reclaimed.is_some_and(|bytes| bytes >= 4096));
+        assert!(cache.is_dir());
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
+    }
+
     #[test]
     fn a_provider_with_a_stated_missing_tool_is_skipped() {
         // npm/pnpm/uv may be installed on this host; the environment states
@@ -1102,8 +1336,9 @@ mod tests {
             .with_missing_tool("npm")
             .with_missing_tool("pnpm")
             .with_missing_tool("uv")
-            .with_missing_tool("bun")
-            .with_missing_tool("composer");
+            .with_missing_tool("pip3")
+            .with_missing_tool("composer")
+            .with_missing_tool("dotnet");
         let registry = SignatureRegistry::load_embedded().unwrap();
         let counters = TraversalCounters::default();
         let result = super::CacheProviderRegistry::scan_items(
@@ -1191,10 +1426,14 @@ mod tests {
             vec![
                 ProviderKind::GoBuild,
                 ProviderKind::GoModule,
+                ProviderKind::Pip,
                 ProviderKind::Pnpm,
                 ProviderKind::Npm,
-                ProviderKind::Bun,
                 ProviderKind::Composer,
+                ProviderKind::NugetHttp,
+                ProviderKind::NugetTemp,
+                ProviderKind::NugetPlugins,
+                ProviderKind::NugetGlobalPackages,
             ]
         );
     }
@@ -1335,6 +1574,7 @@ mod tests {
             vec![
                 ProviderKind::GoBuild,
                 ProviderKind::GoModule,
+                ProviderKind::Pip,
                 ProviderKind::Uv,
             ]
         );

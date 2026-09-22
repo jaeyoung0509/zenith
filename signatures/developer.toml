@@ -157,10 +157,12 @@ id = "dev.bun.cache"
 name = "Bun Package Cache"
 category = "developer"
 family = "package_managers"
-risk = "rebuild"
-strategy = "external_command"
-paths = []
-description = "Bun's global package store inspected and cleared through `bun pm cache`."
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/.bun/install/cache"
+]
+description = "Bun's global package cache reported for review. Current Bun releases require project context even to query `bun pm cache`, so Zenith does not guess a project or recursively delete the store."
 provider = "Bun"
 artifact_kind = "package_store"
 consequence = "Packages may be shared with projects and may need to be downloaded again."
@@ -171,13 +173,10 @@ name = "Pip Cache"
 category = "developer"
 family = "package_managers"
 risk = "rebuild"
-strategy = "manual"
-paths = [
-    "~/Library/Caches/pip",
-    "~/.cache/pip",
-    "${LOCAL_APP_DATA}/pip/cache"
-]
-description = "Python wheels and distributions owned by pip. Use pip cache commands for cleanup."
+strategy = "external_command"
+paths = []
+fail_if_running = ["pip", "pip3", "python", "python3", "python.exe"]
+description = "Python wheels and distributions discovered with `pip3 cache dir` and removed with `pip3 cache purge`."
 provider = "pip"
 artifact_kind = "download_cache"
 consequence = "Python packages may need to be downloaded and rebuilt."
@@ -207,6 +206,78 @@ description = "High-speed package cache inspected and pruned by uv's supported c
 provider = "uv"
 artifact_kind = "package_store"
 consequence = "Unused packages are pruned and may be downloaded again."
+
+[[signatures]]
+id = "dev.nuget.http"
+name = "NuGet HTTP Cache"
+category = "developer"
+family = "package_managers"
+risk = "rebuild"
+strategy = "external_command"
+paths = []
+fail_if_running = ["dotnet", "dotnet.exe", "msbuild", "msbuild.exe", "devenv.exe", "nuget.exe"]
+description = "NuGet's HTTP resource cache, discovered and cleared as its own typed local resource through `dotnet nuget locals`."
+provider = "NuGet"
+artifact_kind = "download_cache"
+consequence = "Package metadata and archives may be downloaded again during restore."
+
+[[signatures]]
+id = "dev.nuget.temp"
+name = "NuGet Temporary Cache"
+category = "developer"
+family = "package_managers"
+risk = "rebuild"
+strategy = "external_command"
+paths = []
+fail_if_running = ["dotnet", "dotnet.exe", "msbuild", "msbuild.exe", "devenv.exe", "nuget.exe"]
+description = "NuGet's temporary resource directory, discovered and cleared separately through `dotnet nuget locals`."
+provider = "NuGet"
+artifact_kind = "temporary"
+consequence = "Interrupted package operations may need to recreate temporary files."
+
+[[signatures]]
+id = "dev.nuget.plugins"
+name = "NuGet Plugins Cache"
+category = "developer"
+family = "package_managers"
+risk = "rebuild"
+strategy = "external_command"
+paths = []
+fail_if_running = ["dotnet", "dotnet.exe", "msbuild", "msbuild.exe", "devenv.exe", "nuget.exe"]
+description = "NuGet's plugins resource cache, discovered and cleared separately through `dotnet nuget locals`."
+provider = "NuGet"
+artifact_kind = "download_cache"
+consequence = "NuGet credential and transport plugins may need to initialize again."
+
+[[signatures]]
+id = "dev.nuget.global_packages"
+name = "NuGet Global Packages"
+category = "developer"
+family = "package_managers"
+risk = "rebuild"
+strategy = "external_command"
+paths = []
+fail_if_running = ["dotnet", "dotnet.exe", "msbuild", "msbuild.exe", "devenv.exe", "nuget.exe"]
+description = "NuGet's expanded global package store, discovered and cleared as an explicit Rebuild action through `dotnet nuget locals`."
+provider = "NuGet"
+artifact_kind = "package_store"
+consequence = "Projects must restore all referenced packages before they can build again."
+
+[[signatures]]
+id = "dev.playwright.browsers"
+name = "Playwright Browser Binaries"
+category = "developer"
+family = "package_managers"
+risk = "manual"
+strategy = "manual"
+paths = [
+    "~/Library/Caches/ms-playwright",
+    "${LOCAL_APP_DATA}/ms-playwright"
+]
+description = "Browser binaries tracked by Playwright installations. Playwright garbage-collects unused revisions and exposes lifecycle commands, so Zenith reports this store without recursively deleting it."
+provider = "Playwright"
+artifact_kind = "package_store"
+consequence = "Removing a required revision breaks that Playwright installation until its browsers are installed again."
 
 [[signatures]]
 id = "dev.xcode.derived_data"

@@ -1,6 +1,6 @@
 use crate::models::{CacheArtifactKind, CleanerFamily};
 
-use super::ProviderSpec;
+use super::{DiscoveryOutput, ProviderSpec};
 
 pub(super) const BUILD: ProviderSpec = ProviderSpec {
     signature_id: "dev.go.build",
@@ -11,6 +11,9 @@ pub(super) const BUILD: ProviderSpec = ProviderSpec {
     consequence: "Go packages compile again on demand.",
     artifact_kind: CacheArtifactKind::BuildArtifact,
     family: CleanerFamily::Developer,
+    discovery_output: DiscoveryOutput::BarePath,
+    active_processes: &["go"],
+    runtime_dependencies: &[],
     local_toolchain_only: true,
 };
 
@@ -23,5 +26,8 @@ pub(super) const MODULE: ProviderSpec = ProviderSpec {
     consequence: "Modules may need to be downloaded again.",
     artifact_kind: CacheArtifactKind::DownloadCache,
     family: CleanerFamily::PackageManagers,
+    discovery_output: DiscoveryOutput::BarePath,
+    active_processes: &["go"],
+    runtime_dependencies: &[],
     local_toolchain_only: true,
 };

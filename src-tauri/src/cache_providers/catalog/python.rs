@@ -1,6 +1,21 @@
 use crate::models::{CacheArtifactKind, CleanerFamily};
 
-use super::ProviderSpec;
+use super::{DiscoveryOutput, ProviderSpec};
+
+pub(super) const PIP: ProviderSpec = ProviderSpec {
+    signature_id: "dev.pip.cache",
+    executable: "pip3",
+    discovery_args: &["cache", "dir"],
+    prune_args: &["cache", "purge"],
+    display_name: "pip Download and Wheel Cache",
+    consequence: "Python packages and locally built wheels may need to be downloaded or rebuilt.",
+    artifact_kind: CacheArtifactKind::DownloadCache,
+    family: CleanerFamily::PackageManagers,
+    discovery_output: DiscoveryOutput::BarePath,
+    active_processes: &["pip", "pip3", "python", "python3"],
+    runtime_dependencies: &[],
+    local_toolchain_only: false,
+};
 
 pub(super) const UV: ProviderSpec = ProviderSpec {
     signature_id: "dev.uv.cache",
@@ -11,5 +26,8 @@ pub(super) const UV: ProviderSpec = ProviderSpec {
     consequence: "Unused archives are pruned; future environments may re-download packages.",
     artifact_kind: CacheArtifactKind::PackageStore,
     family: CleanerFamily::PackageManagers,
+    discovery_output: DiscoveryOutput::BarePath,
+    active_processes: &["uv", "python", "python3"],
+    runtime_dependencies: &[],
     local_toolchain_only: false,
 };
