@@ -964,6 +964,12 @@ provider; it is never an alias for recursive deletion. Provider discovery and
 mutation use backend-owned fixed argv and fresh cache-path validation. A failed
 or missing CLI degrades locally and does not fail unrelated signatures.
 
+`docs/USER_SPACE_CLEANER_COVERAGE.md` records the five delivery workstreams and
+their evidence-backed dispositions. These are coverage workstreams, not new UI
+categories or duplicate domain families. System maintenance is deliberately
+outside that manifest and must not be smuggled into Cleanup through a
+user-visible category name.
+
 ### Lifecycle-aware providers
 
 Some reclaimable storage is not a directory under a reviewed root: it is a store

@@ -151,6 +151,12 @@ generic recursive deletion. Prefixes and age are discovery signals only: a
 broad developer temporary-workspace signature remains advisory until a
 dedicated adapter can re-derive and validate the exact unit at execution.
 
+The user-space coverage manifest in
+[`USER_SPACE_CLEANER_COVERAGE.md`](USER_SPACE_CLEANER_COVERAGE.md) is the
+evidence ledger for application, browser, automation, developer, package, and
+AI candidates. It grants no authority to `CleanerFamily::System`: system
+maintenance and system-owned roots remain a separate future workflow.
+
 ### A running owner
 
 An application that is running keeps its own cache out of the default
