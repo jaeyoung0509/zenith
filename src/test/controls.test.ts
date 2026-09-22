@@ -5,6 +5,7 @@ import Checkbox from '../lib/components/Checkbox.svelte';
 import CategoryCard from '../lib/components/CategoryCard.svelte';
 import DeletingDots from '../lib/components/DeletingDots.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
+import type { CleanupEligibility, ScanItem } from '../lib/models/types';
 
 afterEach(() => {
   scanStore.selectedMap = {};
@@ -127,9 +128,99 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('w-[7rem]');
+    expect(rendered.body).toContain('sm:min-w-[9rem]');
     expect(rendered.body).toContain('whitespace-nowrap');
     expect(rendered.body).toContain('Rebuild: 198.8 MB');
+  });
+
+  it('keeps long partial-category identity, metadata, and metrics in separate regions', () => {
+    scanStore.selectedMap = { safe: true, rebuild: true, manual: false };
+    const mib = 1024 * 1024;
+    const item = (
+      id: string,
+      risk: 'safe' | 'rebuild' | 'manual',
+      bytes: number,
+      eligibility: CleanupEligibility
+    ): ScanItem => ({
+      id,
+      signature_id: `developer.${id}`,
+      name: `${risk} cache`,
+      category: 'developer' as const,
+      risk,
+      path: `/tmp/${id}`,
+      size: { logical: bytes, allocated: bytes },
+      file_count: 1,
+      description: `${risk} cache`,
+      is_selected: id !== 'manual',
+      last_modified: 0,
+      exists: true,
+      quality: 'fresh' as const,
+      disposition: {
+        eligibility,
+        reason: null,
+        cleanable_bytes:
+          eligibility === 'auto_cleanable' || eligibility === 'reviewable' ? bytes : 0,
+      },
+    });
+
+    const rendered = render(CategoryCard, {
+      props: {
+        categoryResult: {
+          category: 'developer',
+          display_name: 'Developer Package Managers and Language Toolchains',
+          items: [
+            item('safe', 'safe', 41.6 * mib, 'auto_cleanable'),
+            item('rebuild', 'rebuild', 261.8 * mib, 'reviewable'),
+            item('manual', 'manual', 913.6 * mib, 'advisory'),
+          ],
+          total_bytes: 1217 * mib,
+          cleanable_bytes: 303.4 * mib,
+          safe_bytes: 41.6 * mib,
+          rebuild_bytes: 261.8 * mib,
+          manual_bytes: 913.6 * mib,
+          quality: 'partial',
+          skipped_entry_count: 479,
+          incomplete_item_count: 479,
+          eligibility: {
+            buckets: [
+              {
+                eligibility: 'auto_cleanable',
+                observed_bytes: 41.6 * mib,
+                cleanable_bytes: 41.6 * mib,
+                items: 1,
+              },
+              {
+                eligibility: 'reviewable',
+                observed_bytes: 261.8 * mib,
+                cleanable_bytes: 261.8 * mib,
+                items: 1,
+              },
+              {
+                eligibility: 'advisory',
+                observed_bytes: 913.6 * mib,
+                cleanable_bytes: 0,
+                items: 1,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(rendered.body).toContain('data-category-card-layout="stable"');
+    expect(rendered.body).toContain('data-region="identity"');
+    expect(rendered.body).toContain('data-region="metadata"');
+    expect(rendered.body).toContain('data-region="metrics"');
+    expect(rendered.body).toContain('Developer Package Managers and Language Toolchains');
+    expect(rendered.body).toContain('break-words');
+    expect(rendered.body).not.toContain('truncate');
+    expect(rendered.body).toContain('Partial');
+    expect(rendered.body).toContain('Safe: 41.6 MB');
+    expect(rendered.body).toContain('Rebuild: 261.8 MB');
+    expect(rendered.body).toContain('Manual: 913.6 MB');
+    expect(rendered.body).toContain('479 entries skipped');
+    expect(rendered.body).toContain('479 items not fully measured');
+    expect(rendered.body).toContain('Selected: 303.4 MB');
   });
 
   it('reports how much of a category the measurement skipped', () => {

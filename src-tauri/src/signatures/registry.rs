@@ -604,8 +604,8 @@ fn platform_token(platform: PlatformKind) -> &'static str {
 mod tests {
     use super::{ManifestLintFinding, SignatureRegistry};
     use crate::models::{
-        Category, CleanStrategy, CleanupUnitKind, DiscoveryScope, EligibilityGate, PlatformKind,
-        RiskTier, Signature,
+        CacheArtifactKind, Category, CleanStrategy, CleanupUnitKind, DiscoveryScope,
+        EligibilityGate, PlatformKind, RiskTier, Signature,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1362,37 +1362,48 @@ mod tests {
     #[test]
     fn shared_package_stores_are_never_generic_safe_deletions() {
         let registry = SignatureRegistry::load_embedded().unwrap();
-        for id in [
-            "dev.npm.cache",
-            "dev.pnpm.store",
-            "dev.yarn.cache",
-            "dev.bun.cache",
-            "dev.pip.cache",
-            "dev.uv.cache",
-            "dev.gradle.caches",
-            "dev.m2.repository",
-        ] {
-            let signature = registry.get(id).unwrap();
-            assert_ne!(signature.risk, RiskTier::Safe, "{id}");
+        for signature in registry
+            .all()
+            .into_iter()
+            .filter(|signature| signature.artifact_kind == CacheArtifactKind::PackageStore)
+        {
+            assert_ne!(signature.risk, RiskTier::Safe, "{}", signature.id);
+            assert!(
+                matches!(
+                    signature.strategy,
+                    CleanStrategy::ExternalCommand
+                        | CleanStrategy::LifecycleProvider
+                        | CleanStrategy::OwnerProvider
+                        | CleanStrategy::Manual
+                ),
+                "{} must be provider-owned or advisory, not generic filesystem cleanup",
+                signature.id
+            );
         }
-        assert_eq!(
-            registry.get("dev.uv.cache").unwrap().strategy,
-            crate::models::CleanStrategy::ExternalCommand
-        );
-        assert_eq!(
-            registry.get("dev.pnpm.store").unwrap().strategy,
-            crate::models::CleanStrategy::ExternalCommand
-        );
-        assert_eq!(
-            registry.get("dev.npm.cache").unwrap().strategy,
-            crate::models::CleanStrategy::ExternalCommand
-        );
+        for id in [
+            "dev.go.build",
+            "dev.go.mod",
+            "dev.uv.cache",
+            "dev.pnpm.store",
+            "dev.npm.cache",
+            "dev.bun.cache",
+            "dev.composer.cache",
+        ] {
+            assert_eq!(
+                registry.get(id).unwrap().strategy,
+                CleanStrategy::ExternalCommand,
+                "{id}"
+            );
+        }
         // Yarn has no version-aware adapter yet, so it stays a manual target:
         // a `rebuild` risk with a `manual` strategy would be a plan the planner
         // refuses and the interface can still select.
         let yarn = registry.get("dev.yarn.cache").unwrap();
         assert_eq!(yarn.risk, RiskTier::Manual);
-        assert_eq!(yarn.strategy, crate::models::CleanStrategy::Manual);
+        assert_eq!(yarn.strategy, CleanStrategy::Manual);
+        let rustup = registry.get("dev.rustup.downloads").unwrap();
+        assert_eq!(rustup.risk, RiskTier::Manual);
+        assert_eq!(rustup.strategy, CleanStrategy::Manual);
     }
 
     #[test]

@@ -224,6 +224,40 @@ exclusions = ["~/.cache/tool/keep.bin"]
         assert_eq!(SignatureLoader::load_str(&selector).unwrap().len(), 1);
     }
 
+    #[test]
+    fn shared_package_stores_cannot_fall_back_to_generic_deletion() {
+        let generic = r#"
+[[signatures]]
+id = "test.shared-store"
+name = "Shared Store"
+category = "developer"
+risk = "rebuild"
+strategy = "delete_contents"
+paths = ["~/.cache/shared-store"]
+provider = "ExamplePM"
+artifact_kind = "package_store"
+"#;
+        let error = SignatureLoader::load_str(generic)
+            .expect_err("a package store must not grant generic recursive deletion");
+        assert!(
+            error.to_string().contains("shared package store"),
+            "the refusal names the ownership boundary: {error}"
+        );
+
+        let advisory = generic
+            .replace("risk = \"rebuild\"", "risk = \"manual\"")
+            .replace("strategy = \"delete_contents\"", "strategy = \"manual\"");
+        assert_eq!(SignatureLoader::load_str(&advisory).unwrap().len(), 1);
+
+        let provider = generic
+            .replace(
+                "strategy = \"delete_contents\"",
+                "strategy = \"external_command\"",
+            )
+            .replace("paths = [\"~/.cache/shared-store\"]", "paths = []");
+        assert_eq!(SignatureLoader::load_str(&provider).unwrap().len(), 1);
+    }
+
     /// A manifest written the way Windows documents paths resolves, and a
     /// spelling this build does not know fails the load instead of quietly
     /// matching nothing.

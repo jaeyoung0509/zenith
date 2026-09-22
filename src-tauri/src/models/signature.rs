@@ -248,6 +248,25 @@ impl Signature {
             ));
         }
 
+        // A package store is shared state whose layout, references, and locks
+        // belong to its package manager. Generic recursion cannot prove which
+        // entries are unused and is especially prone to scan/plan drift when
+        // the store contains lockfiles or databases. Such stores must go
+        // through a reviewed owner command or remain observation-only.
+        if self.artifact_kind == CacheArtifactKind::PackageStore
+            && matches!(
+                self.strategy,
+                CleanStrategy::DeleteContents
+                    | CleanStrategy::DeleteDirectory
+                    | CleanStrategy::DeleteStaleContents
+            )
+        {
+            return invalid(
+                "a shared package store must use an owner provider/external command or remain manual; generic filesystem deletion is forbidden"
+                    .to_string(),
+            );
+        }
+
         // A selector is allowed in `paths` only: the scanner enumerates roots
         // from it, while an exclusion or a child prefix is matched against a
         // concrete name, where `*` would match nothing and silently fail to

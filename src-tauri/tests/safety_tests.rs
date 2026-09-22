@@ -3211,9 +3211,10 @@ fn scan_with(items: Vec<ScanItem>) -> ScanResult {
 #[test]
 fn a_plan_carries_the_scan_time_expectations() {
     let fixture = tempdir().expect("fixture");
-    // The catalog's Go module signature resolves `~/go/pkg/mod/cache`, so the
-    // fixture states a profile whose home is the temporary directory.
-    let cache = fixture.path().join("go/pkg/mod/cache");
+    // The Go provider carries its freshly discovered path as a staleness
+    // assertion; its catalog entry deliberately grants no generic filesystem
+    // scope.
+    let cache = fixture.path().join("go/pkg/mod");
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("payload.bin"), b"module").unwrap();
 
@@ -3244,7 +3245,11 @@ fn a_plan_carries_the_scan_time_expectations() {
     );
     item.is_selected = true;
     item.entry_kind = EntryKind::Directory;
-    item.unit = CleanupUnit::fixed_path(cache.to_string_lossy().into_owned());
+    item.unit = CleanupUnit::new(
+        CleanupUnitKind::ProviderAction,
+        cache.to_string_lossy().into_owned(),
+        cache.to_string_lossy().into_owned(),
+    );
     // The scan records the ownership the catalog declares; the planner refuses
     // an item that reports anything else.
     item.ownership = expected_owner.clone();
@@ -3258,11 +3263,11 @@ fn a_plan_carries_the_scan_time_expectations() {
         &environment,
         &no_owner_providers(),
     )
-    .expect("the catalog signature authorizes the fixture path");
-    assert_eq!(plan.mode, CleanupMode::Trash);
+    .expect("the catalog signature authorizes the fixed Go provider action");
+    assert_eq!(plan.mode, CleanupMode::PermanentDelete);
     let target = &plan.targets[0];
     assert_eq!(target.target_kind, EntryKind::Directory);
-    assert_eq!(target.unit.kind, CleanupUnitKind::FixedPath);
+    assert_eq!(target.unit.kind, CleanupUnitKind::ProviderAction);
     assert_eq!(target.unit.path, cache.to_string_lossy());
     assert_eq!(target.owner.owner, expected_owner.owner);
     assert_eq!(
