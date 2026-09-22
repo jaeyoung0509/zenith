@@ -2,16 +2,18 @@
 use crate::safety::ToctouGuard;
 use crate::safety::{Blacklist, SymlinkGuard};
 #[cfg(unix)]
-use std::ffi::OsStr;
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use zenith_platform::PlatformEnvironment;
 
 #[cfg(unix)]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, FromRawFd};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TreeDeleteReport {
@@ -19,6 +21,9 @@ pub struct TreeDeleteReport {
     pub deleted_files: usize,
     pub skipped_files: usize,
     pub errors: Vec<String>,
+    /// Policy skips are not mutation failures, but callers still need a stable
+    /// explanation when an entire target was deliberately left untouched.
+    pub skip_reasons: Vec<String>,
     /// Raw OS error codes recorded alongside `errors`, in push order, so
     /// failure classification can use the code instead of localized text.
     pub os_error_codes: Vec<i32>,
@@ -59,6 +64,93 @@ struct PermissionSnapshot {
     inode: u64,
     #[cfg(windows)]
     directory: Option<WindowsDeleteHandle>,
+}
+
+/// Metadata read with `fstatat(..., AT_SYMLINK_NOFOLLOW)` from a verified
+/// parent directory descriptor. Keeping only the facts deletion policy needs
+/// avoids resolving the display pathname to a different filesystem object.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UnixEntrySnapshot {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    uid: libc::uid_t,
+    blocks: u64,
+    modified_seconds: libc::time_t,
+    modified_nanoseconds: u32,
+}
+
+#[cfg(unix)]
+impl UnixEntrySnapshot {
+    fn from_stat(stat: &libc::stat) -> Self {
+        Self {
+            device: u64::try_from(stat.st_dev).unwrap_or(u64::MAX),
+            inode: stat.st_ino,
+            mode: u32::from(stat.st_mode),
+            uid: stat.st_uid,
+            blocks: u64::try_from(stat.st_blocks.max(0)).unwrap_or(u64::MAX),
+            modified_seconds: stat.st_mtime,
+            modified_nanoseconds: u32::try_from(stat.st_mtime_nsec.max(0)).unwrap_or(999_999_999),
+        }
+    }
+
+    fn file_type_bits(self) -> u32 {
+        self.mode & libc::S_IFMT as u32
+    }
+
+    fn is_directory(self) -> bool {
+        self.file_type_bits() == libc::S_IFDIR as u32
+    }
+
+    fn is_file(self) -> bool {
+        self.file_type_bits() == libc::S_IFREG as u32
+    }
+
+    fn is_symlink(self) -> bool {
+        self.file_type_bits() == libc::S_IFLNK as u32
+    }
+
+    fn entry_kind(self) -> crate::models::EntryKind {
+        if self.is_directory() {
+            crate::models::EntryKind::Directory
+        } else if self.is_file() {
+            crate::models::EntryKind::File
+        } else {
+            crate::models::EntryKind::Other
+        }
+    }
+
+    fn is_executable(self) -> bool {
+        self.is_file() && self.mode & 0o111 != 0
+    }
+
+    fn allocated_bytes(self) -> u64 {
+        self.blocks.saturating_mul(512)
+    }
+
+    fn modified(self) -> Option<std::time::SystemTime> {
+        if self.modified_seconds >= 0 {
+            std::time::SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(
+                self.modified_seconds as u64,
+                self.modified_nanoseconds.min(999_999_999),
+            ))
+        } else {
+            std::time::SystemTime::UNIX_EPOCH.checked_sub(std::time::Duration::from_secs(
+                self.modified_seconds.unsigned_abs(),
+            ))
+        }
+    }
+}
+
+/// A stable pre-mutation observation for one whole-directory Trash operation.
+/// The second observation must match the first before the path-based platform
+/// adapter is invoked, so changed descendants are refused instead of silently
+/// inheriting an earlier plan estimate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TrashTreeObservation {
+    measured_bytes: u64,
+    identities: Vec<(PathBuf, crate::models::CleanupIdentity)>,
 }
 
 #[cfg(windows)]
@@ -589,19 +681,81 @@ impl SafeTreeDeleter {
 
         match target.strategy() {
             crate::models::CleanStrategy::DeleteDirectory => {
-                if let Err(error) = Self::validate_trash_entry(
+                let metadata = match Self::validate_trash_entry(
                     target.path(),
                     &scope,
                     target.exclusions(),
                     environment,
                     None,
                 ) {
+                    Ok(Some(metadata)) => metadata,
+                    Ok(None) => {
+                        report.skipped_files += 1;
+                        report.skip_reasons.push(format!(
+                            "{} was skipped by cleanup policy; the directory was not moved to Trash",
+                            target.path().display()
+                        ));
+                        return report;
+                    }
+                    Err(error) => {
+                        report.errors.push(error);
+                        return report;
+                    }
+                };
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    report.errors.push(format!(
+                        "{} changed during cleanup; whole-directory Trash requires a real directory",
+                        target.path().display()
+                    ));
+                    return report;
+                }
+
+                let first = match Self::observe_trash_tree(
+                    target.path(),
+                    &scope,
+                    target.exclusions(),
+                    environment,
+                ) {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        report.errors.push(error);
+                        return report;
+                    }
+                };
+                let second = match Self::observe_trash_tree(
+                    target.path(),
+                    &scope,
+                    target.exclusions(),
+                    environment,
+                ) {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        report.errors.push(error);
+                        return report;
+                    }
+                };
+                if first != second {
+                    report.errors.push(format!(
+                        "{} changed during cleanup; refusing whole-directory Trash movement",
+                        target.path().display()
+                    ));
+                    return report;
+                }
+
+                // TrashBackend is intentionally path-based on both supported
+                // platforms. Two identical no-follow observations, followed by
+                // a final root identity check, detect replacements before the
+                // call. POSIX does not offer a conditional whole-tree Trash
+                // primitive, so a same-user leaf replacement after this final
+                // check remains outside the guarantee and must never be
+                // described as an atomic descriptor-relative deletion.
+                if let Err(error) = Self::verify_entry_identity(target.path(), &metadata) {
                     report.errors.push(error);
                     return report;
                 }
                 match backend.move_to_trash(target.path()) {
                     Ok(()) => {
-                        report.reclaimed_bytes = target.expected_bytes();
+                        report.reclaimed_bytes = second.measured_bytes;
                         report.deleted_files = 1;
                     }
                     Err(error) => report.errors.push(error),
@@ -624,6 +778,88 @@ impl SafeTreeDeleter {
             ),
         }
         report
+    }
+
+    /// Observes every entry a whole-directory Trash move would carry. A policy
+    /// skip below the root refuses the whole unit: the path-based Trash API
+    /// cannot preserve one excluded child while moving its parent.
+    fn observe_trash_tree(
+        root: &Path,
+        scope: &VerifiedCleanupScope,
+        exclusions: &[String],
+        environment: &PlatformEnvironment,
+    ) -> Result<TrashTreeObservation, String> {
+        fn visit(
+            path: &Path,
+            root: &Path,
+            scope: &VerifiedCleanupScope,
+            exclusions: &[String],
+            environment: &PlatformEnvironment,
+            observation: &mut TrashTreeObservation,
+        ) -> Result<(), String> {
+            if SafeTreeDeleter::is_excluded(path, exclusions, environment) {
+                return Err(format!(
+                    "{} is excluded; refusing to move the whole directory {} to Trash",
+                    path.display(),
+                    root.display()
+                ));
+            }
+            if Blacklist::is_blacklisted_with(path, environment) {
+                return Err(format!(
+                    "{} is a protected location; refusing to move the whole directory {} to Trash",
+                    path.display(),
+                    root.display()
+                ));
+            }
+
+            let metadata = match SafeTreeDeleter::validate_trash_entry(
+                path,
+                scope,
+                exclusions,
+                environment,
+                None,
+            )? {
+                Some(metadata) => metadata,
+                None => {
+                    return Err(format!(
+                        "{} changed or was skipped during cleanup; refusing to move the whole directory {} to Trash",
+                        path.display(),
+                        root.display()
+                    ))
+                }
+            };
+            let identity = crate::safety::ToctouGuard::capture(path).ok_or_else(|| {
+                format!(
+                    "Could not verify filesystem identity for {}; refusing whole-directory Trash movement",
+                    path.display()
+                )
+            })?;
+            observation.identities.push((path.to_path_buf(), identity));
+
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                let mut children = fs::read_dir(path)
+                    .map_err(|error| format!("{}: {}", path.display(), error))?
+                    .map(|entry| {
+                        entry
+                            .map(|entry| entry.path())
+                            .map_err(|error| error.to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                children.sort();
+                for child in children {
+                    visit(&child, root, scope, exclusions, environment, observation)?;
+                }
+            } else {
+                observation.measured_bytes = observation
+                    .measured_bytes
+                    .saturating_add(allocated_bytes(&metadata));
+            }
+            Ok(())
+        }
+
+        let mut observation = TrashTreeObservation::default();
+        visit(root, root, scope, exclusions, environment, &mut observation)?;
+        Ok(observation)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -767,10 +1003,322 @@ impl SafeTreeDeleter {
         Ok(Some(metadata))
     }
 
-    /// Deletes directory children using the already-verified parent directory
-    /// descriptor. The final unlink for every child goes through `unlinkat`
-    /// on that descriptor, so replacing or redirecting any parent component
-    /// after validation cannot redirect deletion outside the planned scope.
+    #[cfg(unix)]
+    fn child_name_cstring(name: &OsStr) -> io::Result<CString> {
+        let bytes = name.as_bytes();
+        if bytes.is_empty() || bytes.contains(&b'/') || bytes == b"." || bytes == b".." {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing unsafe child name",
+            ));
+        }
+        CString::new(bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing child name containing NUL",
+            )
+        })
+    }
+
+    #[cfg(unix)]
+    fn clear_readdir_errno() {
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd",
+            target_os = "dragonfly"
+        ))]
+        unsafe {
+            *libc::__error() = 0;
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        unsafe {
+            *libc::__errno_location() = 0;
+        }
+    }
+
+    /// Enumerates basenames through a duplicate of the verified directory
+    /// descriptor. `fdopendir` owns the duplicate, while the caller retains the
+    /// original descriptor for metadata, child opens, and mutation.
+    #[cfg(unix)]
+    fn read_dir_names(dir_file: &fs::File) -> io::Result<Vec<OsString>> {
+        let duplicate = unsafe { libc::dup(dir_file.as_raw_fd()) };
+        if duplicate < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe { libc::fcntl(duplicate, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+            let error = io::Error::last_os_error();
+            unsafe {
+                libc::close(duplicate);
+            }
+            return Err(error);
+        }
+        let stream = unsafe { libc::fdopendir(duplicate) };
+        if stream.is_null() {
+            let error = io::Error::last_os_error();
+            unsafe {
+                libc::close(duplicate);
+            }
+            return Err(error);
+        }
+
+        let mut names = Vec::new();
+        let read_result = loop {
+            Self::clear_readdir_errno();
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                let error = io::Error::last_os_error();
+                break if error.raw_os_error().unwrap_or(0) == 0 {
+                    Ok(())
+                } else {
+                    Err(error)
+                };
+            }
+            let bytes = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            names.push(OsString::from_vec(bytes.to_vec()));
+        };
+        let close_result = unsafe { libc::closedir(stream) };
+        read_result?;
+        if close_result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    /// Reads a child's no-follow metadata relative to the verified parent.
+    #[cfg(unix)]
+    fn metadata_at(parent: &fs::File, name: &OsStr) -> io::Result<UnixEntrySnapshot> {
+        let name = Self::child_name_cstring(name)?;
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::fstatat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                &mut stat,
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result == 0 {
+            Ok(UnixEntrySnapshot::from_stat(&stat))
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// Reads a symlink target from the verified parent descriptor without
+    /// resolving the display pathname to a possibly replaced directory.
+    #[cfg(unix)]
+    fn read_link_at(parent: &fs::File, name: &OsStr) -> io::Result<PathBuf> {
+        let name = Self::child_name_cstring(name)?;
+        let mut capacity = 256usize;
+        loop {
+            let mut buffer = vec![0u8; capacity];
+            let length = unsafe {
+                libc::readlinkat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    buffer.as_mut_ptr() as *mut libc::c_char,
+                    buffer.len(),
+                )
+            };
+            if length < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let length = length as usize;
+            if length < buffer.len() {
+                buffer.truncate(length);
+                return Ok(PathBuf::from(OsString::from_vec(buffer)));
+            }
+            capacity = capacity.checked_mul(2).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "symlink target is too large")
+            })?;
+            if capacity > 64 * 1024 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "symlink target exceeds the safety bound",
+                ));
+            }
+        }
+    }
+
+    /// Applies the existing symlink-target blacklist to the target read from
+    /// the verified descriptor. `Ok(false)` means the target vanished and the
+    /// link is conservatively retained as a neutral skip.
+    #[cfg(unix)]
+    fn validate_symlink_target_at(
+        parent: &fs::File,
+        name: &OsStr,
+        display_path: &Path,
+        environment: &PlatformEnvironment,
+    ) -> Result<bool, String> {
+        let target = Self::read_link_at(parent, name)
+            .map_err(|error| format!("{}: {}", display_path.display(), error))?;
+        let resolved = if target.is_absolute() {
+            target
+        } else {
+            display_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(target)
+        };
+        Blacklist::validate_with(&resolved, environment).map_err(|error| error.to_string())?;
+        let canonical = match fs::canonicalize(&resolved) {
+            Ok(canonical) => canonical,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(format!(
+                    "Could not verify symlink target for {}: {}",
+                    display_path.display(),
+                    error
+                ))
+            }
+        };
+        Blacklist::validate_with(&canonical, environment).map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
+    #[cfg(unix)]
+    fn verify_child_identity(
+        parent: &fs::File,
+        name: &OsStr,
+        expected: UnixEntrySnapshot,
+        display_path: &Path,
+    ) -> Result<bool, String> {
+        let current = match Self::metadata_at(parent, name) {
+            Ok(current) => current,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(format!(
+                    "Could not re-verify cleanup entry {}: {}",
+                    display_path.display(),
+                    error
+                ))
+            }
+        };
+        if current.device != expected.device
+            || current.inode != expected.inode
+            || current.file_type_bits() != expected.file_type_bits()
+        {
+            return Err(format!(
+                "Entry changed during cleanup: {}",
+                display_path.display()
+            ));
+        }
+        Ok(true)
+    }
+
+    /// Confirms that the display pathname still names the directory held by
+    /// the descriptor. This is a refusal check, not the traversal primitive:
+    /// enumeration and all child opens remain descriptor-relative.
+    #[cfg(unix)]
+    fn verify_directory_path_binding(path: &Path, directory: &fs::File) -> Result<(), String> {
+        let current = fs::symlink_metadata(path).map_err(|error| {
+            format!(
+                "Directory changed during cleanup: {} ({})",
+                path.display(),
+                error
+            )
+        })?;
+        let held = directory.metadata().map_err(|error| {
+            format!(
+                "Could not re-verify cleanup directory {}: {}",
+                path.display(),
+                error
+            )
+        })?;
+        if current.file_type().is_symlink()
+            || !current.is_dir()
+            || current.dev() != held.dev()
+            || current.ino() != held.ino()
+        {
+            return Err(format!(
+                "Directory changed during cleanup: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Opens a child directory relative to the verified parent and compares the
+    /// resulting descriptor with the no-follow metadata observed for that same
+    /// basename before applying temporary owner permissions.
+    #[cfg(unix)]
+    fn prepare_directory_at(
+        parent: &fs::File,
+        name: &OsStr,
+        expected: UnixEntrySnapshot,
+        display_path: &Path,
+    ) -> Result<PermissionSnapshot, String> {
+        let name = Self::child_name_cstring(name).map_err(|error| error.to_string())?;
+        let descriptor = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            return Err(format!(
+                "Permission denied: could not safely open cleanup directory ({}): {}",
+                display_path.display(),
+                io::Error::last_os_error()
+            ));
+        }
+        let directory = unsafe { fs::File::from_raw_fd(descriptor) };
+        let metadata = directory.metadata().map_err(|error| {
+            format!(
+                "Could not verify cleanup directory {}: {}",
+                display_path.display(),
+                error
+            )
+        })?;
+        if metadata.dev() != expected.device
+            || metadata.ino() != expected.inode
+            || !metadata.is_dir()
+        {
+            return Err(format!(
+                "Directory changed during cleanup: {}",
+                display_path.display()
+            ));
+        }
+
+        let effective_uid = unsafe { libc::geteuid() };
+        if expected.uid != effective_uid {
+            return Err(format!(
+                "Permission denied: cleanup directory is not owned by the current user: {}",
+                display_path.display()
+            ));
+        }
+        let original_mode = expected.mode & 0o7777;
+        let required_mode = original_mode | 0o700;
+        if required_mode != original_mode {
+            directory
+                .set_permissions(fs::Permissions::from_mode(required_mode))
+                .map_err(|error| {
+                    format!(
+                        "Permission denied: could not make cleanup directory writable ({}): {}",
+                        display_path.display(),
+                        error
+                    )
+                })?;
+        }
+        Ok(PermissionSnapshot {
+            original_mode: (required_mode != original_mode).then_some(original_mode),
+            directory: Some(directory),
+            device: expected.device,
+            inode: expected.inode,
+        })
+    }
+
+    /// Deletes directory children through one verified descriptor chain.
+    /// Enumeration (`readdir`), metadata (`fstatat`), recursive child opens
+    /// (`openat`), and mutation (`unlinkat`) all use the same parent handle.
     #[cfg(unix)]
     fn delete_dir_contents_via_fd(
         dir_path: &Path,
@@ -781,30 +1329,37 @@ impl SafeTreeDeleter {
         stale_policy: Option<super::StaleEntryPolicy>,
         report: &mut TreeDeleteReport,
     ) {
-        let entries = match fs::read_dir(dir_path) {
-            Ok(e) => e.collect::<Vec<_>>(),
-            Err(e) => {
-                report.errors.push(e.to_string());
+        if let Err(error) = Self::verify_directory_path_binding(dir_path, dir_file) {
+            report.errors.push(error);
+            return;
+        }
+        let parent_metadata = match dir_file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                report.errors.push(format!(
+                    "Could not read cleanup directory {}: {}",
+                    dir_path.display(),
+                    error
+                ));
+                return;
+            }
+        };
+        let entries = match Self::read_dir_names(dir_file) {
+            Ok(entries) => entries,
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("{}: {}", dir_path.display(), error));
                 return;
             }
         };
 
-        for entry in entries {
-            let ent = match entry {
-                Ok(ent) => ent,
-                Err(e) => {
-                    report.errors.push(e.to_string());
-                    continue;
-                }
-            };
-            let child_path = ent.path();
-            let Some(file_name) = child_path.file_name() else {
-                report.errors.push(format!(
-                    "Could not determine file name for {}",
-                    child_path.display()
-                ));
-                continue;
-            };
+        for file_name in entries {
+            if let Err(error) = Self::verify_directory_path_binding(dir_path, dir_file) {
+                report.errors.push(error);
+                return;
+            }
+            let child_path = dir_path.join(&file_name);
 
             if Self::is_excluded(&child_path, exclusions, environment)
                 || Blacklist::is_blacklisted_with(&child_path, environment)
@@ -813,86 +1368,107 @@ impl SafeTreeDeleter {
                 continue;
             }
 
-            let metadata = match fs::symlink_metadata(&child_path) {
-                Ok(m) => m,
+            if let Err(error) = Self::validate_lexical_scope(&child_path, verified_scope) {
+                report.errors.push(error);
+                continue;
+            }
+
+            let metadata = match Self::metadata_at(dir_file, &file_name) {
+                Ok(metadata) => metadata,
                 // A vanished entry is already in the desired state: the
                 // deletion postcondition holds, so it is a neutral skip rather
                 // than an error. Nothing was reclaimed.
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     report.skipped_files += 1;
                     continue;
                 }
-                Err(e) => {
+                Err(error) => {
                     report
                         .errors
-                        .push(format!("{}: {}", child_path.display(), e));
+                        .push(format!("{}: {}", child_path.display(), error));
                     continue;
                 }
             };
 
-            // The preflight ran before deletion began. Reclassify each entry
-            // here as well so a newly inserted structured file is never unlinked.
-            if let Some((kind, _)) = report
-                .protect_structured_state
-                .then(|| super::structured_state_at(&child_path))
-                .flatten()
-            {
+            let name = file_name.to_string_lossy();
+            if report.protect_structured_state {
+                let facts = crate::models::PathFacts::new(&name, metadata.entry_kind())
+                    .executable(metadata.is_executable());
+                if let Some(kind) = crate::models::classify_structured_state(facts) {
+                    report.errors.push(format!(
+                        "{} is {}; refusing structured state",
+                        child_path.display(),
+                        kind.display_name()
+                    ));
+                    continue;
+                }
+            }
+
+            let effective_uid = unsafe { libc::geteuid() };
+            if metadata.uid != effective_uid {
                 report.errors.push(format!(
-                    "{} is {}; refusing structured state",
-                    child_path.display(),
-                    kind.display_name()
+                    "Permission denied: cleanup entry is not owned by the current user: {}",
+                    child_path.display()
                 ));
                 continue;
             }
 
-            if let Err(error) = Self::validate_verified_scope(&child_path, verified_scope) {
-                report.errors.push(error);
-                continue;
-            }
-            if let Err(error) =
-                SymlinkGuard::validate_canonical_blacklist_strict(&child_path, environment)
-            {
-                // Same neutrality as the metadata arm above: the entry is gone,
-                // so there is nothing to mutate and nothing to report.
-                if crate::safety::is_already_absent(&error) {
-                    report.skipped_files += 1;
-                    continue;
+            if metadata.is_symlink() {
+                match Self::validate_symlink_target_at(
+                    dir_file,
+                    &file_name,
+                    &child_path,
+                    environment,
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        report.skipped_files += 1;
+                        continue;
+                    }
+                    Err(error) => {
+                        report
+                            .errors
+                            .push(format!("{}: {}", child_path.display(), error));
+                        continue;
+                    }
                 }
-                report
-                    .errors
-                    .push(format!("{}: {}", child_path.display(), error));
-                continue;
-            }
-            if let Err(error) = Self::validate_entry_owner(&child_path, &metadata) {
-                report.errors.push(error);
-                continue;
             }
 
-            if metadata.file_type().is_symlink() || metadata.is_file() {
-                if let Err(error) = Self::verify_entry_identity(&child_path, &metadata) {
-                    report.errors.push(error);
-                    continue;
-                }
+            if metadata.is_symlink() || metadata.is_file() {
                 // An entry is removed only when its own age satisfies the
                 // policy. A directory is still descended into: its entries are
                 // judged one by one, and it disappears only if it ends up empty.
                 if let Some(policy) = stale_policy {
-                    let name = file_name.to_string_lossy().into_owned();
                     if !policy.allows(
                         &name,
-                        super::stale::entry_kind(&metadata),
-                        super::stale::is_executable(&metadata),
-                        metadata.modified().ok(),
+                        metadata.entry_kind(),
+                        metadata.is_executable(),
+                        metadata.modified(),
                         std::time::SystemTime::now(),
                     ) {
                         report.skipped_files += 1;
                         continue;
                     }
                 }
-                let bytes = allocated_bytes(&metadata);
-                match Self::unlink_via_parent(dir_file, file_name, false) {
+                match Self::verify_child_identity(dir_file, &file_name, metadata, &child_path) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        report.skipped_files += 1;
+                        continue;
+                    }
+                    Err(error) => {
+                        report.errors.push(error);
+                        continue;
+                    }
+                }
+                if let Err(error) = Self::verify_directory_path_binding(dir_path, dir_file) {
+                    report.errors.push(error);
+                    return;
+                }
+                let bytes = metadata.allocated_bytes();
+                match Self::unlink_via_parent(dir_file, &file_name, false) {
                     Ok(()) => {
-                        report.reclaimed_bytes += bytes;
+                        report.reclaimed_bytes = report.reclaimed_bytes.saturating_add(bytes);
                         report.deleted_files += 1;
                     }
                     // The entry vanished between verification and unlink. It is
@@ -909,22 +1485,38 @@ impl SafeTreeDeleter {
                 continue;
             }
 
-            if !metadata.is_dir() {
+            if !metadata.is_directory() {
+                continue;
+            }
+            if metadata.device != parent_metadata.dev() {
+                report.errors.push(format!(
+                    "{} crosses a mount boundary; refusing recursive cleanup",
+                    child_path.display()
+                ));
                 continue;
             }
 
             // Recurse with the child's own verified descriptor.
-            let child_permissions = match Self::prepare_directory(&child_path, &metadata) {
-                Ok(snapshot) => snapshot,
-                Err(error) => {
-                    report.errors.push(error);
+            let child_permissions =
+                match Self::prepare_directory_at(dir_file, &file_name, metadata, &child_path) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        report.errors.push(error);
+                        continue;
+                    }
+                };
+            match Self::verify_child_identity(dir_file, &file_name, metadata, &child_path) {
+                Ok(true) => {}
+                Ok(false) => {
+                    report.skipped_files += 1;
+                    Self::restore_directory_permissions(&child_path, child_permissions, report);
                     continue;
                 }
-            };
-            if let Err(error) = Self::verify_directory_identity(&child_path, &child_permissions) {
-                report.errors.push(error);
-                Self::restore_directory_permissions(&child_path, child_permissions, report);
-                continue;
+                Err(error) => {
+                    report.errors.push(error);
+                    Self::restore_directory_permissions(&child_path, child_permissions, report);
+                    continue;
+                }
             }
             if let Some(ref child_file) = child_permissions.directory {
                 Self::delete_dir_contents_via_fd(
@@ -942,10 +1534,31 @@ impl SafeTreeDeleter {
                 Self::restore_directory_permissions(&child_path, child_permissions, report);
                 continue;
             }
+            match Self::verify_child_identity(dir_file, &file_name, metadata, &child_path) {
+                Ok(true) => {}
+                Ok(false) => {
+                    report.errors.push(format!(
+                        "Directory changed during cleanup: {} is no longer attached to its verified parent",
+                        child_path.display()
+                    ));
+                    Self::restore_directory_permissions(&child_path, child_permissions, report);
+                    continue;
+                }
+                Err(error) => {
+                    report.errors.push(error);
+                    Self::restore_directory_permissions(&child_path, child_permissions, report);
+                    continue;
+                }
+            }
+            if let Err(error) = Self::verify_directory_path_binding(dir_path, dir_file) {
+                report.errors.push(error);
+                Self::restore_directory_permissions(&child_path, child_permissions, report);
+                return;
+            }
             // Remove the now-empty child directory relative to the verified
             // parent descriptor. The child's own permissions are restored
             // implicitly by removing it; only restore on failure.
-            match Self::unlink_via_parent(dir_file, file_name, true) {
+            match Self::unlink_via_parent(dir_file, &file_name, true) {
                 Ok(()) => {}
                 // The child directory vanished after its contents were walked.
                 // It is already gone, so this is neutral and needs no
@@ -971,31 +1584,18 @@ impl SafeTreeDeleter {
     }
 
     /// Unlinks a child name relative to a verified parent directory
-    /// descriptor. Never re-resolves the full path for the final mutation.
+    /// descriptor. The caller performs a no-follow `fstatat` identity check
+    /// immediately before this call. POSIX has no conditional unlink-by-inode,
+    /// so this does not claim to eliminate a hostile same-user replacement in
+    /// the final check-to-unlink instruction window; it does ensure pathname
+    /// replacement cannot redirect traversal to another parent object.
     #[cfg(unix)]
     fn unlink_via_parent(parent: &fs::File, name: &OsStr, is_dir: bool) -> io::Result<()> {
-        use std::os::unix::ffi::OsStrExt;
-
-        let bytes = name.as_bytes();
-        if bytes.is_empty() || bytes.contains(&b'/') || bytes == b"." || bytes == b".." {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "refusing to unlink unsafe child name",
-            ));
-        }
-        let mut buf = Vec::with_capacity(bytes.len() + 1);
-        buf.extend_from_slice(bytes);
-        buf.push(0);
+        let name = Self::child_name_cstring(name)?;
         let flags = if is_dir { libc::AT_REMOVEDIR } else { 0 };
-        // SAFETY: `buf` is a NUL-terminated non-empty basename without `/`,
+        // SAFETY: `name` is a NUL-terminated non-empty basename without `/`,
         // and `parent` is a verified directory fd opened with O_NOFOLLOW.
-        let res = unsafe {
-            libc::unlinkat(
-                parent.as_raw_fd(),
-                buf.as_ptr() as *const libc::c_char,
-                flags,
-            )
-        };
+        let res = unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), flags) };
         if res == 0 {
             Ok(())
         } else {
@@ -1109,7 +1709,7 @@ impl SafeTreeDeleter {
                 // Prefer descriptor-relative unlink via the verified parent.
                 // Falls back to path removal only when the parent cannot be
                 // opened safely, in which case the error fails closed.
-                match Self::remove_file_via_verified_parent(path) {
+                match Self::remove_file_via_verified_parent(path, &metadata) {
                     Ok(()) => {
                         report.reclaimed_bytes += bytes;
                         report.deleted_files += 1;
@@ -1185,11 +1785,19 @@ impl SafeTreeDeleter {
                 Self::restore_directory_permissions(path, permissions, report);
                 return;
             }
+            if let Some(ref directory) = permissions.directory {
+                if let Err(error) = Self::verify_directory_path_binding(path, directory) {
+                    report.errors.push(error);
+                    Self::restore_directory_permissions(path, permissions, report);
+                    return;
+                }
+            }
             // The top-level directory itself is removed relative to its own
             // verified parent so a replaced parent cannot redirect it.
             // `delete_contents` never reaches here for its root (it returns
             // after `delete_dir_contents_via_fd`); `delete_path` removes it.
-            let remove_result = Self::remove_dir_via_verified_parent(path);
+            let remove_result =
+                Self::remove_dir_via_verified_parent(path, permissions.device, permissions.inode);
             match remove_result {
                 Ok(()) => {}
                 // The directory (or its parent) vanished between the walk and
@@ -1323,15 +1931,39 @@ impl SafeTreeDeleter {
     /// Removes a single file/symlink relative to its verified parent
     /// directory descriptor opened with O_DIRECTORY | O_NOFOLLOW.
     #[cfg(unix)]
-    fn remove_file_via_verified_parent(path: &Path) -> io::Result<()> {
+    fn remove_file_via_verified_parent(path: &Path, expected: &fs::Metadata) -> io::Result<()> {
         let (parent, name) = Self::open_parent_nofollow(path)?;
+        let current = Self::metadata_at(&parent, &name)?;
+        if current.device != expected.dev()
+            || current.inode != expected.ino()
+            || current.file_type_bits() != (expected.mode() & libc::S_IFMT as u32)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "entry changed between verification and deletion",
+            ));
+        }
         Self::unlink_via_parent(&parent, &name, false)
     }
 
     /// Removes an empty directory relative to its verified parent descriptor.
     #[cfg(unix)]
-    fn remove_dir_via_verified_parent(path: &Path) -> io::Result<()> {
+    fn remove_dir_via_verified_parent(
+        path: &Path,
+        expected_device: u64,
+        expected_inode: u64,
+    ) -> io::Result<()> {
         let (parent, name) = Self::open_parent_nofollow(path)?;
+        let current = Self::metadata_at(&parent, &name)?;
+        if !current.is_directory()
+            || current.device != expected_device
+            || current.inode != expected_inode
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory changed between verification and deletion",
+            ));
+        }
         Self::unlink_via_parent(&parent, &name, true)
     }
 
@@ -1496,23 +2128,21 @@ impl SafeTreeDeleter {
     ) {
         #[cfg(unix)]
         if let Some(original_mode) = snapshot.original_mode {
-            // Never restore through a replacement or symlink. If the entry
-            // changed while cleanup was running, leave it untouched and let
-            // the next scan surface the change.
-            let Ok(metadata) = fs::symlink_metadata(path) else {
+            // Restore through the retained descriptor. Resolving `path` here
+            // could chmod a replacement, while the handle still identifies
+            // exactly the directory whose mode this snapshot changed.
+            let Some(directory) = snapshot.directory.as_ref() else {
                 return;
             };
-            if metadata.file_type().is_symlink()
-                || !metadata.is_dir()
+            let Ok(metadata) = directory.metadata() else {
+                return;
+            };
+            if !metadata.is_dir()
                 || metadata.dev() != snapshot.device
                 || metadata.ino() != snapshot.inode
             {
                 return;
             }
-
-            let Some(directory) = snapshot.directory.as_ref() else {
-                return;
-            };
             if let Err(error) = directory.set_permissions(fs::Permissions::from_mode(original_mode))
             {
                 report.errors.push(format!(
@@ -1679,15 +2309,7 @@ impl SafeTreeDeleter {
         path: &Path,
         verified_scope: &VerifiedCleanupScope,
     ) -> Result<(), String> {
-        let normalized_path = zenith_platform::path_algebra::normalize_lexical(path);
-        if normalized_path != verified_scope.lexical_root
-            && !normalized_path.starts_with(&verified_scope.lexical_root)
-        {
-            return Err(format!(
-                "Path escaped the verified cleanup target: {}",
-                path.display()
-            ));
-        }
+        Self::validate_lexical_scope(path, verified_scope)?;
 
         // A final symlink is removed as a link and is never traversed. For all
         // real files/directories, also compare canonical paths so a replaced
@@ -1712,6 +2334,26 @@ impl SafeTreeDeleter {
         })?;
         if canonical_path.as_path() != canonical_root.as_path()
             && !canonical_path.starts_with(canonical_root)
+        {
+            return Err(format!(
+                "Path escaped the verified cleanup target: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Verifies the display spelling remains inside the authorized unit. Unix
+    /// descriptor-relative traversal uses this lexical half and relies on the
+    /// already-verified descriptor chain, rather than canonicalizing a pathname
+    /// that may now name a different object.
+    fn validate_lexical_scope(
+        path: &Path,
+        verified_scope: &VerifiedCleanupScope,
+    ) -> Result<(), String> {
+        let normalized_path = zenith_platform::path_algebra::normalize_lexical(path);
+        if normalized_path != verified_scope.lexical_root
+            && !normalized_path.starts_with(&verified_scope.lexical_root)
         {
             return Err(format!(
                 "Path escaped the verified cleanup target: {}",
@@ -1886,6 +2528,104 @@ mod tests {
 
         assert!(SafeTreeDeleter::verify_directory_identity(&root, &snapshot).is_ok());
         drop(snapshot);
+    }
+
+    /// The walk must not inspect a replacement at the approved spelling and
+    /// then unlink the same basename from the directory handle captured before
+    /// the replacement. The explicit sequence between `prepare_directory` and
+    /// `delete_dir_contents_via_fd` is the deterministic barrier for the race.
+    #[cfg(unix)]
+    #[test]
+    fn root_replacement_between_handle_acquisition_and_enumeration_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("cache");
+        let relocated = fixture.path().join("relocated");
+        std::fs::create_dir(&root).unwrap();
+        let original_payload = root.join("payload.bin");
+        std::fs::write(&original_payload, b"original protected payload").unwrap();
+
+        let scope = SafeTreeDeleter::capture_verified_scope(&root).unwrap();
+        let metadata = std::fs::symlink_metadata(&root).unwrap();
+        let snapshot = SafeTreeDeleter::prepare_directory(&root, &metadata).unwrap();
+
+        // Controlled barrier: the retained descriptor names `relocated`, while
+        // the approved spelling now names a different ordinary directory.
+        std::fs::rename(&root, &relocated).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let replacement_payload = root.join("payload.bin");
+        std::fs::write(&replacement_payload, b"replacement payload").unwrap();
+
+        let relocated_payload = relocated.join("payload.bin");
+        let mut executable = std::fs::metadata(&relocated_payload).unwrap().permissions();
+        executable.set_mode(executable.mode() | 0o100);
+        std::fs::set_permissions(&relocated_payload, executable).unwrap();
+
+        let mut report = TreeDeleteReport {
+            protect_structured_state: true,
+            ..Default::default()
+        };
+        SafeTreeDeleter::delete_dir_contents_via_fd(
+            &root,
+            snapshot.directory.as_ref().unwrap(),
+            &scope,
+            &[],
+            &environment(),
+            None,
+            &mut report,
+        );
+
+        assert!(
+            relocated_payload.exists(),
+            "the protected entry behind the retained handle must remain"
+        );
+        assert!(
+            replacement_payload.exists(),
+            "the replacement entry inspected through the pathname must remain"
+        );
+        assert_eq!(report.reclaimed_bytes, 0);
+        assert_eq!(report.deleted_files, 0);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.contains("changed during cleanup")),
+            "the refusal must name the identity change: {:?}",
+            report.errors
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_child_open_is_bound_to_the_parent_observation() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("cache");
+        let child = root.join("nested");
+        let relocated = root.join("relocated");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(child.join("original.bin"), b"original").unwrap();
+
+        let root_metadata = std::fs::symlink_metadata(&root).unwrap();
+        let root_snapshot = SafeTreeDeleter::prepare_directory(&root, &root_metadata).unwrap();
+        let root_handle = root_snapshot.directory.as_ref().unwrap();
+        let observed = SafeTreeDeleter::metadata_at(root_handle, OsStr::new("nested")).unwrap();
+
+        std::fs::rename(&child, &relocated).unwrap();
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("replacement.bin"), b"replacement").unwrap();
+
+        let result = SafeTreeDeleter::prepare_directory_at(
+            root_handle,
+            OsStr::new("nested"),
+            observed,
+            &child,
+        );
+        assert!(result
+            .expect_err("a replacement child must not inherit the prior observation")
+            .contains("changed during cleanup"));
+        assert!(relocated.join("original.bin").exists());
+        assert!(child.join("replacement.bin").exists());
     }
 
     #[cfg(unix)]
