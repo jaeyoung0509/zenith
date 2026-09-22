@@ -1,7 +1,14 @@
 //! Explicit, read-only real-machine scan evidence. No cleanup plan or executor.
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use zenith_lib::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry};
-use zenith_lib::models::{CancellationProbe, Category, CleanStrategy};
+use zenith_lib::docker::{ContainerHost, DockerAdapter};
+use zenith_lib::models::{CancellationProbe, Category, CleanStrategy, ScanEvent};
+use zenith_lib::orbstack::OrbStackAdapter;
 use zenith_lib::scanner::ScanEngine;
 use zenith_lib::signatures::SignatureRegistry;
 use zenith_platform::PlatformEnvironment;
@@ -13,10 +20,34 @@ impl CancellationProbe for Deadline {
     }
 }
 
+struct ProviderDeadline {
+    started: Instant,
+    cancel: Arc<AtomicBool>,
+}
+
+impl CancellationProbe for ProviderDeadline {
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed) || self.started.elapsed() >= Duration::from_secs(60)
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().nth(1).as_deref() != Some("--live-read-only") {
+    let args: BTreeSet<_> = std::env::args().skip(1).collect();
+    let allowed = [
+        "--live-read-only",
+        "--providers-read-only",
+        "--providers-cancel-after-first-root",
+        "--containers-read-only",
+    ];
+    if !args.contains("--live-read-only")
+        || (args.contains("--providers-cancel-after-first-root")
+            && !args.contains("--providers-read-only"))
+        || args
+            .iter()
+            .any(|argument| !allowed.contains(&argument.as_str()))
+    {
         return Err(
-            "usage: cargo run -p zenith-desktop --example scan_machine -- --live-read-only".into(),
+            "usage: cargo run -p zenith-desktop --example scan_machine -- --live-read-only [--providers-read-only [--providers-cancel-after-first-root]] [--containers-read-only]".into(),
         );
     }
     // This executable is its own composition root. All platform facts are
@@ -106,8 +137,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         })
         .collect();
+    let provider_scan = args
+        .contains("--providers-read-only")
+        .then(|| {
+            scan_providers(
+                &embedded,
+                &environment,
+                args.contains("--providers-cancel-after-first-root"),
+            )
+        })
+        .transpose()?;
+    let container_scan = args
+        .contains("--containers-read-only")
+        .then(|| scan_containers(&environment));
     let report = serde_json::json!({
-        "schema": 1,
+        "schema": 2,
         "version": env!("CARGO_PKG_VERSION"),
         "platform": environment.platform(),
         "started_at": result.started_at,
@@ -123,7 +167,128 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "cancelled": result.cancelled,
         "skipped_entries": result.skipped_entry_count,
         "incomplete_items": result.incomplete_item_count,
+        "provider_scan": provider_scan,
+        "container_scan": container_scan,
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+fn scan_providers(
+    embedded: &SignatureRegistry,
+    environment: &PlatformEnvironment,
+    cancel_after_first_root: bool,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    const PROVIDERS: [(&str, &str); 3] = [
+        ("dev.uv.cache", "uv"),
+        ("dev.pnpm.store", "pnpm"),
+        ("dev.npm.cache", "npm"),
+    ];
+
+    let mut registry = SignatureRegistry::new();
+    for (signature_id, _) in PROVIDERS {
+        let signature = embedded
+            .get(signature_id)
+            .ok_or_else(|| format!("missing provider signature {signature_id}"))?;
+        if signature.strategy != CleanStrategy::ExternalCommand {
+            return Err(format!("{signature_id} is no longer a provider signature").into());
+        }
+        registry.register(signature.clone());
+    }
+
+    let mut root_events = BTreeMap::<String, u64>::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancellation = ProviderDeadline {
+        started: Instant::now(),
+        cancel: Arc::clone(&cancel),
+    };
+    let result = ScanEngine::scan(
+        &registry,
+        &LifecycleProviderRegistry::new(Vec::new()),
+        &OwnerProviderRegistry::new(Vec::new()),
+        Some(&[Category::Developer]),
+        &[],
+        false,
+        environment,
+        &cancellation,
+        |event| {
+            if let ScanEvent::RootStarted { signature_id, .. } = event {
+                *root_events.entry(signature_id).or_default() += 1;
+                if cancel_after_first_root {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            }
+        },
+    );
+
+    let providers: Vec<_> = PROVIDERS
+        .iter()
+        .map(|(signature_id, executable)| {
+            let items: Vec<_> = result
+                .categories
+                .iter()
+                .flat_map(|category| &category.items)
+                .filter(|item| item.signature_id == *signature_id)
+                .collect();
+            serde_json::json!({
+                "signature_id": signature_id,
+                "tool_detected": zenith_lib::tooling::resolve_with(executable, environment).is_some(),
+                "root_events": root_events.get(*signature_id).copied().unwrap_or_default(),
+                "items": items.len(),
+                "observed_bytes": items.iter().map(|item| item.size.observed_bytes()).sum::<u64>(),
+                "cleanable_bytes": items.iter().map(|item| item.cleanable_bytes()).sum::<u64>(),
+                "quality": items.first().map(|item| item.quality),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "scope": "fixed-argument cache-directory discovery and measurement; no prune command",
+        "cancellation_trigger": cancel_after_first_root.then_some("after_first_root_started"),
+        "providers": providers,
+        "metrics": result.metrics,
+        "quality": result.quality,
+        "gaps": result.gaps,
+        "cancelled": result.cancelled,
+        "skipped_entries": result.skipped_entry_count,
+        "incomplete_items": result.incomplete_item_count,
+    }))
+}
+
+fn scan_containers(environment: &PlatformEnvironment) -> serde_json::Value {
+    let docker_host = std::env::var("DOCKER_HOST").ok();
+    let host_was_stated = docker_host
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let status = DockerAdapter::get_status(environment, &ContainerHost::from_value(docker_host));
+    let overview = status.overview.as_ref().map(|overview| {
+        serde_json::json!({
+            "images": overview.images,
+            "containers": overview.containers,
+            "volumes": overview.volumes,
+            "build_cache": overview.build_cache,
+            "total_bytes": overview.total_bytes,
+            "total_reclaimable_bytes": overview.total_reclaimable_bytes,
+            "safe_cleanable_bytes": overview.safe_cleanable_bytes,
+        })
+    });
+    let orbstack_items = OrbStackAdapter::scan_items(environment);
+
+    serde_json::json!({
+        "scope": "fixed-argument runtime inspection and local metadata; no prune or delete command",
+        "docker": {
+            "host_was_stated": host_was_stated,
+            "cli_available": status.is_available,
+            "daemon_running": status.is_running,
+            "overview": overview,
+            "image_count": status.images.len(),
+            "container_count": status.containers.len(),
+            "volume_count": status.volumes.len(),
+        },
+        "orbstack": {
+            "items": orbstack_items.len(),
+            "observed_bytes": orbstack_items.iter().map(|item| item.size.observed_bytes()).sum::<u64>(),
+            "cleanable_bytes": orbstack_items.iter().map(|item| item.cleanable_bytes()).sum::<u64>(),
+        },
+    })
 }

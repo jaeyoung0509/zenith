@@ -198,3 +198,14 @@ exercise Recycle Bin actions, Docker/provider commands, or destructive cleanup;
 those manual fixture cases still require separate evidence. A partial result
 must remain partial in the run record. No Windows 11 desktop execution is
 recorded by the 0.3.45 Mac evidence added in this series.
+
+The helper now also accepts `--providers-read-only` and
+`--containers-read-only` for fixed-argument aggregate inspection, plus
+`--providers-cancel-after-first-root` to record cooperative provider
+cancellation after a progress event. Those options still do not exercise a
+Recycle Bin action or any prune/delete path. The
+[0.3.48 macOS record](validation/2026-09-22-macos-0.3.48.json) demonstrates the
+record shape only; it is not Windows evidence. As of 2026-09-22, no supported
+Windows 11 desktop record has been committed, so every row in the manual matrix
+and issue #224 remain open. See [VALIDATION_SIGNOFF.md](VALIDATION_SIGNOFF.md)
+for the evidence-class boundary.
