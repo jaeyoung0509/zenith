@@ -85,16 +85,17 @@ fn app_state_builds_every_shared_handle_from_the_stated_environment() {
     // resolve through the stated profile rather than the host's.
     let home_relative = state
         .registry
-        .get("dev.go.mod")
+        .get("dev.rustup.downloads")
         .expect("the embedded catalog is loaded");
     let resolved = state
         .registry
         .resolve_paths(home_relative, &state.environment);
     assert_eq!(
         resolved,
-        vec![std::path::PathBuf::from(
-            r"D:\Users\tester\go\pkg\mod\cache"
-        )],
+        vec![
+            std::path::PathBuf::from(r"D:\Users\tester\.rustup\downloads"),
+            std::path::PathBuf::from(r"D:\Users\tester\.rustup\tmp"),
+        ],
         "the stated profile decides where a home-relative path resolves"
     );
 

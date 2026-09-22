@@ -401,6 +401,7 @@ impl NativePlatformPaths {
             let mut roots = vec![
                 PathBuf::from("/opt/homebrew/bin"),
                 PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/local/go/bin"),
                 PathBuf::from("/usr/bin"),
                 PathBuf::from("/Applications"),
                 PathBuf::from("/Applications/Docker.app/Contents/Resources/bin"),
@@ -423,7 +424,11 @@ impl NativePlatformPaths {
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
-            vec![PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]
+            vec![
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/local/go/bin"),
+            ]
         }
     }
 
@@ -508,7 +513,11 @@ impl NativePlatformPaths {
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
-            vec![PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]
+            vec![
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/local/go/bin"),
+            ]
         }
     }
 

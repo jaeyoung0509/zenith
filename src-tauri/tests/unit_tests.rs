@@ -50,10 +50,12 @@ fn test_signature_registry_categories_and_risk_counts() {
         );
     }
 
-    // AI and Dev safe signatures check
+    // Safe cleanup stays narrow; owner-managed language caches are Rebuild
+    // actions because they can trigger compilation or downloads.
     let safe_sigs = registry.by_risk(RiskTier::Safe);
     assert!(safe_sigs.iter().any(|s| s.id == "ai.claude.logs"));
-    assert!(safe_sigs.iter().any(|s| s.id == "dev.go.build"));
+    let rebuild_sigs = registry.by_risk(RiskTier::Rebuild);
+    assert!(rebuild_sigs.iter().any(|s| s.id == "dev.go.build"));
 }
 
 #[test]

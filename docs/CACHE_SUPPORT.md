@@ -14,38 +14,59 @@ runs; they are never presented as promised free-space recovery.
 
 ## Programming-language ecosystems
 
-| Language | Provider family / evidence | macOS | Windows | Cleanup consequence |
-| --- | --- | --- | --- | --- |
-| JavaScript / TypeScript | Node manifests; npm, pnpm, Yarn, Bun | pnpm `tool_managed`; project `node_modules`; others `advisory` | same | package download / project restore |
-| Python | project manifest + `pyvenv.cfg`; uv, pip | uv `tool_managed`; venv `project_only`; pip `advisory` | same | download, wheel build, environment restore |
-| Java | Maven/Gradle project markers | `project_only`; shared stores `advisory` | same | dependency download / build |
-| C | CMake generated metadata; native-build family | `project_only` | `project_only` | compile and link |
-| C++ | CMake generated metadata; native-build family | `project_only` | `project_only` | compile and link |
-| C# | `.sln`/`.csproj` plus `bin`/`obj`; NuGet | `project_only`; NuGet `advisory` | same | restore and compile |
-| Go | Go build/module cache family | `full` / `project_only` | `full` / `project_only` | compile or module download |
-| Rust | Cargo target/registry/git; rustup downloads | `full` / `project_only` | same | crate download / compile |
-| PHP | Composer manifest and generated vendor metadata | `project_only` | `project_only` | `composer install` |
-| Ruby | Gemfile plus Bundler project tree | `project_only` | `project_only` | `bundle install` |
-| Kotlin | shared JVM Gradle/Maven family | `project_only`; stores `advisory` | same | dependency download / build |
-| Swift | SwiftPM `.build`; Xcode DerivedData | `project_only` / `full` | unavailable | rebuild and re-index |
-| Objective-C | shared Xcode/CocoaPods/SPM family | Xcode `full`; CocoaPods `advisory` | unavailable | rebuild and re-index |
-| Dart | pubspec and Flutter generated metadata | `project_only`; pub GC `advisory` | same | package restore |
-| Scala | shared JVM sbt/Ivy/Coursier family | `advisory` | `advisory` | dependency download / compile |
-| Clojure | shared JVM Lein/Clojure/Maven family | `advisory` | `advisory` | dependency download / compile |
-| R | renv shared cache and symlinked libraries | `advisory` | `advisory` | package restore; never remove linked library blindly |
-| Julia | depot and `Pkg.gc()` | `advisory` | `advisory` | package/artifact download and precompile |
-| Elixir / Erlang | Mix manifest plus `_build`/`deps`; Hex/Rebar | `project_only`; stores `advisory` | same | dependency restore / compile |
-| Haskell | Cabal/Stack owned work and stores | `advisory` | `advisory` | dependency download / compile |
-| Zig | versioned project/global caches | `advisory` | `advisory` | compile |
-| Lua | LuaRocks project trees and owner cache | `advisory` | `advisory` | package restore |
-| HCL / Terraform | `.terraform.lock.hcl` or `.tf` plus `.terraform` | `project_only` | `project_only` | provider/module download; state is never touched |
-| SQL | no language-owned generic cache | `not_applicable` | `not_applicable` | application/database specific |
-| Shell | no language-owned generic cache | `not_applicable` | `not_applicable` | tool specific |
-| HTML / CSS | no language-owned generic cache | `not_applicable` | `not_applicable` | framework/build-tool specific |
+| Priority | Language | Actual cache owner(s) | Zenith mode on macOS / Windows | Reason or consequence |
+| ---: | --- | --- | --- | --- |
+| 1 | TypeScript | npm, pnpm, Yarn, Bun; project build tools | npm/pnpm/Bun `tool_managed`; Yarn `advisory`; project outputs `project_only` | packages may download again; the language owns no global cache |
+| 2 | JavaScript | npm, pnpm, Yarn, Bun; project build tools | same as TypeScript | shared with TypeScript; never count the same provider twice |
+| 3 | Python | uv, pip, Poetry, Conda; virtual environments | uv `tool_managed`; pip/Poetry/Conda `advisory`; environments `project_only` | interpreter/version ownership must be preserved |
+| 4 | Java | Gradle, Maven | project outputs `project_only`; shared stores `advisory` | Gradle owns automatic GC; Maven purge is project-scoped |
+| 5 | C# | NuGet; MSBuild `bin`/`obj` | project outputs `project_only`; NuGet `advisory` | restore and compile; add `dotnet nuget locals` only as an owner provider |
+| 6 | PHP | Composer | Composer cache `tool_managed`; `vendor` `project_only` | packages and metadata may download again |
+| 7 | Shell | concrete tools invoked by scripts | `not_applicable` | shell itself has no language-owned cache |
+| 8 | C++ | CMake, Conan, vcpkg and compiler caches | project outputs `project_only`; shared stores `advisory` | compile/link or dependency restore |
+| 9 | Go | Go build and module caches | both `tool_managed` | `go clean -cache` recompiles; `-modcache` re-downloads modules |
+| 10 | C | CMake, Conan, vcpkg and compiler caches | project outputs `project_only`; shared stores `advisory` | shared with the C++ native-build family |
+| 11 | Kotlin | Gradle, Maven | project outputs `project_only`; shared stores `advisory` | shared JVM owner family, not a Kotlin-specific global cache |
+| 12 | Rust | Cargo; rustup | Cargo typed owner provider / `project_only`; rustup `advisory` | crate download/compile; installer state is not generic cache |
+| 13 | SQL | database/application engines | `not_applicable` | databases and journals are structured state, never language cache |
+| 14 | Ruby | RubyGems, Bundler | project bundle `project_only`; shared gems `advisory` | installed gems and reusable downloads need different ownership |
+| 15 | Dart | Dart/Flutter pub | project outputs `project_only`; shared pub cache `advisory` | owner GC/clean is interactive or version-sensitive |
+| 16 | Swift | SwiftPM; Xcode | SwiftPM `.build` `project_only`; DerivedData `full` on macOS | project rebuild and Xcode re-index; unavailable on Windows |
+| 17 | R | pak, renv | `advisory` | linked project libraries make blind shared-cache deletion unsafe |
+| 18 | Lua | LuaRocks | project trees/shared store `advisory` | owner/version semantics vary |
+| 19 | PowerShell | module managers and concrete commands | `not_applicable` | history, profiles, credentials and modules are user state |
+| 20 | Objective-C | Xcode, CocoaPods, SwiftPM | Xcode generated data `full` on macOS; CocoaPods `advisory` | rebuild/re-index; unavailable on Windows |
+| 21 | Scala | sbt, Ivy, Coursier, Maven | project/shared stores `advisory` | overlapping JVM stores require owner-aware accounting |
+| 22 | Groovy | Gradle, Maven, Grape | project outputs `project_only`; shared stores `advisory` | shared JVM family; no broad `~/.gradle` recursion |
+| 23 | Haskell | Cabal, Stack | `advisory` | global stores and project work require distinct owner contracts |
+| 24 | Perl | CPAN, cpanm | `advisory` | installed modules, build work and download caches can coexist |
+| 25 | Julia | `Pkg` depot | `advisory` | add `Pkg.gc()` only through a bounded Julia provider |
+| 26 | Elixir / Erlang | Mix, Hex, Rebar3 | project `_build`/`deps` `project_only`; stores `advisory` | dependency restore and compile |
+| 27 | Clojure | Clojure CLI, Leiningen, Maven | `advisory` | shares Maven artifacts and owner locks with the JVM family |
+| 28 | OCaml | opam, dune | project outputs `project_only`; opam state `advisory` | switches contain installed packages, not disposable cache |
+| 29 | Zig | Zig compiler cache | `advisory` | global/local layouts are version-sensitive; compile again |
+| 30 | Solidity | Foundry, Hardhat and npm | project outputs `project_only`; shared downloads `advisory` | compiler/artifact ownership belongs to the concrete tool |
 
-Shared providers are counted once: Java/Kotlin/Scala/Clojure use the JVM family;
-C/C++ use native-build providers; Swift/Objective-C use Apple build providers;
-and JavaScript/TypeScript use Node providers.
+The priority list is intentionally language-complete while implementation is
+owner-based. Shared providers are registered once: Java/Kotlin/Groovy/Scala/
+Clojure use JVM owners; C/C++ use native-build owners; Swift/Objective-C use
+Apple build owners; and TypeScript/JavaScript share Node/Bun owners. `advisory`
+is a safety decision, not missing permission to recursively delete a familiar
+dot-directory.
+
+## Developer AI and LLM tools
+
+| Tool family | Observed storage | Zenith disposition |
+| --- | --- | --- |
+| Codex, Claude Code, Gemini CLI, Cursor | roots can mix sessions, settings, credentials, logs, extensions and transient files | Only separately documented cache/log subpaths may be catalogued; broad roots remain Manual |
+| Hugging Face Hub | content-addressed model and dataset revisions | Manual model inventory today; a future provider may use `hf cache prune --yes`, while targeted revision/model removal stays explicit |
+| Ollama | named model manifests and blobs | Existing typed inventory/removal; never generic cache cleanup |
+| LM Studio | models plus application/session state | Existing typed inventory; no documented generic owner cleanup command |
+| Local compilation runtimes | kernels, autotune records, optimized engines and model weights | Generated kernels may be Rebuild only under an independently proven root; weights, sessions and configured engines are Manual |
+
+Large size does not turn LLM state into cache. Credentials, conversations,
+prompts, settings, model weights and user-selected revisions keep their typed or
+Manual lifecycle even when they live beside disposable files.
 
 ## GPU and local-AI runtimes
 
@@ -78,17 +99,35 @@ SLM is a model-size label, not a storage owner.
 
 ## Provider contracts shipped in 0.3
 
+- `Go build cache`: discover with `go env GOCACHE`, clear with `go clean
+  -cache`.
+- `Go module cache`: discover with `go env GOMODCACHE`, clear with `go clean
+  -modcache`.
 - `uv`: discover with `uv cache dir`, prune with `uv cache prune`.
 - `pnpm`: discover with `pnpm store path`, prune with `pnpm store prune`.
+- `npm`: discover with `npm config get cache`, clear with `npm cache clean
+  --force` as an explicit Rebuild action.
+- `Bun`: discover with `bun pm cache`, clear with `bun pm cache rm`.
+- `Composer`: discover with `composer --no-interaction --no-plugins config
+  --global cache-dir --absolute`, clear with `composer --no-interaction
+  --no-plugins clear-cache`.
 
-Both adapters use a resolved trusted executable, fixed arguments, a 15-second
+All adapters use a resolved trusted executable, fixed arguments, a 15-second
 timeout, bounded output, current-user containment, symlink/reparse rejection,
 fresh path discovery before and after mutation, active-process refusal, the
 global cleanup operation gate, and the existing bounded one-shot scan/delete
-plan. Unavailable or failing providers are skipped without failing the broader
-scan. npm, pip, NuGet, Yarn, Hugging Face, Gradle, Maven, Bun, Dart, Julia,
-Haskell, Zig, LuaRocks, and mixed AI roots stay advisory until equally narrow
-contracts are implemented.
+plan. Go additionally removes cache/path overrides and sets
+`GOTOOLCHAIN=local`, so inspection cannot download another toolchain or redirect
+authority. Composer disables plugins during discovery and cleanup so a cache
+action cannot execute user- or project-supplied plugin code. Unavailable or
+failing providers are skipped without failing the broader scan.
+
+pip, Poetry, Conda, NuGet, Yarn, Hugging Face, Gradle, Maven, Dart, Julia,
+RubyGems, R package managers, Haskell, Zig, LuaRocks, CPAN, opam, Foundry and
+mixed AI roots stay advisory until equally narrow contracts are implemented.
+Most importantly, every `package_store` catalog entry is rejected at load time
+if it attempts to use a generic filesystem-delete strategy. It must use a
+backend owner provider, a fixed external command, or remain Manual.
 
 ## Sources
 
@@ -114,13 +153,18 @@ rules use these primary sources:
   [npm cache](https://docs.npmjs.com/cli/v7/commands/npm-cache/),
   [pip cache](https://pip.pypa.io/en/stable/cli/pip_cache/), and
   [NuGet local resources](https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders)
+- [Go module cache](https://go.dev/ref/mod),
+  [Go cache management](https://go.dev/doc/manage-install), and
+  [Composer command-line interface](https://getcomposer.org/doc/03-cli.md)
 - [Gradle cache cleanup](https://docs.gradle.org/current/userguide/directory_layout.html),
   [Maven project purge](https://maven.apache.org/components/plugins/maven-dependency-plugin/examples/purging-local-repository.html),
   [Yarn cache clean](https://yarnpkg.com/cli/cache/clean),
-  [Bun global cache](https://bun.com/docs/pm/global-cache), and
+  [Bun package-manager CLI](https://bun.sh/docs/pm/cli/pm), and
   [Dart pub cache](https://dart.dev/tools/pub/cmd/pub-cache)
 - [Hugging Face cache management](https://huggingface.co/docs/huggingface_hub/guides/manage-cache)
-  and [renv cache semantics](https://rstudio.github.io/renv/articles/package-install.html)
+  [Ollama CLI](https://docs.ollama.com/cli),
+  [LM Studio CLI](https://lmstudio.ai/docs/cli), and
+  [renv cache semantics](https://rstudio.github.io/renv/articles/package-install.html)
 
 Review this matrix annually and whenever an owner changes its storage or cleanup
 contract.

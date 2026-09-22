@@ -1,8 +1,8 @@
 use crate::models::{
     derive_cleanup_disposition, AbsolutePath, CacheArtifactKind, CacheManagementMode,
     CacheMetadata, CacheSizeSemantics, CancellationProbe, CanonicalPath, Category,
-    CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitKind, DispositionFacts,
-    EligibilityGate, EntryKind, ObservationQuality, RiskTier, ScanGapKind, ScanItem,
+    CleanupEligibility, CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind,
+    ObservationQuality, RiskTier, ScanGapKind, ScanItem,
 };
 use crate::safety::{Blacklist, SymlinkGuard};
 use crate::scanner::{
@@ -20,74 +20,138 @@ use zenith_platform::PlatformEnvironment;
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DISCOVERY_OUTPUT: usize = 16 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ProviderKind {
+    GoBuild,
+    GoModule,
     Uv,
     Pnpm,
     Npm,
+    Bun,
+    Composer,
 }
 
 impl ProviderKind {
-    const ALL: [Self; 3] = [Self::Uv, Self::Pnpm, Self::Npm];
+    const ALL: [Self; 7] = [
+        Self::GoBuild,
+        Self::GoModule,
+        Self::Uv,
+        Self::Pnpm,
+        Self::Npm,
+        Self::Bun,
+        Self::Composer,
+    ];
 
     fn signature_id(self) -> &'static str {
         match self {
+            Self::GoBuild => "dev.go.build",
+            Self::GoModule => "dev.go.mod",
             Self::Uv => "dev.uv.cache",
             Self::Pnpm => "dev.pnpm.store",
             Self::Npm => "dev.npm.cache",
+            Self::Bun => "dev.bun.cache",
+            Self::Composer => "dev.composer.cache",
         }
     }
 
     fn for_signature(id: &str) -> Option<Self> {
         match id {
+            "dev.go.build" => Some(Self::GoBuild),
+            "dev.go.mod" => Some(Self::GoModule),
             "dev.uv.cache" => Some(Self::Uv),
             "dev.pnpm.store" => Some(Self::Pnpm),
             "dev.npm.cache" => Some(Self::Npm),
+            "dev.bun.cache" => Some(Self::Bun),
+            "dev.composer.cache" => Some(Self::Composer),
             _ => None,
         }
     }
 
     fn executable(self) -> &'static str {
         match self {
+            Self::GoBuild | Self::GoModule => "go",
             Self::Uv => "uv",
             Self::Pnpm => "pnpm",
             Self::Npm => "npm",
+            Self::Bun => "bun",
+            Self::Composer => "composer",
         }
     }
 
     fn discovery_args(self) -> &'static [&'static str] {
         match self {
+            Self::GoBuild => &["env", "GOCACHE"],
+            Self::GoModule => &["env", "GOMODCACHE"],
             Self::Uv => &["cache", "dir"],
             Self::Pnpm => &["store", "path"],
             // Prints the single configured cache directory.
             Self::Npm => &["config", "get", "cache"],
+            Self::Bun => &["pm", "cache"],
+            // Disable plugins during inspection: a cache probe must not run
+            // project- or user-supplied Composer plugin code.
+            Self::Composer => &[
+                "--no-interaction",
+                "--no-plugins",
+                "config",
+                "--global",
+                "cache-dir",
+                "--absolute",
+            ],
         }
     }
 
     fn prune_args(self) -> &'static [&'static str] {
         match self {
+            Self::GoBuild => &["clean", "-cache"],
+            Self::GoModule => &["clean", "-modcache"],
             Self::Uv => &["cache", "prune"],
             Self::Pnpm => &["store", "prune"],
             Self::Npm => &["cache", "clean", "--force"],
+            Self::Bun => &["pm", "cache", "rm"],
+            Self::Composer => &["--no-interaction", "--no-plugins", "clear-cache"],
         }
     }
 
     fn display_name(self) -> &'static str {
         match self {
+            Self::GoBuild => "Go Build Cache",
+            Self::GoModule => "Go Module Cache",
             Self::Uv => "uv Package Cache",
             Self::Pnpm => "pnpm Content-Addressable Store",
             Self::Npm => "npm Cache",
+            Self::Bun => "Bun Package Cache",
+            Self::Composer => "Composer Cache",
         }
     }
 
     fn consequence(self) -> &'static str {
         match self {
+            Self::GoBuild => "Go packages compile again on demand.",
+            Self::GoModule => "Modules may need to be downloaded again.",
             Self::Uv => "Unused archives are pruned; future environments may re-download packages.",
             Self::Pnpm => {
                 "Unreferenced packages are pruned; future installs may download them again."
             }
             Self::Npm => "A full cleanup can force package downloads on later installs.",
+            Self::Bun => "Packages may need to be downloaded again on later installs.",
+            Self::Composer => {
+                "PHP packages and repository metadata may need to be downloaded again."
+            }
         }
+    }
+
+    fn artifact_kind(self) -> CacheArtifactKind {
+        match self {
+            Self::GoBuild => CacheArtifactKind::BuildArtifact,
+            Self::GoModule => CacheArtifactKind::DownloadCache,
+            Self::Uv | Self::Pnpm | Self::Npm | Self::Bun | Self::Composer => {
+                CacheArtifactKind::PackageStore
+            }
+        }
+    }
+
+    fn is_go(self) -> bool {
+        matches!(self, Self::GoBuild | Self::GoModule)
     }
 }
 
@@ -177,7 +241,7 @@ impl ProviderCommandRunner for NativeProviderCommandRunner {
         }
         let mut command = Command::new(executable);
         command.args(provider.discovery_args());
-        strip_cache_environment(&mut command);
+        configure_provider_command(provider, &mut command);
         match zenith_platform::subprocess::run_with_timeout_cancellable(
             command,
             PROVIDER_TIMEOUT,
@@ -255,10 +319,9 @@ impl CacheProviderRegistry {
         measurer: &dyn ProviderMeasurer,
     ) -> CacheProviderScan {
         let mut result = CacheProviderScan::default();
-        // Provider discovery is deliberately sequential. Starting all three
-        // CLIs at once would make a user stop incapable of preventing later
-        // probes, while three bounded lookups do not justify that lifecycle
-        // ambiguity.
+        // Provider discovery is deliberately sequential. Starting every CLI
+        // at once would make a user stop incapable of preventing later probes,
+        // while these bounded lookups do not justify that lifecycle ambiguity.
         for provider in ProviderKind::ALL {
             if cancellation.is_cancelled() {
                 result.cancelled = true;
@@ -397,7 +460,7 @@ impl CacheProviderRegistry {
         let cache_metadata = CacheMetadata {
             provider: provider.executable().to_string(),
             management_mode: CacheManagementMode::ToolManaged,
-            artifact_kind: CacheArtifactKind::PackageStore,
+            artifact_kind: provider.artifact_kind(),
             consequence: provider.consequence().to_string(),
             size_semantics,
             last_used_confidence: Default::default(),
@@ -420,7 +483,7 @@ impl CacheProviderRegistry {
             path: path_text.clone(),
             size: measurement.size,
             file_count: measurement.file_count,
-            description: "Inspected and pruned by the owning package manager.".to_string(),
+            description: "Inspected and pruned by the owning tool.".to_string(),
             cache_metadata,
             disposition,
             // The provider owns both the discovery and the invalidation; the
@@ -430,7 +493,10 @@ impl CacheProviderRegistry {
                 path_text.clone(),
                 path_text,
             ),
-            ownership: CleanupOwnership::declared(provider.executable().to_string()),
+            // The planner compares this claim with the catalog. Reuse the
+            // catalog projection instead of manufacturing a stronger
+            // executable-name claim (for example `go` versus provider `Go`).
+            ownership: signature.ownership(),
             age: None,
             stale: None,
             structured_state: None,
@@ -543,7 +609,7 @@ fn run_provider(
     validate_executable(&executable, environment)?;
     let mut command = Command::new(executable);
     command.args(args);
-    strip_cache_environment(&mut command);
+    configure_provider_command(provider, &mut command);
     zenith_platform::subprocess::run_with_timeout(command, PROVIDER_TIMEOUT)
         .map_err(|error| error.to_string())
 }
@@ -551,6 +617,10 @@ fn run_provider(
 // Discovery and mutation must see the same cache configuration. Explicitly
 // remove both npm spellings: environment keys are case-sensitive on Unix.
 const CACHE_PATH_ENVIRONMENT: &[&str] = &[
+    "GOCACHE",
+    "GOMODCACHE",
+    "GOPATH",
+    "GOENV",
     "UV_CACHE_DIR",
     "XDG_CACHE_HOME",
     "XDG_DATA_HOME",
@@ -563,11 +633,26 @@ const CACHE_PATH_ENVIRONMENT: &[&str] = &[
     "NPM_CONFIG_USERCONFIG",
     "npm_config_globalconfig",
     "NPM_CONFIG_GLOBALCONFIG",
+    "BUN_INSTALL_CACHE_DIR",
+    "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
+    "COMPOSER_CACHE_DIR",
+    "COMPOSER_HOME",
 ];
 
 fn strip_cache_environment(command: &mut Command) {
     for variable in CACHE_PATH_ENVIRONMENT {
         command.env_remove(variable);
+    }
+}
+
+fn configure_provider_command(provider: ProviderKind, command: &mut Command) {
+    strip_cache_environment(command);
+    if provider.is_go() {
+        // Go's default `auto` toolchain mode may download a different toolchain
+        // merely to answer `go env` or perform `go clean`. Inspection and
+        // cleanup must not create the cache they are measuring or access the
+        // network as a side effect.
+        command.env("GOTOOLCHAIN", "local");
     }
 }
 
@@ -703,6 +788,9 @@ fn cache_location_approved(canonical: &Path, canonical_home: &Path, flavor: Path
         canonical_home.join("Library/pnpm"),
         canonical_home.join(".pnpm-store"),
         canonical_home.join(".npm"),
+        canonical_home.join(".bun/install/cache"),
+        canonical_home.join(".composer/cache"),
+        canonical_home.join("go/pkg/mod"),
     ];
     broad_cache_roots.iter().any(|root| {
         !path_is_same(canonical, root, flavor) && path_is_within(canonical, root, flavor)
@@ -815,10 +903,13 @@ fn bounded_message(bytes: &[u8]) -> String {
 mod tests {
     use super::{cache_location_approved, node_manager_roots, parse_discovered_path, AbsolutePath};
     use super::{
-        strip_cache_environment, NativeProviderMeasurer, ProviderCommandResult,
-        ProviderCommandRunner, ProviderKind, ProviderMeasurer, CACHE_PATH_ENVIRONMENT,
+        configure_provider_command, strip_cache_environment, NativeProviderMeasurer,
+        ProviderCommandResult, ProviderCommandRunner, ProviderKind, ProviderMeasurer,
+        CACHE_PATH_ENVIRONMENT,
     };
-    use crate::models::{CancellationProbe, NeverCancelled, ObservationQuality, ScanGapKind};
+    use crate::models::{
+        CancellationProbe, CleanStrategy, NeverCancelled, ObservationQuality, ScanGapKind,
+    };
     use crate::scanner::{NoRootProgress, PathMeasurement, ScanLimits, TraversalCounters};
     use crate::signatures::SignatureRegistry;
     use std::path::PathBuf;
@@ -828,33 +919,20 @@ mod tests {
     use zenith_platform::paths::SimulatedPaths;
     use zenith_platform::PlatformEnvironment;
 
+    #[derive(Default)]
     struct FakeRunner {
-        uv: ProviderCommandResult,
-        pnpm: ProviderCommandResult,
-        npm: ProviderCommandResult,
+        responses: std::collections::HashMap<ProviderKind, ProviderCommandResult>,
         calls: Mutex<Vec<ProviderKind>>,
     }
 
     impl FakeRunner {
-        fn new(
-            uv: ProviderCommandResult,
-            pnpm: ProviderCommandResult,
-            npm: ProviderCommandResult,
-        ) -> Self {
-            Self {
-                uv,
-                pnpm,
-                npm,
-                calls: Mutex::new(Vec::new()),
-            }
+        fn with(mut self, provider: ProviderKind, result: ProviderCommandResult) -> Self {
+            self.responses.insert(provider, result);
+            self
         }
 
         fn absent() -> Self {
-            Self::new(
-                ProviderCommandResult::Absent,
-                ProviderCommandResult::Absent,
-                ProviderCommandResult::Absent,
-            )
+            Self::default()
         }
 
         fn calls(&self) -> Vec<ProviderKind> {
@@ -870,11 +948,10 @@ mod tests {
             _cancellation: &dyn CancellationProbe,
         ) -> ProviderCommandResult {
             self.calls.lock().unwrap().push(provider);
-            match provider {
-                ProviderKind::Uv => self.uv.clone(),
-                ProviderKind::Pnpm => self.pnpm.clone(),
-                ProviderKind::Npm => self.npm.clone(),
-            }
+            self.responses
+                .get(&provider)
+                .cloned()
+                .unwrap_or(ProviderCommandResult::Absent)
         }
     }
 
@@ -958,6 +1035,24 @@ mod tests {
     }
 
     #[test]
+    fn go_commands_disable_automatic_toolchain_downloads() {
+        let mut command = Command::new("go-fixture");
+        command.env("GOTOOLCHAIN", "auto");
+        command.env("GOMODCACHE", "/untrusted/mod-cache");
+        configure_provider_command(ProviderKind::GoModule, &mut command);
+        let variables: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_string_lossy().into_owned(), value))
+            .collect();
+
+        assert_eq!(
+            variables.get("GOTOOLCHAIN"),
+            Some(&Some(std::ffi::OsStr::new("local")))
+        );
+        assert_eq!(variables.get("GOMODCACHE"), Some(&None));
+    }
+
+    #[test]
     fn npm_provider_is_wired_to_its_signature_and_commands() {
         assert_eq!(
             ProviderKind::for_signature("dev.npm.cache"),
@@ -973,6 +1068,23 @@ mod tests {
             &["cache", "clean", "--force"]
         );
         assert_eq!(ProviderKind::for_signature("dev.yarn.cache"), None);
+    }
+
+    #[test]
+    fn language_cache_providers_use_fixed_owner_commands() {
+        assert_eq!(ProviderKind::GoBuild.discovery_args(), &["env", "GOCACHE"]);
+        assert_eq!(ProviderKind::GoBuild.prune_args(), &["clean", "-cache"]);
+        assert_eq!(
+            ProviderKind::GoModule.discovery_args(),
+            &["env", "GOMODCACHE"]
+        );
+        assert_eq!(ProviderKind::GoModule.prune_args(), &["clean", "-modcache"]);
+        assert_eq!(ProviderKind::Bun.discovery_args(), &["pm", "cache"]);
+        assert_eq!(ProviderKind::Bun.prune_args(), &["pm", "cache", "rm"]);
+        assert_eq!(
+            ProviderKind::Composer.prune_args(),
+            &["--no-interaction", "--no-plugins", "clear-cache"]
+        );
     }
 
     #[test]
@@ -1109,9 +1221,12 @@ mod tests {
         // npm/pnpm/uv may be installed on this host; the environment states
         // they are absent, and a stated absence is never re-discovered.
         let environment = PlatformEnvironment::simulated(PathFlavor::current())
+            .with_missing_tool("go")
             .with_missing_tool("npm")
             .with_missing_tool("pnpm")
-            .with_missing_tool("uv");
+            .with_missing_tool("uv")
+            .with_missing_tool("bun")
+            .with_missing_tool("composer");
         let registry = SignatureRegistry::load_embedded().unwrap();
         let counters = TraversalCounters::default();
         let result = super::CacheProviderRegistry::scan_items(
@@ -1126,6 +1241,53 @@ mod tests {
         assert!(result.items.is_empty());
         assert!(result.failures.is_empty());
         assert!(!result.cancelled);
+    }
+
+    #[test]
+    fn a_go_module_cache_with_toolchain_locks_is_plannable_through_go() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join("go/pkg/mod");
+        let download = cache.join("cache/download/golang.org/toolchain/@v");
+        std::fs::create_dir_all(&download).unwrap();
+        std::fs::write(
+            download.join("v0.0.1-go1.24.0.darwin-arm64.lock"),
+            b"owner lock fixture",
+        )
+        .unwrap();
+
+        let environment = fixture_environment(home.path());
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let runner =
+            FakeRunner::absent().with(ProviderKind::GoModule, successful_discovery(&cache));
+        let counters = TraversalCounters::default();
+        let result = super::CacheProviderRegistry::scan_items_with(
+            &registry,
+            &[],
+            &environment,
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
+            &runner,
+            &NativeProviderMeasurer,
+        );
+
+        assert!(result.failures.is_empty());
+        assert_eq!(result.items.len(), 1);
+        let mut item = result.items.into_iter().next().unwrap();
+        assert_eq!(item.signature_id, "dev.go.mod");
+        item.is_selected = true;
+
+        let owner_providers = crate::cleaner::OwnerProviderRegistry::new(Vec::new());
+        let plan = crate::safety::SafetyPlanner::create_plan_with_environment(
+            &[item],
+            &registry,
+            &environment,
+            &owner_providers,
+        )
+        .expect("Go owns its valid lockfiles; generic structured-state checks do not apply");
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].strategy, CleanStrategy::ExternalCommand);
     }
 
     #[test]
@@ -1147,17 +1309,24 @@ mod tests {
         );
 
         assert!(result.items.is_empty());
-        assert_eq!(runner.calls(), vec![ProviderKind::Pnpm, ProviderKind::Npm]);
+        assert_eq!(
+            runner.calls(),
+            vec![
+                ProviderKind::GoBuild,
+                ProviderKind::GoModule,
+                ProviderKind::Pnpm,
+                ProviderKind::Npm,
+                ProviderKind::Bun,
+                ProviderKind::Composer,
+            ]
+        );
     }
 
     #[test]
     fn command_cancellation_stops_before_later_providers() {
         let registry = SignatureRegistry::load_embedded().unwrap();
-        let runner = FakeRunner::new(
-            ProviderCommandResult::Cancelled,
-            ProviderCommandResult::Absent,
-            ProviderCommandResult::Absent,
-        );
+        let runner =
+            FakeRunner::absent().with(ProviderKind::GoBuild, ProviderCommandResult::Cancelled);
         let counters = TraversalCounters::default();
         let progress = RecordingProgress::default();
         let result = super::CacheProviderRegistry::scan_items_with(
@@ -1174,21 +1343,25 @@ mod tests {
 
         assert!(result.cancelled);
         assert!(result.items.is_empty());
-        assert_eq!(runner.calls(), vec![ProviderKind::Uv]);
+        assert_eq!(runner.calls(), vec![ProviderKind::GoBuild]);
     }
 
     #[test]
     fn malformed_and_timed_out_discovery_are_typed_scan_failures() {
         let registry = SignatureRegistry::load_embedded().unwrap();
-        let runner = FakeRunner::new(
-            ProviderCommandResult::Output {
-                success: true,
-                stdout: b"relative/cache\n".to_vec(),
-                stderr: Vec::new(),
-            },
-            ProviderCommandResult::Failed("command timed out".to_string()),
-            ProviderCommandResult::Absent,
-        );
+        let runner = FakeRunner::absent()
+            .with(
+                ProviderKind::GoBuild,
+                ProviderCommandResult::Output {
+                    success: true,
+                    stdout: b"relative/cache\n".to_vec(),
+                    stderr: Vec::new(),
+                },
+            )
+            .with(
+                ProviderKind::GoModule,
+                ProviderCommandResult::Failed("command timed out".to_string()),
+            );
         let counters = TraversalCounters::default();
         let result = super::CacheProviderRegistry::scan_items_with(
             &registry,
@@ -1216,11 +1389,7 @@ mod tests {
         let cache = home.path().join(".cache/uv/store");
         std::fs::create_dir_all(&cache).unwrap();
         let environment = fixture_environment(home.path());
-        let runner = FakeRunner::new(
-            successful_discovery(&cache),
-            ProviderCommandResult::Absent,
-            ProviderCommandResult::Absent,
-        );
+        let runner = FakeRunner::absent().with(ProviderKind::Uv, successful_discovery(&cache));
         let counters = TraversalCounters::default();
         let progress = RecordingProgress::default();
         let result = super::CacheProviderRegistry::scan_items_with(
@@ -1257,11 +1426,7 @@ mod tests {
             std::fs::write(cache.join(format!("{index}.bin")), b"fixture").unwrap();
         }
         let environment = fixture_environment(home.path());
-        let runner = FakeRunner::new(
-            successful_discovery(&cache),
-            ProviderCommandResult::Absent,
-            ProviderCommandResult::Absent,
-        );
+        let runner = FakeRunner::absent().with(ProviderKind::Uv, successful_discovery(&cache));
         let counters = TraversalCounters::default();
         let cancellation = CancelAfterVisits {
             counters: &counters,
@@ -1288,7 +1453,14 @@ mod tests {
             .is_some_and(|reason| reason.contains("cancelled")));
         assert!(counters.visited_entries() < 33);
         assert!(counters.directories_read() > 0);
-        assert_eq!(runner.calls(), vec![ProviderKind::Uv]);
+        assert_eq!(
+            runner.calls(),
+            vec![
+                ProviderKind::GoBuild,
+                ProviderKind::GoModule,
+                ProviderKind::Uv,
+            ]
+        );
     }
 
     #[test]
