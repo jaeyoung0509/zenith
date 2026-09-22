@@ -19,15 +19,20 @@ catalog-load error. The interface category does not grant mutation authority.
 Broad temporary-directory prefixes remain advisory because a matching name and
 age do not establish who owns the contents or whether they are recoverable.
 
+The cross-workstream application, browser, automation, package-manager, and AI
+decision record is maintained in
+[USER_SPACE_CLEANER_COVERAGE.md](USER_SPACE_CLEANER_COVERAGE.md). That manifest
+also states the system-maintenance boundary for this coverage.
+
 ## Programming-language ecosystems
 
 | Priority | Language | Actual cache owner(s) | Zenith mode on macOS / Windows | Reason or consequence |
 | ---: | --- | --- | --- | --- |
-| 1 | TypeScript | npm, pnpm, Yarn, Bun; project build tools | npm/pnpm/Bun `tool_managed`; Yarn `advisory`; project outputs `project_only` | packages may download again; the language owns no global cache |
+| 1 | TypeScript | npm, pnpm, Yarn, Bun; project build tools | npm/pnpm `tool_managed`; Yarn/Bun `advisory`; project outputs `project_only` | packages may download again; the language owns no global cache |
 | 2 | JavaScript | npm, pnpm, Yarn, Bun; project build tools | same as TypeScript | shared with TypeScript; never count the same provider twice |
-| 3 | Python | uv, pip, Poetry, Conda; virtual environments | uv `tool_managed`; pip/Poetry/Conda `advisory`; environments `project_only` | interpreter/version ownership must be preserved |
+| 3 | Python | uv, pip, Poetry, Conda; virtual environments | uv/pip `tool_managed`; Poetry/Conda `advisory`; environments `project_only` | interpreter/version ownership must be preserved |
 | 4 | Java | Gradle, Maven | project outputs `project_only`; shared stores `advisory` | Gradle owns automatic GC; Maven purge is project-scoped |
-| 5 | C# | NuGet; MSBuild `bin`/`obj` | project outputs `project_only`; NuGet `advisory` | restore and compile; add `dotnet nuget locals` only as an owner provider |
+| 5 | C# | NuGet; MSBuild `bin`/`obj` | project outputs `project_only`; NuGet typed resources `tool_managed` | restore and compile; global packages remain a distinct explicit Rebuild unit |
 | 6 | PHP | Composer | Composer cache `tool_managed`; `vendor` `project_only` | packages and metadata may download again |
 | 7 | Shell | concrete tools invoked by scripts | `not_applicable` | shell itself has no language-owned cache |
 | 8 | C++ | CMake, Conan, vcpkg and compiler caches | project outputs `project_only`; shared stores `advisory` | compile/link or dependency restore |
@@ -111,13 +116,16 @@ SLM is a model-size label, not a storage owner.
 - `Go module cache`: discover with `go env GOMODCACHE`, clear with `go clean
   -modcache`.
 - `uv`: discover with `uv cache dir`, prune with `uv cache prune`.
+- `pip`: discover with `pip3 cache dir`, clear with `pip3 cache purge`.
 - `pnpm`: discover with `pnpm store path`, prune with `pnpm store prune`.
 - `npm`: discover with `npm config get cache`, clear with `npm cache clean
   --force` as an explicit Rebuild action.
-- `Bun`: discover with `bun pm cache`, clear with `bun pm cache rm`.
 - `Composer`: discover with `composer --no-interaction --no-plugins config
   --global cache-dir --absolute`, clear with `composer --no-interaction
   --no-plugins clear-cache`.
+- `NuGet`: discover and clear the `http-cache`, `temp`, `plugins-cache`, and
+  `global-packages` resources separately through `dotnet nuget locals`; the
+  global package store is never presented as equivalent to a temporary cache.
 
 All adapters use a resolved trusted executable, fixed arguments, a 15-second
 timeout, bounded output, current-user containment, symlink/reparse rejection,
@@ -129,7 +137,7 @@ authority. Composer disables plugins during discovery and cleanup so a cache
 action cannot execute user- or project-supplied plugin code. Unavailable or
 failing providers are skipped without failing the broader scan.
 
-pip, Poetry, Conda, NuGet, Yarn, Hugging Face, Gradle, Maven, Dart, Julia,
+Poetry, Conda, Yarn, Bun, Hugging Face, Gradle, Maven, Dart, Julia,
 RubyGems, R package managers, Haskell, Zig, LuaRocks, CPAN, opam, Foundry and
 mixed AI roots stay advisory until equally narrow contracts are implemented.
 Most importantly, every `package_store` catalog entry is rejected at load time

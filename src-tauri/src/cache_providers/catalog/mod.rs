@@ -7,6 +7,7 @@
 
 mod go;
 mod javascript;
+mod nuget;
 mod php;
 mod python;
 
@@ -16,11 +17,21 @@ use crate::models::{CacheArtifactKind, CleanerFamily};
 pub(super) enum ProviderKind {
     GoBuild,
     GoModule,
+    Pip,
     Uv,
     Pnpm,
     Npm,
-    Bun,
     Composer,
+    NugetHttp,
+    NugetTemp,
+    NugetPlugins,
+    NugetGlobalPackages,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum DiscoveryOutput {
+    BarePath,
+    LabeledPath(&'static str),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -33,20 +44,31 @@ pub(super) struct ProviderSpec {
     pub consequence: &'static str,
     pub artifact_kind: CacheArtifactKind,
     pub family: CleanerFamily,
+    pub discovery_output: DiscoveryOutput,
+    /// Processes that can actively read or mutate the store. Provider cleanup
+    /// is refused while any of these owners is running.
+    pub active_processes: &'static [&'static str],
+    /// Interpreters named by an executable's `env` shebang. Their validated
+    /// parent directories form the provider's bounded PATH.
+    pub runtime_dependencies: &'static [&'static str],
     /// Go's automatic toolchain lookup can download a toolchain while merely
     /// inspecting a cache. Providers that set this require a local toolchain.
     pub local_toolchain_only: bool,
 }
 
 impl ProviderKind {
-    pub(super) const ALL: [Self; 7] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::GoBuild,
         Self::GoModule,
+        Self::Pip,
         Self::Uv,
         Self::Pnpm,
         Self::Npm,
-        Self::Bun,
         Self::Composer,
+        Self::NugetHttp,
+        Self::NugetTemp,
+        Self::NugetPlugins,
+        Self::NugetGlobalPackages,
     ];
 
     pub(super) fn for_signature(id: &str) -> Option<Self> {
@@ -59,11 +81,15 @@ impl ProviderKind {
         match self {
             Self::GoBuild => &go::BUILD,
             Self::GoModule => &go::MODULE,
+            Self::Pip => &python::PIP,
             Self::Uv => &python::UV,
             Self::Pnpm => &javascript::PNPM,
             Self::Npm => &javascript::NPM,
-            Self::Bun => &javascript::BUN,
             Self::Composer => &php::COMPOSER,
+            Self::NugetHttp => &nuget::HTTP,
+            Self::NugetTemp => &nuget::TEMP,
+            Self::NugetPlugins => &nuget::PLUGINS,
+            Self::NugetGlobalPackages => &nuget::GLOBAL_PACKAGES,
         }
     }
 
@@ -99,6 +125,18 @@ impl ProviderKind {
         self.spec().family
     }
 
+    pub(super) fn discovery_output(self) -> DiscoveryOutput {
+        self.spec().discovery_output
+    }
+
+    pub(super) fn active_processes(self) -> &'static [&'static str] {
+        self.spec().active_processes
+    }
+
+    pub(super) fn runtime_dependencies(self) -> &'static [&'static str] {
+        self.spec().runtime_dependencies
+    }
+
     pub(super) fn local_toolchain_only(self) -> bool {
         self.spec().local_toolchain_only
     }
@@ -118,6 +156,7 @@ mod tests {
             assert!(!provider.executable().is_empty());
             assert!(!provider.discovery_args().is_empty());
             assert!(!provider.prune_args().is_empty());
+            assert!(!provider.active_processes().is_empty());
             assert_ne!(
                 provider.family(),
                 crate::models::CleanerFamily::Unclassified

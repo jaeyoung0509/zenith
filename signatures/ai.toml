@@ -6,33 +6,33 @@ id = "ai.claude.logs"
 name = "Claude Code Logs"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.claude/logs",
     "~/.claude/mcp-logs"
 ]
-description = "Diagnostic and MCP interaction logs generated during Claude Code sessions."
+description = "Diagnostic and MCP interaction logs reported for review; upstream does not expose a narrow cleanup contract that proves they contain no session state."
 
 [[signatures]]
 id = "ai.claude.cache"
 name = "Claude Code Cache"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.claude/cache",
     "~/.claude/tmp"
 ]
-description = "Temporary context cache and downloaded transient assets."
+description = "A mixed CLI cache root reported for review; prompt, session, authentication, and configuration state must not be inferred disposable from the directory name."
 
 [[signatures]]
 id = "ai.cursor.cache"
 name = "Cursor Editor Cache"
 category = "ai"
 family = "developer"
-risk = "safe"
+risk = "rebuild"
 strategy = "delete_contents"
 paths = [
     "~/Library/Caches/Cursor",
@@ -50,33 +50,33 @@ id = "ai.cursor.logs"
 name = "Cursor Session Logs"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/Library/Application Support/Cursor/logs",
     "${ROAMING_APP_DATA}/Cursor/logs"
 ]
-description = "Log files from editor sessions and language server background tasks."
+description = "Editor and language-server logs reported for review because they can contain session and diagnostic state."
 
 [[signatures]]
 id = "ai.cursor.extensions.cache"
 name = "Cursor Extensions Cache"
 category = "ai"
 family = "developer"
-risk = "rebuild"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.cursor/extensions/cache"
 ]
-description = "Downloaded extension VSIX packages and uncompressed asset caches."
+description = "Extension-related storage reported for review; generic cleanup cannot prove which packages remain installed or user-selected."
 
 [[signatures]]
 id = "ai.gemini.cache"
 name = "Gemini CLI & Antigravity Cache"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.gemini/antigravity-cli/tmp",
     "~/.gemini/antigravity-cli/cache",
@@ -88,59 +88,59 @@ exclusions = [
     "onboarding.json",
     "default_project_id.txt"
 ]
-description = "Temporary session files and cached search/API tokens."
+description = "Mixed CLI storage reported for review; onboarding, project, authentication, prompt, and session state remain protected."
 
 [[signatures]]
 id = "ai.gemini.logs"
 name = "Gemini CLI & Antigravity Logs"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.gemini/antigravity-cli/logs",
     "~/.gemini/antigravity-cli/log"
 ]
-description = "Historical CLI operation and session logs."
+description = "CLI operation and session logs reported for review rather than automatically removed."
 
 [[signatures]]
 id = "ai.codex.cache"
 name = "Codex CLI Cache"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.codex/cache",
     "~/.codex/tmp"
 ]
-description = "Codex prompt caches and temporary scratchpads."
+description = "Mixed CLI storage reported for review; prompts, sessions, authentication, settings, and scratch state remain protected."
 
 [[signatures]]
 id = "ai.aider.cache"
 name = "Aider Chat Cache"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.aider.tags.cache.v3",
     "~/.aider.cache"
 ]
-description = "Tree-sitter tag index cache and syntax map caches."
+description = "Assistant index storage reported for review until an owner contract can distinguish reproducible indexes from project state."
 
 [[signatures]]
 id = "ai.opencode.cache"
 name = "OpenCode Assistant Cache"
 category = "ai"
 family = "developer"
-risk = "safe"
-strategy = "delete_contents"
+risk = "manual"
+strategy = "manual"
 paths = [
     "~/.opencode/cache",
     "~/.opencode/logs"
 ]
-description = "Temporary telemetry and API response caches."
+description = "Mixed assistant cache and log storage reported for review; generic cleanup cannot prove it excludes session and authentication state."
 
 [[signatures]]
 id = "ai.gpu.directx_shader"

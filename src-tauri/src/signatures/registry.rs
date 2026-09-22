@@ -1426,8 +1426,12 @@ mod tests {
             "dev.uv.cache",
             "dev.pnpm.store",
             "dev.npm.cache",
-            "dev.bun.cache",
+            "dev.pip.cache",
             "dev.composer.cache",
+            "dev.nuget.http",
+            "dev.nuget.temp",
+            "dev.nuget.plugins",
+            "dev.nuget.global_packages",
         ] {
             assert_eq!(
                 registry.get(id).unwrap().strategy,
@@ -1441,6 +1445,9 @@ mod tests {
         let yarn = registry.get("dev.yarn.cache").unwrap();
         assert_eq!(yarn.risk, RiskTier::Manual);
         assert_eq!(yarn.strategy, CleanStrategy::Manual);
+        let bun = registry.get("dev.bun.cache").unwrap();
+        assert_eq!(bun.risk, RiskTier::Manual);
+        assert_eq!(bun.strategy, CleanStrategy::Manual);
         let rustup = registry.get("dev.rustup.downloads").unwrap();
         assert_eq!(rustup.risk, RiskTier::Manual);
         assert_eq!(rustup.strategy, CleanStrategy::Manual);

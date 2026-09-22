@@ -1,6 +1,6 @@
 use crate::models::{CacheArtifactKind, CleanerFamily};
 
-use super::ProviderSpec;
+use super::{DiscoveryOutput, ProviderSpec};
 
 pub(super) const PNPM: ProviderSpec = ProviderSpec {
     signature_id: "dev.pnpm.store",
@@ -11,6 +11,9 @@ pub(super) const PNPM: ProviderSpec = ProviderSpec {
     consequence: "Unreferenced packages are pruned; future installs may download them again.",
     artifact_kind: CacheArtifactKind::PackageStore,
     family: CleanerFamily::PackageManagers,
+    discovery_output: DiscoveryOutput::BarePath,
+    active_processes: &["pnpm", "node"],
+    runtime_dependencies: &["node"],
     local_toolchain_only: false,
 };
 
@@ -23,17 +26,8 @@ pub(super) const NPM: ProviderSpec = ProviderSpec {
     consequence: "A full cleanup can force package downloads on later installs.",
     artifact_kind: CacheArtifactKind::PackageStore,
     family: CleanerFamily::PackageManagers,
-    local_toolchain_only: false,
-};
-
-pub(super) const BUN: ProviderSpec = ProviderSpec {
-    signature_id: "dev.bun.cache",
-    executable: "bun",
-    discovery_args: &["pm", "cache"],
-    prune_args: &["pm", "cache", "rm"],
-    display_name: "Bun Package Cache",
-    consequence: "Packages may need to be downloaded again on later installs.",
-    artifact_kind: CacheArtifactKind::PackageStore,
-    family: CleanerFamily::PackageManagers,
+    discovery_output: DiscoveryOutput::BarePath,
+    active_processes: &["npm", "node"],
+    runtime_dependencies: &["node"],
     local_toolchain_only: false,
 };

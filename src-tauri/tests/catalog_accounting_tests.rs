@@ -2,8 +2,8 @@ use std::fs;
 use std::sync::Arc;
 use zenith_lib::cleaner::{LifecycleProviderRegistry, OwnerProviderRegistry};
 use zenith_lib::models::{
-    CacheManagementMode, CacheSizeSemantics, Category, CleanStrategy, NeverCancelled,
-    ZenithSettings,
+    CacheManagementMode, CacheSizeSemantics, Category, CleanStrategy, CleanerFamily,
+    NeverCancelled, RiskTier, ZenithSettings,
 };
 use zenith_lib::scanner::{DirectoryScanner, ScanEngine};
 use zenith_lib::signatures::{SignatureLoader, SignatureRegistry};
@@ -27,6 +27,81 @@ fn temp_aliases_produce_one_cleanup_unit() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].size.logical, 4096);
     assert_eq!(items[0].path, unit.to_string_lossy());
+}
+
+#[test]
+fn browser_profiles_and_offline_state_are_outside_cleanup_patterns() {
+    let registry = SignatureRegistry::load_embedded_catalog().unwrap();
+    for signature_id in [
+        "system.app_support_cache_segments",
+        "system.windows.roaming_cache_segments",
+        "system.intensive.windows_browser_caches",
+    ] {
+        let signature = registry.get(signature_id).unwrap();
+        let patterns = signature.paths.join("\n").to_ascii_lowercase();
+        for protected in [
+            "service worker",
+            "cachestorage",
+            "cookies",
+            "history",
+            "bookmarks",
+            "login data",
+            "local storage",
+            "extensions",
+            "downloads",
+        ] {
+            assert!(
+                !patterns.contains(protected),
+                "{signature_id} must not select browser state `{protected}`"
+            );
+        }
+    }
+
+    let saved_state = registry.get("system.saved_application_state").unwrap();
+    assert_eq!(saved_state.strategy, CleanStrategy::Manual);
+    assert_eq!(saved_state.risk, RiskTier::Manual);
+}
+
+#[test]
+fn new_user_space_providers_never_claim_system_ownership() {
+    let registry = SignatureRegistry::load_embedded_catalog().unwrap();
+    for signature_id in [
+        "dev.pip.cache",
+        "dev.nuget.http",
+        "dev.nuget.temp",
+        "dev.nuget.plugins",
+        "dev.nuget.global_packages",
+    ] {
+        let signature = registry.get(signature_id).unwrap();
+        assert_eq!(signature.strategy, CleanStrategy::ExternalCommand);
+        assert_eq!(signature.family, CleanerFamily::PackageManagers);
+        assert!(signature.paths.is_empty());
+    }
+
+    let playwright = registry.get("dev.playwright.browsers").unwrap();
+    assert_eq!(playwright.strategy, CleanStrategy::Manual);
+    assert_eq!(playwright.risk, RiskTier::Manual);
+    assert_eq!(playwright.family, CleanerFamily::PackageManagers);
+}
+
+#[test]
+fn mixed_ai_tool_roots_are_advisory() {
+    let registry = SignatureRegistry::load_embedded_catalog().unwrap();
+    for signature_id in [
+        "ai.claude.logs",
+        "ai.claude.cache",
+        "ai.cursor.logs",
+        "ai.cursor.extensions.cache",
+        "ai.gemini.cache",
+        "ai.gemini.logs",
+        "ai.codex.cache",
+        "ai.aider.cache",
+        "ai.opencode.cache",
+    ] {
+        let signature = registry.get(signature_id).unwrap();
+        assert_eq!(signature.strategy, CleanStrategy::Manual, "{signature_id}");
+        assert_eq!(signature.risk, RiskTier::Manual, "{signature_id}");
+    }
 }
 
 #[test]
