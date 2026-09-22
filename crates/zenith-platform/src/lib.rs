@@ -63,7 +63,10 @@ pub use selector::{
     validate_pattern_syntax, ContinuationLost, PathSelector, SelectionFailure, SelectionPage,
     SelectorComponent, SelectorCursor, SelectorError, SELECTOR_PAGE_LIMIT,
 };
-pub use subprocess::{run_with_timeout, run_with_timeout_async, set_error_sink, SubprocessError};
+pub use subprocess::{
+    run_with_timeout, run_with_timeout_async, run_with_timeout_cancellable, set_error_sink,
+    SubprocessError,
+};
 pub use system_actions::{NativeSystemActions, SystemActionProvider};
 pub use trash::{MockTrashBackend, NativeTrashBackend, TrashBackend};
 

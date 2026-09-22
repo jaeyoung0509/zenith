@@ -1,5 +1,5 @@
 use super::observation::{RootProgressSink, ScanLimits, TraversalCounters, WalkContext};
-use crate::cache_providers::CacheProviderRegistry;
+use crate::cache_providers::{CacheProviderRegistry, CacheProviderScanner};
 use crate::cleaner::LifecycleProviderRegistry;
 use crate::docker::DockerAdapter;
 use crate::execution_budget::shared_scan_pool;
@@ -356,6 +356,36 @@ impl ScanEngine {
         intensive_cleanup: bool,
         environment: &PlatformEnvironment,
         cancellation: &dyn crate::models::CancellationProbe,
+        on_event: F,
+    ) -> ScanResult
+    where
+        F: FnMut(ScanEvent),
+    {
+        Self::scan_with_cache_providers(
+            registry,
+            lifecycle_providers,
+            owner_providers,
+            categories_filter,
+            excluded_signatures,
+            intensive_cleanup,
+            environment,
+            cancellation,
+            &CacheProviderRegistry,
+            on_event,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn scan_with_cache_providers<F>(
+        registry: &SignatureRegistry,
+        lifecycle_providers: &LifecycleProviderRegistry,
+        owner_providers: &crate::cleaner::OwnerProviderRegistry,
+        categories_filter: Option<&[Category]>,
+        excluded_signatures: &[String],
+        intensive_cleanup: bool,
+        environment: &PlatformEnvironment,
+        cancellation: &dyn crate::models::CancellationProbe,
+        cache_providers: &dyn CacheProviderScanner,
         mut on_event: F,
     ) -> ScanResult
     where
@@ -402,6 +432,8 @@ impl ScanEngine {
         let mut suppressed_duplicate_count = 0u64;
         let mut suppressed_duplicate_bytes = 0u64;
         let mut gaps = Vec::new();
+        let mut provider_incomplete_reasons = Vec::new();
+        let mut provider_scan_incomplete = false;
         // One process-table pass for the whole scan: the scan asks which
         // application bundles are running, and every signature sees the same
         // answer.
@@ -425,6 +457,7 @@ impl ScanEngine {
             events.send(ScanEvent::CategoryStarted { category });
 
             let mut accumulator = CategoryAccumulator::new();
+            let mut category_incomplete = false;
 
             // 1. Scan filesystem signatures for this category
             // Discovery and eligibility are decided separately: the registry
@@ -465,18 +498,36 @@ impl ScanEngine {
                 }
             }
 
-            // 2. Typed container adapters can report cleanable or observation-only storage.
+            // 2. Tool-owned package caches apply the request contract before
+            //    discovery and report command/measurement coverage explicitly.
             if !was_cancelled && category == Category::Developer {
-                for item in CacheProviderRegistry::scan_items(registry, environment) {
-                    if cancellation.is_cancelled() {
-                        was_cancelled = true;
-                        break;
+                let provider_scan = cache_providers.scan_items(
+                    registry,
+                    excluded_signatures,
+                    environment,
+                    cancellation,
+                    limits,
+                    &counters,
+                    &events,
+                );
+                let provider_cancelled = provider_scan.cancelled;
+                for failure in provider_scan.failures {
+                    category_incomplete = true;
+                    provider_scan_incomplete = true;
+                    add_scan_gap(&mut gaps, failure.kind, 1);
+                    if !provider_incomplete_reasons.contains(&failure.reason) {
+                        provider_incomplete_reasons.push(failure.reason);
                     }
+                }
+                for item in provider_scan.items {
                     if let Some(retained) = accumulator.push(item) {
                         events.send(ScanEvent::ItemFound {
                             item: retained.clone(),
                         });
                     }
+                }
+                if provider_cancelled || cancellation.is_cancelled() {
+                    was_cancelled = true;
                 }
             }
 
@@ -547,7 +598,7 @@ impl ScanEngine {
 
             let category_result = accumulator.finalize(
                 category,
-                was_cancelled.then_some(ObservationQuality::Partial),
+                (was_cancelled || category_incomplete).then_some(ObservationQuality::Partial),
             );
             category_results.push(category_result);
 
@@ -602,7 +653,7 @@ impl ScanEngine {
             .unwrap_or_default()
             .as_secs();
 
-        let mut incomplete_reasons = Vec::new();
+        let mut incomplete_reasons = provider_incomplete_reasons;
         for cat in &category_results {
             for item in &cat.items {
                 if let Some(reason) = &item.incomplete_reason {
@@ -628,7 +679,7 @@ impl ScanEngine {
         // Item-derived gaps already contribute their own observation quality,
         // including the all-unavailable case. Only scan-level incompleteness
         // that is not represented by a retained item must force Partial.
-        let scan_quality = if was_cancelled || has_selector_truncation {
+        let scan_quality = if was_cancelled || has_selector_truncation || provider_scan_incomplete {
             ObservationQuality::Partial
         } else {
             aggregate_quality(category_results.iter().map(|cat| cat.quality))
@@ -826,17 +877,53 @@ impl<F: FnMut(ScanEvent)> RootProgressSink for ScanEvents<'_, F> {
 #[cfg(test)]
 mod tests {
     use super::{add_scan_gap, aggregate_quality, scan_gap_kind, CategoryAccumulator, ScanEngine};
+    use crate::cache_providers::{CacheProviderFailure, CacheProviderScan, CacheProviderScanner};
     use crate::cleaner::LifecycleProviderRegistry;
     use crate::models::{
-        Category, CleanStrategy, FileSize, ObservationQuality, PathIdentity, RiskTier, ScanEvent,
-        ScanGapKind, ScanItem, Signature,
+        Category, CleanStrategy, FileSize, NeverCancelled, ObservationQuality, PathIdentity,
+        RiskTier, ScanEvent, ScanGapKind, ScanItem, Signature,
     };
     use crate::scanner::relationship::{same_directory_entry, unit_relationship};
+    use crate::scanner::{ScanLimits, TraversalCounters};
     use crate::signatures::SignatureRegistry;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
     use zenith_platform::path_algebra::PathFlavor;
     use zenith_platform::PlatformEnvironment;
+
+    struct FixedCacheProviders {
+        result: CacheProviderScan,
+        excluded: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl FixedCacheProviders {
+        fn new(result: CacheProviderScan) -> Self {
+            Self {
+                result,
+                excluded: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl CacheProviderScanner for FixedCacheProviders {
+        fn scan_items(
+            &self,
+            _registry: &SignatureRegistry,
+            excluded_signatures: &[String],
+            _environment: &PlatformEnvironment,
+            _cancellation: &dyn crate::models::CancellationProbe,
+            _limits: ScanLimits,
+            _counters: &TraversalCounters,
+            _progress: &dyn crate::scanner::RootProgressSink,
+        ) -> CacheProviderScan {
+            self.excluded
+                .lock()
+                .unwrap()
+                .push(excluded_signatures.to_vec());
+            self.result.clone()
+        }
+    }
 
     /// A scan environment with no tools and a synthetic profile, so a scan in
     /// a test only reports the fixture signatures it was given.
@@ -925,6 +1012,82 @@ mod tests {
                     count: 1,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn provider_exclusions_reach_the_scanner_and_empty_cancellation_stays_partial() {
+        let cache_providers = FixedCacheProviders::new(CacheProviderScan {
+            cancelled: true,
+            ..CacheProviderScan::default()
+        });
+        let registry = SignatureRegistry::new();
+        let lifecycle = LifecycleProviderRegistry::new(Vec::new());
+        let owners = crate::cleaner::OwnerProviderRegistry::new(Vec::new());
+        let excluded = vec!["dev.uv.cache".to_string()];
+        let result = ScanEngine::scan_with_cache_providers(
+            &registry,
+            &lifecycle,
+            &owners,
+            Some(&[Category::Developer]),
+            &excluded,
+            false,
+            &scan_environment(),
+            &NeverCancelled,
+            &cache_providers,
+            |_| {},
+        );
+
+        assert_eq!(
+            cache_providers.excluded.lock().unwrap().as_slice(),
+            &[excluded]
+        );
+        assert!(result.cancelled);
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result.categories[0].items.is_empty());
+        assert!(result
+            .gaps
+            .iter()
+            .any(|gap| gap.kind == ScanGapKind::Cancelled));
+    }
+
+    #[test]
+    fn provider_failure_without_a_row_is_a_typed_scan_level_gap() {
+        let cache_providers = FixedCacheProviders::new(CacheProviderScan {
+            failures: vec![CacheProviderFailure {
+                kind: ScanGapKind::IoError,
+                reason: "uv cache discovery timed out".to_string(),
+            }],
+            ..CacheProviderScan::default()
+        });
+        let result = ScanEngine::scan_with_cache_providers(
+            &SignatureRegistry::new(),
+            &LifecycleProviderRegistry::new(Vec::new()),
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+            Some(&[Category::Developer]),
+            &[],
+            false,
+            &scan_environment(),
+            &NeverCancelled,
+            &cache_providers,
+            |_| {},
+        );
+
+        assert!(!result.cancelled);
+        assert_eq!(result.quality, ObservationQuality::Partial);
+        assert!(result.categories[0].items.is_empty());
+        assert_eq!(result.categories[0].quality, ObservationQuality::Partial);
+        assert_eq!(
+            result
+                .gaps
+                .iter()
+                .find(|gap| gap.kind == ScanGapKind::IoError)
+                .map(|gap| gap.count),
+            Some(1)
+        );
+        assert_eq!(
+            result.incomplete_reasons,
+            vec!["uv cache discovery timed out".to_string()]
         );
     }
 

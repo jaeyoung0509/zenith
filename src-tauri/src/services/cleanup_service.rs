@@ -631,13 +631,40 @@ impl CleanupService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache_providers::{CacheProviderScan, CacheProviderScanner};
     use crate::models::{
         Category, CategoryResult, FileSize, ObservationQuality, PlatformCapabilities, RiskTier,
         ScanDiscovery, ScanItem, Signature,
     };
+    use crate::scanner::{ScanLimits, TraversalCounters};
+    use std::sync::Mutex;
     use zenith_platform::path_algebra::PathFlavor;
 
     struct TestCapabilitiesProvider(PlatformCapabilities);
+
+    #[derive(Default)]
+    struct RecordingCacheProviders {
+        excluded: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl CacheProviderScanner for RecordingCacheProviders {
+        fn scan_items(
+            &self,
+            _registry: &SignatureRegistry,
+            excluded_signatures: &[String],
+            _environment: &PlatformEnvironment,
+            _cancellation: &dyn crate::models::CancellationProbe,
+            _limits: ScanLimits,
+            _counters: &TraversalCounters,
+            _progress: &dyn crate::scanner::RootProgressSink,
+        ) -> CacheProviderScan {
+            self.excluded
+                .lock()
+                .unwrap()
+                .push(excluded_signatures.to_vec());
+            CacheProviderScan::default()
+        }
+    }
 
     impl PlatformCapabilitiesProvider for TestCapabilitiesProvider {
         fn capabilities(&self) -> PlatformCapabilities {
@@ -728,6 +755,79 @@ mod tests {
         let settings = ZenithSettings::default();
         let selected = select_quick_clean_safe_candidates(&scan, &settings);
         assert_eq!(selected, vec!["item_safe"]);
+    }
+
+    #[tokio::test]
+    async fn resumed_developer_scan_keeps_the_original_provider_exclusions() {
+        let environment = Arc::new(
+            PlatformEnvironment::simulated(PathFlavor::current()).with_home(
+                if PathFlavor::current().is_windows() {
+                    r"Z:\ZenithFixtureHome"
+                } else {
+                    "/zenith-fixture-home"
+                },
+            ),
+        );
+        let registry = Arc::new(SignatureRegistry::new());
+        let lifecycle = Arc::new(crate::cleaner::LifecycleProviderRegistry::new(Vec::new()));
+        let owners = Arc::new(crate::cleaner::OwnerProviderRegistry::new(Vec::new()));
+        let cache_providers = Arc::new(RecordingCacheProviders::default());
+        let scan_service = Arc::new(ScanService::new_with_cache_providers(
+            registry.clone(),
+            lifecycle.clone(),
+            owners.clone(),
+            cache_providers.clone(),
+            environment.clone(),
+        ));
+        let service = CleanupService::new(
+            scan_service,
+            Arc::new(PlanStore::new(crate::services::PlanLifecycle::cleanup())),
+            Arc::new(ScanStore::new()),
+            StorageOperationGate::default(),
+            Arc::new(ExecutionBudgets::new()),
+            environment,
+            registry,
+            Arc::new(DockerStatusCache::new()),
+            lifecycle,
+            owners,
+            Arc::new(zenith_platform::MockTrashBackend::new()),
+            Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
+        );
+        let progress: Arc<dyn ScanProgressSink> = Arc::new(|_: ScanEvent| {});
+        let excluded = vec!["dev.uv.cache".to_string()];
+
+        let first = service
+            .start_scan(
+                ScanRequest {
+                    categories: Some(vec![Category::System, Category::Ai, Category::Developer]),
+                    excluded_signatures: excluded.clone(),
+                    intensive_cleanup: false,
+                },
+                progress.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(cache_providers.excluded.lock().unwrap().is_empty());
+        let ScanDiscovery::Paused { continuation_id } = first.discovery else {
+            panic!("the developer category should remain for the resumed slice")
+        };
+
+        let completed = service
+            .resume_scan(
+                ResumeScanRequest {
+                    scan_id: first.result.scan_id,
+                    continuation_id,
+                },
+                progress,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(completed.discovery, ScanDiscovery::Exhausted);
+        assert_eq!(
+            cache_providers.excluded.lock().unwrap().as_slice(),
+            &[excluded]
+        );
     }
 
     /// A cancel requested while a scan runs stops it, and the scan says so:
