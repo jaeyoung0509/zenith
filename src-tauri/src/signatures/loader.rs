@@ -197,6 +197,7 @@ mod tests {
 id = "test.exclusions"
 name = "Exclusions"
 category = "system"
+family = "system"
 risk = "safe"
 strategy = "delete_contents"
 paths = ["~/.cache/tool"]
@@ -225,12 +226,40 @@ exclusions = ["~/.cache/tool/keep.bin"]
     }
 
     #[test]
+    fn catalog_requires_a_compatible_cleaner_family() {
+        let valid = r#"
+[[signatures]]
+id = "test.family"
+name = "Family"
+category = "system"
+family = "system"
+risk = "manual"
+strategy = "manual"
+paths = ["~/.cache/tool"]
+"#;
+        assert_eq!(SignatureLoader::load_str(valid).unwrap().len(), 1);
+
+        let missing = valid.replace("family = \"system\"", "");
+        assert!(SignatureLoader::load_str(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("family"));
+
+        let incompatible = valid.replace("family = \"system\"", "family = \"containers\"");
+        assert!(SignatureLoader::load_str(&incompatible)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot publish"));
+    }
+
+    #[test]
     fn shared_package_stores_cannot_fall_back_to_generic_deletion() {
         let generic = r#"
 [[signatures]]
 id = "test.shared-store"
 name = "Shared Store"
 category = "developer"
+family = "package_managers"
 risk = "rebuild"
 strategy = "delete_contents"
 paths = ["~/.cache/shared-store"]
@@ -240,7 +269,7 @@ artifact_kind = "package_store"
         let error = SignatureLoader::load_str(generic)
             .expect_err("a package store must not grant generic recursive deletion");
         assert!(
-            error.to_string().contains("shared package store"),
+            error.to_string().contains("package-manager store"),
             "the refusal names the ownership boundary: {error}"
         );
 
@@ -268,6 +297,7 @@ artifact_kind = "package_store"
 id = "test.normalized"
 name = "Normalized"
 category = "system"
+family = "system"
 risk = "safe"
 strategy = "delete_directory"
 paths = [

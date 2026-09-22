@@ -610,7 +610,7 @@ impl CleanupService {
                         docker_status_cache.invalidate();
                     }
 
-                    Ok(CleanExecutor::execute(
+                    let result = CleanExecutor::execute(
                         plan,
                         &environment,
                         &lifecycle_providers,
@@ -619,7 +619,14 @@ impl CleanupService {
                         move |event: CleanEvent| {
                             progress.emit(event);
                         },
-                    ))
+                    );
+                    if let Err(error) = crate::cleaner::history::record(&result, &environment) {
+                        crate::diagnostics::log_error(
+                            "cleanup-history",
+                            &format!("Cleanup history could not be recorded: {error}"),
+                        );
+                    }
+                    Ok(result)
                 })
             },
             "Cleanup worker panicked",
@@ -878,6 +885,7 @@ mod tests {
                 id: id.to_string(),
                 name: name.to_string(),
                 category: Category::Developer,
+                family: Default::default(),
                 risk: RiskTier::Safe,
                 strategy: CleanStrategy::DeleteDirectory,
                 paths: vec![path.to_string_lossy().into_owned()],
@@ -1106,6 +1114,7 @@ mod tests {
             id: "test.stated.store".to_string(),
             name: "Stated Store".to_string(),
             category: Category::System,
+            family: Default::default(),
             risk: RiskTier::Manual,
             strategy: CleanStrategy::LifecycleProvider,
             paths: Vec::new(),
@@ -1220,6 +1229,7 @@ mod tests {
             id: "test_sig".to_string(),
             name: "Fixture cache".to_string(),
             category: Category::System,
+            family: Default::default(),
             risk: RiskTier::Safe,
             strategy: CleanStrategy::DeleteDirectory,
             paths: vec![cache.to_string_lossy().to_string()],
@@ -1327,6 +1337,7 @@ mod tests {
             id: "test_sig".to_string(),
             name: "Fixture cache".to_string(),
             category: Category::System,
+            family: Default::default(),
             risk: RiskTier::Safe,
             strategy: CleanStrategy::DeleteDirectory,
             paths: vec![cache.to_string_lossy().to_string()],

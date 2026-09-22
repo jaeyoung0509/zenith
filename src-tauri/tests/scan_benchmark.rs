@@ -394,6 +394,7 @@ fn signature(
         id: id.to_string(),
         name: name.to_string(),
         category,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy,
         paths: paths

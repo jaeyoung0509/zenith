@@ -1103,6 +1103,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             category,
+            family: Default::default(),
             risk: RiskTier::Safe,
             strategy: CleanStrategy::DeleteContents,
             paths: vec![path.to_string_lossy().into_owned()],

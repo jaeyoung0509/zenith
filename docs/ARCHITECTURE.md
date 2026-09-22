@@ -246,7 +246,12 @@ because no other crate has to name them.
   bounds both cleanup and reviewed Trash plans under one lifecycle.
 - `src-tauri/src/cleaner`: execution of verified plans. Each target is
   classified into `CleanupOperation` first, so only a filesystem operation can
-  reach the validated deletion primitive.
+  reach the validated deletion primitive. Completed runs append a bounded,
+  aggregate-only JSONL history beside diagnostics; inventory IDs, names, paths,
+  provider output, and error text are never persisted there.
+- `src-tauri/src/cache_providers/catalog`: fixed executable, discovery, and
+  cleanup contracts grouped by the tool owner. The catalog entry and provider
+  must agree on their `CleanerFamily` before a command is invoked.
 - `src-tauri/src/large_files`: bounded traversal of approved user-content roots,
   streamed progress, file classification, and filesystem identity capture.
 - `src-tauri/src/applications`: installed-app inventory plus constrained related
@@ -278,6 +283,17 @@ because no other crate has to name them.
 - `src/lib/stores`: Svelte state and lifecycle orchestration.
 - `src/routes/dashboard` and `src/routes/quick`: the two window surfaces.
 - `signatures`: reviewed cleanup definitions embedded in the Rust binary.
+  Every entry declares both a presentation `category` and an owning
+  `family` (`user`, `system`, `applications`, `developer`,
+  `package_managers`, `containers`, or `leftovers`). A family is an execution
+  boundary: package-manager stores cannot gain generic recursive-delete
+  authority, and an unclassified entry fails catalog loading.
+
+Main Cleanup owns only catalog units whose safety contract is complete. Broad
+developer temporary-workspace hints remain visible but advisory and belong in
+Developer Artifacts for user review. Tool-owned shared caches use a fixed,
+backend-owned command adapter; catalog paths are never a fallback when that
+adapter is unavailable.
 
 ## Scan and cleanup flow
 

@@ -54,6 +54,25 @@ fn manual_refusal(item: &ScanItem) -> PlanItemRefusal {
     }
 }
 
+/// An item-scoped refusal for a generic filesystem unit whose contents require
+/// an owner-specific cleaner.
+///
+/// This is a normal policy answer, not a malformed plan. Keeping it in the
+/// preview lets the rest of a reviewed selection proceed and avoids turning a
+/// recognizable cache-layout change into a page-wide internal error.
+fn safety_refusal(
+    item: &ScanItem,
+    reason: CleanFailureReason,
+    message: impl Into<String>,
+) -> PlanItemRefusal {
+    PlanItemRefusal {
+        item_id: item.id.clone(),
+        item_name: item.name.clone(),
+        reason,
+        message: message.into(),
+    }
+}
+
 /// The item-scoped refusal one provider refusal projects to.
 fn plan_refusal(refusal: &crate::models::OwnerUnitRefusal) -> PlanItemRefusal {
     PlanItemRefusal {
@@ -420,11 +439,15 @@ impl SafetyPlanner {
                 //    execution guard refuses it too; refusing here keeps a plan
                 //    from offering a target that could never be cleaned.
                 if let Some((kind, _)) = crate::safety::validator::structured_state_at(&path) {
-                    return Err(ZenithError::InvalidPlan(format!(
-                        "`{}` is {} and can only be handled by a dedicated provider, not by generic cleanup",
-                        item.name,
-                        kind.display_name()
-                    )));
+                    refusals.push(safety_refusal(
+                        item,
+                        CleanFailureReason::StructuredStore,
+                        format!(
+                            "This unit is a {}; only a dedicated owner cleaner may remove it.",
+                            kind.display_name()
+                        ),
+                    ));
+                    continue;
                 }
                 if matches!(
                     strategy,
@@ -432,19 +455,26 @@ impl SafetyPlanner {
                 ) && path.is_dir()
                 {
                     match crate::safety::validator::structured_descendant(&path) {
-                        Ok(Some((nested, kind))) => {
-                            return Err(ZenithError::InvalidPlan(format!(
-                                "`{}` contains {} ({}); generic cleanup cannot remove this unit",
-                                item.name,
-                                nested.display(),
-                                kind.display_name()
-                            )));
+                        Ok(Some((_nested, kind))) => {
+                            refusals.push(safety_refusal(
+                                item,
+                                CleanFailureReason::StructuredStore,
+                                format!(
+                                    "This unit contains a {}; only a dedicated owner cleaner may remove the unit.",
+                                    kind.display_name()
+                                ),
+                            ));
+                            continue;
                         }
                         Err(error) => {
-                            return Err(ZenithError::InvalidPlan(format!(
-                                "Could not inspect all of `{}` before planning cleanup: {error}",
-                                item.name
-                            )));
+                            refusals.push(safety_refusal(
+                                item,
+                                CleanFailureReason::SafetyBoundary,
+                                format!(
+                                    "The unit could not be completely inspected before cleanup: {error}"
+                                ),
+                            ));
+                            continue;
                         }
                         Ok(None) => {}
                     }
@@ -642,6 +672,7 @@ mod tests {
                 id: "test.stated.store".to_string(),
                 name: "Stated Store".to_string(),
                 category: Category::System,
+                family: Default::default(),
                 risk: RiskTier::Manual,
                 strategy: CleanStrategy::LifecycleProvider,
                 paths: Vec::new(),
@@ -754,6 +785,7 @@ mod tests {
                 id: id.into(),
                 name: name.into(),
                 category: Category::System,
+                family: Default::default(),
                 risk: RiskTier::Safe,
                 strategy,
                 paths: vec![path.to_string_lossy().into_owned()],
@@ -845,6 +877,7 @@ mod tests {
                 id: id.into(),
                 name: name.into(),
                 category: Category::System,
+                family: Default::default(),
                 risk: RiskTier::Safe,
                 strategy: CleanStrategy::DeleteDirectory,
                 paths: vec![path.to_string_lossy().into_owned()],
@@ -955,6 +988,7 @@ mod tests {
                 id: id.into(),
                 name: name.into(),
                 category: Category::System,
+                family: Default::default(),
                 risk: RiskTier::Safe,
                 strategy: CleanStrategy::DeleteContents,
                 paths: vec![path.to_string_lossy().into_owned()],
@@ -1024,6 +1058,7 @@ mod tests {
             id: "test.broad-root".into(),
             name: "Broad root".into(),
             category: Category::System,
+            family: Default::default(),
             risk: RiskTier::Safe,
             strategy: crate::models::CleanStrategy::DeleteDirectory,
             paths: vec!["/tmp/broad-root".into()],

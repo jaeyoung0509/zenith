@@ -1,8 +1,10 @@
+mod catalog;
+
 use crate::models::{
-    derive_cleanup_disposition, AbsolutePath, CacheArtifactKind, CacheManagementMode,
-    CacheMetadata, CacheSizeSemantics, CancellationProbe, CanonicalPath, Category,
-    CleanupEligibility, CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind,
-    ObservationQuality, RiskTier, ScanGapKind, ScanItem,
+    derive_cleanup_disposition, AbsolutePath, CacheManagementMode, CacheMetadata,
+    CacheSizeSemantics, CancellationProbe, CanonicalPath, Category, CleanupEligibility,
+    CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind, ObservationQuality,
+    RiskTier, ScanGapKind, ScanItem,
 };
 use crate::safety::{Blacklist, SymlinkGuard};
 use crate::scanner::{
@@ -10,6 +12,7 @@ use crate::scanner::{
 };
 use crate::signatures::SignatureRegistry;
 use crate::tooling;
+use catalog::ProviderKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
@@ -19,141 +22,6 @@ use zenith_platform::PlatformEnvironment;
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_DISCOVERY_OUTPUT: usize = 16 * 1024;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ProviderKind {
-    GoBuild,
-    GoModule,
-    Uv,
-    Pnpm,
-    Npm,
-    Bun,
-    Composer,
-}
-
-impl ProviderKind {
-    const ALL: [Self; 7] = [
-        Self::GoBuild,
-        Self::GoModule,
-        Self::Uv,
-        Self::Pnpm,
-        Self::Npm,
-        Self::Bun,
-        Self::Composer,
-    ];
-
-    fn signature_id(self) -> &'static str {
-        match self {
-            Self::GoBuild => "dev.go.build",
-            Self::GoModule => "dev.go.mod",
-            Self::Uv => "dev.uv.cache",
-            Self::Pnpm => "dev.pnpm.store",
-            Self::Npm => "dev.npm.cache",
-            Self::Bun => "dev.bun.cache",
-            Self::Composer => "dev.composer.cache",
-        }
-    }
-
-    fn for_signature(id: &str) -> Option<Self> {
-        match id {
-            "dev.go.build" => Some(Self::GoBuild),
-            "dev.go.mod" => Some(Self::GoModule),
-            "dev.uv.cache" => Some(Self::Uv),
-            "dev.pnpm.store" => Some(Self::Pnpm),
-            "dev.npm.cache" => Some(Self::Npm),
-            "dev.bun.cache" => Some(Self::Bun),
-            "dev.composer.cache" => Some(Self::Composer),
-            _ => None,
-        }
-    }
-
-    fn executable(self) -> &'static str {
-        match self {
-            Self::GoBuild | Self::GoModule => "go",
-            Self::Uv => "uv",
-            Self::Pnpm => "pnpm",
-            Self::Npm => "npm",
-            Self::Bun => "bun",
-            Self::Composer => "composer",
-        }
-    }
-
-    fn discovery_args(self) -> &'static [&'static str] {
-        match self {
-            Self::GoBuild => &["env", "GOCACHE"],
-            Self::GoModule => &["env", "GOMODCACHE"],
-            Self::Uv => &["cache", "dir"],
-            Self::Pnpm => &["store", "path"],
-            // Prints the single configured cache directory.
-            Self::Npm => &["config", "get", "cache"],
-            Self::Bun => &["pm", "cache"],
-            // Disable plugins during inspection: a cache probe must not run
-            // project- or user-supplied Composer plugin code.
-            Self::Composer => &[
-                "--no-interaction",
-                "--no-plugins",
-                "config",
-                "--global",
-                "cache-dir",
-                "--absolute",
-            ],
-        }
-    }
-
-    fn prune_args(self) -> &'static [&'static str] {
-        match self {
-            Self::GoBuild => &["clean", "-cache"],
-            Self::GoModule => &["clean", "-modcache"],
-            Self::Uv => &["cache", "prune"],
-            Self::Pnpm => &["store", "prune"],
-            Self::Npm => &["cache", "clean", "--force"],
-            Self::Bun => &["pm", "cache", "rm"],
-            Self::Composer => &["--no-interaction", "--no-plugins", "clear-cache"],
-        }
-    }
-
-    fn display_name(self) -> &'static str {
-        match self {
-            Self::GoBuild => "Go Build Cache",
-            Self::GoModule => "Go Module Cache",
-            Self::Uv => "uv Package Cache",
-            Self::Pnpm => "pnpm Content-Addressable Store",
-            Self::Npm => "npm Cache",
-            Self::Bun => "Bun Package Cache",
-            Self::Composer => "Composer Cache",
-        }
-    }
-
-    fn consequence(self) -> &'static str {
-        match self {
-            Self::GoBuild => "Go packages compile again on demand.",
-            Self::GoModule => "Modules may need to be downloaded again.",
-            Self::Uv => "Unused archives are pruned; future environments may re-download packages.",
-            Self::Pnpm => {
-                "Unreferenced packages are pruned; future installs may download them again."
-            }
-            Self::Npm => "A full cleanup can force package downloads on later installs.",
-            Self::Bun => "Packages may need to be downloaded again on later installs.",
-            Self::Composer => {
-                "PHP packages and repository metadata may need to be downloaded again."
-            }
-        }
-    }
-
-    fn artifact_kind(self) -> CacheArtifactKind {
-        match self {
-            Self::GoBuild => CacheArtifactKind::BuildArtifact,
-            Self::GoModule => CacheArtifactKind::DownloadCache,
-            Self::Uv | Self::Pnpm | Self::Npm | Self::Bun | Self::Composer => {
-                CacheArtifactKind::PackageStore
-            }
-        }
-    }
-
-    fn is_go(self) -> bool {
-        matches!(self, Self::GoBuild | Self::GoModule)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CacheProviderFailure {
@@ -386,6 +254,15 @@ impl CacheProviderRegistry {
         let Some(signature) = registry.get(signature_id) else {
             return Ok(None);
         };
+        if signature.family != provider.family() {
+            return Err(CacheProviderFailure::new(
+                ScanGapKind::IoError,
+                format!(
+                    "{} catalog ownership does not match its provider contract",
+                    provider.display_name()
+                ),
+            ));
+        }
         if !signature.supports_current_platform() {
             return Ok(None);
         }
@@ -647,7 +524,7 @@ fn strip_cache_environment(command: &mut Command) {
 
 fn configure_provider_command(provider: ProviderKind, command: &mut Command) {
     strip_cache_environment(command);
-    if provider.is_go() {
+    if provider.local_toolchain_only() {
         // Go's default `auto` toolchain mode may download a different toolchain
         // merely to answer `go env` or perform `go clean`. Inspection and
         // cleanup must not create the cache they are measuring or access the
