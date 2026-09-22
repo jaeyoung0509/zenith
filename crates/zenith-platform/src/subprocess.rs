@@ -80,9 +80,26 @@ pub fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 pub fn configure_background_command(_command: &mut Command) {}
 
-/// Runs a command in an isolated process group or Windows Job Object with a strict timeout and pipe draining to prevent deadlock.
-pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, SubprocessError> {
+/// Runs a command in an isolated process group or Windows Job Object with a
+/// strict timeout and pipe draining to prevent deadlock.
+pub fn run_with_timeout(cmd: Command, timeout: Duration) -> Result<Output, SubprocessError> {
+    run_with_timeout_cancellable(cmd, timeout, &|| false)
+}
+
+/// [`run_with_timeout`] with a caller-owned cancellation signal.
+///
+/// The signal is checked before spawn and while the child is running. A
+/// cancellation terminates and reaps the same owned process tree as a timeout,
+/// so a stopped scan cannot leave a provider CLI running in the background.
+pub fn run_with_timeout_cancellable(
+    mut cmd: Command,
+    timeout: Duration,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<Output, SubprocessError> {
     let program = cmd.get_program().to_string_lossy().to_string();
+    if is_cancelled() {
+        return Err(SubprocessError::Cancelled(program));
+    }
     // Callers may construct a Command directly (for example a native picker).
     // Keep all timeout-managed subprocesses headless on Windows.
     configure_background_command(&mut cmd);
@@ -261,6 +278,12 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, S
                 });
             }
             Ok(None) => {
+                if is_cancelled() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = cleanup_and_drain(true);
+                    return Err(SubprocessError::Cancelled(program.clone()));
+                }
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -592,6 +615,15 @@ mod tests {
     #[cfg(target_os = "windows")]
     use std::fs;
 
+    #[test]
+    fn a_pre_cancelled_command_is_never_spawned() {
+        let cmd = std::process::Command::new("provider-that-must-not-run");
+        let error =
+            super::run_with_timeout_cancellable(cmd, std::time::Duration::from_secs(1), &|| true)
+                .unwrap_err();
+        assert!(matches!(error, super::SubprocessError::Cancelled(_)));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn background_command_captures_output_without_a_console() {
@@ -638,6 +670,47 @@ mod tests {
             result.unwrap_err(),
             super::SubprocessError::Timeout(..)
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_terminates_and_reaps_the_owned_process_tree() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sh -c 'sleep 10 >&1' & sleep 10"]);
+        let polls = AtomicUsize::new(0);
+        let start = std::time::Instant::now();
+        let error =
+            super::run_with_timeout_cancellable(cmd, std::time::Duration::from_secs(30), &|| {
+                polls.fetch_add(1, Ordering::SeqCst) >= 2
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, super::SubprocessError::Cancelled(_)));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "cancellation must not wait for the descendant-held pipe"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cancellation_terminates_and_reaps_the_owned_job() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut cmd = std::process::Command::new("cmd.exe");
+        cmd.args(["/D", "/C", "ping -n 30 127.0.0.1 > nul"]);
+        let polls = AtomicUsize::new(0);
+        let start = std::time::Instant::now();
+        let error =
+            super::run_with_timeout_cancellable(cmd, std::time::Duration::from_secs(30), &|| {
+                polls.fetch_add(1, Ordering::SeqCst) >= 2
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, super::SubprocessError::Cancelled(_)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(3));
     }
 
     #[test]

@@ -1,14 +1,15 @@
 use crate::models::{
     derive_cleanup_disposition, AbsolutePath, CacheArtifactKind, CacheManagementMode,
-    CacheMetadata, CacheSizeSemantics, CanonicalPath, Category, CleanupEligibility,
-    CleanupOwnership, CleanupUnit, CleanupUnitKind, DispositionFacts, EligibilityGate, EntryKind,
-    ObservationQuality, RiskTier, ScanItem,
+    CacheMetadata, CacheSizeSemantics, CancellationProbe, CanonicalPath, Category,
+    CleanupEligibility, CleanupOwnership, CleanupUnit, CleanupUnitKind, DispositionFacts,
+    EligibilityGate, EntryKind, ObservationQuality, RiskTier, ScanGapKind, ScanItem,
 };
 use crate::safety::{Blacklist, SymlinkGuard};
-use crate::scanner::SizeCalculator;
+use crate::scanner::{
+    PathMeasurement, RootProgressSink, ScanLimits, SizeCalculator, TraversalCounters,
+};
 use crate::signatures::SignatureRegistry;
 use crate::tooling;
-use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
@@ -27,6 +28,16 @@ enum ProviderKind {
 }
 
 impl ProviderKind {
+    const ALL: [Self; 3] = [Self::Uv, Self::Pnpm, Self::Npm];
+
+    fn signature_id(self) -> &'static str {
+        match self {
+            Self::Uv => "dev.uv.cache",
+            Self::Pnpm => "dev.pnpm.store",
+            Self::Npm => "dev.npm.cache",
+        }
+    }
+
     fn for_signature(id: &str) -> Option<Self> {
         match id {
             "dev.uv.cache" => Some(Self::Uv),
@@ -80,6 +91,124 @@ impl ProviderKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheProviderFailure {
+    pub kind: ScanGapKind,
+    pub reason: String,
+}
+
+impl CacheProviderFailure {
+    fn new(kind: ScanGapKind, reason: impl Into<String>) -> Self {
+        Self {
+            kind,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct CacheProviderScan {
+    pub items: Vec<ScanItem>,
+    pub failures: Vec<CacheProviderFailure>,
+    pub cancelled: bool,
+}
+
+pub(crate) trait CacheProviderScanner: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    fn scan_items(
+        &self,
+        registry: &SignatureRegistry,
+        excluded_signatures: &[String],
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+        progress: &dyn RootProgressSink,
+    ) -> CacheProviderScan;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProviderCommandResult {
+    Absent,
+    Output {
+        success: bool,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    Failed(String),
+    Cancelled,
+}
+
+trait ProviderCommandRunner: Send + Sync {
+    fn discover(
+        &self,
+        provider: ProviderKind,
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+    ) -> ProviderCommandResult;
+}
+
+trait ProviderMeasurer: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    fn measure(
+        &self,
+        path: &Path,
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+    ) -> PathMeasurement;
+}
+
+struct NativeProviderCommandRunner;
+
+impl ProviderCommandRunner for NativeProviderCommandRunner {
+    fn discover(
+        &self,
+        provider: ProviderKind,
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+    ) -> ProviderCommandResult {
+        let Some(executable) = tooling::resolve_with(provider.executable(), environment) else {
+            return ProviderCommandResult::Absent;
+        };
+        if let Err(error) = validate_executable(&executable, environment) {
+            return ProviderCommandResult::Failed(error);
+        }
+        let mut command = Command::new(executable);
+        command.args(provider.discovery_args());
+        strip_cache_environment(&mut command);
+        match zenith_platform::subprocess::run_with_timeout_cancellable(
+            command,
+            PROVIDER_TIMEOUT,
+            &|| cancellation.is_cancelled(),
+        ) {
+            Ok(output) => ProviderCommandResult::Output {
+                success: output.status.success(),
+                stdout: output.stdout,
+                stderr: output.stderr,
+            },
+            Err(zenith_platform::SubprocessError::Cancelled(_)) => ProviderCommandResult::Cancelled,
+            Err(error) => ProviderCommandResult::Failed(error.to_string()),
+        }
+    }
+}
+
+struct NativeProviderMeasurer;
+
+impl ProviderMeasurer for NativeProviderMeasurer {
+    fn measure(
+        &self,
+        path: &Path,
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+    ) -> PathMeasurement {
+        SizeCalculator::measure_path_bounded(path, &[], environment, cancellation, limits, counters)
+    }
+}
+
 /// Backend-owned cache providers. The frontend can select only the ScanItem ID;
 /// executable names, arguments, and cache paths are all rediscovered here.
 pub struct CacheProviderRegistry;
@@ -90,69 +219,163 @@ impl CacheProviderRegistry {
     /// facts and the discovered caches are approved against the environment's
     /// home, so a redirected or simulated environment cannot be answered by the
     /// runner's own profile.
-    pub fn scan_items(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn scan_items(
         registry: &SignatureRegistry,
+        excluded_signatures: &[String],
         environment: &PlatformEnvironment,
-    ) -> Vec<ScanItem> {
-        // Three tiny provider lookups; route through the shared bounded scan
-        // pool intentionally instead of the unbounded global Rayon pool.
-        crate::execution_budget::install_shared(
-            || {
-                [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
-                    .into_par_iter()
-                    .filter_map(|provider| {
-                        Self::scan_provider_logged(provider, registry, environment)
-                    })
-                    .collect()
-            },
-            || {
-                [ProviderKind::Uv, ProviderKind::Pnpm, ProviderKind::Npm]
-                    .into_iter()
-                    .filter_map(|provider| {
-                        Self::scan_provider_logged(provider, registry, environment)
-                    })
-                    .collect()
-            },
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+        progress: &dyn RootProgressSink,
+    ) -> CacheProviderScan {
+        Self::scan_items_with(
+            registry,
+            excluded_signatures,
+            environment,
+            cancellation,
+            limits,
+            counters,
+            progress,
+            &NativeProviderCommandRunner,
+            &NativeProviderMeasurer,
         )
     }
 
-    fn scan_provider_logged(
-        provider: ProviderKind,
+    #[allow(clippy::too_many_arguments)]
+    fn scan_items_with(
         registry: &SignatureRegistry,
+        excluded_signatures: &[String],
         environment: &PlatformEnvironment,
-    ) -> Option<ScanItem> {
-        match Self::scan_provider(provider, registry, environment) {
-            Ok(item) => item,
-            Err(error) => {
-                // A rejected provider must be visible in diagnostics instead of
-                // silently disappearing from the scan results.
-                crate::diagnostics::log_error(
-                    "cache_providers",
-                    &format!("{} scan skipped: {error}", provider.executable()),
-                );
-                None
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+        progress: &dyn RootProgressSink,
+        runner: &dyn ProviderCommandRunner,
+        measurer: &dyn ProviderMeasurer,
+    ) -> CacheProviderScan {
+        let mut result = CacheProviderScan::default();
+        // Provider discovery is deliberately sequential. Starting all three
+        // CLIs at once would make a user stop incapable of preventing later
+        // probes, while three bounded lookups do not justify that lifecycle
+        // ambiguity.
+        for provider in ProviderKind::ALL {
+            if cancellation.is_cancelled() {
+                result.cancelled = true;
+                break;
+            }
+            if excluded_signatures
+                .iter()
+                .any(|id| id == provider.signature_id())
+            {
+                continue;
+            }
+            match Self::scan_provider(
+                provider,
+                registry,
+                environment,
+                cancellation,
+                limits,
+                counters,
+                progress,
+                runner,
+                measurer,
+            ) {
+                Ok(Some(item)) => result.items.push(item),
+                Ok(None) => {}
+                Err(failure) if failure.kind == ScanGapKind::Cancelled => {
+                    result.cancelled = true;
+                    break;
+                }
+                Err(failure) => {
+                    crate::diagnostics::log_error(
+                        "cache_providers",
+                        &format!(
+                            "{} scan incomplete: {}",
+                            provider.executable(),
+                            failure.reason
+                        ),
+                    );
+                    result.failures.push(failure);
+                }
+            }
+            if cancellation.is_cancelled() {
+                result.cancelled = true;
+                break;
             }
         }
+        result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn scan_provider(
         provider: ProviderKind,
         registry: &SignatureRegistry,
         environment: &PlatformEnvironment,
-    ) -> Result<Option<ScanItem>, String> {
-        let signature_id = match provider {
-            ProviderKind::Uv => "dev.uv.cache",
-            ProviderKind::Pnpm => "dev.pnpm.store",
-            ProviderKind::Npm => "dev.npm.cache",
-        };
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+        progress: &dyn RootProgressSink,
+        runner: &dyn ProviderCommandRunner,
+        measurer: &dyn ProviderMeasurer,
+    ) -> Result<Option<ScanItem>, CacheProviderFailure> {
+        let signature_id = provider.signature_id();
         let Some(signature) = registry.get(signature_id) else {
             return Ok(None);
         };
         if !signature.supports_current_platform() {
             return Ok(None);
         }
-        let path = discover_path(provider, environment)?;
-        let measurement = SizeCalculator::measure_path_full(&path, &[], environment);
+        let command = runner.discover(provider, environment, cancellation);
+        let path = match command {
+            ProviderCommandResult::Absent => return Ok(None),
+            ProviderCommandResult::Cancelled => {
+                return Err(CacheProviderFailure::new(
+                    ScanGapKind::Cancelled,
+                    format!("{} cache inspection was cancelled", provider.executable()),
+                ));
+            }
+            ProviderCommandResult::Failed(reason) => {
+                return Err(CacheProviderFailure::new(
+                    classify_provider_failure(&reason),
+                    format!(
+                        "{} cache inspection failed: {reason}",
+                        provider.executable()
+                    ),
+                ));
+            }
+            ProviderCommandResult::Output {
+                success,
+                stdout,
+                stderr,
+            } => {
+                if !success {
+                    let reason = bounded_message(&stderr);
+                    return Err(CacheProviderFailure::new(
+                        classify_provider_failure(&reason),
+                        format!(
+                            "{} cache discovery failed: {}",
+                            provider.executable(),
+                            reason
+                        ),
+                    ));
+                }
+                let parsed = parse_discovered_path(&stdout).map_err(|reason| {
+                    CacheProviderFailure::new(
+                        ScanGapKind::IoError,
+                        format!("{}: {reason}", provider.executable()),
+                    )
+                })?;
+                validate_cache_path(parsed, environment).map_err(|reason| {
+                    CacheProviderFailure::new(
+                        classify_provider_failure(&reason),
+                        format!("{}: {reason}", provider.executable()),
+                    )
+                })?
+            }
+        };
+        progress.root_started(signature, &path);
+        let measurement = measurer.measure(&path, environment, cancellation, limits, counters);
         if measurement.size.reclaimable() == 0 && measurement.complete {
             return Ok(None);
         }
@@ -265,6 +488,43 @@ impl CacheProviderRegistry {
         }
         let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment);
         Ok(crate::scanner::size::reclaimed_between(&before, &after))
+    }
+}
+
+impl CacheProviderScanner for CacheProviderRegistry {
+    fn scan_items(
+        &self,
+        registry: &SignatureRegistry,
+        excluded_signatures: &[String],
+        environment: &PlatformEnvironment,
+        cancellation: &dyn CancellationProbe,
+        limits: ScanLimits,
+        counters: &TraversalCounters,
+        progress: &dyn RootProgressSink,
+    ) -> CacheProviderScan {
+        Self::scan_items(
+            registry,
+            excluded_signatures,
+            environment,
+            cancellation,
+            limits,
+            counters,
+            progress,
+        )
+    }
+}
+
+fn classify_provider_failure(reason: &str) -> ScanGapKind {
+    let reason = reason.to_ascii_lowercase();
+    if reason.contains("cancel") {
+        ScanGapKind::Cancelled
+    } else if reason.contains("permission denied")
+        || reason.contains("operation not permitted")
+        || reason.contains("access denied")
+    {
+        ScanGapKind::PermissionDenied
+    } else {
+        ScanGapKind::IoError
     }
 }
 
@@ -554,13 +814,123 @@ fn bounded_message(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{cache_location_approved, node_manager_roots, parse_discovered_path, AbsolutePath};
-    use super::{strip_cache_environment, ProviderKind, CACHE_PATH_ENVIRONMENT};
+    use super::{
+        strip_cache_environment, NativeProviderMeasurer, ProviderCommandResult,
+        ProviderCommandRunner, ProviderKind, ProviderMeasurer, CACHE_PATH_ENVIRONMENT,
+    };
+    use crate::models::{CancellationProbe, NeverCancelled, ObservationQuality, ScanGapKind};
+    use crate::scanner::{NoRootProgress, PathMeasurement, ScanLimits, TraversalCounters};
+    use crate::signatures::SignatureRegistry;
     use std::path::PathBuf;
     use std::process::Command;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use zenith_platform::path_algebra::PathFlavor;
     use zenith_platform::paths::SimulatedPaths;
     use zenith_platform::PlatformEnvironment;
+
+    struct FakeRunner {
+        uv: ProviderCommandResult,
+        pnpm: ProviderCommandResult,
+        npm: ProviderCommandResult,
+        calls: Mutex<Vec<ProviderKind>>,
+    }
+
+    impl FakeRunner {
+        fn new(
+            uv: ProviderCommandResult,
+            pnpm: ProviderCommandResult,
+            npm: ProviderCommandResult,
+        ) -> Self {
+            Self {
+                uv,
+                pnpm,
+                npm,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn absent() -> Self {
+            Self::new(
+                ProviderCommandResult::Absent,
+                ProviderCommandResult::Absent,
+                ProviderCommandResult::Absent,
+            )
+        }
+
+        fn calls(&self) -> Vec<ProviderKind> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl ProviderCommandRunner for FakeRunner {
+        fn discover(
+            &self,
+            provider: ProviderKind,
+            _environment: &PlatformEnvironment,
+            _cancellation: &dyn CancellationProbe,
+        ) -> ProviderCommandResult {
+            self.calls.lock().unwrap().push(provider);
+            match provider {
+                ProviderKind::Uv => self.uv.clone(),
+                ProviderKind::Pnpm => self.pnpm.clone(),
+                ProviderKind::Npm => self.npm.clone(),
+            }
+        }
+    }
+
+    struct FixedMeasurer(PathMeasurement);
+
+    impl ProviderMeasurer for FixedMeasurer {
+        fn measure(
+            &self,
+            _path: &std::path::Path,
+            _environment: &PlatformEnvironment,
+            _cancellation: &dyn CancellationProbe,
+            _limits: ScanLimits,
+            _counters: &TraversalCounters,
+        ) -> PathMeasurement {
+            self.0.clone()
+        }
+    }
+
+    struct CancelAfterVisits<'a> {
+        counters: &'a TraversalCounters,
+        limit: u64,
+    }
+
+    impl CancellationProbe for CancelAfterVisits<'_> {
+        fn is_cancelled(&self) -> bool {
+            self.counters.visited_entries() >= self.limit
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingProgress(Mutex<Vec<(String, PathBuf)>>);
+
+    impl crate::scanner::RootProgressSink for RecordingProgress {
+        fn root_started(&self, signature: &crate::models::Signature, root: &std::path::Path) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((signature.id.clone(), root.to_path_buf()));
+        }
+    }
+
+    fn fixture_environment(home: &std::path::Path) -> PlatformEnvironment {
+        PlatformEnvironment::simulated(PathFlavor::current()).with_roots(Arc::new(
+            SimulatedPaths::new()
+                .with_flavor(PathFlavor::current())
+                .with_home(home),
+        ))
+    }
+
+    fn successful_discovery(path: &std::path::Path) -> ProviderCommandResult {
+        ProviderCommandResult::Output {
+            success: true,
+            stdout: format!("{}\n", path.display()).into_bytes(),
+            stderr: Vec::new(),
+        }
+    }
 
     #[test]
     fn provider_command_removes_cache_path_overrides() {
@@ -736,8 +1106,6 @@ mod tests {
 
     #[test]
     fn a_provider_with_a_stated_missing_tool_is_skipped() {
-        use crate::signatures::SignatureRegistry;
-
         // npm/pnpm/uv may be installed on this host; the environment states
         // they are absent, and a stated absence is never re-discovered.
         let environment = PlatformEnvironment::simulated(PathFlavor::current())
@@ -745,10 +1113,182 @@ mod tests {
             .with_missing_tool("pnpm")
             .with_missing_tool("uv");
         let registry = SignatureRegistry::load_embedded().unwrap();
-        assert!(
-            super::CacheProviderRegistry::scan_items(&registry, &environment).is_empty(),
-            "a stated missing tool must not be re-discovered from the host"
+        let counters = TraversalCounters::default();
+        let result = super::CacheProviderRegistry::scan_items(
+            &registry,
+            &[],
+            &environment,
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
         );
+        assert!(result.items.is_empty());
+        assert!(result.failures.is_empty());
+        assert!(!result.cancelled);
+    }
+
+    #[test]
+    fn an_excluded_provider_is_not_invoked() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let environment = PlatformEnvironment::simulated(PathFlavor::current());
+        let runner = FakeRunner::absent();
+        let counters = TraversalCounters::default();
+        let result = super::CacheProviderRegistry::scan_items_with(
+            &registry,
+            &["dev.uv.cache".to_string()],
+            &environment,
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
+            &runner,
+            &NativeProviderMeasurer,
+        );
+
+        assert!(result.items.is_empty());
+        assert_eq!(runner.calls(), vec![ProviderKind::Pnpm, ProviderKind::Npm]);
+    }
+
+    #[test]
+    fn command_cancellation_stops_before_later_providers() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let runner = FakeRunner::new(
+            ProviderCommandResult::Cancelled,
+            ProviderCommandResult::Absent,
+            ProviderCommandResult::Absent,
+        );
+        let counters = TraversalCounters::default();
+        let progress = RecordingProgress::default();
+        let result = super::CacheProviderRegistry::scan_items_with(
+            &registry,
+            &[],
+            &PlatformEnvironment::simulated(PathFlavor::current()),
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &progress,
+            &runner,
+            &NativeProviderMeasurer,
+        );
+
+        assert!(result.cancelled);
+        assert!(result.items.is_empty());
+        assert_eq!(runner.calls(), vec![ProviderKind::Uv]);
+    }
+
+    #[test]
+    fn malformed_and_timed_out_discovery_are_typed_scan_failures() {
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let runner = FakeRunner::new(
+            ProviderCommandResult::Output {
+                success: true,
+                stdout: b"relative/cache\n".to_vec(),
+                stderr: Vec::new(),
+            },
+            ProviderCommandResult::Failed("command timed out".to_string()),
+            ProviderCommandResult::Absent,
+        );
+        let counters = TraversalCounters::default();
+        let result = super::CacheProviderRegistry::scan_items_with(
+            &registry,
+            &[],
+            &PlatformEnvironment::simulated(PathFlavor::current()),
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
+            &runner,
+            &NativeProviderMeasurer,
+        );
+
+        assert!(result.items.is_empty());
+        assert_eq!(result.failures.len(), 2);
+        assert!(result
+            .failures
+            .iter()
+            .all(|failure| failure.kind == ScanGapKind::IoError));
+    }
+
+    #[test]
+    fn permission_refused_measurement_remains_a_visible_unavailable_row() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join(".cache/uv/store");
+        std::fs::create_dir_all(&cache).unwrap();
+        let environment = fixture_environment(home.path());
+        let runner = FakeRunner::new(
+            successful_discovery(&cache),
+            ProviderCommandResult::Absent,
+            ProviderCommandResult::Absent,
+        );
+        let counters = TraversalCounters::default();
+        let progress = RecordingProgress::default();
+        let result = super::CacheProviderRegistry::scan_items_with(
+            &SignatureRegistry::load_embedded().unwrap(),
+            &[],
+            &environment,
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &progress,
+            &runner,
+            &FixedMeasurer(PathMeasurement::unavailable("Permission denied")),
+        );
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].quality, ObservationQuality::Unavailable);
+        assert_eq!(
+            result.items[0].incomplete_reason.as_deref(),
+            Some("Permission denied")
+        );
+        assert_eq!(
+            progress.0.lock().unwrap().as_slice(),
+            &[("dev.uv.cache".to_string(), cache.canonicalize().unwrap())]
+        );
+        assert!(result.failures.is_empty());
+    }
+
+    #[test]
+    fn cancellation_inside_cache_measurement_stops_the_walk_and_later_providers() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join(".cache/uv/store");
+        std::fs::create_dir_all(&cache).unwrap();
+        for index in 0..32 {
+            std::fs::write(cache.join(format!("{index}.bin")), b"fixture").unwrap();
+        }
+        let environment = fixture_environment(home.path());
+        let runner = FakeRunner::new(
+            successful_discovery(&cache),
+            ProviderCommandResult::Absent,
+            ProviderCommandResult::Absent,
+        );
+        let counters = TraversalCounters::default();
+        let cancellation = CancelAfterVisits {
+            counters: &counters,
+            limit: 5,
+        };
+        let result = super::CacheProviderRegistry::scan_items_with(
+            &SignatureRegistry::load_embedded().unwrap(),
+            &[],
+            &environment,
+            &cancellation,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
+            &runner,
+            &NativeProviderMeasurer,
+        );
+
+        assert!(result.cancelled);
+        assert_eq!(result.items.len(), 1);
+        assert_ne!(result.items[0].quality, ObservationQuality::Fresh);
+        assert!(result.items[0]
+            .incomplete_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("cancelled")));
+        assert!(counters.visited_entries() < 33);
+        assert!(counters.directories_read() > 0);
+        assert_eq!(runner.calls(), vec![ProviderKind::Uv]);
     }
 
     #[test]
