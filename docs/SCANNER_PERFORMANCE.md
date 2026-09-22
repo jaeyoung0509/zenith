@@ -115,6 +115,7 @@ compared against a known point rather than against a feeling.
 |---|---|---|---|---|
 | MacBook Air (Apple M1, 8 cores) | macOS 27.0 (26A428), Darwin 27.0.0 | 2026-09-19 | 0.3.36 | the table below |
 | MacBook Air (Apple M1, 8 cores, 16 GiB) | macOS 27.0 (26A428) | 2026-09-21 UTC | 0.3.45 | [synthetic and live evidence](validation/2026-09-21-macos-0.3.45.json) |
+| MacBook Air (Apple M1, 8 cores, 16 GiB) | macOS 27.0 (26A428) | 2026-09-22 UTC | 0.3.48 | [filesystem, provider, container, and cancellation evidence](validation/2026-09-22-macos-0.3.48.json) |
 
 macOS, `cargo test -p zenith-desktop --test scan_benchmark -- --nocapture`:
 
@@ -168,16 +169,29 @@ Run the synthetic suite above first, then the explicit live observation tool:
 
 ```sh
 cargo run -p zenith-desktop --example scan_machine -- --live-read-only
+
+# Add fixed-argument tool-provider and container inspection. These modes still
+# construct no cleanup plan and invoke no prune/delete operation.
+cargo run -p zenith-desktop --example scan_machine -- \
+  --live-read-only --providers-read-only --containers-read-only
+
+# Stop provider measurement immediately after its first root progress event.
+cargo run -p zenith-desktop --example scan_machine -- \
+  --live-read-only --providers-read-only --providers-cancel-after-first-root
 ```
 
 The tool scans a fixed subset of the shipped filesystem catalog with intensive
-observation enabled. It constructs no cleanup plan and invokes no cleanup
-executor or cache-provider command. A cooperative 60-second deadline returns a
-cancelled/partial result; it is not an OS-level timeout for a stalled filesystem
-call. Output contains catalog IDs and aggregate counts/bytes, never item paths,
-user names, or free-form errors. Record the OS build, hardware, date, and version
-alongside the JSON. A zero-item signature is missing coverage, not a passing
-application-specific check. The tool does not validate Docker/provider probes.
+observation enabled. Provider inspection is opt-in and runs only the reviewed
+cache-directory discovery commands before measuring the approved roots;
+container inspection is opt-in and runs fixed status/list commands plus local
+OrbStack metadata. It constructs no cleanup plan and invokes no cleanup
+executor, provider prune, container prune, delete, or Trash operation. A
+cooperative 60-second deadline returns a cancelled/partial result; it is not an
+OS-level timeout for a stalled filesystem call. Output contains catalog IDs,
+typed gaps, and aggregate counts/bytes, never item paths, user names, tool
+output, free-form errors, or container identifiers. Record the OS build,
+hardware, date, and version alongside the JSON. A zero-item signature is
+missing coverage, not a passing application-specific check.
 
 The [0.3.45 Mac record](validation/2026-09-21-macos-0.3.45.json) contains both
 synthetic fixture results and an actual cache scan. The live result was partial:
@@ -187,3 +201,10 @@ real-machine behavior. Timings include background developer activity and are
 observations for comparison, not new pass/fail thresholds. Windows 11 desktop
 validation and the uncovered Mac application/provider cases remain open in
 #224/#227; #221 cannot close on this evidence alone.
+
+The [0.3.48 Mac record](validation/2026-09-22-macos-0.3.48.json) adds pnpm/npm
+cache measurements, provider progress and cancellation, a typed uv inspection
+failure, Docker-daemon availability, and OrbStack aggregate metadata. The
+filesystem observation is still partial, Docker was not running, and
+Cursor/Go still produced no items. The evidence classes and remaining closure
+boundary are summarized in [VALIDATION_SIGNOFF.md](VALIDATION_SIGNOFF.md).
