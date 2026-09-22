@@ -12,6 +12,13 @@ are typed as physical reclaimable, conservative lower bound, or informational.
 Hard-linked/deduplicated provider stores are informational until the owner GC
 runs; they are never presented as promised free-space recovery.
 
+Each catalog entry also declares its backend owner family. Package-manager
+stores belong to `package_managers`, compiler/build caches to `developer`, and
+container resources to `containers`; a missing or incompatible family is a
+catalog-load error. The interface category does not grant mutation authority.
+Broad temporary-directory prefixes remain advisory because a matching name and
+age do not establish who owns the contents or whether they are recoverable.
+
 ## Programming-language ecosystems
 
 | Priority | Language | Actual cache owner(s) | Zenith mode on macOS / Windows | Reason or consequence |

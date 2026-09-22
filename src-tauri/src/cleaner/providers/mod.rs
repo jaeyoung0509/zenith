@@ -425,6 +425,7 @@ mod tests {
             id: "test.stated.store".to_string(),
             name: "Stated Store".to_string(),
             category: Category::System,
+            family: Default::default(),
             risk: RiskTier::Manual,
             strategy: CleanStrategy::LifecycleProvider,
             paths: Vec::new(),

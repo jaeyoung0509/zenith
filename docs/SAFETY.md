@@ -137,14 +137,19 @@ Three boundaries enforce it:
 - the execution guard re-classifies immediately before mutating, so a path that
   became structured state after the scan is skipped instead of deleted.
 
-Structured content *inside* a declared cache or log namespace is covered by
-that namespace's contract: the unit is the application's regenerable cache
-directory, and `delete_directory` removes it whole. What the classifier
-prevents is a *discovery* rule — an age threshold, an enumerated child — from
-manufacturing a target out of state that only its owner may invalidate. A
-provider that legitimately owns a disposable database must go through its own
-adapter with its own lifecycle, which is what `CleanupOperation::Provider`
-exists for.
+A generic filesystem cleaner does not infer that structured content inside a
+directory is disposable merely because the directory was discovered as a
+cache. The planner inspects the selected unit and records an item-level
+`StructuredStore` refusal when it contains protected state; other selected
+units can still form a plan. A provider that legitimately owns a disposable
+database must go through its own adapter with its own lifecycle, which is what
+`CleanupOperation::Provider` exists for.
+
+Catalog families make that ownership explicit. Package-manager stores can use
+a fixed owner command/provider or remain advisory, but cannot authorize a
+generic recursive deletion. Prefixes and age are discovery signals only: a
+broad developer temporary-workspace signature remains advisory until a
+dedicated adapter can re-derive and validate the exact unit at execution.
 
 ### A running owner
 

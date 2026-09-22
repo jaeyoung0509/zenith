@@ -1,7 +1,7 @@
 use crate::models::{
     CacheArtifactKind, CacheManagementMode, CacheMetadata, CacheSizeSemantics,
-    CacheUsageConfidence, Category, CleanStrategy, CleanupOwnership, CleanupUnitKind,
-    EligibilityGate, PlatformKind, RiskTier, RunningProcessPolicy, ZenithError,
+    CacheUsageConfidence, Category, CleanStrategy, CleanerFamily, CleanupOwnership,
+    CleanupUnitKind, EligibilityGate, PlatformKind, RiskTier, RunningProcessPolicy, ZenithError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,13 @@ pub struct Signature {
     pub id: String,
     pub name: String,
     pub category: Category,
+    /// The module that owns this entry's discovery and recovery contract.
+    ///
+    /// Category is presentation; family is backend ownership. Every embedded
+    /// entry states both so adding a target cannot silently widen a generic
+    /// scanner's responsibility.
+    #[serde(default)]
+    pub family: CleanerFamily,
     pub risk: RiskTier,
     pub strategy: CleanStrategy,
     #[serde(default)]
@@ -199,6 +206,38 @@ impl Signature {
             return invalid("the id is empty".to_string());
         }
 
+        if self.family == CleanerFamily::Unclassified {
+            return invalid("the cleaner family is not declared (`family`)".to_string());
+        }
+        if !self.family.accepts_category(self.category) {
+            return invalid(format!(
+                "cleaner family `{}` cannot publish into category `{}`",
+                self.family.display_name(),
+                self.category.display_name()
+            ));
+        }
+
+        if self.family == CleanerFamily::PackageManagers
+            && !matches!(
+                self.strategy,
+                CleanStrategy::ExternalCommand
+                    | CleanStrategy::OwnerProvider
+                    | CleanStrategy::LifecycleProvider
+                    | CleanStrategy::Manual
+            )
+        {
+            return invalid(
+                "a package-manager store must use an owner operation or remain manual; its family cannot authorize generic filesystem deletion"
+                    .to_string(),
+            );
+        }
+        if self.strategy == CleanStrategy::DockerPrune && self.family != CleanerFamily::Containers {
+            return invalid(
+                "a container-runtime prune must belong to the containers cleaner family"
+                    .to_string(),
+            );
+        }
+
         let kind = self.unit_kind();
         if matches!(
             kind,
@@ -253,18 +292,24 @@ impl Signature {
         // entries are unused and is especially prone to scan/plan drift when
         // the store contains lockfiles or databases. Such stores must go
         // through a reviewed owner command or remain observation-only.
-        if self.artifact_kind == CacheArtifactKind::PackageStore
-            && matches!(
+        if self.artifact_kind == CacheArtifactKind::PackageStore {
+            if self.family != CleanerFamily::PackageManagers {
+                return invalid(
+                    "a shared package store must belong to the package-managers cleaner family"
+                        .to_string(),
+                );
+            }
+            if matches!(
                 self.strategy,
                 CleanStrategy::DeleteContents
                     | CleanStrategy::DeleteDirectory
                     | CleanStrategy::DeleteStaleContents
-            )
-        {
-            return invalid(
-                "a shared package store must use an owner provider/external command or remain manual; generic filesystem deletion is forbidden"
-                    .to_string(),
-            );
+            ) {
+                return invalid(
+                    "a shared package store must use an owner provider/external command or remain manual; generic filesystem deletion is forbidden"
+                        .to_string(),
+                );
+            }
         }
 
         // A selector is allowed in `paths` only: the scanner enumerates roots

@@ -468,14 +468,41 @@ fn test_safety_planner_rejects_unknown_signatures() {
 
 #[test]
 fn test_safety_planner_rejects_path_outside_signature_scope() {
-    let registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
+    let mut registry = SignatureRegistry::load_embedded().expect("load embedded signatures");
     let dir = tempdir().expect("tempdir");
     let forged_path = dir.path().join("codex-forged");
+    let authorized_path = dir.path().join("authorized-cache");
     fs::create_dir(&forged_path).unwrap();
+    fs::create_dir(&authorized_path).unwrap();
+    registry.register(Signature {
+        id: "test.scope".into(),
+        name: "Scope fixture".into(),
+        category: Category::System,
+        family: zenith_lib::models::CleanerFamily::System,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteDirectory,
+        paths: vec![authorized_path.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "test fixture".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
+        platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
+        provider: String::new(),
+        provider_id: None,
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+    });
 
     let mut forged_item = ScanItem::mock(
-        "system.developer_temp.0.codex-forged",
-        "system.developer_temp",
+        "test.scope.forged",
+        "test.scope",
         "Forged temp item",
         Category::System,
         RiskTier::Safe,
@@ -483,12 +510,7 @@ fn test_safety_planner_rejects_path_outside_signature_scope() {
         FileSize::new(1024, Some(1024)),
         1,
     );
-    // The unit is spelled the way the signature declares it, so the refusal
-    // comes from the scope check rather than from a malformed item.
-    forged_item.unit = CleanupUnit::child_namespace(
-        dir.path().to_string_lossy().into_owned(),
-        forged_path.to_string_lossy().into_owned(),
-    );
+    forged_item.unit = CleanupUnit::fixed_path(forged_path.to_string_lossy().into_owned());
 
     let result = SafetyPlanner::create_plan(&[forged_item], &registry, &no_owner_providers());
     assert!(matches!(result, Err(ZenithError::SignatureMismatch(_))));
@@ -518,6 +540,7 @@ fn test_cleaner_delete_contents_preserves_root_directory() {
         id: "test.delete-contents".into(),
         name: "Test cache".into(),
         category: Category::Developer,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteContents,
         paths: vec![cache_root.to_string_lossy().into_owned()],
@@ -791,6 +814,7 @@ fn manual_strategy_never_enters_generic_cleaner() {
         id: "test.manual-model".into(),
         name: "Manual model".into(),
         category: Category::Model,
+        family: Default::default(),
         risk: RiskTier::Manual,
         strategy: CleanStrategy::Manual,
         paths: vec![model_root.to_string_lossy().into_owned()],
@@ -889,6 +913,7 @@ fn external_command_strategy_never_falls_back_to_filesystem_deletion() {
         id: "test.unknown-provider".into(),
         name: "Unknown provider".into(),
         category: Category::Developer,
+        family: Default::default(),
         risk: RiskTier::Rebuild,
         strategy: CleanStrategy::ExternalCommand,
         paths: vec![cache_root.to_string_lossy().into_owned()],
@@ -1140,6 +1165,7 @@ fn test_stale_temp_toctou_recheck_aborts_on_new_file() {
         id: "test.stale_temp".into(),
         name: "Test stale temp".into(),
         category: Category::Developer,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteDirectory,
         paths: vec![dir.path().to_string_lossy().into_owned()],
@@ -1865,6 +1891,7 @@ fn replaying_a_plan_skips_targets_instead_of_deleting_replacements() {
         id: "test.replay".into(),
         name: "Replay cache".into(),
         category: Category::Developer,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteContents,
         paths: vec![cache.to_string_lossy().into_owned()],
@@ -2057,6 +2084,7 @@ fn the_planner_refuses_a_structured_target() {
         id: "test.aged-structured".into(),
         name: "Aged namespace".into(),
         category: Category::System,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteDirectory,
         paths: vec![fixture.path().to_string_lossy().into_owned()],
@@ -2097,10 +2125,12 @@ fn the_planner_refuses_a_structured_target() {
 
     let error = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers())
         .expect_err("structured state is never plannable");
-    assert!(
-        matches!(&error, ZenithError::InvalidPlan(message) if message.contains("database")),
-        "the refusal names the classification: {error}"
-    );
+    let ZenithError::RefusedSelection(refusals) = error else {
+        panic!("the structured target must be an item-scoped refusal");
+    };
+    assert_eq!(refusals.len(), 1);
+    assert_eq!(refusals[0].reason, CleanFailureReason::StructuredStore);
+    assert!(refusals[0].message.contains("database"));
     assert!(database.exists());
 }
 
@@ -2150,6 +2180,7 @@ fn an_unreadable_root_is_reported_with_its_reason() {
         id: "test.unreadable".into(),
         name: "Unreadable root".into(),
         category: Category::System,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteStaleContents,
         paths: vec![root.to_string_lossy().into_owned()],
@@ -2220,6 +2251,7 @@ fn a_running_owner_keeps_its_cache_out_of_the_default_selection() {
         id: "test.running-owner".into(),
         name: "Third-party caches".into(),
         category: Category::System,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteStaleContents,
         paths: vec![root.to_string_lossy().into_owned()],
@@ -2520,6 +2552,7 @@ fn a_mixed_age_cache_namespace_reports_and_prunes_its_stale_remainder() {
         id: "test.stale-namespace".into(),
         name: "App cache".into(),
         category: Category::System,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteStaleContents,
         paths: vec![root.to_string_lossy().into_owned()],
@@ -2710,6 +2743,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         id: "test.nested-structured".into(),
         name: "Ordinary cache".into(),
         category: Category::System,
+        family: Default::default(),
         risk: RiskTier::Safe,
         strategy: CleanStrategy::DeleteContents,
         paths: vec![cache.to_string_lossy().into_owned()],
@@ -2741,10 +2775,69 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
         2,
     );
     item.is_selected = true;
-    let error = SafetyPlanner::create_plan(&[item], &registry, &no_owner_providers())
-        .expect_err("nested structured state must be rejected before confirmation");
+    let error = SafetyPlanner::create_plan(
+        std::slice::from_ref(&item),
+        &registry,
+        &no_owner_providers(),
+    )
+    .expect_err("nested structured state must be rejected before confirmation");
+    let ZenithError::RefusedSelection(refusals) = error else {
+        panic!("structured state must be reported as an item refusal");
+    };
+    assert_eq!(refusals.len(), 1);
+    assert_eq!(refusals[0].reason, CleanFailureReason::StructuredStore);
     assert!(
-        matches!(&error, ZenithError::InvalidPlan(message) if message.contains("session.sqlite"))
+        !refusals[0].message.contains("session.sqlite"),
+        "the interface refusal should not expose a nested local path"
+    );
+
+    let ordinary = fixture.path().join("plain-cache");
+    fs::create_dir(&ordinary).unwrap();
+    fs::write(ordinary.join("payload.bin"), b"cleanable").unwrap();
+    registry.register(Signature {
+        id: "test.plain-cache".into(),
+        name: "Plain cache".into(),
+        category: Category::System,
+        family: zenith_lib::models::CleanerFamily::System,
+        risk: RiskTier::Safe,
+        strategy: CleanStrategy::DeleteContents,
+        paths: vec![ordinary.to_string_lossy().into_owned()],
+        exclusions: vec![],
+        description: "test fixture".into(),
+        min_age_days: None,
+        include_prefixes: vec![],
+        exclude_prefixes: vec![],
+        intensive_only: false,
+        platforms: vec![],
+        discovery: Default::default(),
+        unit: None,
+        owner: String::new(),
+        priority: 0,
+        fail_if_running: Vec::new(),
+        provider: String::new(),
+        provider_id: None,
+        artifact_kind: Default::default(),
+        consequence: String::new(),
+    });
+    let mut ordinary_item = ScanItem::mock(
+        "plain-cache",
+        "test.plain-cache",
+        "Plain cache",
+        Category::System,
+        RiskTier::Safe,
+        ordinary.to_string_lossy().into_owned(),
+        FileSize::new(9, Some(9)),
+        1,
+    );
+    ordinary_item.is_selected = true;
+    let mixed_plan =
+        SafetyPlanner::create_plan(&[ordinary_item, item], &registry, &no_owner_providers())
+            .expect("a refused item must not discard an independently safe target");
+    assert_eq!(mixed_plan.targets.len(), 1);
+    assert_eq!(mixed_plan.refusals.len(), 1);
+    assert_eq!(
+        mixed_plan.refusals[0].reason,
+        CleanFailureReason::StructuredStore
     );
 
     let plan = DeletePlan {

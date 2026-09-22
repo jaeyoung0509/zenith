@@ -61,8 +61,8 @@ pub use zenith_core::application::dto::storage::{
 };
 pub use zenith_core::domain::category::Category;
 pub use zenith_core::domain::cleanup::{
-    classify_structured_state, CleanStrategy, CleanupMode, CleanupOperation, ContainerCleanup,
-    DeletePlan, DeleteTarget, EntryKind, FilesystemCleanup, FilesystemMutation,
+    classify_structured_state, CleanStrategy, CleanerFamily, CleanupMode, CleanupOperation,
+    ContainerCleanup, DeletePlan, DeleteTarget, EntryKind, FilesystemCleanup, FilesystemMutation,
     OwnerProviderAuthorization, OwnerProviderExecution, OwnerProviderRefusal,
     OwnerProviderSelection, OwnerProviderUnit, OwnerStoreObservation, OwnerUnitMeasurement,
     OwnerUnitMeasurer, OwnerUnitObservation, OwnerUnitOutcome, OwnerUnitRefusal, OwnerUnitState,

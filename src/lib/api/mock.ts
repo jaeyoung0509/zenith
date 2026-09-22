@@ -940,7 +940,7 @@ export const mockApi = {
           signature_id: 'system.intensive.user_app_caches',
           name: 'Stale Third-Party Application Cache (Mock App)',
           category: 'system',
-          risk: 'safe',
+          risk: 'manual',
           path: '~/Library/Caches/com.example.mock-app',
           size: { logical: intensiveBytes, allocated: intensiveBytes },
           file_count: 2400,
@@ -1005,10 +1005,9 @@ export const mockApi = {
             'Protected application bundle encountered in ~/Library/Caches/com.example.bundled-cache/nested/Tool.app',
           skipped_entry_count: 1,
         };
-        // A unit the age policy does not authorize yet: discovered and
-        // measured like the others, but its bytes are not cleanable until the
-        // cache goes stale. It belongs to the standard temporary signature, so
-        // the state is visible without enabling the opt-in broader scan.
+        // A broad temporary-workspace hint: discovered and measured, but kept
+        // advisory because prefix and age do not prove ownership. It stays
+        // visible without enabling the opt-in broader scan.
         const recentItem: ScanItem = {
           id: 'system.developer_temp.0.vite-cache-8f3c',
           signature_id: 'system.developer_temp',
@@ -1018,13 +1017,13 @@ export const mockApi = {
           path: '$TMPDIR/vite-cache-8f3c',
           size: { logical: recentBytes, allocated: recentBytes },
           file_count: 410,
-          description: 'Known developer-tool temporary files (modified within the last 3 days)',
-          cache_metadata: { provider: 'Zenith', management_mode: 'zenith', artifact_kind: 'temporary', consequence: '', size_semantics: 'physical_reclaimable', last_used_confidence: 'approximate' },
+          description: 'Developer-tool temporary workspace requiring review',
+          cache_metadata: { provider: 'Zenith', management_mode: 'advisory', artifact_kind: 'temporary', consequence: '', size_semantics: 'informational', last_used_confidence: 'approximate' },
           disposition: {
-            eligibility: 'recent',
+            eligibility: 'advisory',
             cleanable_bytes: null,
             reason:
-              'Modified within the last 3 days; the age policy needs 3 days of inactivity',
+              'Temporary developer workspace requires review in Developer Artifacts',
           },
           unit: {
             kind: 'child_namespace',

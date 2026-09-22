@@ -6,6 +6,7 @@
 //! [`crate::application::dto::cleanup`], which carry item IDs and byte totals
 //! and nothing a caller could replay into a mutation.
 
+pub mod family;
 pub mod operation;
 pub mod owner;
 pub mod plan;
@@ -13,6 +14,7 @@ pub mod provider;
 pub mod strategy;
 pub mod structured;
 
+pub use family::CleanerFamily;
 pub use operation::{
     CleanupOperation, ContainerCleanup, FilesystemCleanup, FilesystemMutation,
     LifecycleProviderCleanup, ProviderCleanup,

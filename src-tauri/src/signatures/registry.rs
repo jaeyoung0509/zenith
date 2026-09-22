@@ -1,4 +1,6 @@
-use crate::models::{Category, CleanStrategy, PlatformKind, RiskTier, Signature, ZenithError};
+use crate::models::{
+    Category, CleanStrategy, CleanerFamily, PlatformKind, RiskTier, Signature, ZenithError,
+};
 use crate::safety::Blacklist;
 use crate::signatures::SignatureLoader;
 use std::collections::{BTreeSet, HashMap};
@@ -155,6 +157,20 @@ impl SignatureRegistry {
             .values()
             .filter(|s| s.category == category)
             .collect()
+    }
+
+    /// Lists catalog entries owned by one cleaner family.
+    ///
+    /// Categories are presentation groups; families are the implementation
+    /// boundary used when a workflow chooses discovery and mutation adapters.
+    pub fn by_family(&self, family: CleanerFamily) -> Vec<&Signature> {
+        let mut signatures: Vec<&Signature> = self
+            .signatures
+            .values()
+            .filter(|signature| signature.family == family)
+            .collect();
+        signatures.sort_by(|left, right| left.id.cmp(&right.id));
+        signatures
     }
 
     /// Lists the signatures a scan discovers for a category and scope.
@@ -604,7 +620,7 @@ fn platform_token(platform: PlatformKind) -> &'static str {
 mod tests {
     use super::{ManifestLintFinding, SignatureRegistry};
     use crate::models::{
-        CacheArtifactKind, Category, CleanStrategy, CleanupUnitKind, DiscoveryScope,
+        CacheArtifactKind, Category, CleanStrategy, CleanerFamily, CleanupUnitKind, DiscoveryScope,
         EligibilityGate, PlatformKind, RiskTier, Signature,
     };
     use std::path::PathBuf;
@@ -758,6 +774,7 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
             category: Category::System,
+            family: CleanerFamily::System,
             risk: RiskTier::Safe,
             strategy: crate::models::CleanStrategy::DeleteDirectory,
             paths: paths.into_iter().map(str::to_string).collect(),
@@ -1059,6 +1076,7 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
             category: Category::System,
+            family: CleanerFamily::System,
             risk: RiskTier::Safe,
             strategy: CleanStrategy::DeleteDirectory,
             paths: vec!["/tmp/example".to_string()],
@@ -1287,6 +1305,28 @@ mod tests {
             );
         }
         assert_eq!(signature.min_age_days, Some(3));
+        assert_eq!(signature.family, CleanerFamily::Developer);
+        assert_eq!(signature.risk, RiskTier::Manual);
+        assert_eq!(signature.strategy, CleanStrategy::Manual);
+        assert_eq!(signature.unit_kind(), CleanupUnitKind::ChildNamespace);
+    }
+
+    #[test]
+    fn embedded_catalog_is_partitioned_into_owned_families() {
+        let registry = SignatureRegistry::load_embedded_catalog().unwrap();
+
+        assert!(registry
+            .all()
+            .iter()
+            .all(|signature| signature.family != CleanerFamily::Unclassified));
+        assert!(registry
+            .by_family(CleanerFamily::PackageManagers)
+            .iter()
+            .all(|signature| signature.category == Category::Developer));
+        assert!(registry
+            .by_family(CleanerFamily::Containers)
+            .iter()
+            .all(|signature| signature.category == Category::Container));
     }
 
     #[test]

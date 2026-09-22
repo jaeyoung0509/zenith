@@ -667,6 +667,7 @@ mod tests {
             id: "test.owner.store".to_string(),
             name: "Owner Store".to_string(),
             category: Category::Developer,
+            family: Default::default(),
             risk: RiskTier::Rebuild,
             strategy: CleanStrategy::OwnerProvider,
             paths: Vec::new(),
