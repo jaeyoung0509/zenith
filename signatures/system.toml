@@ -140,24 +140,22 @@ risk = "safe"
 strategy = "delete_directory"
 platforms = ["macos"]
 paths = [
-    "~/Library/Application Support/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache,CacheStorage}",
-    "~/Library/Application Support/*/Service Worker/CacheStorage",
+    "~/Library/Application Support/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}",
 ]
 unit = "named_subtree"
 min_age_days = 7
-description = "The disposable cache subtree an application keeps inside its own data directory, which is where every Electron and Chromium-based application parks its renderer, GPU, and shader caches. Each subtree is its own unit and is removed only when everything inside it has been inactive for at least 7 days, so an application that is running keeps its caches."
+description = "A narrowly named renderer, GPU, or shader cache subtree inside an application's data directory. Service Worker CacheStorage is excluded because it can hold offline application state. Each subtree is its own unit and is removed only when everything inside it has been inactive for at least 7 days, so an application that is running keeps its caches."
 
 [[signatures]]
 id = "system.saved_application_state"
 name = "Saved Application State"
 category = "system"
 family = "applications"
-risk = "safe"
-strategy = "delete_stale_contents"
+risk = "manual"
+strategy = "manual"
 platforms = ["macos"]
 paths = ["~/Library/Saved Application State"]
-min_age_days = 7
-description = "Window and session restoration state written by applications that have not been opened for at least 7 days."
+description = "Window and session restoration state reported for review. It is user-visible state rather than a reconstructible cache, so generic cleanup never removes it."
 
 [[signatures]]
 id = "system.xcode_device_support"
@@ -254,12 +252,11 @@ risk = "safe"
 strategy = "delete_directory"
 platforms = ["windows"]
 paths = [
-    "${ROAMING_APP_DATA}/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache,CacheStorage}",
-    "${ROAMING_APP_DATA}/*/Service Worker/CacheStorage",
+    "${ROAMING_APP_DATA}/*/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}",
 ]
 unit = "named_subtree"
 min_age_days = 7
-description = "The disposable cache subtree an application keeps under the roaming profile, removed only when everything inside it has been inactive for at least 7 days."
+description = "A narrowly named renderer, GPU, or shader cache subtree under the roaming profile. Service Worker CacheStorage is excluded because it can hold offline application state."
 
 [[signatures]]
 id = "system.windows.temp_known"
@@ -336,16 +333,13 @@ id = "system.intensive.windows_browser_caches"
 name = "Browser Profile Cache"
 category = "system"
 family = "applications"
-risk = "safe"
+risk = "rebuild"
 strategy = "delete_directory"
 platforms = ["windows"]
 paths = [
-    "${LOCAL_APP_DATA}/Google/Chrome/User Data/*/{Cache,Code Cache,GPUCache,CacheStorage}",
-    "${LOCAL_APP_DATA}/Google/Chrome/User Data/*/Service Worker/CacheStorage",
-    "${LOCAL_APP_DATA}/Microsoft/Edge/User Data/*/{Cache,Code Cache,GPUCache,CacheStorage}",
-    "${LOCAL_APP_DATA}/Microsoft/Edge/User Data/*/Service Worker/CacheStorage",
-    "${LOCAL_APP_DATA}/BraveSoftware/Brave-Browser/User Data/*/{Cache,Code Cache,GPUCache,CacheStorage}",
-    "${LOCAL_APP_DATA}/BraveSoftware/Brave-Browser/User Data/*/Service Worker/CacheStorage",
+    "${LOCAL_APP_DATA}/Google/Chrome/User Data/*/{Cache,Code Cache,GPUCache}",
+    "${LOCAL_APP_DATA}/Microsoft/Edge/User Data/*/{Cache,Code Cache,GPUCache}",
+    "${LOCAL_APP_DATA}/BraveSoftware/Brave-Browser/User Data/*/{Cache,Code Cache,GPUCache}",
     "${LOCAL_APP_DATA}/Mozilla/Firefox/Profiles/*/cache2",
     "${ROAMING_APP_DATA}/Mozilla/Firefox/Profiles/*/cache2",
 ]
@@ -353,7 +347,7 @@ unit = "named_subtree"
 min_age_days = 7
 intensive_only = true
 discovery = "always"
-description = "Chromium and Firefox profile caches, enumerated per profile so an installation with several profiles is covered rather than only its first one. Discovered in either scope, eligible in the broader scope, and removed only when the profile's cache subtree has been inactive for at least 7 days."
+description = "Chromium and Firefox transport/code caches, enumerated per profile while cookies, history, bookmarks, passwords, extensions, local storage, sessions, downloads, and Service Worker CacheStorage remain outside the cleanup scope. This Rebuild action is opt-in and only eligible when the exact cache subtree has been inactive for at least 7 days."
 
 [[signatures]]
 id = "system.intensive.windows_packages"

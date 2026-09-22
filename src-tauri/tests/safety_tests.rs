@@ -2502,16 +2502,18 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
 
         // The scope that is switched off states nothing about the location: a
         // standard scan still offers the cache the running rule authorizes,
-        // whichever category is visited first.
+        // whichever category is visited first. Cursor's renderer cache is a
+        // Rebuild action now, so it is reviewable rather than auto-selected.
         let standard = scan(false);
         let offered = item_at_cursor(&standard);
         assert_eq!(
             offered.disposition.eligibility,
-            CleanupEligibility::AutoCleanable,
+            CleanupEligibility::Reviewable,
             "a gated rule cannot withhold another rule's permission ({order:?}): {:?}",
             offered.disposition
         );
-        assert!(offered.is_selected);
+        assert!(!offered.is_selected);
+        assert!(offered.cleanable_bytes() > 0);
     }
 }
 
