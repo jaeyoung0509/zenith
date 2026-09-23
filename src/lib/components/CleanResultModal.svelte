@@ -45,9 +45,7 @@
   // One string, so the summary line reads as a single sentence rather than
   // three fragments stitched by conditional markup.
   let targetCounts = $derived(
-    skippedCount > 0
-      ? `${partialCount} target(s) partially cleaned, ${failedCount} failed, ${skippedCount} skipped`
-      : `${partialCount} target(s) partially cleaned, ${failedCount} failed`
+    `${partialCount} partly cleaned · ${failedCount} failed · ${skippedCount} skipped`
   );
 
   onMount(() => {
@@ -143,7 +141,7 @@
           {outcome === 'success'
             ? 'Clean Complete'
             : outcome === 'partial'
-              ? 'Clean Partially Complete'
+              ? 'Some items could not be cleaned'
               : 'Clean Failed'}
         </h3>
         <p id={id + '-description'} class="text-xs text-muted-foreground">
@@ -247,7 +245,7 @@
       <div class="space-y-1.5">
         <div class="flex items-center gap-1.5 text-xs font-medium text-warning">
           <AlertTriangle size={14} />
-          <span>{partialCount} item(s) partially cleaned</span>
+          <span>{partialCount} {partialCount === 1 ? 'item needs' : 'items need'} attention</span>
         </div>
         <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
           {#each partialItems as item}

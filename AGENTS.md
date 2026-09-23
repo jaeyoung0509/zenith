@@ -165,6 +165,12 @@ safety conventions below when changing Zenith.
   loading, empty, error, disabled, hover, and focus states.
 - Do not duplicate backend business rules in the UI. Browser mocks should match
   the real command response shape, not become a second implementation.
+- Name domain states and user-facing actions once at their owning boundary.
+  Avoid message-substring branching and repeated magic strings or numeric
+  thresholds when they express the same rule. Use typed reasons for decisions;
+  keep copy in a presentation helper where several views share it. Extract a
+  shared helper only after confirming the callers have the same semantics, and
+  keep deliberately different limits or platform contracts separate.
 - Keep browser-preview fixtures in domain files under `src/lib/api/mocks` and
   preserve exact top-level key parity with the native API via contract tests.
 - Recurring store work must be owned by explicit subscribers. Use reference

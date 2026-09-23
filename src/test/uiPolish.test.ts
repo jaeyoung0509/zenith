@@ -163,7 +163,7 @@ describe('cleanup result feedback', () => {
     const partial = render(CleanResultModal, {
       props: { result: result('partial', true, 'one file was locked'), onClose: () => undefined },
     });
-    expect(partial.body).toContain('Clean Partially Complete');
+    expect(partial.body).toContain('Some items could not be cleaned');
     expect(partial.body).toContain('Some storage was reclaimed');
 
     const failedResult = result('failed', false, 'Permission denied (os error 13)');
@@ -176,9 +176,9 @@ describe('cleanup result feedback', () => {
     expect(failed.body).not.toContain('Clean Complete');
     expect(failed.body).not.toContain('Free space delta');
 
-    expect(success.body).not.toContain('target(s) partially cleaned');
-    expect(partial.body).toContain('1 target(s) partially cleaned, 0 failed');
-    expect(failed.body).toContain('0 target(s) partially cleaned, 1 failed');
+    expect(success.body).not.toContain('partly cleaned');
+    expect(partial.body).toContain('1 partly cleaned · 0 failed · 0 skipped');
+    expect(failed.body).toContain('0 partly cleaned · 1 failed · 0 skipped');
   });
 
   it('reports a run that both partially cleaned and failed targets', () => {
@@ -214,9 +214,9 @@ describe('cleanup result feedback', () => {
       props: { result: mixed, onClose: () => undefined },
     });
 
-    expect(rendered.body).toContain('Clean Partially Complete');
-    expect(rendered.body).toContain('1 target(s) partially cleaned, 1 failed');
-    expect(rendered.body).toContain('1 item(s) partially cleaned');
+    expect(rendered.body).toContain('Some items could not be cleaned');
+    expect(rendered.body).toContain('1 partly cleaned · 1 failed · 0 skipped');
+    expect(rendered.body).toContain('1 item needs attention');
     expect(rendered.body).toContain('1 item(s) failed');
   });
 

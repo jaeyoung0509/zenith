@@ -58,8 +58,8 @@ impl PlanLifecycle {
         Self {
             ttl_seconds: 300,
             capacity: 64,
-            not_found: "Delete plan not found or already used",
-            expired: "Delete plan expired. Scan again before cleaning.",
+            not_found: "Cleanup selection is no longer available. Review it again.",
+            expired: "Cleanup selection expired. Review it again.",
         }
     }
 
@@ -215,7 +215,7 @@ mod tests {
         assert!(store.take_valid(plan_id, 1_050).is_ok());
         let second = store.take_valid(plan_id, 1_051);
         assert!(second.is_err(), "a consumed plan must not be replayable");
-        assert!(second.unwrap_err().to_string().contains("not found"));
+        assert!(matches!(second, Err(PlanStoreError::Unavailable(_))));
     }
 
     #[test]

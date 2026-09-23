@@ -60,7 +60,7 @@
         class="text-xs text-muted-foreground hover:text-foreground"
       >
         <CheckSquare size={13} class="mr-1 text-success" />
-        <span>Select Safe</span>
+        <span>Select recommended</span>
       </Button>
     {/if}
 
@@ -112,7 +112,7 @@
         {/if}
         {#if manualCount > 0}
           <span class="text-destructive">
-            ! {manualCount} Manual {manualCount === 1 ? 'item' : 'items'}{#if manualBytes > 0} · <ByteValue bytes={manualBytes} />{/if}
+            {manualCount} {manualCount === 1 ? 'item needs' : 'items need'} a separate action{#if manualBytes > 0} · <ByteValue bytes={manualBytes} />{/if}
           </span>
         {/if}
       </span>
@@ -129,7 +129,7 @@
         variant={rebuildBytes > 0 ? "secondary" : "primary"}
         size="sm"
         disabled={isActionDisabled || isActionLoading || selectedCount === 0 || manualCount > 0}
-        title={manualCount > 0 ? "Manual items require their dedicated management action" : undefined}
+        title={manualCount > 0 ? "These items need a separate action" : undefined}
         onclick={onAction}
         class="gap-1.5"
       >

@@ -78,12 +78,19 @@ export class CleanupRefusalError extends Error {
 }
 
 /** Whether a command error is the structured refusal a cleanup command returns. */
+const cleanupFailureScopes: ReadonlySet<CleanupFailure['scope']> = new Set([
+  'inventory_stale', 'plan_unavailable', 'items', 'provider_busy',
+  'permission', 'cancelled', 'internal',
+]);
+
 function isCleanupFailure(error: unknown): error is CleanupFailure {
   return (
     typeof error === 'object' &&
     error !== null &&
-    typeof (error as CleanupFailure).scope === 'string' &&
-    typeof (error as CleanupFailure).message === 'string'
+    cleanupFailureScopes.has((error as CleanupFailure).scope) &&
+    typeof (error as CleanupFailure).reason === 'string' &&
+    typeof (error as CleanupFailure).message === 'string' &&
+    Array.isArray((error as CleanupFailure).items)
   );
 }
 

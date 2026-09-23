@@ -64,8 +64,8 @@ describe('redesign interaction semantics', () => {
     const { body } = render(SelectionToolbar, { props: {
       selectedCount: 1, selectedBytes: 0, manualBytes: 0, manualCount: 1, onAction: () => {},
     } });
-    expect(body).toContain('1 Manual item');
-    expect(body).toContain('Manual items require their dedicated management action');
+    expect(body).toContain('1 item needs a separate action');
+    expect(body).toContain('These items need a separate action');
     expect(body).toContain('disabled');
   });
 
@@ -74,7 +74,7 @@ describe('redesign interaction semantics', () => {
     expect(render(InlineNotice, { props: { variant: 'error', message: 'Refresh failed' } }).body).toContain('role="alert"');
   });
 
-  it('shows the backend consequence statement verbatim for each item that carries one', () => {
+  it('keeps the reviewed paths and concise operation summary without per-item jargon', () => {
     const providerItem = {
       ...item,
       id: 'windows.recycle_bin',
@@ -92,14 +92,11 @@ describe('redesign interaction semantics', () => {
     } as ScanItem;
     const { body } = render(CleanupReviewDialog, { props: {
       plan: planFor([item, providerItem], 'mixed'),
-      items: [item, providerItem], onCancel: () => {}, onConfirm: () => {},
+      onCancel: () => {}, onConfirm: () => {},
     } });
-    // The item's own consequence line, not a paraphrased warning.
-    expect(body).toContain('Items move to the Recycle Bin and can be restored until it is emptied.');
-    // Both backend-resolved paths are present, while the consequence appears
-    // only on the provider-backed row that supplied it.
+    expect(body).toContain('Some items move to');
     expect(body).toContain('/fixture');
-    expect(body.match(/Items move to the Recycle Bin and can be restored until it is emptied\./g)).toHaveLength(1);
+    expect(body).not.toContain('Rebuild items');
   });
 
   it('routes category cleanup through review before executing selected items', () => {
@@ -115,14 +112,14 @@ describe('redesign interaction semantics', () => {
   it('explains rebuild consequences and blocks execution after scan invalidation', () => {
     const { body } = render(CleanupReviewDialog, { props: {
       plan: planFor([item]),
-      items: [item], disabled: true, onCancel: () => {}, onConfirm: () => {},
+      disabled: true, onCancel: () => {}, onConfirm: () => {},
     } });
     expect(body).toContain('Build cache');
-    expect(body).toContain('downloads or recompilation');
+    expect(body).toContain('download or build again');
     expect(body).toContain('/fixture');
-    expect(body).toContain('remain recoverable');
-    expect(body).toContain('scan changed or expired');
-    const confirm = body.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('Move to'));
+    expect(body).toContain('Move to');
+    expect(body).toContain('This selection expired');
+    const confirm = body.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find(button => button.includes('Clean items'));
     expect(confirm).toMatch(/<button[^>]*disabled/);
   });
 });

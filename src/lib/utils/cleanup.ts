@@ -154,7 +154,7 @@ export function summarizeCategory(
       policy_gated_count++;
     }
 
-    if (isCleanable(item)) {
+    if (isActionable(item)) {
       cleanable_count++;
       const cln = cleanableBytes(item);
       cleanable_bytes_sum += cln;

@@ -1,17 +1,11 @@
 <script lang="ts">
-  import type { CategoryResult, PlanPreview, RiskTier, ScanItem } from '../../lib/models/types';
+  import type { CategoryResult, PlanPreview } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { formatBytes } from '../../lib/utils/format';
   import {
     cleanableBytes,
-    cleanableTotals,
-    describeIneligibleStates,
     filterAndSortCleanupItems,
-    ineligibleStates,
-    isCleanable,
-    observedByteRange,
-    presentedItems,
-    riskCounts,
+    isActionable,
     summarizeCategory,
     type CleanupSortMode,
   } from '../../lib/utils/cleanup';
@@ -28,7 +22,6 @@
     Search,
     CheckSquare,
     Square,
-    Info,
     Trash2,
     Boxes,
     Container,
@@ -44,51 +37,30 @@
   let { categoryResult, onBack, onNavigateTab }: Props = $props();
 
   let searchQuery = $state('');
-  let selectedRiskFilter = $state<RiskTier | 'all'>('all');
   let sortMode = $state<CleanupSortMode>('size');
   let showResultModal = $state(false);
-  let review = $state<{ scanId: string; items: ScanItem[]; plan: PlanPreview } | null>(null);
+  let review = $state<{ scanId: string; plan: PlanPreview } | null>(null);
   let isPreparingReview = $state(false);
 
   let filteredItems = $derived.by(() => {
     return filterAndSortCleanupItems(
       categoryResult.items,
-      selectedRiskFilter,
+      'all',
       searchQuery,
       sortMode
     );
   });
 
-  let cleanableFilteredItems = $derived(filteredItems.filter(isCleanable));
+  let cleanableFilteredItems = $derived(filteredItems.filter(isActionable));
 
-  // The tabs count risk classification while the actions act on current
-  // eligibility, so the two can disagree. This pair is what lets the active tab
-  // state both numbers instead of leaving a risk count that reads as an
-  // authorization the actions will refuse.
-  let tabTotals = $derived(cleanableTotals(filteredItems));
-  let showsCleanableTotals = $derived(
-    tabTotals.detected.count > 0 &&
-      (tabTotals.cleanable.count !== tabTotals.detected.count ||
-        tabTotals.cleanable.bytes !== tabTotals.detected.bytes)
-  );
-  // A tab whose rows are all still ineligible explains itself from those rows'
-  // own dispositions, so it never reads as a category that failed to load.
   let noCleanableReason = $derived.by(() => {
     if (filteredItems.length === 0 || cleanableFilteredItems.length > 0) return null;
-    const states = ineligibleStates(filteredItems);
-    return states.length === 0
-      ? 'No rows in this tab are cleanable now.'
-      : `No rows in this tab are cleanable now: ${describeIneligibleStates(states)}.`;
+    return 'Nothing to clean here right now.';
   });
   let selectFilteredTitle = $derived.by(() => {
     if (!scanStore.canClean) return 'Run a fresh scan before changing the selection.';
     return noCleanableReason ?? undefined;
   });
-  // The Rebuild explanation speaks about the Rebuild rows it is visible over, so
-  // it can say when some of them are not removable right now.
-  let rebuildNotRemovable = $derived(
-    ineligibleStates(filteredItems.filter((item) => item.risk === 'rebuild'))
-  );
 
   let allFilteredSelected = $derived.by(() => {
     if (cleanableFilteredItems.length === 0) return false;
@@ -97,12 +69,8 @@
 
   let summary = $derived(summarizeCategory(categoryResult.items, scanStore.selectedMap));
   let presentedCount = $derived(summary.visible_count);
-  let tabs = $derived(riskCounts(categoryResult.items));
 
   let categorySelectedBytes = $derived(summary.selected_bytes);
-  let observedRange = $derived(
-    observedByteRange(categoryResult.total_bytes, categoryResult.ambiguous_overlap_bytes ?? 0)
-  );
 
   function toggleAllFiltered() {
     if (cleanableFilteredItems.length === 0) return;
@@ -116,7 +84,7 @@
     const scan = scanStore.lastScan;
     if (!scan || !scanStore.canClean) return;
     const items = categoryResult.items.filter(
-      (item) => scanStore.selectedMap[item.id] && isCleanable(item)
+      (item) => scanStore.selectedMap[item.id] && isActionable(item)
     );
     if (items.length === 0) return;
     const scanId = scan.scan_id;
@@ -124,7 +92,7 @@
     try {
       const plan = await scanStore.prepareCleanup(items);
       if (plan && scanStore.lastScan?.scan_id === scanId && scanStore.canClean) {
-        review = { scanId, items, plan };
+        review = { scanId, plan };
       }
     } finally {
       isPreparingReview = false;
@@ -154,14 +122,9 @@
           <h2 class="text-base font-semibold text-foreground tracking-tight">
             {categoryResult.display_name}
           </h2>
-          {#if categoryResult.quality === 'partial'}
-            <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title="Some paths could not be fully inspected">
-              Partial
-            </span>
-          {/if}
         </div>
         <p class="text-xs text-muted-foreground">
-          {presentedCount} detected {presentedCount === 1 ? 'location' : 'locations'} • {observedRange.isAmbiguous ? `${formatBytes(observedRange.lower)} – ${formatBytes(observedRange.upper)} observed` : `${categoryResult.quality === 'partial' ? '≥ ' : ''}${formatBytes(categoryResult.total_bytes)} detected`}
+          {presentedCount} {presentedCount === 1 ? 'item' : 'items'} · {summary.cleanable_bytes > 0 ? `${formatBytes(summary.cleanable_bytes)} can be cleaned` : 'Nothing to clean'}
         </p>
       </div>
     </div>
@@ -177,10 +140,10 @@
       >
         {#if allFilteredSelected}
           <Square size={13} />
-          <span>Deselect Filtered</span>
+          <span>Deselect</span>
         {:else}
           <CheckSquare size={13} class="text-success" />
-          <span>Select Filtered</span>
+          <span>Select all</span>
         {/if}
       </Button>
 
@@ -282,7 +245,6 @@
       />
     </div>
 
-    <!-- Risk Filter Tabs -->
     <div class="flex flex-col items-stretch gap-1 sm:items-end sm:self-auto">
       <div class="flex items-center gap-2">
         <select
@@ -295,82 +257,14 @@
           <option value="name">Name A–Z</option>
         </select>
 
-        <div
-          class="flex items-center gap-1 bg-secondary/60 p-1 rounded-lg"
-          role="group"
-          aria-label="Filter cleanup items by risk"
-        >
-          <button
-            type="button"
-            aria-pressed={selectedRiskFilter === 'all'}
-            onclick={() => (selectedRiskFilter = 'all')}
-            class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
-            'all'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'}"
-          >
-            All ({tabs.all})
-          </button>
-          <button
-            type="button"
-            aria-pressed={selectedRiskFilter === 'safe'}
-            onclick={() => (selectedRiskFilter = 'safe')}
-            class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
-            'safe'
-              ? 'bg-background text-success shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'}"
-          >
-            Safe ({tabs.safe})
-          </button>
-          <button
-            type="button"
-            aria-pressed={selectedRiskFilter === 'rebuild'}
-            onclick={() => (selectedRiskFilter = 'rebuild')}
-            class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
-            'rebuild'
-              ? 'bg-background text-warning shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'}"
-          >
-            Rebuild ({tabs.rebuild})
-          </button>
-          <button
-            type="button"
-            aria-pressed={selectedRiskFilter === 'manual'}
-            onclick={() => (selectedRiskFilter = 'manual')}
-            class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors {selectedRiskFilter ===
-            'manual'
-              ? 'bg-background text-destructive shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'}"
-          >
-            Manual ({tabs.manual})
-          </button>
-        </div>
       </div>
 
-      <!-- The tabs count risk; these two lines state what is currently cleanable
-           in the active tab, and why nothing is, when that differs. -->
-      {#if showsCleanableTotals}
-        <p
-          class="text-caption font-mono text-muted-foreground"
-          title="This tab counts every detected row by risk tier. Only rows the current policy still allows can be selected or cleaned."
-        >
-          <span>{tabTotals.detected.count} detected ({formatBytes(tabTotals.detected.bytes)}) · </span><span class={tabTotals.cleanable.count > 0 ? 'text-success' : ''}>{tabTotals.cleanable.count} cleanable now ({formatBytes(tabTotals.cleanable.bytes)})</span>
-        </p>
-      {/if}
       {#if noCleanableReason}
         <p class="text-caption text-muted-foreground">{noCleanableReason}</p>
       {/if}
     </div>
   </div>
 
-  {#if selectedRiskFilter === 'all' || selectedRiskFilter === 'rebuild'}
-    <div class="flex items-start gap-2.5 rounded-xl border border-warning/20 bg-warning/5 px-4 py-3">
-      <Info size={15} class="mt-0.5 shrink-0 text-warning" />
-      <p class="text-meta leading-relaxed text-muted-foreground">
-        <span class="font-medium text-warning">Rebuild</span> items are safe to remove, but dependencies or indexes will be downloaded or rebuilt the next time you use that tool. They stay unselected until you choose them.{#if rebuildNotRemovable.length > 0} Some Rebuild rows here are not removable right now ({describeIneligibleStates(rebuildNotRemovable)}) and stay counted, not selectable.{/if}
-      </p>
-    </div>
-  {/if}
 
   <!-- Items List -->
   {#if filteredItems.length > 0}
@@ -381,14 +275,13 @@
     </div>
   {:else}
     <div class="py-16 text-center text-xs text-muted-foreground">
-      No items match your search or risk filter.
+      No items match your search.
     </div>
   {/if}
 
   {#if review}
     <CleanupReviewDialog
       plan={review.plan}
-      items={review.items}
       disabled={review.scanId !== scanStore.lastScan?.scan_id || !scanStore.canClean}
       onCancel={() => (review = null)}
       onConfirm={confirmCleanup}

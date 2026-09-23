@@ -22,7 +22,7 @@ import {
   tauriScan,
   tauriScanDiscovery,
 } from '../utils/tauri';
-import { cleanableBytes, isActionable, isAutoCleanable, isCleanable, isProviderBacked } from '../utils/cleanup';
+import { cleanableBytes, isActionable, isAutoCleanable, isProviderBacked } from '../utils/cleanup';
 
 /** How the in-flight (or most recent) scan was started. Drives auto-refresh copy. */
 export type ScanTrigger = 'auto' | 'manual';
@@ -244,16 +244,25 @@ export class ScanStore {
    * rows it names. Copy comes from the typed outcome, never from `String(error)`
    * plus a guess, so a deterministic refusal never reads as "Scan again".
    */
-  private refuseCleanup(cause: unknown): null {
-    if (cause instanceof CleanupRefusalError && !cause.invalidatesInventory) {
+  private refuseCleanup(cause: unknown, mayHaveMutated = false): null {
+    if (cause instanceof CleanupRefusalError) {
+      if (cause.invalidatesInventory) {
+        this.invalidate();
+        this.error = `${cause.message} Scan again.`;
+        return null;
+      }
       this.recordRefusals(cause.items);
-      this.refusalMessage = cause.message || 'The cleanup was refused for the rows it names.';
+      this.refusalMessage = cause.message || 'The selected items could not be cleaned.';
       this.error = this.refusalMessage;
+      if (mayHaveMutated && cause.scope === 'internal') this.invalidate();
       return null;
     }
-    const message = cause instanceof Error ? cause.message : String(cause ?? '');
-    this.invalidate();
-    this.error = `${message || 'Clean failed'} Scan again and review the results before retrying.`;
+    // An untyped bridge failure cannot establish whether execution mutated a
+    // target. Keep a planning failure local; retire a possibly changed scan.
+    if (mayHaveMutated) this.invalidate();
+    this.error = mayHaveMutated
+      ? 'Cleanup outcome could not be verified. Scan again before cleaning.'
+      : 'Could not prepare cleanup. Try again.';
     return null;
   }
 
@@ -355,6 +364,11 @@ export class ScanStore {
       } else if (cached.scan_id !== this.lastScan?.scan_id) {
         this.acceptScan(cached);
       }
+      // A checkpoint from an older app session is an internal implementation
+      // detail. Finish it without asking for another click.
+      if (this.discovery.status === 'paused' && !this.isScanning) {
+        void this.continueScan();
+      }
       this.updateFreshness();
     } catch (error) {
       if (generation !== this.generation || this.isScanning || this.isCleaning) return;
@@ -387,13 +401,13 @@ export class ScanStore {
 
   toggleItem(id: string) {
     const item = this.findItem(id);
-    if (!this.canClean || !item || !isCleanable(item)) return;
+    if (!this.canClean || !item || !isActionable(item)) return;
     this.selectedMap[id] = !this.selectedMap[id];
   }
 
   setItemSelected(id: string, selected: boolean) {
     const item = this.findItem(id);
-    if (!this.canClean || !item || (selected && !isCleanable(item))) return;
+    if (!this.canClean || !item || (selected && !isActionable(item))) return;
     this.selectedMap[id] = selected;
   }
 
@@ -404,7 +418,7 @@ export class ScanStore {
 
     for (const item of cat.items) {
       if (select) {
-        if (isCleanable(item)) this.selectedMap[item.id] = true;
+        if (isActionable(item)) this.selectedMap[item.id] = true;
       } else if (isActionable(item)) {
         this.selectedMap[item.id] = false;
       }
@@ -689,7 +703,7 @@ export class ScanStore {
 
       return result;
     } catch (cause: unknown) {
-      return this.refuseCleanup(cause);
+      return this.refuseCleanup(cause, true);
     } finally {
       this.isCleaning = false;
     }
@@ -732,7 +746,11 @@ export class ScanStore {
       if (!this.lastScan) throw new Error('Scan result is no longer available');
       const plan = await tauriCreatePlan(this.lastScan.scan_id, selectedItems);
 
-      if (this.isStale()) throw new Error('Scan expired. Scan again before cleaning.');
+      if (this.isStale()) {
+        this.invalidate();
+        this.error = 'Scan expired. Scan again before cleaning.';
+        return null;
+      }
 
       // A plan that does not cover every selection still runs for the rows it
       // does cover: the refusals name the rows it left out, and the inventory
@@ -762,7 +780,9 @@ export class ScanStore {
 
     try {
       if (Math.floor(Date.now() / 1000) > plan.expires_at) {
-        throw new Error('Cleanup review expired. Scan again and review the new plan before cleaning.');
+        this.invalidate();
+        this.error = 'Cleanup selection expired. Scan again before cleaning.';
+        return null;
       }
 
       if (plan.requires_confirmation && !confirmed) {
@@ -806,7 +826,7 @@ export class ScanStore {
 
       return result;
     } catch (cause: unknown) {
-      return this.refuseCleanup(cause);
+      return this.refuseCleanup(cause, true);
     } finally {
       this.isCleaning = false;
     }

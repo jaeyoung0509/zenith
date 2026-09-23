@@ -1,12 +1,11 @@
 <script lang="ts">
   import type { ScanItem } from '../models/types';
   import { formatBytes, formatTimeAgo } from '../utils/format';
-  import { isAdvisory, isBlocked, isCleanable, isPolicyGated, isRecent } from '../utils/cleanup';
+  import { isActionable, isAdvisory } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import { platformContextStore } from '../stores/platformContext.svelte';
   import { canReveal, revealUnavailableReason, runReveal } from '../utils/reveal';
   import { tauriShowInFileManager } from '../utils/tauri';
-  import RiskBadge from './RiskBadge.svelte';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
   import { FolderOpen, ArrowUpRight } from '@lucide/svelte';
@@ -25,8 +24,7 @@
     size_semantics: 'physical_reclaimable' as const,
     last_used_confidence: 'unknown' as const,
   });
-  let cleanable = $derived(isCleanable(item));
-  let isBlockedItem = $derived(isBlocked(item));
+  let cleanable = $derived(isActionable(item));
   let isAdvisoryItem = $derived(isAdvisory(item));
   let isSelected = $derived(!!scanStore.selectedMap[item.id] && cleanable);
   let blockedReason = $derived(item.disposition?.reason ?? item.incomplete_reason ?? 'Cleanup blocked');
@@ -71,7 +69,7 @@
         title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
         class="mt-0.5 px-1.5 py-0.5 rounded text-caption font-medium border border-destructive/30 text-destructive bg-destructive/10 flex items-center gap-0.5 shrink-0 hover:bg-destructive/20 transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
       >
-        <span>Manual</span>
+        <span>Show location</span>
         <ArrowUpRight size={10} />
       </button>
     {:else}
@@ -90,32 +88,6 @@
         <span class="text-xs font-medium text-foreground truncate">
           {item.name}
         </span>
-        <RiskBadge risk={item.risk} />
-        {#if item.disposition?.eligibility === 'blocked'}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={blockedReason}>
-            Blocked
-          </span>
-        {:else if item.disposition?.eligibility === 'advisory'}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={blockedReason}>
-            Advisory
-          </span>
-        {:else if isRecent(item)}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.disposition?.reason ?? blockedReason}>
-            Recently used
-          </span>
-        {:else if isPolicyGated(item)}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.disposition?.reason ?? blockedReason}>
-            Outside scope
-          </span>
-        {:else if item.quality === 'partial'}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-warning/40 text-warning bg-warning/10" title={item.incomplete_reason ?? 'Partial scan'}>
-            Partial
-          </span>
-        {:else if isBlockedItem}
-          <span class="px-1.5 py-0.5 rounded text-micro font-medium border border-destructive/40 text-destructive bg-destructive/10" title={blockedReason}>
-            Inaccessible
-          </span>
-        {/if}
       </div>
 
       {#if refusalReason}
@@ -130,28 +102,13 @@
         <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.incomplete_reason}>
           {item.incomplete_reason}
         </p>
+      {:else if item.risk === 'rebuild' && cleanable}
+        <p class="text-caption text-muted-foreground mt-0.5">May download or build again later</p>
       {/if}
 
       <p class="text-meta text-muted-foreground mt-0.5 line-clamp-1">
         {item.description || item.path}
       </p>
-
-      {#if cacheMetadata.provider || cacheMetadata.consequence}
-        <div class="flex flex-wrap items-center gap-1.5 mt-1 text-caption text-muted-foreground">
-          <span class="rounded border border-border/70 px-1.5 py-0.5">
-            {cacheMetadata.provider || 'Zenith'} · {cacheMetadata.management_mode.replace('_', ' ')}
-          </span>
-          <span class="rounded border border-border/70 px-1.5 py-0.5">
-            {cacheMetadata.artifact_kind.replaceAll('_', ' ')}
-          </span>
-          {#if cacheMetadata.consequence}
-            <span class="line-clamp-1">{cacheMetadata.consequence}</span>
-          {/if}
-          {#if cacheMetadata.last_used_confidence !== 'unknown'}
-            <span>usage time: {cacheMetadata.last_used_confidence}</span>
-          {/if}
-        </div>
-      {/if}
 
       <div class="flex items-center gap-2 mt-1 text-caption text-muted-foreground font-mono">
         <span class="truncate max-w-[280px]">{item.path}</span>

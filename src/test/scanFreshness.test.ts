@@ -245,14 +245,52 @@ describe('cleanup freshness and recovery', () => {
     expect(submitted.map((entry) => entry.id)).toEqual(['provider-item', 'windows.recycle_bin']);
   });
 
-  it.each(['Selected target no longer exists', 'Permission denied', 'Delete plan expired'])('provides a non-destructive recovery for %s', async (message) => {
+  it.each([
+    ['items', 'not_found', 'Selected target no longer exists'],
+    ['permission', 'permission_denied', 'Permission denied'],
+  ] as const)('keeps a valid inventory after %s/%s', async (scope, reason, message) => {
     const store = await loaded();
-    vi.mocked(tauriCreatePlan).mockRejectedValue(new Error(message));
+    vi.mocked(tauriCreatePlan).mockRejectedValue(new CleanupRefusalError({
+      scope, reason, message, items: [],
+    }));
     await store.cleanSelected();
     expect(store.error).toContain(message);
-    expect(store.error).toContain('Scan again');
-    expect(store.canClean).toBe(false);
+    expect(store.error).not.toContain('Scan again');
+    expect(store.canClean).toBe(true);
     expect(tauriExecuteClean).not.toHaveBeenCalled();
+    expect(tauriScan).not.toHaveBeenCalled();
+  });
+
+  it('keeps a planning bridge failure local without exposing raw details', async () => {
+    const store = await loaded();
+    vi.mocked(tauriCreatePlan).mockRejectedValue(new Error('/Users/example/private/token'));
+    await store.cleanSelected();
+    expect(store.error).toBe('Could not prepare cleanup. Try again.');
+    expect(store.canClean).toBe(true);
+  });
+
+  it('rebuilds only the review plan when a one-shot plan expires', async () => {
+    const store = await loaded();
+    vi.mocked(tauriCreatePlan).mockResolvedValue({
+      id: 'expired-plan', targets: [{
+        item_id: 'scan-item', name: 'Fixture', path: '/fixture', mode: 'permanent_delete',
+        requires_confirmation: false, expected_bytes: 10, risk: 'safe',
+      }], refused: [], expected_reclaim_bytes: 10,
+      risk: { safe_count: 1, rebuild_count: 0, manual_count: 0, safe_bytes: 10, rebuild_bytes: 0, manual_bytes: 0 },
+      requires_confirmation: false, expires_at: 1600, mode: 'permanent_delete',
+    });
+    vi.mocked(tauriExecuteClean).mockRejectedValue(new CleanupRefusalError({
+      scope: 'plan_unavailable', reason: 'plan_unavailable',
+      message: 'Cleanup selection expired. Review it again.', items: [],
+    }));
+
+    const plan = await store.prepareCleanup(store.lastScan!.categories[0].items);
+    expect(plan).not.toBeNull();
+    await store.executePreparedPlan(plan!, true);
+
+    expect(store.canClean).toBe(true);
+    expect(store.selectedMap['scan-item']).toBe(true);
+    expect(store.error).toContain('Review it again');
     expect(tauriScan).not.toHaveBeenCalled();
   });
 
