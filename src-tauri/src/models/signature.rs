@@ -315,21 +315,36 @@ impl Signature {
         }
 
         if self.artifact_kind == CacheArtifactKind::RendererCache {
-            let expected_path = "~/Library/Application Support/Cursor/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}";
-            let required_cursor_processes = [
-                "Cursor",
-                "Cursor Helper",
-                "Cursor Helper (GPU)",
-                "Cursor Helper (Renderer)",
-                "Cursor Helper (Plugin)",
-            ];
-            let cursor_process_guard = required_cursor_processes.iter().all(|required| {
+            // Each relaxed unit is named here as well as in the catalog. A
+            // new renderer cache cannot inherit this policy by copying the
+            // artifact kind onto an arbitrary application directory.
+            let contract: Option<(&str, Category, &str, &[&str])> = match self.id.as_str() {
+                "ai.cursor.renderer_cache" => Some((
+                    "~/Library/Application Support/Cursor/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}",
+                    Category::Ai,
+                    "Cursor",
+                    &["Cursor", "Cursor Helper", "Cursor Helper (GPU)", "Cursor Helper (Renderer)", "Cursor Helper (Plugin)"],
+                )),
+                "system.brave.code_cache" => Some((
+                    "~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache",
+                    Category::System,
+                    "Brave Browser",
+                    &["Brave Browser", "Brave Browser Helper", "Brave Browser Helper (GPU)", "Brave Browser Helper (Renderer)", "Brave Browser Helper (Plugin)"],
+                )),
+                _ => None,
+            };
+            let Some((expected_path, category, owner, required_processes)) = contract else {
+                return invalid(
+                    "an unregistered renderer cache has no reviewed unit contract".to_string(),
+                );
+            };
+            let owner_process_guard = required_processes.iter().all(|required| {
                 self.fail_if_running
                     .iter()
                     .any(|name| name.eq_ignore_ascii_case(required))
             });
             if self.family != CleanerFamily::Applications
-                || self.category != Category::Ai
+                || self.category != category
                 || self.risk != RiskTier::Rebuild
                 || self.strategy != CleanStrategy::DeleteDirectory
                 || self.platforms.as_slice() != [PlatformKind::Macos]
@@ -338,12 +353,12 @@ impl Signature {
                 || self.unit != Some(CleanupUnitKind::NamedSubtree)
                 || self.min_age_days.is_some()
                 || self.intensive_only
-                || !cursor_process_guard
-                || self.owner != "Cursor"
+                || !owner_process_guard
+                || self.owner != owner
                 || self.consequence.trim().is_empty()
             {
                 return invalid(
-                    "a renderer cache must name the exact macOS Cursor cache subtrees, use a whole-unit Rebuild deletion, state the Cursor owner process, and include a consequence"
+                    "a renderer cache must name its registered macOS unit, use a whole-unit Rebuild deletion, state the owner process, and include a consequence"
                         .to_string(),
                 );
             }
@@ -501,7 +516,7 @@ impl Signature {
 
     /// The structured-state rule this signature is allowed to use.
     ///
-    /// `RendererCache` is validated as a macOS Cursor-only named subtree with
+    /// `RendererCache` is validated as a registered macOS named subtree with
     /// an explicit owner process guard, so an unrelated broad discovery rule
     /// cannot enable the relaxed cache contract.
     pub fn structured_state_policy(&self) -> StructuredStatePolicy {

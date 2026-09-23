@@ -101,6 +101,8 @@ pub struct PlatformEnvironment {
     path_entries: Vec<PathBuf>,
     volumes: Option<Vec<VolumeIdentity>>,
     tools: BTreeMap<String, ToolResolution>,
+    /// Allowlisted owner-CLI cache path settings captured at composition.
+    cache_path_overrides: BTreeMap<String, PathBuf>,
     /// A stated Cargo home. `None` means the default below the user profile.
     cargo_home: Option<PathBuf>,
 }
@@ -115,6 +117,7 @@ impl std::fmt::Debug for PlatformEnvironment {
             .field("path_entries", &self.path_entries)
             .field("volumes", &self.volumes)
             .field("tools", &self.tools)
+            .field("cache_path_overrides", &self.cache_path_overrides)
             .field("cargo_home", &self.cargo_home)
             .finish_non_exhaustive()
     }
@@ -142,6 +145,19 @@ impl PlatformEnvironment {
             volumes: None,
             // `None` entries mean "resolve through the platform tool search".
             tools: BTreeMap::new(),
+            cache_path_overrides: [
+                "UV_CACHE_DIR",
+                "PIP_CACHE_DIR",
+                "NPM_CONFIG_CACHE",
+                "npm_config_cache",
+                "NPM_CONFIG_STORE_DIR",
+                "npm_config_store_dir",
+            ]
+            .into_iter()
+            .filter_map(|name| {
+                std::env::var_os(name).map(|path| (name.to_string(), PathBuf::from(path)))
+            })
+            .collect(),
             cargo_home: native_cargo_home(),
         }
     }
@@ -163,6 +179,7 @@ impl PlatformEnvironment {
             path_entries: Vec::new(),
             volumes: None,
             tools: BTreeMap::new(),
+            cache_path_overrides: BTreeMap::new(),
             cargo_home: None,
         }
     }
@@ -268,6 +285,16 @@ impl PlatformEnvironment {
         self.tools
             .insert(name.to_string(), ToolResolution::NotFound);
         self
+    }
+
+    pub fn with_cache_path_override(mut self, name: &str, path: impl Into<PathBuf>) -> Self {
+        self.cache_path_overrides
+            .insert(name.to_string(), path.into());
+        self
+    }
+
+    pub fn cache_path_override(&self, name: &str) -> Option<&Path> {
+        self.cache_path_overrides.get(name).map(PathBuf::as_path)
     }
 
     /// Resolved user-content folder, or `None` when the platform does not

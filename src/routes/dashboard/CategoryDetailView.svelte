@@ -4,6 +4,7 @@
   import { formatBytes } from '../../lib/utils/format';
   import {
     cleanableBytes,
+    emptyCategoryMessage,
     filterAndSortCleanupItems,
     isActionable,
     summarizeCategory,
@@ -54,8 +55,13 @@
   let cleanableFilteredItems = $derived(filteredItems.filter(isActionable));
 
   let noCleanableReason = $derived.by(() => {
-    if (filteredItems.length === 0 || cleanableFilteredItems.length > 0) return null;
-    return 'Nothing to clean here right now.';
+    if (filteredItems.length === 0) return 'No matching items.';
+    if (cleanableFilteredItems.length > 0) return null;
+    return emptyCategoryMessage(
+      summarizeCategory(filteredItems, scanStore.selectedMap),
+      categoryResult.quality,
+      categoryResult.category
+    );
   });
   let selectFilteredTitle = $derived.by(() => {
     if (!scanStore.canClean) return 'Run a fresh scan before changing the selection.';
@@ -124,7 +130,7 @@
           </h2>
         </div>
         <p class="text-xs text-muted-foreground">
-          {presentedCount} {presentedCount === 1 ? 'item' : 'items'} · {summary.cleanable_bytes > 0 ? `${formatBytes(summary.cleanable_bytes)} can be cleaned` : 'Nothing to clean'}
+          {presentedCount} {presentedCount === 1 ? 'item' : 'items'} · {summary.cleanable_bytes > 0 ? `${formatBytes(summary.cleanable_bytes)} can be cleaned` : summary.cleanable_count > 0 ? 'Amount varies by owner' : emptyCategoryMessage(summary, categoryResult.quality, categoryResult.category)}
         </p>
       </div>
     </div>
@@ -151,7 +157,7 @@
         variant="primary"
         size="sm"
         class="gap-1.5 min-w-[90px]"
-        disabled={categorySelectedBytes === 0 || !scanStore.canClean || isPreparingReview}
+        disabled={summary.selected_count === 0 || !scanStore.canClean || isPreparingReview}
         onclick={cleanSelected}
       >
         {#if scanStore.isCleaning || isPreparingReview}
@@ -159,7 +165,7 @@
           <span>{isPreparingReview ? 'Reviewing…' : 'Cleaning…'}</span>
         {:else}
           <Trash2 size={13} />
-          <span>Clean {formatBytes(categorySelectedBytes)}</span>
+          <span>{categorySelectedBytes > 0 ? `Clean ${formatBytes(categorySelectedBytes)}` : 'Run owner cleanup'}</span>
         {/if}
       </Button>
     </div>

@@ -82,7 +82,7 @@ Manual lifecycle even when they live beside disposable files.
 
 ### macOS explicit cache unit
 
-The current filesystem example is Cursor's five named renderer/code/GPU cache
+The first filesystem example is Cursor's five named renderer/code/GPU cache
 subtrees under `~/Library/Application Support/Cursor`:
 `Cache`, `CachedData`, `Code Cache`, `GPUCache`, and `ShaderCache`. Zenith offers
 each existing subtree as an explicit Rebuild review unit with no age or
@@ -93,6 +93,14 @@ unit may contain cache databases, their companions and cache-local locks, but
 settings, credentials, sessions, app bundles, executables, logs, extensions,
 and neighboring Application Support data still refuse or remain outside its
 scope. It is never added to automatic Safe selection or the Quick Panel.
+
+The next reviewed unit is Brave Browser's `Default/Code Cache` under its
+per-user `~/Library/Caches/BraveSoftware/Brave-Browser` tree. It is an explicit
+Rebuild unit with the same protected-descendant and running-owner checks.
+Other Brave profiles, HTTP cache, cookies, history, and offline content remain
+outside that unit. The Default profile HTTP cache has a separate Manual
+inventory row. The broad third-party cache rule excludes `BraveSoftware` to
+prevent an overlapping generic deletion path.
 
 The existing Windows Cursor rule keeps its Windows-only paths and current
 strategy. CloudKit is inventoried by one macOS Manual signature and excluded
@@ -152,12 +160,19 @@ discovery before and after mutation, active-owner checks, the global cleanup
 operation gate, and the existing bounded one-shot scan/delete plan. Commands
 have a 15-second timeout except uv prune, which may wait up to five minutes for
 uv's cache lock. uv relies on that owner lock instead of blocking on unrelated
-Python processes; npm and pnpm match their CLI entrypoints rather than every
-Node process. Go additionally removes cache/path overrides and sets
+Python processes; pip, npm, and pnpm match their CLI entrypoints rather than
+every Python or Node process. `UV_CACHE_DIR`, `PIP_CACHE_DIR`, npm's cache
+override, and pnpm's store-directory override are captured once in the platform
+environment, validated as existing cache directories, and applied identically
+during inspection and execution. Other inherited path and project-config
+variables remain stripped. A tool whose default cache directory does not yet
+exist produces no cleanup row; an invalid existing path remains a scan gap.
+Go additionally removes cache/path overrides and sets
 `GOTOOLCHAIN=local`, so inspection cannot download another toolchain or redirect
 authority. Composer disables plugins during discovery and cleanup so a cache
 action cannot execute user- or project-supplied plugin code. Unavailable or
-failing providers are skipped without failing the broader scan.
+failing providers do not stop the broader scan; failures remain visible as
+scan gaps.
 
 Poetry, Conda, Yarn, Bun, Hugging Face, Gradle, Maven, Dart, Julia,
 RubyGems, R package managers, Haskell, Zig, LuaRocks, CPAN, opam, Foundry and

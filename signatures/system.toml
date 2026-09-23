@@ -52,6 +52,7 @@ min_age_days = 7
 exclude_prefixes = [
     "com.apple.",
     "CloudKit",
+    "BraveSoftware",
     "dotslash",
     "ms-playwright"
 ]
@@ -72,6 +73,40 @@ owner = "Apple CloudKit"
 provider = "Apple CloudKit"
 artifact_kind = "temporary"
 description = "Apple CloudKit service state is inventoried for reference; Zenith does not remove this service-owned store."
+
+[[signatures]]
+id = "system.brave.code_cache"
+name = "Brave Code Cache"
+category = "system"
+family = "applications"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache"]
+unit = "named_subtree"
+owner = "Brave Browser"
+fail_if_running = [
+    "Brave Browser",
+    "Brave Browser Helper",
+    "Brave Browser Helper (GPU)",
+    "Brave Browser Helper (Renderer)",
+    "Brave Browser Helper (Plugin)"
+]
+artifact_kind = "renderer_cache"
+consequence = "Brave recompiles cached code after the next launch; first pages may load more slowly."
+description = "Only the verified Default profile Code Cache is removable. HTTP cache, cookies, history, offline content, and other profiles stay outside this unit."
+
+[[signatures]]
+id = "system.brave.http_cache"
+name = "Brave HTTP Cache"
+category = "system"
+family = "applications"
+risk = "manual"
+strategy = "manual"
+platforms = ["macos"]
+paths = ["~/Library/Caches/BraveSoftware/Brave-Browser/Default/Cache"]
+owner = "Brave Browser"
+description = "The browser's HTTP cache is inventoried separately so excluding Brave from the broad age-based rule does not make these bytes disappear. Zenith does not remove this unit."
 
 [[signatures]]
 id = "system.intensive.application_logs"

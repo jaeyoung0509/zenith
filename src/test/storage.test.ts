@@ -622,7 +622,7 @@ describe('detected versus reclaimable storage copy', () => {
     });
 
     expect(rendered.body).toContain('1 item');
-    expect(rendered.body).toContain('Nothing to clean');
+    expect(rendered.body).toContain('Manage containers');
     expect(rendered.body).not.toContain('reclaimable locations');
     expect(rendered.body).toContain('Zenith reports their storage without deleting it');
     expect(scanStore.selectedMap['container.orbstack.storage']).toBe(false);
@@ -734,6 +734,42 @@ describe('risk classification versus current eligibility', () => {
     });
   }
 
+  it('keeps a selected owner prune usable when its reclaim amount is unknown', () => {
+    const category = publishScan(
+      [
+        scanItem({
+          id: 'owner-store',
+          risk: 'rebuild',
+          cache_metadata: {
+            provider: 'pnpm',
+            management_mode: 'tool_managed',
+            artifact_kind: 'package_store',
+            consequence: 'Unused packages may be downloaded again.',
+            size_semantics: 'informational',
+            last_used_confidence: 'unknown',
+          },
+          disposition: {
+            eligibility: 'reviewable',
+            reason: 'The package manager decides what can be pruned',
+            cleanable_bytes: null,
+          },
+        }),
+      ],
+      'scan-owner-store'
+    );
+    scanStore.setItemSelected('owner-store', true);
+
+    const detail = renderCategory(category).body;
+    expect(detail).toContain('Amount varies by owner');
+    const ownerButton = buttonTags(detail).find(button => button.includes('Run owner cleanup')) ?? '';
+    expect(ownerButton).not.toMatch(/\sdisabled(?:\s|=|>)/);
+
+    const overview = render(StorageView, { props: { onSelectCategory: vi.fn() } }).body;
+    expect(overview).toContain('Amount varies by owner');
+    const cleanButton = buttonTags(overview).find(button => button.includes('Clean selected')) ?? '';
+    expect(cleanButton).not.toMatch(/\sdisabled(?:\s|=|>)/);
+  });
+
   it('shows a tab of recent and advisory rows as zero selectable inventory, not as broken', () => {
     const category = publishScan(
       [
@@ -761,11 +797,11 @@ describe('risk classification versus current eligibility', () => {
 
     const { body } = renderCategory(category);
 
-    expect(body).toContain('2 items · Nothing to clean');
-    expect(body).toContain('Nothing to clean here right now.');
+    expect(body).toContain('2 items · Nothing ready yet');
+    expect(body).toContain('Nothing ready yet');
     const selectFiltered = buttonTags(body).find((button) => button.includes('Select all')) ?? '';
     expect(selectFiltered).toContain('disabled');
-    expect(body).toContain('title="Nothing to clean here right now."');
+    expect(body).toContain('title="Nothing ready yet"');
     expect(body).not.toContain('Filter cleanup items by risk');
     expect(body).toContain('aria-label="Filter cleanup items by name or path"');
     // Inventory that is not cleanable yet is not a failure.
@@ -794,7 +830,7 @@ describe('risk classification versus current eligibility', () => {
 
     const mixedBody = renderCategory(mixed).body;
     expect(mixedBody).toContain('2 items · 4 KB can be cleaned');
-    expect(mixedBody).not.toContain('Nothing to clean here right now');
+    expect(mixedBody).not.toContain('Nothing ready yet');
     expect(
       buttonTags(mixedBody).find((button) => button.includes('Select all')) ?? ''
     ).not.toContain('disabled');

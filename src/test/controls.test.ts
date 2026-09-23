@@ -239,7 +239,7 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('Nothing to clean');
+    expect(rendered.body).toContain('Some locations unavailable');
     expect(rendered.body).not.toContain('entries skipped');
     expect(rendered.body).not.toContain('not fully measured');
 
@@ -262,6 +262,7 @@ describe('metric and action consistency contracts', () => {
 
     expect(complete.body).not.toContain('entries skipped');
     expect(complete.body).not.toContain('items not fully measured');
+    expect(complete.body).toContain('No items found');
   });
 
   it('renders ambiguous detected bytes as a range instead of an exact lower bound', () => {
@@ -285,7 +286,7 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('Nothing to clean');
+    expect(rendered.body).toContain('Some locations unavailable');
     expect(rendered.body).not.toContain('Observed range');
     expect(rendered.body).not.toContain('512 B');
   });

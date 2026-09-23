@@ -60,6 +60,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let requested = [
         "system.developer_temp",
         "system.intensive.user_app_caches",
+        "system.brave.code_cache",
+        "system.brave.http_cache",
+        "system.cloudkit.cache",
         "system.intensive.containers_caches",
         "system.intensive.group_containers_caches",
         "system.app_support_cache_segments",
@@ -69,9 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "system.intensive.windows_user_caches",
         "system.intensive.windows_browser_caches",
         "system.intensive.windows_packages",
-        "ai.cursor.cache",
-        "dev.go.build",
-        "dev.go.mod",
+        "ai.cursor.renderer_cache",
     ];
     let mut included = Vec::new();
     let mut unavailable = Vec::new();
@@ -179,10 +180,11 @@ fn scan_providers(
     environment: &PlatformEnvironment,
     cancel_after_first_root: bool,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    const PROVIDERS: [(&str, &str); 3] = [
+    const PROVIDERS: [(&str, &str); 4] = [
         ("dev.uv.cache", "uv"),
         ("dev.pnpm.store", "pnpm"),
         ("dev.npm.cache", "npm"),
+        ("dev.pip.cache", "pip3"),
     ];
 
     let mut registry = SignatureRegistry::new();
