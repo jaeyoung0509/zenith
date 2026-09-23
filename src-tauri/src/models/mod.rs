@@ -67,7 +67,7 @@ pub use zenith_core::domain::cleanup::{
     OwnerProviderSelection, OwnerProviderUnit, OwnerStoreObservation, OwnerUnitMeasurement,
     OwnerUnitMeasurer, OwnerUnitObservation, OwnerUnitOutcome, OwnerUnitRefusal, OwnerUnitState,
     PathFacts, PlanItemRefusal, ProviderCleanup, ProviderStatus, RunningProcessPolicy,
-    RunningProcessProbe, StructuredStateKind,
+    RunningProcessProbe, StructuredStateKind, StructuredStatePolicy,
 };
 pub use zenith_core::domain::error::{ZenithError, ZenithResult};
 pub use zenith_core::domain::identity::{

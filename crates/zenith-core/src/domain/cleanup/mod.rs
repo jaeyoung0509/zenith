@@ -31,4 +31,6 @@ pub use plan::{
 };
 pub use provider::{ProviderOutcome, ProviderProbe, ProviderStatus};
 pub use strategy::CleanStrategy;
-pub use structured::{classify_structured_state, EntryKind, PathFacts, StructuredStateKind};
+pub use structured::{
+    classify_structured_state, EntryKind, PathFacts, StructuredStateKind, StructuredStatePolicy,
+};

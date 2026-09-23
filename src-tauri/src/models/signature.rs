@@ -1,7 +1,8 @@
 use crate::models::{
     CacheArtifactKind, CacheManagementMode, CacheMetadata, CacheSizeSemantics,
     CacheUsageConfidence, Category, CleanStrategy, CleanerFamily, CleanupOwnership,
-    CleanupUnitKind, EligibilityGate, PlatformKind, RiskTier, RunningProcessPolicy, ZenithError,
+    CleanupUnitKind, EligibilityGate, PlatformKind, RiskTier, RunningProcessPolicy,
+    StructuredStatePolicy, ZenithError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -243,6 +244,7 @@ impl Signature {
             kind,
             CleanupUnitKind::ChildNamespace | CleanupUnitKind::NamedSubtree
         ) && self.min_age_days.is_none()
+            && self.artifact_kind != CacheArtifactKind::RendererCache
         {
             return invalid(format!(
                 "unit `{}` requires an age policy (`min_age_days`)",
@@ -307,6 +309,41 @@ impl Signature {
             ) {
                 return invalid(
                     "a shared package store must use an owner provider/external command or remain manual; generic filesystem deletion is forbidden"
+                        .to_string(),
+                );
+            }
+        }
+
+        if self.artifact_kind == CacheArtifactKind::RendererCache {
+            let expected_path = "~/Library/Application Support/Cursor/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}";
+            let required_cursor_processes = [
+                "Cursor",
+                "Cursor Helper",
+                "Cursor Helper (GPU)",
+                "Cursor Helper (Renderer)",
+                "Cursor Helper (Plugin)",
+            ];
+            let cursor_process_guard = required_cursor_processes.iter().all(|required| {
+                self.fail_if_running
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(required))
+            });
+            if self.family != CleanerFamily::Applications
+                || self.category != Category::Ai
+                || self.risk != RiskTier::Rebuild
+                || self.strategy != CleanStrategy::DeleteDirectory
+                || self.platforms.as_slice() != [PlatformKind::Macos]
+                || self.paths.len() != 1
+                || self.paths[0] != expected_path
+                || self.unit != Some(CleanupUnitKind::NamedSubtree)
+                || self.min_age_days.is_some()
+                || self.intensive_only
+                || !cursor_process_guard
+                || self.owner != "Cursor"
+                || self.consequence.trim().is_empty()
+            {
+                return invalid(
+                    "a renderer cache must name the exact macOS Cursor cache subtrees, use a whole-unit Rebuild deletion, state the Cursor owner process, and include a consequence"
                         .to_string(),
                 );
             }
@@ -460,6 +497,19 @@ impl Signature {
     /// The process guard the execution boundary applies to this signature.
     pub fn process_guard(&self) -> RunningProcessPolicy {
         RunningProcessPolicy::guarding(self.fail_if_running.clone())
+    }
+
+    /// The structured-state rule this signature is allowed to use.
+    ///
+    /// `RendererCache` is validated as a macOS Cursor-only named subtree with
+    /// an explicit owner process guard, so an unrelated broad discovery rule
+    /// cannot enable the relaxed cache contract.
+    pub fn structured_state_policy(&self) -> StructuredStatePolicy {
+        if self.artifact_kind == CacheArtifactKind::RendererCache {
+            StructuredStatePolicy::VerifiedRegenerableCache
+        } else {
+            StructuredStatePolicy::ProtectAll
+        }
     }
 
     pub fn supports_current_platform(&self) -> bool {

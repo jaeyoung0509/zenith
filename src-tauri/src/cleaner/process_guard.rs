@@ -52,17 +52,37 @@ impl RunningProcessProbe for SysinfoProcessProbe {
 /// Returns every match, not just the first, so the message can name what the
 /// user has to close.
 pub fn running_executables(policy: &RunningProcessPolicy) -> Vec<String> {
+    running_executables_if_known(policy).unwrap_or_default()
+}
+
+/// The executables from `policy` that are running, if the process table is
+/// available. Owner-scoped whole-cache deletion uses this form because an
+/// unreadable table cannot prove the cache owner is idle.
+pub fn running_executables_if_known(policy: &RunningProcessPolicy) -> Option<Vec<String>> {
     if policy.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
     }
 
-    let mut matched: Vec<String> = running_process_names()
+    matching_running_names(policy, running_process_names())
+}
+
+fn matching_running_names(
+    policy: &RunningProcessPolicy,
+    process_names: Vec<String>,
+) -> Option<Vec<String>> {
+    if policy.is_empty() {
+        return Some(Vec::new());
+    }
+    if process_names.is_empty() {
+        return None;
+    }
+    let mut matched: Vec<String> = process_names
         .into_iter()
         .filter(|name| policy.matches(name))
         .collect();
     matched.sort();
     matched.dedup();
-    matched
+    Some(matched)
 }
 
 /// Whether a running process matches the target's guard.
@@ -123,5 +143,22 @@ mod tests {
             RunningProcessPolicy::guarding(vec!["zenith-guard-fixture-never-running".into()]);
         assert!(!blocked_by_running_process(&policy));
         assert!(running_executables(&policy).is_empty());
+    }
+
+    #[test]
+    fn a_guarded_cache_requires_a_readable_nonempty_process_table() {
+        let policy = RunningProcessPolicy::guarding(vec!["Cursor Helper (Renderer)".into()]);
+        assert_eq!(matching_running_names(&policy, Vec::new()), None);
+        assert_eq!(
+            matching_running_names(
+                &policy,
+                vec!["Finder".into(), "Cursor Helper (Renderer)".into()]
+            ),
+            Some(vec!["Cursor Helper (Renderer)".into()])
+        );
+        assert_eq!(
+            matching_running_names(&RunningProcessPolicy::none(), Vec::new()),
+            Some(Vec::new())
+        );
     }
 }

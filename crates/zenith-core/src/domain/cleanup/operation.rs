@@ -201,6 +201,7 @@ mod tests {
             target_kind: crate::domain::cleanup::EntryKind::Directory,
             owner: crate::domain::scan::CleanupOwnership::unknown(),
             process_guard: crate::domain::cleanup::RunningProcessPolicy::none(),
+            structured_state_policy: crate::domain::cleanup::StructuredStatePolicy::ProtectAll,
             provider_id: None,
             requires_confirmation: false,
         }

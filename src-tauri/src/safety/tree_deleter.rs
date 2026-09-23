@@ -27,7 +27,7 @@ pub struct TreeDeleteReport {
     /// Raw OS error codes recorded alongside `errors`, in push order, so
     /// failure classification can use the code instead of localized text.
     pub os_error_codes: Vec<i32>,
-    pub(crate) protect_structured_state: bool,
+    pub(crate) structured_state_policy: Option<crate::models::StructuredStatePolicy>,
 }
 
 impl TreeDeleteReport {
@@ -407,18 +407,18 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_contents_with_policy(root, exclusions, environment, false, None)
+        Self::delete_contents_with_policy(root, exclusions, environment, None, None)
     }
 
     fn delete_contents_with_policy(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
-        protect_structured_state: bool,
+        structured_state_policy: Option<crate::models::StructuredStatePolicy>,
         stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
-            protect_structured_state,
+            structured_state_policy,
             ..Default::default()
         };
         let root_metadata = match fs::symlink_metadata(root) {
@@ -542,18 +542,18 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
     ) -> TreeDeleteReport {
-        Self::delete_path_with_policy(root, exclusions, environment, false, None)
+        Self::delete_path_with_policy(root, exclusions, environment, None, None)
     }
 
     fn delete_path_with_policy(
         root: &Path,
         exclusions: &[String],
         environment: &PlatformEnvironment,
-        protect_structured_state: bool,
+        structured_state_policy: Option<crate::models::StructuredStatePolicy>,
         stale_policy: Option<super::StaleEntryPolicy>,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
-            protect_structured_state,
+            structured_state_policy,
             ..Default::default()
         };
         match fs::symlink_metadata(root) {
@@ -607,7 +607,7 @@ impl SafeTreeDeleter {
             auth.path(),
             auth.exclusions(),
             environment,
-            auth.protect_structured_state(),
+            auth.structured_state_policy(),
             auth.stale_policy(),
         )
     }
@@ -636,7 +636,7 @@ impl SafeTreeDeleter {
             auth.path(),
             auth.exclusions(),
             environment,
-            auth.protect_structured_state(),
+            auth.structured_state_policy(),
             Some(policy),
         )
     }
@@ -651,7 +651,7 @@ impl SafeTreeDeleter {
             auth.path(),
             auth.exclusions(),
             environment,
-            auth.protect_structured_state(),
+            auth.structured_state_policy(),
             auth.stale_policy(),
         )
     }
@@ -668,7 +668,7 @@ impl SafeTreeDeleter {
         backend: &dyn zenith_platform::TrashBackend,
     ) -> TreeDeleteReport {
         let mut report = TreeDeleteReport {
-            protect_structured_state: true,
+            structured_state_policy: Some(target.structured_state_policy()),
             ..Default::default()
         };
         let scope = match Self::capture_verified_scope(target.path()) {
@@ -687,6 +687,7 @@ impl SafeTreeDeleter {
                     target.exclusions(),
                     environment,
                     None,
+                    target.structured_state_policy(),
                 ) {
                     Ok(Some(metadata)) => metadata,
                     Ok(None) => {
@@ -715,6 +716,7 @@ impl SafeTreeDeleter {
                     &scope,
                     target.exclusions(),
                     environment,
+                    target.structured_state_policy(),
                 ) {
                     Ok(observation) => observation,
                     Err(error) => {
@@ -727,6 +729,7 @@ impl SafeTreeDeleter {
                     &scope,
                     target.exclusions(),
                     environment,
+                    target.structured_state_policy(),
                 ) {
                     Ok(observation) => observation,
                     Err(error) => {
@@ -769,6 +772,7 @@ impl SafeTreeDeleter {
                     target.exclusions(),
                     environment,
                     target.stale_policy(),
+                    target.structured_state_policy(),
                     backend,
                     &mut report,
                 );
@@ -788,6 +792,7 @@ impl SafeTreeDeleter {
         scope: &VerifiedCleanupScope,
         exclusions: &[String],
         environment: &PlatformEnvironment,
+        structured_state_policy: crate::models::StructuredStatePolicy,
     ) -> Result<TrashTreeObservation, String> {
         fn visit(
             path: &Path,
@@ -795,6 +800,7 @@ impl SafeTreeDeleter {
             scope: &VerifiedCleanupScope,
             exclusions: &[String],
             environment: &PlatformEnvironment,
+            structured_state_policy: crate::models::StructuredStatePolicy,
             observation: &mut TrashTreeObservation,
         ) -> Result<(), String> {
             if SafeTreeDeleter::is_excluded(path, exclusions, environment) {
@@ -818,6 +824,7 @@ impl SafeTreeDeleter {
                 exclusions,
                 environment,
                 None,
+                structured_state_policy,
             )? {
                 Some(metadata) => metadata,
                 None => {
@@ -847,7 +854,15 @@ impl SafeTreeDeleter {
                     .collect::<Result<Vec<_>, _>>()?;
                 children.sort();
                 for child in children {
-                    visit(&child, root, scope, exclusions, environment, observation)?;
+                    visit(
+                        &child,
+                        root,
+                        scope,
+                        exclusions,
+                        environment,
+                        structured_state_policy,
+                        observation,
+                    )?;
                 }
             } else {
                 observation.measured_bytes = observation
@@ -858,7 +873,15 @@ impl SafeTreeDeleter {
         }
 
         let mut observation = TrashTreeObservation::default();
-        visit(root, root, scope, exclusions, environment, &mut observation)?;
+        visit(
+            root,
+            root,
+            scope,
+            exclusions,
+            environment,
+            structured_state_policy,
+            &mut observation,
+        )?;
         Ok(observation)
     }
 
@@ -869,6 +892,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         stale_policy: Option<super::StaleEntryPolicy>,
+        structured_state_policy: crate::models::StructuredStatePolicy,
         backend: &dyn zenith_platform::TrashBackend,
         report: &mut TreeDeleteReport,
     ) {
@@ -897,6 +921,7 @@ impl SafeTreeDeleter {
                 exclusions,
                 environment,
                 stale_policy,
+                structured_state_policy,
             ) {
                 Ok(Some(metadata)) => metadata,
                 Ok(None) => {
@@ -916,6 +941,7 @@ impl SafeTreeDeleter {
                     exclusions,
                     environment,
                     stale_policy,
+                    structured_state_policy,
                     backend,
                     report,
                 );
@@ -959,6 +985,7 @@ impl SafeTreeDeleter {
         exclusions: &[String],
         environment: &PlatformEnvironment,
         stale_policy: Option<super::StaleEntryPolicy>,
+        structured_state_policy: crate::models::StructuredStatePolicy,
     ) -> Result<Option<fs::Metadata>, String> {
         if Self::is_excluded(path, exclusions, environment)
             || Blacklist::is_blacklisted_with(path, environment)
@@ -971,11 +998,13 @@ impl SafeTreeDeleter {
             Err(error) => return Err(format!("{}: {}", path.display(), error)),
         };
         if let Some((kind, _)) = super::structured_state_at(path) {
-            return Err(format!(
-                "{} is {}; refusing structured state",
-                path.display(),
-                kind.display_name()
-            ));
+            if !structured_state_policy.permits(kind) {
+                return Err(format!(
+                    "{} is {}; refusing structured state",
+                    path.display(),
+                    kind.display_name()
+                ));
+            }
         }
         Self::validate_verified_scope(path, scope)?;
         SymlinkGuard::validate_canonical_blacklist_strict(path, environment)
@@ -1391,16 +1420,18 @@ impl SafeTreeDeleter {
             };
 
             let name = file_name.to_string_lossy();
-            if report.protect_structured_state {
+            if let Some(structured_state_policy) = report.structured_state_policy {
                 let facts = crate::models::PathFacts::new(&name, metadata.entry_kind())
                     .executable(metadata.is_executable());
                 if let Some(kind) = crate::models::classify_structured_state(facts) {
-                    report.errors.push(format!(
-                        "{} is {}; refusing structured state",
-                        child_path.display(),
-                        kind.display_name()
-                    ));
-                    continue;
+                    if !structured_state_policy.permits(kind) {
+                        report.errors.push(format!(
+                            "{} is {}; refusing structured state",
+                            child_path.display(),
+                            kind.display_name()
+                        ));
+                        continue;
+                    }
                 }
             }
 
@@ -1633,17 +1664,18 @@ impl SafeTreeDeleter {
             }
         };
 
-        if let Some((kind, _)) = report
-            .protect_structured_state
-            .then(|| super::structured_state_at(path))
-            .flatten()
-        {
-            report.errors.push(format!(
-                "{} is {}; refusing structured state",
-                path.display(),
-                kind.display_name()
-            ));
-            return;
+        if let Some((kind, _)) = super::structured_state_at(path) {
+            if report
+                .structured_state_policy
+                .is_some_and(|policy| !policy.permits(kind))
+            {
+                report.errors.push(format!(
+                    "{} is {}; refusing structured state",
+                    path.display(),
+                    kind.display_name()
+                ));
+                return;
+            }
         }
 
         if let Err(error) = Self::validate_verified_scope(path, verified_scope) {
@@ -2563,7 +2595,7 @@ mod tests {
         std::fs::set_permissions(&relocated_payload, executable).unwrap();
 
         let mut report = TreeDeleteReport {
-            protect_structured_state: true,
+            structured_state_policy: Some(crate::models::StructuredStatePolicy::ProtectAll),
             ..Default::default()
         };
         SafeTreeDeleter::delete_dir_contents_via_fd(
@@ -2945,8 +2977,13 @@ mod tests {
 
         let environment = environment();
         let policy = super::super::StaleEntryPolicy::from_days(7);
-        let report =
-            SafeTreeDeleter::delete_path_with_policy(&root, &[], &environment, true, Some(policy));
+        let report = SafeTreeDeleter::delete_path_with_policy(
+            &root,
+            &[],
+            &environment,
+            Some(crate::models::StructuredStatePolicy::ProtectAll),
+            Some(policy),
+        );
 
         assert!(!old_file.exists(), "a stale file is removed");
         assert!(recent_file.exists(), "a recent file beside it stays");
@@ -2987,7 +3024,7 @@ mod tests {
         let environment = environment();
         let policy = super::super::StaleEntryPolicy::from_days(7);
         let mut report = TreeDeleteReport {
-            protect_structured_state: true,
+            structured_state_policy: Some(crate::models::StructuredStatePolicy::ProtectAll),
             ..Default::default()
         };
         let scope = SafeTreeDeleter::capture_verified_scope(&dir).unwrap();

@@ -15,12 +15,42 @@
 //! is marked executable — because those come from metadata the platform layer
 //! already read.
 //!
-//! This is a boundary, not a policy. A signature that legitimately owns a
-//! disposable database would have to go through a specialized provider (its own
-//! lifecycle, its own verification); nothing about a discovery rule may reach
-//! past this classifier.
+//! Classification remains name-shaped and conservative. The separate
+//! `StructuredStatePolicy` can permit only cache-store structures inside an
+//! independently verified, owner-guarded unit; nothing about a discovery rule
+//! may reach past this classifier on its own.
 
 use serde::{Deserialize, Serialize};
+
+/// How generic cleanup treats structured files inside a catalogued unit.
+///
+/// The ordinary policy refuses every classified state shape. The verified
+/// cache policy is reserved for a named, owner-guarded cache unit: databases,
+/// their companions, and cache-local locks belong to that coherent
+/// regenerable store, while credentials, configuration, bundles, and
+/// executables still invalidate the whole unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredStatePolicy {
+    #[default]
+    ProtectAll,
+    VerifiedRegenerableCache,
+}
+
+impl StructuredStatePolicy {
+    /// Whether a classified entry is within this policy's cleanup authority.
+    pub fn permits(self, kind: StructuredStateKind) -> bool {
+        matches!(
+            (self, kind),
+            (
+                Self::VerifiedRegenerableCache,
+                StructuredStateKind::Database
+                    | StructuredStateKind::DatabaseCompanion
+                    | StructuredStateKind::Lock
+            )
+        )
+    }
+}
 
 /// What kind of structured state a path name identifies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -309,6 +339,34 @@ mod tests {
             file("CURRENT"),
             Some(StructuredStateKind::DatabaseCompanion)
         );
+    }
+
+    #[test]
+    fn only_a_verified_cache_unit_can_own_database_companions_and_locks() {
+        for kind in [
+            StructuredStateKind::Database,
+            StructuredStateKind::DatabaseCompanion,
+            StructuredStateKind::Lock,
+        ] {
+            assert!(
+                StructuredStatePolicy::VerifiedRegenerableCache.permits(kind),
+                "the owner clears the coherent cache unit, including {kind:?}"
+            );
+            assert!(!StructuredStatePolicy::ProtectAll.permits(kind));
+        }
+
+        for kind in [
+            StructuredStateKind::Credential,
+            StructuredStateKind::Configuration,
+            StructuredStateKind::ApplicationBundle,
+            StructuredStateKind::Executable,
+        ] {
+            assert!(
+                !StructuredStatePolicy::VerifiedRegenerableCache.permits(kind),
+                "a regenerable cache cannot grant authority over {kind:?}"
+            );
+            assert!(!StructuredStatePolicy::ProtectAll.permits(kind));
+        }
     }
 
     #[test]

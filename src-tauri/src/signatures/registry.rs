@@ -1069,6 +1069,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cursor_renderer_cache_is_exact_and_keeps_windows_rule_unchanged() {
+        use crate::models::StructuredStatePolicy;
+
+        let registry = SignatureRegistry::load_embedded_catalog().expect("embedded catalog");
+        let cursor_windows = registry
+            .get("ai.cursor.cache")
+            .expect("existing Windows Cursor cache rule");
+        assert_eq!(cursor_windows.platforms, vec![PlatformKind::Windows]);
+        assert_eq!(cursor_windows.min_age_days, None);
+        assert_eq!(
+            cursor_windows.structured_state_policy(),
+            StructuredStatePolicy::ProtectAll
+        );
+
+        let renderer = registry
+            .get("ai.cursor.renderer_cache")
+            .expect("macOS renderer cache rule");
+        assert_eq!(renderer.platforms, vec![PlatformKind::Macos]);
+        assert_eq!(renderer.unit_kind(), CleanupUnitKind::NamedSubtree);
+        assert_eq!(renderer.min_age_days, None);
+        assert!(!renderer.intensive_only);
+        assert_eq!(
+            renderer.structured_state_policy(),
+            StructuredStatePolicy::VerifiedRegenerableCache
+        );
+        assert_eq!(
+            renderer.paths,
+            vec!["~/Library/Application Support/Cursor/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}"]
+        );
+
+        let mut broadened = renderer.clone();
+        broadened.paths[0] = "~/Library/Application Support/Cursor".into();
+        assert!(
+            broadened.validate().is_err(),
+            "a broad app-support root is refused"
+        );
+
+        let mut unguarded = renderer.clone();
+        unguarded.fail_if_running.clear();
+        assert!(
+            unguarded.validate().is_err(),
+            "the owner's lifecycle guard is required"
+        );
+    }
+
     /// The schema rules refuse a catalog entry that contradicts itself.
     #[test]
     fn a_contradictory_signature_is_refused() {

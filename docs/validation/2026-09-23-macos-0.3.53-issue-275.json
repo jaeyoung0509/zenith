@@ -1,0 +1,39 @@
+{
+  "evidence_class": "disposable synthetic filesystem fixtures on macOS",
+  "issue": 275,
+  "commit": "85f2a234265fb960a7f6b00c5f77cb5db04fd88a",
+  "machine": {
+    "architecture": "arm64",
+    "os": "macOS 27.0",
+    "os_build": "26A428",
+    "date_local": "2026-09-23 KST",
+    "zenith": "0.3.53"
+  },
+  "smoke": [
+    {
+      "command": "cargo test -p zenith-desktop --lib cursor -- --nocapture",
+      "outcome": "passed: 4 tests, including fresh Cursor renderer cache scan, explicit plan, validated cleanup, and protected-state refusal"
+    },
+    {
+      "command": "cargo test -p zenith-desktop --lib cloudkit -- --nocapture",
+      "outcome": "passed: 1 test; CloudKit remains visible as manual inventory and absent from generic removable cache items"
+    }
+  ],
+  "repository_gates": {
+    "cargo_check": "passed",
+    "cargo_test": "passed",
+    "cargo_clippy_workspace_all_targets_deny_warnings": "passed",
+    "cargo_fmt_check": "passed",
+    "pnpm_check": "passed: 0 errors, 0 warnings",
+    "pnpm_test": "passed: 37 files, 349 tests",
+    "pnpm_build": "passed",
+    "just_check_architecture": "passed",
+    "just_check_version": "passed: all manifests at 0.3.53",
+    "just_build_fast": "passed: target/debug/bundle/macos/Zenith.app"
+  },
+  "limitations": [
+    "No installed Cursor profile, real user cache, or live cleanup was touched.",
+    "This smoke run exercises the native scan, plan, validation, and filesystem cleanup code on temporary fixtures, not the desktop UI.",
+    "The 0.3.52 npm process state shown in the screenshot cannot be reconstructed from that screenshot alone."
+  ]
+}

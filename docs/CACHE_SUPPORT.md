@@ -80,6 +80,25 @@ Large size does not turn LLM state into cache. Credentials, conversations,
 prompts, settings, model weights and user-selected revisions keep their typed or
 Manual lifecycle even when they live beside disposable files.
 
+### macOS explicit cache unit
+
+The current filesystem example is Cursor's five named renderer/code/GPU cache
+subtrees under `~/Library/Application Support/Cursor`:
+`Cache`, `CachedData`, `Code Cache`, `GPUCache`, and `ShaderCache`. Zenith offers
+each existing subtree as an explicit Rebuild review unit with no age or
+intensive-scope gate. It checks Cursor and its helper processes immediately
+before mutation; unreadable process state or a running owner skips that unit.
+One excluded or protected descendant refuses the whole subtree. The verified
+unit may contain cache databases, their companions and cache-local locks, but
+settings, credentials, sessions, app bundles, executables, logs, extensions,
+and neighboring Application Support data still refuse or remain outside its
+scope. It is never added to automatic Safe selection or the Quick Panel.
+
+The existing Windows Cursor rule keeps its Windows-only paths and current
+strategy. CloudKit is inventoried by one macOS Manual signature and excluded
+from broad third-party app-cache discovery; Zenith does not mutate that
+service-owned store.
+
 ## GPU and local-AI runtimes
 
 | Runtime / owner | Artifact role | macOS | Windows | Mode / risk |
@@ -118,8 +137,8 @@ SLM is a model-size label, not a storage owner.
 - `uv`: discover with `uv cache dir`, prune with `uv cache prune`.
 - `pip`: discover with `pip3 cache dir`, clear with `pip3 cache purge`.
 - `pnpm`: discover with `pnpm store path`, prune with `pnpm store prune`.
-- `npm`: discover with `npm config get cache`, clear with `npm cache clean
-  --force` as an explicit Rebuild action.
+- `npm`: discover with `npm config get cache`, verify/prune unneeded entries
+  with `npm cache verify` as an explicit Rebuild action.
 - `Composer`: discover with `composer --no-interaction --no-plugins config
   --global cache-dir --absolute`, clear with `composer --no-interaction
   --no-plugins clear-cache`.
@@ -127,11 +146,14 @@ SLM is a model-size label, not a storage owner.
   `global-packages` resources separately through `dotnet nuget locals`; the
   global package store is never presented as equivalent to a temporary cache.
 
-All adapters use a resolved trusted executable, fixed arguments, a 15-second
-timeout, bounded output, current-user containment, symlink/reparse rejection,
-fresh path discovery before and after mutation, active-process refusal, the
-global cleanup operation gate, and the existing bounded one-shot scan/delete
-plan. Go additionally removes cache/path overrides and sets
+All adapters use a resolved trusted executable, fixed arguments, bounded
+output, current-user containment, symlink/reparse rejection, fresh path
+discovery before and after mutation, active-owner checks, the global cleanup
+operation gate, and the existing bounded one-shot scan/delete plan. Commands
+have a 15-second timeout except uv prune, which may wait up to five minutes for
+uv's cache lock. uv relies on that owner lock instead of blocking on unrelated
+Python processes; npm and pnpm match their CLI entrypoints rather than every
+Node process. Go additionally removes cache/path overrides and sets
 `GOTOOLCHAIN=local`, so inspection cannot download another toolchain or redirect
 authority. Composer disables plugins during discovery and cleanup so a cache
 action cannot execute user- or project-supplied plugin code. Unavailable or
@@ -165,7 +187,7 @@ rules use these primary sources:
   [MIOpen cache](https://rocm.docs.amd.com/projects/MIOpen/en/develop/install/build-source.html)
 - [uv cache](https://docs.astral.sh/uv/concepts/cache/),
   [pnpm store](https://pnpm.io/cli/store),
-  [npm cache](https://docs.npmjs.com/cli/v7/commands/npm-cache/),
+  [npm cache](https://docs.npmjs.com/cli/v11/commands/npm-cache/),
   [pip cache](https://pip.pypa.io/en/stable/cli/pip_cache/), and
   [NuGet local resources](https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders)
 - [Go module cache](https://go.dev/ref/mod),

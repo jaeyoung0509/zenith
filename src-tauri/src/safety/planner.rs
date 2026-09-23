@@ -346,6 +346,7 @@ impl SafetyPlanner {
             let path = PathBuf::from(&item.path);
             let strategy = signature.strategy;
             let mut identity = None;
+            let structured_state_policy = signature.structured_state_policy();
 
             // An owner-scoped store is not a filesystem target at all. The
             // provider enumerates and removes its own units, so the checks
@@ -439,22 +440,27 @@ impl SafetyPlanner {
                 //    execution guard refuses it too; refusing here keeps a plan
                 //    from offering a target that could never be cleaned.
                 if let Some((kind, _)) = crate::safety::validator::structured_state_at(&path) {
-                    refusals.push(safety_refusal(
-                        item,
-                        CleanFailureReason::StructuredStore,
-                        format!(
-                            "This unit is a {}; only a dedicated owner cleaner may remove it.",
-                            kind.display_name()
-                        ),
-                    ));
-                    continue;
+                    if !structured_state_policy.permits(kind) {
+                        refusals.push(safety_refusal(
+                            item,
+                            CleanFailureReason::StructuredStore,
+                            format!(
+                                "This unit is a {}; only a dedicated owner cleaner may remove it.",
+                                kind.display_name()
+                            ),
+                        ));
+                        continue;
+                    }
                 }
                 if matches!(
                     strategy,
                     CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
                 ) && path.is_dir()
                 {
-                    match crate::safety::validator::structured_descendant(&path) {
+                    match crate::safety::validator::structured_descendant_with_policy(
+                        &path,
+                        structured_state_policy,
+                    ) {
                         Ok(Some((_nested, kind))) => {
                             refusals.push(safety_refusal(
                                 item,
@@ -519,6 +525,7 @@ impl SafetyPlanner {
                 target_kind: item.entry_kind,
                 owner: item.ownership.clone(),
                 process_guard: signature.process_guard(),
+                structured_state_policy,
                 provider_id: provider_id.clone(),
                 requires_confirmation: item.requires_confirmation,
             });
@@ -596,6 +603,139 @@ mod tests {
     /// cleanup assertion means: nothing in this build owns the store.
     fn no_owner_providers() -> OwnerProviderRegistry {
         OwnerProviderRegistry::new(Vec::new())
+    }
+
+    #[test]
+    fn a_recent_cursor_renderer_cache_with_database_and_index_completes_review_and_cleanup() {
+        use crate::models::{CleanupEligibility, StructuredStatePolicy};
+        use crate::safety::{RevalidationOutcome, SafeTreeDeleter, SafetyValidator};
+        use crate::scanner::DirectoryScanner;
+        use zenith_platform::path_algebra::PathFlavor;
+        use zenith_platform::PlatformEnvironment;
+
+        let fixture = tempfile::tempdir().expect("disposable fixture");
+        let home = fixture.path().join("home");
+        let cache = home.join("Library/Application Support/Cursor/Cache");
+        std::fs::create_dir_all(&cache).expect("cache fixture");
+        std::fs::write(cache.join("index.db"), vec![b'd'; 8_192]).expect("database fixture");
+        std::fs::write(cache.join("index.db-wal"), vec![b'w'; 4_096]).expect("WAL fixture");
+        std::fs::write(cache.join("index.json"), vec![b'j'; 2_048]).expect("index fixture");
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(&home);
+        let registry = SignatureRegistry::load_embedded_with(&environment)
+            .expect("catalog validates for the fixture environment");
+        let signature = registry
+            .get("ai.cursor.renderer_cache")
+            .expect("verified Cursor cache signature");
+        let mut items = DirectoryScanner::scan_signature(
+            signature,
+            &environment,
+            &crate::models::NeverCancelled,
+        );
+        assert_eq!(
+            items.len(),
+            1,
+            "only the existing named cache unit is found"
+        );
+        let item = &mut items[0];
+        assert_eq!(item.disposition.eligibility, CleanupEligibility::Reviewable);
+        assert!(item.age.is_none(), "a fresh cache needs no retention delay");
+        assert!(item.cleanable_bytes() > 0);
+        assert!(
+            !item.is_selected,
+            "Rebuild units are never selected by default"
+        );
+        item.is_selected = true; // represents explicit selection in review
+
+        let plan = SafetyPlanner::create_plan_with_environment(
+            &items,
+            &registry,
+            &environment,
+            &no_owner_providers(),
+        )
+        .expect("explicitly reviewed cache unit is plannable");
+        assert_eq!(
+            plan.targets[0].structured_state_policy,
+            StructuredStatePolicy::VerifiedRegenerableCache
+        );
+
+        let validated = match SafetyValidator::revalidate(&plan.targets[0], &environment) {
+            RevalidationOutcome::Validated(target) => target,
+            RevalidationOutcome::Skipped(result) | RevalidationOutcome::Failed(result) => {
+                panic!("unchanged disposable fixture must remain authorized: {result:?}")
+            }
+        };
+        let report = SafeTreeDeleter::delete_path_validated(&validated, &environment);
+        assert!(
+            report.errors.is_empty(),
+            "cleanup errors: {:?}",
+            report.errors
+        );
+        assert!(
+            !cache.exists(),
+            "the reviewed cache unit is removed as a whole"
+        );
+    }
+
+    #[test]
+    fn settings_and_credentials_invalidate_a_cursor_cache_unit_before_mutation() {
+        use crate::models::{CleanFailureReason, StructuredStatePolicy};
+        use crate::scanner::DirectoryScanner;
+        use zenith_platform::path_algebra::PathFlavor;
+        use zenith_platform::PlatformEnvironment;
+
+        for protected_name in ["settings.json", "auth.json"] {
+            let fixture = tempfile::tempdir().expect("disposable fixture");
+            let home = fixture.path().join("home");
+            let cache = home.join("Library/Application Support/Cursor/Cache");
+            std::fs::create_dir_all(&cache).expect("cache fixture");
+            let database = cache.join("index.db");
+            let protected = cache.join(protected_name);
+            std::fs::write(&database, b"regenerable cache database").expect("database fixture");
+            std::fs::write(&protected, b"keep this protected state").expect("protected fixture");
+
+            let environment =
+                PlatformEnvironment::simulated(PathFlavor::current()).with_home(&home);
+            let registry = SignatureRegistry::load_embedded_with(&environment)
+                .expect("catalog validates for the fixture environment");
+            let signature = registry
+                .get("ai.cursor.renderer_cache")
+                .expect("verified Cursor cache signature");
+            let mut items = DirectoryScanner::scan_signature(
+                signature,
+                &environment,
+                &crate::models::NeverCancelled,
+            );
+            assert_eq!(items.len(), 1);
+            items[0].is_selected = true;
+
+            let result = SafetyPlanner::create_plan_with_environment(
+                &items,
+                &registry,
+                &environment,
+                &no_owner_providers(),
+            );
+            match result {
+                Err(ZenithError::RefusedSelection(refusals)) => assert_eq!(
+                    refusals[0].reason,
+                    CleanFailureReason::StructuredStore,
+                    "the verified-cache exception still excludes {protected_name}"
+                ),
+                other => panic!("protected content refuses the whole unit: {other:?}"),
+            }
+            assert!(
+                database.exists(),
+                "the cache stays intact with {protected_name}"
+            );
+            assert!(protected.exists(), "protected entry is never removed");
+            assert_eq!(
+                registry
+                    .get("ai.cursor.renderer_cache")
+                    .unwrap()
+                    .structured_state_policy(),
+                StructuredStatePolicy::VerifiedRegenerableCache
+            );
+        }
     }
 
     #[test]
