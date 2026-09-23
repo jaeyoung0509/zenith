@@ -1,0 +1,79 @@
+{
+  "evidence_class": "read-only native observation plus disposable fixture tests",
+  "issues": [276, 277],
+  "implementation_commit": "1fed2aa944ad16d001fe6353d2c61557c10fff0a",
+  "machine": {
+    "architecture": "arm64",
+    "os": "macOS 27.0",
+    "os_build": "26A428",
+    "date_local": "2026-09-23 KST",
+    "zenith": "0.3.53",
+    "tauri_cli": "2.11.4"
+  },
+  "release_workflow": {
+    "before_dmg_build": "One writable intermediate DMG from a prior 0.3.52 build was already mounted. It was not detached or attributed as the alert's cause.",
+    "app_only_recipe": "just --dry-run release showed one --bundles app build followed by install-release; no DMG command",
+    "distribution_check": "./scripts/tauri_release_build.sh --bundles dmg succeeded for 0.3.53. A separate read-only mount showed Zenith.app and the Applications link; only that check mount was detached.",
+    "fixture_result": "just test-release-installer passed recipe, retained-failure-log, fresh-install, replacement, and rollback checks",
+    "alert_reproduction": "unresolved: the reported first-attempt native alert did not appear in this DMG-only run",
+    "not_run": "No live just release, real /Applications replacement, or manual Finder drag was performed."
+  },
+  "cleanup_read_only": {
+    "before": {
+      "generic_user_app_cache_observed_bytes": 66785280,
+      "generic_user_app_cache_cleanable_bytes": 0,
+      "provider_gaps": 2
+    },
+    "after": {
+      "brave_code_cache_observed_bytes": 36028416,
+      "brave_code_cache_reviewable_bytes": 36028416,
+      "brave_http_cache_manual_observed_bytes": 54800384,
+      "provider_gaps": 0,
+      "overall_quality": "partial"
+    },
+    "providers": [
+      {
+        "owner": "uv",
+        "version": "0.10.7",
+        "discovery": "CLI detected; default cache directory not created; no item",
+        "execution": "disposable override fixture passed; no live prune"
+      },
+      {
+        "owner": "pnpm",
+        "version": "10.33.0",
+        "discovery": "CLI detected; store root found and measured empty; no item",
+        "execution": "no live prune"
+      },
+      {
+        "owner": "npm",
+        "version": "11.19.0",
+        "discovery": "CLI detected; 45056 observed bytes; owner decides prunable amount",
+        "execution": "no live verify/prune"
+      },
+      {
+        "owner": "pip3",
+        "version": "25.1.1",
+        "discovery": "CLI detected; default cache directory not created; no item",
+        "execution": "no live purge"
+      }
+    ],
+    "limitations": [
+      "The original nine large application-cache units and their starting state were not supplied, so the reported 572.4 MB cannot be attributed to these paths.",
+      "Cache sizes changed during ordinary machine use; the two read-only inventories are not a controlled before/after cleanup benchmark.",
+      "No real user cache was cleaned. Cursor, other Brave profiles, and unavailable protected roots were not validated by this machine observation.",
+      "Bun remains advisory because its project-context contract was not verified. A GitHub CLI adapter was deferred because no approved local cache root was established for measurement."
+    ]
+  },
+  "checks": {
+    "cargo_check": "passed",
+    "cargo_test": "passed",
+    "cargo_clippy_workspace_all_targets_deny_warnings": "passed",
+    "cargo_fmt_check": "passed",
+    "pnpm_check": "passed",
+    "pnpm_test": "passed: 37 files, 350 tests",
+    "pnpm_build": "passed",
+    "just_check_architecture": "passed",
+    "just_build_fast": "passed: target/debug/bundle/macos/Zenith.app",
+    "just_test_release_installer": "passed"
+  }
+}
