@@ -27,6 +27,30 @@ const UV_PRUNE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DISCOVERY_OUTPUT: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CacheProviderPruneFailure {
+    OwnerRunning(String),
+    OwnerStateUnknown(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for CacheProviderPruneFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OwnerRunning(executable) => {
+                write!(formatter, "{executable} is currently running")
+            }
+            Self::OwnerStateUnknown(executable) => {
+                write!(
+                    formatter,
+                    "{executable} process state could not be verified"
+                )
+            }
+            Self::Failed(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CacheProviderFailure {
     pub kind: ScanGapKind,
     pub reason: String,
@@ -439,13 +463,14 @@ impl CacheProviderRegistry {
     /// The returned amount is `None` when either measurement was incomplete:
     /// the provider still pruned, and the caller reports the target as partial
     /// instead of showing a difference between two partial numbers as exact.
-    pub fn prune(
+    pub(crate) fn prune(
         signature_id: &str,
         planned_path: &Path,
         environment: &PlatformEnvironment,
-    ) -> Result<Option<u64>, String> {
-        let provider = ProviderKind::for_signature(signature_id)
-            .ok_or_else(|| "Unknown external cache provider".to_string())?;
+    ) -> Result<Option<u64>, CacheProviderPruneFailure> {
+        let provider = ProviderKind::for_signature(signature_id).ok_or_else(|| {
+            CacheProviderPruneFailure::Failed("Unknown external cache provider".to_string())
+        })?;
         Self::prune_with(
             provider,
             planned_path,
@@ -461,18 +486,20 @@ impl CacheProviderRegistry {
         environment: &PlatformEnvironment,
         runner: &dyn ProviderCommandRunner,
         measurer: &dyn ProviderMeasurer,
-    ) -> Result<Option<u64>, String> {
-        if !provider.active_processes().is_empty() && matching_process_is_active(provider) {
-            return Err(format!(
-                "{} is currently running. Close it and try again.",
-                provider.executable()
-            ));
+    ) -> Result<Option<u64>, CacheProviderPruneFailure> {
+        if !provider.active_processes().is_empty() {
+            if let Some(refusal) =
+                owner_process_refusal(provider, matching_process_is_active(provider))
+            {
+                return Err(refusal);
+            }
         }
-        let fresh_path = discover_path_with(provider, environment, runner)?;
+        let fresh_path = discover_path_with(provider, environment, runner)
+            .map_err(CacheProviderPruneFailure::Failed)?;
         if !paths_match(&fresh_path, planned_path) {
-            return Err(
+            return Err(CacheProviderPruneFailure::Failed(
                 "The provider cache location changed since the scan. Scan again.".to_string(),
-            );
+            ));
         }
         let before = measurer.measure_for_prune(&fresh_path, environment);
         match runner.prune(provider, environment) {
@@ -482,28 +509,37 @@ impl CacheProviderRegistry {
                 stderr,
                 ..
             } => {
-                return Err(format!(
+                return Err(CacheProviderPruneFailure::Failed(format!(
                     "{} prune failed: {}",
                     provider.executable(),
                     bounded_message(&stderr)
-                ));
+                )));
             }
             ProviderCommandResult::Failed(reason) => {
-                return Err(format!("{} prune failed: {reason}", provider.executable()));
+                return Err(CacheProviderPruneFailure::Failed(format!(
+                    "{} prune failed: {reason}",
+                    provider.executable()
+                )));
             }
             ProviderCommandResult::Absent => {
-                return Err(format!(
+                return Err(CacheProviderPruneFailure::Failed(format!(
                     "{} was not detected in trusted tool locations",
                     provider.executable()
-                ));
+                )));
             }
             ProviderCommandResult::Cancelled => {
-                return Err(format!("{} prune was cancelled", provider.executable()));
+                return Err(CacheProviderPruneFailure::Failed(format!(
+                    "{} prune was cancelled",
+                    provider.executable()
+                )));
             }
         }
-        let rediscovered = discover_path_with(provider, environment, runner)?;
+        let rediscovered = discover_path_with(provider, environment, runner)
+            .map_err(CacheProviderPruneFailure::Failed)?;
         if !paths_match(&rediscovered, &fresh_path) {
-            return Err("The provider cache location changed during cleanup.".to_string());
+            return Err(CacheProviderPruneFailure::Failed(
+                "The provider cache location changed during cleanup.".to_string(),
+            ));
         }
         let after = measurer.measure_for_prune(&rediscovered, environment);
         Ok(crate::scanner::size::reclaimed_between(&before, &after))
@@ -948,13 +984,39 @@ fn paths_match(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn matching_process_is_active(provider: ProviderKind) -> bool {
+fn matching_process_is_active(provider: ProviderKind) -> Option<bool> {
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All, true);
-    system
-        .processes()
-        .values()
-        .any(|process| process_matches_provider(provider, process.name(), process.cmd()))
+    let processes: Vec<_> = system.processes().values().collect();
+    process_table_activity(&processes, |process| {
+        process_matches_provider(provider, process.name(), process.cmd())
+    })
+}
+
+fn owner_process_refusal(
+    provider: ProviderKind,
+    active: Option<bool>,
+) -> Option<CacheProviderPruneFailure> {
+    match active {
+        Some(false) => None,
+        Some(true) => Some(CacheProviderPruneFailure::OwnerRunning(
+            provider.executable().to_string(),
+        )),
+        None => Some(CacheProviderPruneFailure::OwnerStateUnknown(
+            provider.executable().to_string(),
+        )),
+    }
+}
+
+fn process_table_activity<T>(
+    processes: &[T],
+    mut matches_owner: impl FnMut(&T) -> bool,
+) -> Option<bool> {
+    if processes.is_empty() {
+        None
+    } else {
+        Some(processes.iter().any(&mut matches_owner))
+    }
 }
 
 fn process_matches_provider(
@@ -988,8 +1050,9 @@ fn bounded_message(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_location_approved, node_manager_roots, parse_discovered_path, parse_provider_path,
-        process_matches_provider, AbsolutePath, CacheProviderRegistry, UV_PRUNE_TIMEOUT,
+        cache_location_approved, node_manager_roots, owner_process_refusal, parse_discovered_path,
+        parse_provider_path, process_matches_provider, process_table_activity, AbsolutePath,
+        CacheProviderPruneFailure, CacheProviderRegistry, UV_PRUNE_TIMEOUT,
     };
     use super::{
         configure_provider_command, strip_cache_environment, NativeProviderMeasurer,
@@ -1216,7 +1279,9 @@ mod tests {
         )
         .expect_err("a failed owner command is reported honestly");
 
-        assert!(error.contains("uv prune failed: fixture refusal"));
+        assert!(error
+            .to_string()
+            .contains("uv prune failed: fixture refusal"));
         assert_eq!(runner.prune_calls(), vec![ProviderKind::Uv]);
         assert!(
             existing.exists(),
@@ -1330,6 +1395,26 @@ mod tests {
             std::ffi::OsStr::new("node"),
             &pnpm_command,
         ));
+
+        assert_eq!(
+            process_table_activity::<&str>(&[], |_| true),
+            None,
+            "an unreadable process table is not an idle-owner signal"
+        );
+        assert_eq!(
+            process_table_activity(&["node"], |_| false),
+            Some(false),
+            "a readable unrelated Node process does not block the owner command"
+        );
+        assert_eq!(
+            owner_process_refusal(ProviderKind::Npm, None),
+            Some(CacheProviderPruneFailure::OwnerStateUnknown("npm".into()))
+        );
+        assert_eq!(
+            owner_process_refusal(ProviderKind::Npm, Some(true)),
+            Some(CacheProviderPruneFailure::OwnerRunning("npm".into()))
+        );
+        assert_eq!(owner_process_refusal(ProviderKind::Npm, Some(false)), None);
     }
 
     #[test]

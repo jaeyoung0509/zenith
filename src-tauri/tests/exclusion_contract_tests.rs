@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use zenith_lib::models::{
     CleanStrategy, CleanupOwnership, CleanupUnit, DeleteTarget, EntryKind, NeverCancelled,
-    RiskTier, RunningProcessPolicy,
+    RiskTier, RunningProcessPolicy, StructuredStatePolicy,
 };
 use zenith_lib::safety::{
     RevalidationOutcome, SafeTreeDeleter, SafetyValidator, ToctouGuard, ValidatedTarget,
@@ -33,6 +33,7 @@ fn validate(
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };

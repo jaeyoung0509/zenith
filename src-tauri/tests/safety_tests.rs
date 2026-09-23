@@ -8,7 +8,7 @@ use zenith_lib::models::{
     CategoryResult, CleanFailureReason, CleanStrategy, CleanupEligibility, CleanupMode,
     CleanupOwnership, CleanupUnit, CleanupUnitKind, DeletePlan, DeleteTarget, DispositionFacts,
     EligibilityGate, EntryKind, FileSize, ObservationQuality, RiskTier, RunningProcessPolicy,
-    ScanItem, ScanResult, Signature, ZenithError,
+    ScanItem, ScanResult, Signature, StructuredStatePolicy, ZenithError,
 };
 use zenith_lib::safety::blacklist::{classify_windows, BlacklistEnvironment, BlacklistVerdict};
 use zenith_lib::safety::{
@@ -84,6 +84,7 @@ fn validated_filesystem_target(
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -116,6 +117,7 @@ fn present_filesystem_target_without_identity_fails_closed() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -996,6 +998,7 @@ fn recursive_delete_refuses_a_unit_with_nested_protected_state() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -1996,6 +1999,7 @@ fn a_target_outside_its_authorizing_unit_is_refused() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -2046,6 +2050,7 @@ fn structured_state_is_refused_by_the_execution_guard() {
             target_kind: EntryKind::File,
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
+            structured_state_policy: StructuredStatePolicy::ProtectAll,
             provider_id: None,
             requires_confirmation: false,
         };
@@ -2397,13 +2402,12 @@ fn the_shipped_explorer_cache_entry_scans_and_plans() {
     assert!(thumbcache.exists(), "planning does not mutate");
 }
 
-/// Two shipped rules can name one location with different operations:
-/// `ai.cursor.cache` deletes the whole cache, while the intensive
-/// `system.intensive.user_app_caches` removes only the entries older than seven
-/// days. The location is counted once, and neither rule's operation may
-/// authorize what the other refuses.
+/// Two generic rules can name one location with different operations: one
+/// deletes a whole selected tree, while the intensive app-cache signature
+/// removes only entries older than seven days. The location is counted once,
+/// and neither rule's operation may authorize what the other refuses.
 #[test]
-fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() {
+fn generic_rules_that_disagree_about_one_location_do_not_authorize_each_other() {
     let fixture = tempdir().expect("fixture");
     let caches = fixture.path().join("Caches");
     let cursor = caches.join("Cursor");
@@ -2414,11 +2418,14 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
     age_entry(&stale, 30);
 
     let shipped = SignatureRegistry::load_embedded().expect("catalog");
-    let mut cursor_rule = shipped
+    let mut whole_tree_rule = shipped
         .get("ai.cursor.cache")
         .cloned()
-        .expect("the Cursor cache entry is in the catalog");
-    cursor_rule.paths = vec![cursor.to_string_lossy().into_owned()];
+        .expect("a fixed-path signature supplies the generic rule shape");
+    whole_tree_rule.id = "test.generic.whole_tree_cache".into();
+    whole_tree_rule.name = "Generic whole-tree cache fixture".into();
+    whole_tree_rule.platforms.clear();
+    whole_tree_rule.paths = vec![cursor.to_string_lossy().into_owned()];
     let mut stale_rule = shipped
         .get("system.intensive.user_app_caches")
         .cloned()
@@ -2428,7 +2435,7 @@ fn shipped_rules_that_disagree_about_one_location_do_not_authorize_each_other() 
     stale_rule.platforms = vec![];
 
     let mut registry = SignatureRegistry::new();
-    registry.register(cursor_rule);
+    registry.register(whole_tree_rule);
     registry.register(stale_rule);
 
     // Intensive cleanup runs both rules. The wider operation (`delete_contents`
@@ -2687,6 +2694,7 @@ fn a_non_mutating_plan_is_refused_by_the_executor() {
             target_kind: EntryKind::Directory,
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
+            structured_state_policy: StructuredStatePolicy::ProtectAll,
             provider_id: None,
             requires_confirmation: false,
         }],
@@ -2862,6 +2870,7 @@ fn nested_structured_state_skips_the_whole_cleanup_unit_before_mutation() {
             target_kind: EntryKind::Directory,
             owner: CleanupOwnership::unknown(),
             process_guard: RunningProcessPolicy::none(),
+            structured_state_policy: StructuredStatePolicy::ProtectAll,
             provider_id: None,
             requires_confirmation: false,
         }],
@@ -2939,6 +2948,7 @@ fn a_file_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
         target_kind: EntryKind::File,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -2987,6 +2997,7 @@ fn a_directory_replaced_by_a_symlink_between_scan_and_clean_is_skipped() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -3033,6 +3044,7 @@ fn a_target_that_changed_kind_between_scan_and_clean_is_skipped() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -3071,6 +3083,7 @@ fn stale_cleanup_requires_identity_at_revalidation() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -3127,6 +3140,7 @@ fn stale_cleanup_allows_mtime_change_with_same_entity() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -3170,6 +3184,7 @@ fn stale_cleanup_refuses_replaced_directory_at_revalidation() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };
@@ -3220,6 +3235,7 @@ fn stale_cleanup_refuses_incomplete_directory_tree_at_revalidation() {
         target_kind: EntryKind::Directory,
         owner: CleanupOwnership::unknown(),
         process_guard: RunningProcessPolicy::none(),
+        structured_state_policy: StructuredStatePolicy::ProtectAll,
         provider_id: None,
         requires_confirmation: false,
     };

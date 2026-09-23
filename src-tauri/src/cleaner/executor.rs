@@ -512,7 +512,29 @@ impl CleanExecutor {
                     Ok(Some(reclaimed)) => {
                         item_result(target, CleanStatus::Success, None, reclaimed, None)
                     }
-                    Err(error) => item_result(
+                    Err(crate::cache_providers::CacheProviderPruneFailure::OwnerRunning(
+                        executable,
+                    )) => item_result(
+                        target,
+                        CleanStatus::Skipped,
+                        Some(CleanFailureReason::InUse),
+                        0,
+                        Some(format!(
+                            "{executable} is currently running; its cache was skipped. Close it and scan again before retrying."
+                        )),
+                    ),
+                    Err(crate::cache_providers::CacheProviderPruneFailure::OwnerStateUnknown(
+                        executable,
+                    )) => item_result(
+                        target,
+                        CleanStatus::Skipped,
+                        Some(CleanFailureReason::SafetyBoundary),
+                        0,
+                        Some(format!(
+                            "The process state for {executable} could not be verified; its cache was skipped. Try again after process inspection is available."
+                        )),
+                    ),
+                    Err(crate::cache_providers::CacheProviderPruneFailure::Failed(error)) => item_result(
                         target,
                         CleanStatus::Failed,
                         Some(CleanFailureReason::ExternalCommandFailed),
