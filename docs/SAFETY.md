@@ -141,9 +141,13 @@ A generic filesystem cleaner does not infer that structured content inside a
 directory is disposable merely because the directory was discovered as a
 cache. The planner inspects the selected unit and records an item-level
 `StructuredStore` refusal when it contains protected state; other selected
-units can still form a plan. A provider that legitimately owns a disposable
-database must go through its own adapter with its own lifecycle, which is what
-`CleanupOperation::Provider` exists for.
+units can still form a plan. The only filesystem exception is the catalogued
+macOS Cursor renderer-cache unit: its exact five named subtrees, explicit
+Rebuild review and execution-time Cursor/helper process guard establish the
+unit contract. That policy permits cache databases, companions and lock
+markers inside the unit, while credentials, configuration, bundles and
+executables still refuse the whole unit. It grants no authority to other
+signatures or application roots.
 
 Catalog families make that ownership explicit. Package-manager stores can use
 a fixed owner command/provider or remain advisory, but cannot authorize a
@@ -212,15 +216,15 @@ return":
 | --- | --- |
 | `success` | the target's postcondition holds because this run removed it |
 | `partial` | some of the target was removed |
-| `skipped` | nothing was removed and nothing was wrong: the object was already gone, or is no longer the one the plan authorized |
+| `skipped` | nothing was removed: the object was already gone or changed, or the owning application is active or its state could not be verified |
 | `failed` | the object was still the right one and Zenith could not remove it |
 
 `success` is true for `success` and `partial` only. A skipped target removed
 nothing, so it is never reported as cleaned; the reason
 (`changed_since_scan`, `not_found`, `safety_boundary`, `structured_store`,
-`blacklisted`) says which rule answered. Failure reasons distinguish
-`permission_denied`, `in_use`, and `external_command_failed` from the skip
-reasons, because those are the ones a user can act on.
+`blacklisted`, `in_use`) says which rule answered. Failure reasons distinguish
+`permission_denied` and `external_command_failed` from skip reasons, because
+those are the ones a user can act on.
 
 Each result keeps two byte populations apart: `estimated_bytes` is what the scan
 measured and the plan was built from, and `bytes_reclaimed` is what this run

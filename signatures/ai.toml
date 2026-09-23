@@ -34,16 +34,35 @@ category = "ai"
 family = "developer"
 risk = "rebuild"
 strategy = "delete_contents"
+platforms = ["windows"]
 paths = [
-    "~/Library/Caches/Cursor",
-    "~/Library/Application Support/Cursor/Cache",
-    "~/Library/Application Support/Cursor/Code Cache",
-    "~/Library/Application Support/Cursor/GPUCache",
     "${ROAMING_APP_DATA}/Cursor/Cache",
     "${ROAMING_APP_DATA}/Cursor/Code Cache",
     "${ROAMING_APP_DATA}/Cursor/GPUCache"
 ]
 description = "V8 code cache, GPU shader cache, and webview temporary storage for Cursor."
+
+[[signatures]]
+id = "ai.cursor.renderer_cache"
+name = "Cursor Renderer and Code Cache"
+category = "ai"
+family = "applications"
+risk = "rebuild"
+strategy = "delete_directory"
+platforms = ["macos"]
+paths = ["~/Library/Application Support/Cursor/{Cache,CachedData,Code Cache,GPUCache,ShaderCache}"]
+unit = "named_subtree"
+owner = "Cursor"
+fail_if_running = [
+    "Cursor",
+    "Cursor Helper",
+    "Cursor Helper (GPU)",
+    "Cursor Helper (Renderer)",
+    "Cursor Helper (Plugin)"
+]
+artifact_kind = "renderer_cache"
+consequence = "Cursor rebuilds renderer, code, and GPU cache data on demand; some data may need to be downloaded again."
+description = "Only Cursor's renderer, code, GPU, and shader cache subtrees are targeted; profile state, sessions, credentials, settings, logs, and extensions stay outside this unit."
 
 [[signatures]]
 id = "ai.cursor.logs"

@@ -1,5 +1,5 @@
 use super::owner::{OwnerProviderAuthorization, OwnerProviderUnit};
-use super::structured::EntryKind;
+use super::structured::{EntryKind, StructuredStatePolicy};
 use super::CleanStrategy;
 use crate::domain::identity::CleanupIdentity;
 use crate::domain::scan::{CleanupOwnership, CleanupUnit};
@@ -128,6 +128,8 @@ pub struct DeleteTarget {
     pub owner: CleanupOwnership,
     /// Executables whose running state refuses this cleanup.
     pub process_guard: RunningProcessPolicy,
+    /// Which structured entry kinds the catalogued unit may remove.
+    pub structured_state_policy: StructuredStatePolicy,
     /// The lifecycle provider the catalog named for this target's action.
     ///
     /// `None` for every strategy that does not run through one, and for a plan

@@ -91,7 +91,7 @@
       </h3>
       <p data-region="metadata" class="mt-0.5 text-xs text-muted-foreground">
         {presented.length} {presented.length === 1 ? 'item' : 'items'}
-        {#if summary.cleanable_bytes === 0} · Nothing to clean{/if}
+        {#if summary.cleanable_count === 0} · Nothing to clean{/if}
       </p>
     </div>
 
@@ -100,10 +100,14 @@
       class="shrink-0 text-right"
     >
       <span class="block whitespace-nowrap text-sm font-semibold font-mono tabular-nums text-foreground">
-        {#if summary.cleanable_bytes > 0}{formatBytes(summary.cleanable_bytes)}{/if}
+        {#if summary.cleanable_bytes > 0}
+          {formatBytes(summary.cleanable_bytes)}
+        {:else if summary.cleanable_count > 0}
+          Amount varies
+        {/if}
       </span>
       <span class="block whitespace-nowrap text-micro text-muted-foreground">
-        {summary.cleanable_bytes > 0 ? 'Can clean' : ''}
+        {summary.cleanable_bytes > 0 ? 'Can clean' : summary.cleanable_count > 0 ? 'Owner decides' : ''}
       </span>
     </div>
 

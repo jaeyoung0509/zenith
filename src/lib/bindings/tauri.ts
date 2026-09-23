@@ -703,7 +703,7 @@ export type BudgetStatus = {
 	mixed_sources: boolean,
 };
 
-export type CacheArtifactKind = "temporary" | "download_cache" | "package_store" | "build_artifact" | "compiled_kernel" | "optimized_engine" | "autotune" | "model_weight" | "prompt_or_session_state" | "runtime_memory" | "log";
+export type CacheArtifactKind = "temporary" | "download_cache" | "package_store" | "build_artifact" | "renderer_cache" | "compiled_kernel" | "optimized_engine" | "autotune" | "model_weight" | "prompt_or_session_state" | "runtime_memory" | "log";
 
 export type CacheManagementMode = "zenith" | "tool_managed" | "advisory";
 

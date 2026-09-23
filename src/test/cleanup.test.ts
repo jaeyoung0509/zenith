@@ -634,6 +634,40 @@ describe('cleanup disposition authority & byte semantics', () => {
     expect(observedBytes(advisoryItem)).toBe(800);
   });
 
+  it('keeps owner-pruned package stores selectable without promising their full footprint', () => {
+    const store = item({
+      id: 'uv-store',
+      name: 'uv Package Cache',
+      risk: 'rebuild',
+      size: { logical: 4_000, allocated: 4_000 },
+      cache_metadata: {
+        provider: 'uv',
+        management_mode: 'tool_managed',
+        artifact_kind: 'package_store',
+        consequence: 'Unused packages may be downloaded again.',
+        size_semantics: 'informational',
+        last_used_confidence: 'unknown',
+      },
+      disposition: {
+        eligibility: 'reviewable',
+        cleanable_bytes: null,
+        reason: 'Observed store size; the package manager decides which unused entries it can prune',
+      },
+    });
+
+    expect(isCleanable(store)).toBe(true);
+    expect(isActionable(store)).toBe(true);
+    expect(isAutoCleanable(store)).toBe(false);
+    expect(cleanableBytes(store)).toBe(0);
+    expect(summarizeCategory([store], { 'uv-store': true })).toMatchObject({
+      cleanable_count: 1,
+      cleanable_bytes: 0,
+      selected_count: 1,
+      selected_bytes: 0,
+      observed_bytes: 4_000,
+    });
+  });
+
   it('fails closed when disposition is absent', () => {
     const freshSafeItem = item({
       id: 'legacy-fresh-safe',

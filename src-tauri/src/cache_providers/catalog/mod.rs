@@ -156,7 +156,10 @@ mod tests {
             assert!(!provider.executable().is_empty());
             assert!(!provider.discovery_args().is_empty());
             assert!(!provider.prune_args().is_empty());
-            assert!(!provider.active_processes().is_empty());
+            assert!(
+                !provider.active_processes().is_empty() || provider == ProviderKind::Uv,
+                "only uv uses its own cache lock instead of a process-name gate"
+            );
             assert_ne!(
                 provider.family(),
                 crate::models::CleanerFamily::Unclassified

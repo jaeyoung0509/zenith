@@ -16,6 +16,7 @@
   const id = $props.id();
   let dialog: HTMLDialogElement;
   let hasRebuild = $derived(plan.targets.some(target => target.risk === 'rebuild'));
+  let hasUnknownEstimate = $derived(plan.targets.some(target => target.expected_bytes === 0));
   let actionSummary = $derived(plan.mode === 'trash'
     ? `Move to ${platformContextStore.trashLabel}`
     : plan.mode === 'mixed'
@@ -60,7 +61,12 @@
 >
   <h2 id={id + '-title'} class="text-base font-semibold">Clean {plan.targets.length} {plan.targets.length === 1 ? 'item' : 'items'}?</h2>
   <p id={id + '-description'} class="mt-2 text-sm text-muted-foreground">
-    {actionSummary} · {formatBytes(plan.expected_reclaim_bytes)} estimated
+    {#if hasUnknownEstimate && plan.expected_reclaim_bytes === 0}
+      {actionSummary} · reclaimed amount depends on what the owner tool can prune
+    {:else}
+      {actionSummary} · {formatBytes(plan.expected_reclaim_bytes)} estimated
+      {#if hasUnknownEstimate}<br />Owner-managed prune amounts may vary.{/if}
+    {/if}
   </p>
   {#if hasRebuild}
     <p class="mt-2 text-xs text-warning">Some items may download or build again later.</p>
@@ -72,7 +78,9 @@
           <span>{target.name}</span>
           <code class="mt-0.5 block break-all text-meta text-muted-foreground">{target.path}</code>
         </div>
-        <span class="font-mono whitespace-nowrap">{formatBytes(target.expected_bytes)}</span>
+        <span class="font-mono whitespace-nowrap">
+          {target.expected_bytes === 0 ? 'Varies' : formatBytes(target.expected_bytes)}
+        </span>
       </li>
     {/each}
   </ul>

@@ -1538,6 +1538,52 @@ mod tests {
         )
     }
 
+    #[test]
+    fn cloudkit_is_inventoried_separately_from_removable_app_caches() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let cache_root = fixture.path().join("Library/Caches");
+        let cloudkit = cache_root.join("CloudKit");
+        let application = cache_root.join("com.example.editor");
+        std::fs::create_dir_all(&cloudkit).expect("CloudKit fixture");
+        std::fs::create_dir_all(&application).expect("application cache fixture");
+        std::fs::write(cloudkit.join("service-state"), b"state").expect("fixture data");
+        std::fs::write(application.join("payload"), b"cache").expect("fixture data");
+
+        let environment = environment().with_home(fixture.path());
+        let registry = crate::signatures::SignatureRegistry::load_embedded_with(&environment)
+            .expect("embedded catalog");
+        let cloudkit_signature = registry
+            .get("system.cloudkit.cache")
+            .expect("CloudKit observation signature");
+        let cloudkit_items =
+            DirectoryScanner::scan_signature(cloudkit_signature, &environment, &NeverCancelled);
+        assert_eq!(cloudkit_items.len(), 1);
+        assert_eq!(cloudkit_items[0].risk, RiskTier::Manual);
+        assert_eq!(
+            cloudkit_items[0].disposition.eligibility,
+            crate::models::CleanupEligibility::Advisory
+        );
+        assert!(!cloudkit_items[0].is_selected);
+
+        let broad_cache_signature = registry
+            .get("system.intensive.user_app_caches")
+            .expect("broad app cache signature");
+        let broad_items =
+            DirectoryScanner::scan_signature(broad_cache_signature, &environment, &NeverCancelled);
+        assert!(
+            broad_items
+                .iter()
+                .any(|item| item.path.contains("com.example.editor")),
+            "a third-party app cache remains inventoried"
+        );
+        assert!(
+            broad_items
+                .iter()
+                .all(|item| !item.path.contains("CloudKit")),
+            "the service-owned CloudKit tree cannot produce removable child items"
+        );
+    }
+
     /// A shared helper for the aged-child fixtures: an empty root, plus the
     /// signature shape every aged test needs.
     /// A walk context for a test that states its own environment: default

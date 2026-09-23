@@ -429,8 +429,29 @@ impl CleanExecutor {
         // container prune asks the runtime itself, which is running by
         // definition when it answers.
         if !matches!(operation, CleanupOperation::Container(_)) {
-            let running = crate::cleaner::running_executables(&target.process_guard);
+            let running = if target.structured_state_policy
+                == crate::models::StructuredStatePolicy::VerifiedRegenerableCache
+            {
+                match crate::cleaner::running_executables_if_known(&target.process_guard) {
+                    Some(running) => running,
+                    None => {
+                        return item_result(
+                            target,
+                            CleanStatus::Skipped,
+                            Some(CleanFailureReason::SafetyBoundary),
+                            0,
+                            Some(
+                                "The owner process state could not be verified, so this cache was skipped. Try again after the process list is available.".to_string(),
+                            ),
+                        );
+                    }
+                }
+            } else {
+                crate::cleaner::running_executables(&target.process_guard)
+            };
             if !running.is_empty() {
+                let verified_cache = target.structured_state_policy
+                    == crate::models::StructuredStatePolicy::VerifiedRegenerableCache;
                 let owner = if target.owner.is_known() {
                     format!(" ({})", target.owner.owner)
                 } else {
@@ -438,11 +459,15 @@ impl CleanExecutor {
                 };
                 return item_result(
                     target,
-                    CleanStatus::Failed,
+                    if verified_cache {
+                        CleanStatus::Skipped
+                    } else {
+                        CleanStatus::Failed
+                    },
                     Some(CleanFailureReason::InUse),
                     0,
                     Some(format!(
-                        "A process that owns this cache{} is running ({}). Close it and scan again.",
+                        "A process that owns this cache{} is running ({}); the cache was skipped. Close it and scan again.",
                         owner,
                         running.join(", ")
                     )),
@@ -770,6 +795,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: None,
                 requires_confirmation: false,
             }],
@@ -844,6 +870,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: None,
                 requires_confirmation: false,
             }],
@@ -906,6 +933,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: None,
                 requires_confirmation: false,
             }],
@@ -1110,6 +1138,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: None,
                 requires_confirmation: false,
             }],
@@ -1268,6 +1297,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: None,
                 requires_confirmation: false,
             }],
@@ -1300,6 +1330,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Directory,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: None,
                 requires_confirmation: false,
             }],
@@ -1470,6 +1501,7 @@ mod tests {
                 target_kind: crate::models::EntryKind::Other,
                 owner: crate::models::CleanupOwnership::unknown(),
                 process_guard: crate::models::RunningProcessPolicy::none(),
+                structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
                 provider_id: Some(provider_id.to_string()),
                 requires_confirmation: true,
             }],

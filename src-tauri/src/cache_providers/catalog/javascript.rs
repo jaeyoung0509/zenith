@@ -12,7 +12,9 @@ pub(super) const PNPM: ProviderSpec = ProviderSpec {
     artifact_kind: CacheArtifactKind::PackageStore,
     family: CleanerFamily::PackageManagers,
     discovery_output: DiscoveryOutput::BarePath,
-    active_processes: &["pnpm", "node"],
+    // Match the owner CLI only. Every unrelated Node app can run without
+    // holding this store's pruning operation open.
+    active_processes: &["pnpm", "pnpm-cli"],
     runtime_dependencies: &["node"],
     local_toolchain_only: false,
 };
@@ -21,13 +23,15 @@ pub(super) const NPM: ProviderSpec = ProviderSpec {
     signature_id: "dev.npm.cache",
     executable: "npm",
     discovery_args: &["config", "get", "cache"],
-    prune_args: &["cache", "clean", "--force"],
+    prune_args: &["cache", "verify"],
     display_name: "npm Cache",
-    consequence: "A full cleanup can force package downloads on later installs.",
+    consequence: "npm verifies the cache and garbage-collects unneeded entries; packages may need to be downloaded again.",
     artifact_kind: CacheArtifactKind::PackageStore,
     family: CleanerFamily::PackageManagers,
     discovery_output: DiscoveryOutput::BarePath,
-    active_processes: &["npm", "node"],
+    // npm's CLI is a Node process, so recognizing its entrypoint avoids
+    // treating an unrelated Node app as an active npm cache owner.
+    active_processes: &["npm", "npm-cli"],
     runtime_dependencies: &["node"],
     local_toolchain_only: false,
 };

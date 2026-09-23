@@ -78,6 +78,7 @@ pub enum CacheArtifactKind {
     DownloadCache,
     PackageStore,
     BuildArtifact,
+    RendererCache,
     CompiledKernel,
     OptimizedEngine,
     Autotune,
@@ -720,6 +721,16 @@ fn derive_own_disposition(facts: DispositionFacts<'_>) -> CleanupDisposition {
         if observed == 0 {
             return CleanupDisposition::blocked("No cleanable data found");
         }
+        if cache_metadata.artifact_kind == CacheArtifactKind::PackageStore {
+            return CleanupDisposition::new(
+                CleanupEligibility::Reviewable,
+                Some(
+                    "Observed store size; the package manager decides which unused entries it can prune"
+                        .to_string(),
+                ),
+                None,
+            );
+        }
         if quality == ObservationQuality::Partial {
             return CleanupDisposition::reviewable(
                 reclaimable,
@@ -1024,7 +1035,13 @@ impl ScanItem {
     }
 
     pub fn allows_cleanup(&self) -> bool {
+        // Owner-pruned package stores are explicitly selectable, but their
+        // observed footprint is not a promise about what the command removes.
         self.disposition.is_cleanable()
+            || (self.disposition.eligibility == CleanupEligibility::Reviewable
+                && self.cache_metadata.management_mode == CacheManagementMode::ToolManaged
+                && self.cache_metadata.artifact_kind == CacheArtifactKind::PackageStore
+                && self.observed_bytes() > 0)
     }
 
     /// Bytes this item would reclaim when cleaned, and zero when it cannot be
@@ -1690,6 +1707,41 @@ mod tests {
         assert_eq!(d7.eligibility, CleanupEligibility::Reviewable);
         assert_eq!(d7.cleanable_bytes, Some(1000));
         assert!(d7.is_cleanable());
+
+        // A package store's measured footprint is inventory, not an estimate
+        // of what the owner's prune operation will discard.
+        let package_store_meta = CacheMetadata {
+            management_mode: CacheManagementMode::ToolManaged,
+            artifact_kind: CacheArtifactKind::PackageStore,
+            size_semantics: CacheSizeSemantics::Informational,
+            consequence: "Unused entries may be downloaded again.".into(),
+            ..Default::default()
+        };
+        let package_store = derive_cleanup_disposition(DispositionFacts::new(
+            RiskTier::Rebuild,
+            ObservationQuality::Fresh,
+            &package_store_meta,
+            &size,
+            None,
+        ));
+        assert_eq!(package_store.eligibility, CleanupEligibility::Reviewable);
+        assert_eq!(package_store.cleanable_bytes, None);
+
+        let mut package_store_item = ScanItem::mock(
+            "dev.uv.cache",
+            "dev.uv.cache",
+            "uv Package Cache",
+            Category::Developer,
+            RiskTier::Rebuild,
+            "/Users/test/.cache/uv",
+            size,
+            3,
+        );
+        package_store_item.cache_metadata = package_store_meta;
+        package_store_item = package_store_item.with_derived_disposition();
+        assert!(package_store_item.allows_cleanup());
+        assert_eq!(package_store_item.cleanable_bytes(), 0);
+        assert!(!package_store_item.is_pre_selectable());
 
         // 8. Safe + Fresh + Advisory => Advisory
         let d8 = derive_cleanup_disposition(DispositionFacts::new(

@@ -43,9 +43,18 @@ export function observedBytes(item: ScanItem): number {
  */
 export function isCleanable(item: ScanItem): boolean {
   const eligibility = item.disposition?.eligibility;
+  if (eligibility !== 'auto_cleanable' && eligibility !== 'reviewable') return false;
+  if (cleanableBytes(item) > 0) return true;
+
+  // A package-store command may prune unused entries, but the measured store
+  // footprint is not a reclaim estimate. Keep it explicitly selectable with
+  // zero bytes in the guaranteed totals.
   return (
-    (eligibility === 'auto_cleanable' || eligibility === 'reviewable') &&
-    cleanableBytes(item) > 0
+    eligibility === 'reviewable' &&
+    item.exists &&
+    observedBytes(item) > 0 &&
+    item.cache_metadata?.management_mode === 'tool_managed' &&
+    item.cache_metadata.artifact_kind === 'package_store'
   );
 }
 

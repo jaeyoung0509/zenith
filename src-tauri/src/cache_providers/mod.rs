@@ -21,6 +21,9 @@ use zenith_platform::path_algebra::{self, PathFlavor};
 use zenith_platform::PlatformEnvironment;
 
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(15);
+/// uv coordinates cache access through its own lock. Its documented lock wait
+/// is five minutes, so permit that wait while retaining the same hard deadline.
+const UV_PRUNE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DISCOVERY_OUTPUT: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +81,12 @@ trait ProviderCommandRunner: Send + Sync {
         environment: &PlatformEnvironment,
         cancellation: &dyn CancellationProbe,
     ) -> ProviderCommandResult;
+
+    fn prune(
+        &self,
+        provider: ProviderKind,
+        environment: &PlatformEnvironment,
+    ) -> ProviderCommandResult;
 }
 
 trait ProviderMeasurer: Send + Sync {
@@ -90,6 +99,17 @@ trait ProviderMeasurer: Send + Sync {
         limits: ScanLimits,
         counters: &TraversalCounters,
     ) -> PathMeasurement;
+
+    fn measure_for_prune(&self, path: &Path, environment: &PlatformEnvironment) -> PathMeasurement {
+        let counters = TraversalCounters::default();
+        self.measure(
+            path,
+            environment,
+            &crate::models::NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+        )
+    }
 }
 
 struct NativeProviderCommandRunner;
@@ -124,6 +144,26 @@ impl ProviderCommandRunner for NativeProviderCommandRunner {
             },
             Err(zenith_platform::SubprocessError::Cancelled(_)) => ProviderCommandResult::Cancelled,
             Err(error) => ProviderCommandResult::Failed(error.to_string()),
+        }
+    }
+
+    fn prune(
+        &self,
+        provider: ProviderKind,
+        environment: &PlatformEnvironment,
+    ) -> ProviderCommandResult {
+        let timeout = if provider == ProviderKind::Uv {
+            UV_PRUNE_TIMEOUT
+        } else {
+            PROVIDER_TIMEOUT
+        };
+        match run_provider_with_timeout(provider, provider.prune_args(), environment, timeout) {
+            Ok(output) => ProviderCommandResult::Output {
+                success: output.status.success(),
+                stdout: output.stdout,
+                stderr: output.stderr,
+            },
+            Err(error) => ProviderCommandResult::Failed(error),
         }
     }
 }
@@ -406,32 +446,66 @@ impl CacheProviderRegistry {
     ) -> Result<Option<u64>, String> {
         let provider = ProviderKind::for_signature(signature_id)
             .ok_or_else(|| "Unknown external cache provider".to_string())?;
-        if matching_process_is_active(provider) {
+        Self::prune_with(
+            provider,
+            planned_path,
+            environment,
+            &NativeProviderCommandRunner,
+            &NativeProviderMeasurer,
+        )
+    }
+
+    fn prune_with(
+        provider: ProviderKind,
+        planned_path: &Path,
+        environment: &PlatformEnvironment,
+        runner: &dyn ProviderCommandRunner,
+        measurer: &dyn ProviderMeasurer,
+    ) -> Result<Option<u64>, String> {
+        if !provider.active_processes().is_empty() && matching_process_is_active(provider) {
             return Err(format!(
                 "{} is currently running. Close it and try again.",
                 provider.executable()
             ));
         }
-        let fresh_path = discover_path(provider, environment)?;
+        let fresh_path = discover_path_with(provider, environment, runner)?;
         if !paths_match(&fresh_path, planned_path) {
             return Err(
                 "The provider cache location changed since the scan. Scan again.".to_string(),
             );
         }
-        let before = SizeCalculator::measure_path_logged(&fresh_path, &[], environment);
-        let output = run_provider(provider, provider.prune_args(), environment)?;
-        if !output.status.success() {
-            return Err(format!(
-                "{} prune failed: {}",
-                provider.executable(),
-                bounded_message(&output.stderr)
-            ));
+        let before = measurer.measure_for_prune(&fresh_path, environment);
+        match runner.prune(provider, environment) {
+            ProviderCommandResult::Output { success: true, .. } => {}
+            ProviderCommandResult::Output {
+                success: false,
+                stderr,
+                ..
+            } => {
+                return Err(format!(
+                    "{} prune failed: {}",
+                    provider.executable(),
+                    bounded_message(&stderr)
+                ));
+            }
+            ProviderCommandResult::Failed(reason) => {
+                return Err(format!("{} prune failed: {reason}", provider.executable()));
+            }
+            ProviderCommandResult::Absent => {
+                return Err(format!(
+                    "{} was not detected in trusted tool locations",
+                    provider.executable()
+                ));
+            }
+            ProviderCommandResult::Cancelled => {
+                return Err(format!("{} prune was cancelled", provider.executable()));
+            }
         }
-        let rediscovered = discover_path(provider, environment)?;
+        let rediscovered = discover_path_with(provider, environment, runner)?;
         if !paths_match(&rediscovered, &fresh_path) {
             return Err("The provider cache location changed during cleanup.".to_string());
         }
-        let after = SizeCalculator::measure_path_logged(&rediscovered, &[], environment);
+        let after = measurer.measure_for_prune(&rediscovered, environment);
         Ok(crate::scanner::size::reclaimed_between(&before, &after))
     }
 }
@@ -473,10 +547,11 @@ fn classify_provider_failure(reason: &str) -> ScanGapKind {
     }
 }
 
-fn run_provider(
+fn run_provider_with_timeout(
     provider: ProviderKind,
     args: &[&str],
     environment: &PlatformEnvironment,
+    timeout: Duration,
 ) -> Result<std::process::Output, String> {
     let executable =
         tooling::resolve_with(provider.executable(), environment).ok_or_else(|| {
@@ -489,7 +564,7 @@ fn run_provider(
     let mut command = Command::new(executable);
     command.args(args);
     configure_provider_command(provider, environment, &mut command)?;
-    zenith_platform::subprocess::run_with_timeout(command, PROVIDER_TIMEOUT)
+    zenith_platform::subprocess::run_with_timeout(command, timeout)
         .map_err(|error| error.to_string())
 }
 
@@ -571,20 +646,49 @@ fn configure_provider_command(
     Ok(())
 }
 
-fn discover_path(
+fn discover_path_with(
     provider: ProviderKind,
     environment: &PlatformEnvironment,
+    runner: &dyn ProviderCommandRunner,
 ) -> Result<PathBuf, String> {
-    let output = run_provider(provider, provider.discovery_args(), environment)?;
-    if !output.status.success() {
-        return Err(format!(
-            "{} cache discovery failed: {}",
-            provider.executable(),
-            bounded_message(&output.stderr)
-        ));
-    }
-    parse_provider_path(provider, &output.stdout)
-        .and_then(|path| validate_cache_path(path, environment))
+    let output = runner.discover(provider, environment, &crate::models::NeverCancelled);
+    let bytes = match output {
+        ProviderCommandResult::Output {
+            success: true,
+            stdout,
+            ..
+        } => stdout,
+        ProviderCommandResult::Output {
+            success: false,
+            stderr,
+            ..
+        } => {
+            return Err(format!(
+                "{} cache discovery failed: {}",
+                provider.executable(),
+                bounded_message(&stderr)
+            ));
+        }
+        ProviderCommandResult::Absent => {
+            return Err(format!(
+                "{} was not detected in trusted tool locations",
+                provider.executable()
+            ));
+        }
+        ProviderCommandResult::Failed(reason) => {
+            return Err(format!(
+                "{} cache discovery failed: {reason}",
+                provider.executable()
+            ));
+        }
+        ProviderCommandResult::Cancelled => {
+            return Err(format!(
+                "{} cache discovery was cancelled",
+                provider.executable()
+            ));
+        }
+    };
+    parse_provider_path(provider, &bytes).and_then(|path| validate_cache_path(path, environment))
 }
 
 fn parse_provider_path(provider: ProviderKind, output: &[u8]) -> Result<AbsolutePath, String> {
@@ -845,24 +949,33 @@ fn paths_match(left: &Path, right: &Path) -> bool {
 }
 
 fn matching_process_is_active(provider: ProviderKind) -> bool {
-    let expected = provider.active_processes();
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All, true);
-    system.processes().values().any(|process| {
-        let name = process.name().to_string_lossy();
-        expected.iter().any(|expected| {
-            name.eq_ignore_ascii_case(expected)
-                || name.eq_ignore_ascii_case(&format!("{expected}.exe"))
-                || process.cmd().iter().take(3).any(|argument| {
-                    Path::new(argument)
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .is_some_and(|value| {
-                            value.eq_ignore_ascii_case(expected)
-                                || value.starts_with(&format!("{expected}."))
-                        })
-                })
-        })
+    system
+        .processes()
+        .values()
+        .any(|process| process_matches_provider(provider, process.name(), process.cmd()))
+}
+
+fn process_matches_provider(
+    provider: ProviderKind,
+    process_name: &std::ffi::OsStr,
+    command: &[std::ffi::OsString],
+) -> bool {
+    let name = process_name.to_string_lossy();
+    provider.active_processes().iter().any(|expected| {
+        name.eq_ignore_ascii_case(expected)
+            || name.eq_ignore_ascii_case(&format!("{expected}.exe"))
+            || command.iter().take(3).any(|argument| {
+                Path::new(argument)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| {
+                        value.eq_ignore_ascii_case(expected)
+                            || value.eq_ignore_ascii_case(&format!("{expected}.exe"))
+                            || value.starts_with(&format!("{expected}."))
+                    })
+            })
     })
 }
 
@@ -876,7 +989,7 @@ fn bounded_message(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         cache_location_approved, node_manager_roots, parse_discovered_path, parse_provider_path,
-        AbsolutePath,
+        process_matches_provider, AbsolutePath, CacheProviderRegistry, UV_PRUNE_TIMEOUT,
     };
     use super::{
         configure_provider_command, strip_cache_environment, NativeProviderMeasurer,
@@ -898,12 +1011,25 @@ mod tests {
     #[derive(Default)]
     struct FakeRunner {
         responses: std::collections::HashMap<ProviderKind, ProviderCommandResult>,
+        prune_responses: std::collections::HashMap<ProviderKind, ProviderCommandResult>,
+        prune_files: std::collections::HashMap<ProviderKind, PathBuf>,
         calls: Mutex<Vec<ProviderKind>>,
+        prune_calls: Mutex<Vec<ProviderKind>>,
     }
 
     impl FakeRunner {
         fn with(mut self, provider: ProviderKind, result: ProviderCommandResult) -> Self {
             self.responses.insert(provider, result);
+            self
+        }
+
+        fn with_prune(mut self, provider: ProviderKind, result: ProviderCommandResult) -> Self {
+            self.prune_responses.insert(provider, result);
+            self
+        }
+
+        fn delete_file_on_prune(mut self, provider: ProviderKind, path: PathBuf) -> Self {
+            self.prune_files.insert(provider, path);
             self
         }
 
@@ -913,6 +1039,10 @@ mod tests {
 
         fn calls(&self) -> Vec<ProviderKind> {
             self.calls.lock().unwrap().clone()
+        }
+
+        fn prune_calls(&self) -> Vec<ProviderKind> {
+            self.prune_calls.lock().unwrap().clone()
         }
     }
 
@@ -928,6 +1058,28 @@ mod tests {
                 .get(&provider)
                 .cloned()
                 .unwrap_or(ProviderCommandResult::Absent)
+        }
+
+        fn prune(
+            &self,
+            provider: ProviderKind,
+            _environment: &PlatformEnvironment,
+        ) -> ProviderCommandResult {
+            self.prune_calls.lock().unwrap().push(provider);
+            let response = self
+                .prune_responses
+                .get(&provider)
+                .cloned()
+                .unwrap_or(ProviderCommandResult::Absent);
+            if matches!(
+                response,
+                ProviderCommandResult::Output { success: true, .. }
+            ) {
+                if let Some(path) = self.prune_files.get(&provider) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            response
         }
     }
 
@@ -983,6 +1135,97 @@ mod tests {
             stdout: format!("{}\n", path.display()).into_bytes(),
             stderr: Vec::new(),
         }
+    }
+
+    #[test]
+    fn uv_prune_uses_its_lock_wait_and_bounded_owner_command() {
+        assert_eq!(ProviderKind::Uv.prune_args(), &["cache", "prune"]);
+        assert!(ProviderKind::Uv.active_processes().is_empty());
+        assert_eq!(UV_PRUNE_TIMEOUT, std::time::Duration::from_secs(300));
+    }
+
+    #[test]
+    fn uv_owner_prune_succeeds_without_generic_tree_deletion() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let cache = home.join(".cache/uv");
+        std::fs::create_dir_all(&cache).unwrap();
+        let unused = cache.join("unused.whl");
+        let retained = cache.join("retained.whl");
+        std::fs::write(&unused, vec![1u8; 4_096]).unwrap();
+        std::fs::write(&retained, vec![2u8; 2_048]).unwrap();
+        let environment = fixture_environment(&home);
+        let runner = FakeRunner::default()
+            .with(ProviderKind::Uv, successful_discovery(&cache))
+            .with_prune(
+                ProviderKind::Uv,
+                ProviderCommandResult::Output {
+                    success: true,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                },
+            )
+            .delete_file_on_prune(ProviderKind::Uv, unused.clone());
+
+        let outcome = CacheProviderRegistry::prune_with(
+            ProviderKind::Uv,
+            &cache,
+            &environment,
+            &runner,
+            &NativeProviderMeasurer,
+        )
+        .expect("the owner command succeeds");
+
+        assert_eq!(outcome, Some(4_096));
+        assert_eq!(runner.prune_calls(), vec![ProviderKind::Uv]);
+        assert!(!unused.exists(), "the fake owner pruned its unused fixture");
+        assert!(retained.exists(), "the owner retained referenced data");
+        assert!(
+            cache.is_dir(),
+            "the store root was never recursively removed"
+        );
+    }
+
+    #[test]
+    fn failed_uv_owner_prune_leaves_the_store_untouched_without_fallback() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let cache = home.join(".cache/uv");
+        std::fs::create_dir_all(&cache).unwrap();
+        let existing = cache.join("package.whl");
+        std::fs::write(&existing, vec![3u8; 1_024]).unwrap();
+        let environment = fixture_environment(&home);
+        let runner = FakeRunner::default()
+            .with(ProviderKind::Uv, successful_discovery(&cache))
+            .with_prune(
+                ProviderKind::Uv,
+                ProviderCommandResult::Output {
+                    success: false,
+                    stdout: Vec::new(),
+                    stderr: b"fixture refusal".to_vec(),
+                },
+            )
+            .delete_file_on_prune(ProviderKind::Uv, existing.clone());
+
+        let error = CacheProviderRegistry::prune_with(
+            ProviderKind::Uv,
+            &cache,
+            &environment,
+            &runner,
+            &NativeProviderMeasurer,
+        )
+        .expect_err("a failed owner command is reported honestly");
+
+        assert!(error.contains("uv prune failed: fixture refusal"));
+        assert_eq!(runner.prune_calls(), vec![ProviderKind::Uv]);
+        assert!(
+            existing.exists(),
+            "failure does not fall back to file deletion"
+        );
+        assert!(
+            cache.is_dir(),
+            "failure does not fall back to root deletion"
+        );
     }
 
     #[test]
@@ -1044,11 +1287,49 @@ mod tests {
             ProviderKind::Npm.discovery_args(),
             &["config", "get", "cache"]
         );
-        assert_eq!(
-            ProviderKind::Npm.prune_args(),
-            &["cache", "clean", "--force"]
-        );
+        assert_eq!(ProviderKind::Npm.prune_args(), &["cache", "verify"]);
+        assert_eq!(ProviderKind::Npm.active_processes(), &["npm", "npm-cli"]);
         assert_eq!(ProviderKind::for_signature("dev.yarn.cache"), None);
+    }
+
+    #[test]
+    fn cache_owner_process_checks_ignore_unrelated_node_apps() {
+        let unrelated_node_command = vec![
+            std::ffi::OsString::from("node"),
+            std::ffi::OsString::from("/workspace/server.js"),
+        ];
+        assert!(!process_matches_provider(
+            ProviderKind::Npm,
+            std::ffi::OsStr::new("node"),
+            &unrelated_node_command,
+        ));
+        assert!(!process_matches_provider(
+            ProviderKind::Pnpm,
+            std::ffi::OsStr::new("node"),
+            &unrelated_node_command,
+        ));
+
+        let npm_command = vec![
+            std::ffi::OsString::from("node"),
+            std::ffi::OsString::from("/usr/local/lib/node_modules/npm/bin/npm-cli.js"),
+            std::ffi::OsString::from("cache"),
+        ];
+        assert!(process_matches_provider(
+            ProviderKind::Npm,
+            std::ffi::OsStr::new("node"),
+            &npm_command,
+        ));
+
+        let pnpm_command = vec![
+            std::ffi::OsString::from("node"),
+            std::ffi::OsString::from("/usr/local/lib/node_modules/pnpm/bin/pnpm.cjs"),
+            std::ffi::OsString::from("store"),
+        ];
+        assert!(process_matches_provider(
+            ProviderKind::Pnpm,
+            std::ffi::OsStr::new("node"),
+            &pnpm_command,
+        ));
     }
 
     #[test]

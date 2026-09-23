@@ -27,7 +27,10 @@ pub(super) const UV: ProviderSpec = ProviderSpec {
     artifact_kind: CacheArtifactKind::PackageStore,
     family: CleanerFamily::PackageManagers,
     discovery_output: DiscoveryOutput::BarePath,
-    active_processes: &["uv", "python", "python3"],
+    // uv serializes cache-modifying commands with its cache lock. Guarding all
+    // Python processes rejects unrelated applications and duplicates uv's
+    // owner-level coordination; the prune command itself waits for that lock.
+    active_processes: &[],
     runtime_dependencies: &[],
     local_toolchain_only: false,
 };

@@ -470,6 +470,7 @@ mod tests {
             target_kind: crate::models::EntryKind::Other,
             owner: crate::models::CleanupOwnership::unknown(),
             process_guard: crate::models::RunningProcessPolicy::none(),
+            structured_state_policy: crate::models::StructuredStatePolicy::ProtectAll,
             provider_id: provider_id.map(str::to_string),
             requires_confirmation: true,
         }

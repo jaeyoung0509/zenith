@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::models::{
     classify_structured_state, CleanFailureReason, CleanItemResult, CleanStatus, CleanStrategy,
-    DeleteTarget, EntryKind, PathFacts, StructuredStateKind,
+    DeleteTarget, EntryKind, PathFacts, StructuredStateKind, StructuredStatePolicy,
 };
 use crate::models_inventory::ValidatedModelTarget;
 use crate::safety::{Blacklist, SymlinkGuard, ToctouGuard};
@@ -31,6 +31,7 @@ pub struct ValidatedTarget {
     /// rather than a tree-level one.
     stale_policy: Option<crate::safety::StaleEntryPolicy>,
     min_age_days: Option<u32>,
+    structured_state_policy: StructuredStatePolicy,
 }
 
 impl ValidatedTarget {
@@ -50,6 +51,7 @@ impl ValidatedTarget {
             exclusions: target.exclusions.clone(),
             stale_policy,
             min_age_days: target.min_age_days,
+            structured_state_policy: target.structured_state_policy,
         }
     }
 
@@ -83,6 +85,10 @@ impl ValidatedTarget {
 
     pub fn min_age_days(&self) -> Option<u32> {
         self.min_age_days
+    }
+
+    pub fn structured_state_policy(&self) -> StructuredStatePolicy {
+        self.structured_state_policy
     }
 }
 
@@ -205,8 +211,9 @@ fn crosses_mount_boundary(_path: &Path) -> bool {
 /// Inspect the whole authorized unit before its first mutation. A directory
 /// with an ordinary name can still contain a database or configuration file.
 /// Symlinks are classified by name but never followed.
-pub(crate) fn structured_descendant(
+pub(crate) fn structured_descendant_with_policy(
     path: &Path,
+    policy: StructuredStatePolicy,
 ) -> std::io::Result<Option<(PathBuf, StructuredStateKind)>> {
     let mut pending = vec![path.to_path_buf()];
     while let Some(current) = pending.pop() {
@@ -219,7 +226,9 @@ pub(crate) fn structured_descendant(
         let facts = PathFacts::new(&name, kind)
             .executable(kind == EntryKind::File && is_executable(&metadata));
         if let Some(structured) = classify_structured_state(facts) {
-            return Ok(Some((current, structured)));
+            if !policy.permits(structured) {
+                return Ok(Some((current, structured)));
+            }
         }
         if kind == EntryKind::Directory && !SymlinkGuard::is_symlink_metadata(&current)? {
             if current != path && crosses_mount_boundary(&current) {
@@ -410,15 +419,17 @@ impl SafetyValidator {
         // 6. Structured state is never generic cleanup's to remove, even when a
         //    discovery rule produced the target.
         if let Some((kind, _)) = crate::safety::validator::structured_state_at(path) {
-            return skipped(
-                target,
-                CleanFailureReason::StructuredStore,
-                format!(
-                    "{} is {}; generic cleanup does not remove structured state",
-                    path.display(),
-                    kind.display_name()
-                ),
-            );
+            if !target.structured_state_policy.permits(kind) {
+                return skipped(
+                    target,
+                    CleanFailureReason::StructuredStore,
+                    format!(
+                        "{} is {}; generic cleanup does not remove structured state",
+                        path.display(),
+                        kind.display_name()
+                    ),
+                );
+            }
         }
 
         // A target with a harmless basename may contain structured state.
@@ -429,7 +440,7 @@ impl SafetyValidator {
                 CleanStrategy::DeleteContents | CleanStrategy::DeleteDirectory
             )
         {
-            match structured_descendant(path) {
+            match structured_descendant_with_policy(path, target.structured_state_policy) {
                 Ok(Some((nested, kind))) => {
                     return skipped(
                         target,
@@ -600,8 +611,11 @@ impl<'a> FilesystemDeleteAuthority<'a> {
         }
     }
 
-    pub(crate) fn protect_structured_state(&self) -> bool {
-        matches!(self.inner, AuthorityKind::Cleanup(_))
+    pub(crate) fn structured_state_policy(&self) -> Option<StructuredStatePolicy> {
+        match self.inner {
+            AuthorityKind::Cleanup(target) => Some(target.structured_state_policy()),
+            AuthorityKind::ModelInventory(_) => None,
+        }
     }
 }
 
