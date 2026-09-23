@@ -97,9 +97,14 @@ build provenance attestation.
 #### Local release recipes
 
 - `just distribute` only creates fresh `.app` and `.dmg` package artifacts under `target/release`; it never changes `/Applications`.
-- `just release` packages the app, validates its bundle identity and version, then replaces the exact `/Applications/Zenith.app`. The previous installed bundle is restored if activation or verification fails.
+- `just release` builds only the `.app`, validates its bundle identity and version, then replaces the exact `/Applications/Zenith.app`. It does not create a DMG or open Finder. The previous installed bundle is restored if activation or verification fails.
 - `just release-and-run` performs the same verified replacement and opens the installed copy rather than the build-tree bundle.
 - `just install-release` installs an already-built release bundle using the same transaction. It reports a clear error if the current user cannot write to `/Applications` and does not use `sudo` automatically.
+
+If a Tauri release build fails, the command prints the path of a retained local
+build log. Keep that log and the mounted-image state before retrying a DMG
+build; redact user paths before sharing either. A successful build removes its
+temporary log.
 
 #### Opening unsigned beta builds on macOS
 
