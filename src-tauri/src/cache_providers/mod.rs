@@ -669,7 +669,7 @@ fn configure_provider_command(
     command: &mut Command,
 ) -> Result<(), String> {
     strip_cache_environment(command);
-    if let Some((name, configured_path)) = provider_cache_override(provider, environment) {
+    if let Some((name, configured_path)) = provider_cache_override(provider, environment)? {
         let path = configured_path
             .to_str()
             .ok_or_else(|| "The provider cache override is not UTF-8".to_string())?;
@@ -717,24 +717,47 @@ fn configure_provider_command(
 fn provider_cache_override(
     provider: ProviderKind,
     environment: &PlatformEnvironment,
-) -> Option<(&'static str, &Path)> {
-    match provider {
+) -> Result<Option<(&'static str, &Path)>, String> {
+    Ok(match provider {
         ProviderKind::Uv => environment
             .cache_path_override("UV_CACHE_DIR")
             .map(|path| ("UV_CACHE_DIR", path)),
         ProviderKind::Pip => environment
             .cache_path_override("PIP_CACHE_DIR")
             .map(|path| ("PIP_CACHE_DIR", path)),
-        ProviderKind::Npm => environment
-            .cache_path_override("NPM_CONFIG_CACHE")
-            .or_else(|| environment.cache_path_override("npm_config_cache"))
-            .map(|path| ("NPM_CONFIG_CACHE", path)),
-        ProviderKind::Pnpm => environment
-            .cache_path_override("NPM_CONFIG_STORE_DIR")
-            .or_else(|| environment.cache_path_override("npm_config_store_dir"))
-            .map(|path| ("npm_config_store_dir", path)),
+        ProviderKind::Npm => {
+            npm_cache_override(environment, "npm_config_cache", "NPM_CONFIG_CACHE")?
+                .map(|path| ("npm_config_cache", path))
+        }
+        ProviderKind::Pnpm => {
+            npm_cache_override(environment, "npm_config_store_dir", "NPM_CONFIG_STORE_DIR")?
+                .map(|path| ("npm_config_store_dir", path))
+        }
         _ => None,
+    })
+}
+
+fn npm_cache_override<'a>(
+    environment: &'a PlatformEnvironment,
+    lowercase: &str,
+    uppercase: &str,
+) -> Result<Option<&'a Path>, String> {
+    let configured = |name| {
+        environment
+            .cache_path_override(name)
+            .filter(|path| !path.as_os_str().is_empty())
+    };
+    let lower = configured(lowercase);
+    let upper = configured(uppercase);
+    if lower
+        .zip(upper)
+        .is_some_and(|(lower, upper)| lower != upper)
+    {
+        return Err(format!(
+            "Conflicting {lowercase} and {uppercase} cache settings; choose one location"
+        ));
     }
+    Ok(lower.or(upper))
 }
 
 fn discover_path_with(
@@ -1082,6 +1105,16 @@ fn process_matches_provider(
     command: &[std::ffi::OsString],
 ) -> bool {
     let name = process_name.to_string_lossy();
+    if provider == ProviderKind::Pip {
+        return pip_executable_name(&name)
+            || command.first().is_some_and(|arg| {
+                Path::new(arg)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(pip_executable_name)
+            })
+            || python_pip_module(command);
+    }
     provider.active_processes().iter().any(|expected| {
         name.eq_ignore_ascii_case(expected)
             || name.eq_ignore_ascii_case(&format!("{expected}.exe"))
@@ -1096,6 +1129,39 @@ fn process_matches_provider(
                     })
             })
     })
+}
+
+fn pip_executable_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    matches!(name.as_str(), "pip" | "pip3" | "pip.exe" | "pip3.exe")
+        || name.strip_prefix("pip3.").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
+        })
+}
+
+fn python_pip_module(command: &[std::ffi::OsString]) -> bool {
+    let Some(executable) = command.first().and_then(|arg| Path::new(arg).file_name()) else {
+        return false;
+    };
+    let executable = executable.to_string_lossy().to_ascii_lowercase();
+    if !executable.starts_with("python") && !executable.starts_with("pypy") {
+        return false;
+    }
+    let mut args = command.iter().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("-m") => return args.next().is_some_and(|module| module == "pip"),
+            Some("-c" | "--") => return false,
+            Some("-W" | "-X") => {
+                if args.next().is_none() {
+                    return false;
+                }
+            }
+            Some(option) if option.starts_with('-') && option != "--" => {}
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn bounded_message(bytes: &[u8]) -> String {
@@ -1392,7 +1458,7 @@ mod tests {
         for (provider, setting, forwarded) in [
             (ProviderKind::Uv, "UV_CACHE_DIR", "UV_CACHE_DIR"),
             (ProviderKind::Pip, "PIP_CACHE_DIR", "PIP_CACHE_DIR"),
-            (ProviderKind::Npm, "npm_config_cache", "NPM_CONFIG_CACHE"),
+            (ProviderKind::Npm, "npm_config_cache", "npm_config_cache"),
             (
                 ProviderKind::Pnpm,
                 "NPM_CONFIG_STORE_DIR",
@@ -1430,6 +1496,51 @@ mod tests {
             &mut Command::new("provider-fixture")
         )
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn npm_cache_settings_ignore_empty_values_and_refuse_conflicts() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let cache_a = fixture.path().join("cache-a");
+        let cache_b = fixture.path().join("cache-b");
+        std::fs::create_dir_all(&cache_a).unwrap();
+        std::fs::create_dir_all(&cache_b).unwrap();
+        let bin = fixture.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let node = bin.join("node");
+        std::fs::write(&node, b"fixture").unwrap();
+        let mut permissions = std::fs::metadata(&node).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&node, permissions).unwrap();
+        let base = fixture_environment(fixture.path()).with_tool("node", &node);
+
+        let empty_upper = base
+            .clone()
+            .with_cache_path_override("NPM_CONFIG_CACHE", "")
+            .with_cache_path_override("npm_config_cache", &cache_b);
+        let mut command = Command::new("provider-fixture");
+        configure_provider_command(ProviderKind::Npm, &empty_upper, &mut command).unwrap();
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "npm_config_cache")
+                .and_then(|(_, value)| value),
+            Some(std::fs::canonicalize(&cache_b).unwrap().as_os_str())
+        );
+
+        let conflicting = base
+            .with_cache_path_override("NPM_CONFIG_CACHE", &cache_a)
+            .with_cache_path_override("npm_config_cache", &cache_b);
+        let error = configure_provider_command(
+            ProviderKind::Npm,
+            &conflicting,
+            &mut Command::new("provider-fixture"),
+        )
+        .unwrap_err();
+        assert!(error.contains("Conflicting npm_config_cache and NPM_CONFIG_CACHE"));
     }
 
     #[test]
@@ -1533,6 +1644,12 @@ mod tests {
 
     #[test]
     fn pip_owner_check_ignores_unrelated_python_but_catches_module_invocation() {
+        let signature = SignatureRegistry::load_embedded_catalog()
+            .unwrap()
+            .get("dev.pip.cache")
+            .unwrap()
+            .process_guard();
+        assert_eq!(signature.executables(), &["pip", "pip3"]);
         let unrelated = vec![
             std::ffi::OsString::from("python3"),
             std::ffi::OsString::from("/workspace/server.py"),
@@ -1552,6 +1669,43 @@ mod tests {
             ProviderKind::Pip,
             std::ffi::OsStr::new("python3"),
             &module,
+        ));
+        for args in [
+            vec!["python3", "-I", "-m", "pip", "install"],
+            vec!["python3", "-u", "-W", "ignore", "-m", "pip"],
+        ] {
+            let command = args
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+            assert!(process_matches_provider(
+                ProviderKind::Pip,
+                std::ffi::OsStr::new("python3"),
+                &command,
+            ));
+        }
+        let unrelated_argument = ["python3", "server.py", "-m", "pip"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        assert!(!process_matches_provider(
+            ProviderKind::Pip,
+            std::ffi::OsStr::new("python3"),
+            &unrelated_argument,
+        ));
+        let inline_script = ["python3", "-c", "print('ready')", "-m", "pip"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
+        assert!(!process_matches_provider(
+            ProviderKind::Pip,
+            std::ffi::OsStr::new("python3"),
+            &inline_script,
+        ));
+        assert!(process_matches_provider(
+            ProviderKind::Pip,
+            std::ffi::OsStr::new("pip3.13"),
+            &[],
         ));
     }
 
@@ -2010,6 +2164,48 @@ esac
         )
         .expect("Go owns its valid lockfiles; generic structured-state checks do not apply");
         assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].strategy, CleanStrategy::ExternalCommand);
+    }
+
+    #[test]
+    fn pip_scan_plan_carries_only_the_narrow_executable_guard() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join(".cache/pip");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("wheel.bin"), vec![0_u8; 4096]).unwrap();
+
+        let environment = fixture_environment(home.path());
+        let registry = SignatureRegistry::load_embedded().unwrap();
+        let runner = FakeRunner::absent().with(ProviderKind::Pip, successful_discovery(&cache));
+        let counters = TraversalCounters::default();
+        let result = CacheProviderRegistry::scan_items_with(
+            &registry,
+            &[],
+            &environment,
+            &NeverCancelled,
+            ScanLimits::default(),
+            &counters,
+            &NoRootProgress,
+            &runner,
+            &NativeProviderMeasurer,
+        );
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        assert_eq!(result.items.len(), 1);
+        let mut item = result.items.into_iter().next().unwrap();
+        assert_eq!(item.signature_id, "dev.pip.cache");
+        item.is_selected = true;
+        let plan = crate::safety::SafetyPlanner::create_plan_with_environment(
+            &[item],
+            &registry,
+            &environment,
+            &crate::cleaner::OwnerProviderRegistry::new(Vec::new()),
+        )
+        .expect("the selected pip cache is plannable");
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(
+            plan.targets[0].process_guard.executables(),
+            &["pip", "pip3"]
+        );
         assert_eq!(plan.targets[0].strategy, CleanStrategy::ExternalCommand);
     }
 
