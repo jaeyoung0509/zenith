@@ -2,15 +2,28 @@
 
 # Build a release bundle and recover once when Cargo's unpacked registry source
 # is incomplete but the cached crate archive can be fetched again. This keeps
-# the common path cache-friendly while making `just release` self-healing for
+# the common path cache-friendly while making release builds self-healing for
 # the specific local-cache corruption Cargo cannot repair on its own.
 set -uo pipefail
 
 build_log="$(mktemp "${TMPDIR:-/tmp}/zenith-tauri-build.XXXXXX")"
-trap 'rm -f "$build_log"' EXIT
+repair_dir=""
+finish() {
+  local build_status=$?
+  if [[ -n "$repair_dir" ]]; then
+    rm -rf -- "$repair_dir"
+  fi
+  if (( build_status == 0 )); then
+    rm -f -- "$build_log"
+  else
+    echo "Tauri build failed (exit $build_status). Local build log: $build_log" >&2
+  fi
+}
+trap finish EXIT
 
 run_build() {
-  pnpm tauri build "$@" 2>&1 | tee "$build_log"
+  printf 'Running pnpm tauri build %s\n' "$*" >> "$build_log"
+  pnpm tauri build "$@" 2>&1 | tee -a "$build_log"
   return "${PIPESTATUS[0]}"
 }
 
@@ -36,7 +49,6 @@ if [[ "$missing_manifest" != /* || "$(basename "$registry_src_dir")" != "src" ||
 fi
 
 repair_dir="$(mktemp -d "${TMPDIR:-/tmp}/zenith-cargo-repair.XXXXXX")"
-trap 'rm -f "$build_log"; rm -rf "$repair_dir"' EXIT
 
 echo "Detected an incomplete Cargo source cache at $package_dir. Refreshing only that crate and retrying once..." >&2
 mv "$package_dir" "$repair_dir/"

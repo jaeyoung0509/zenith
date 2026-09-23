@@ -1,4 +1,4 @@
-import type { RiskTier, ScanItem } from '../models/types';
+import type { CategoryResult, RiskTier, ScanItem } from '../models/types';
 
 export type CleanupSortMode = 'size' | 'name' | 'modified';
 
@@ -192,6 +192,24 @@ export function summarizeCategory(
     is_all_cleanable_selected,
     can_select_all,
   };
+}
+
+/** Compact explanation for a category with no currently actionable item. */
+export function emptyCategoryMessage(
+  summary: CategorySummary,
+  quality: CategoryResult['quality'],
+  category?: CategoryResult['category']
+): string | null {
+  if (summary.cleanable_count > 0) return null;
+  if (summary.visible_count === 0) {
+    return quality === 'fresh' ? 'No items found' : 'Some locations unavailable';
+  }
+  if (category === 'container') return 'Manage containers';
+  if (summary.advisory_count === summary.visible_count) return 'Managed elsewhere';
+  if (summary.policy_gated_count > 0) return 'Review scan scope';
+  if (summary.recent_count > 0) return 'Nothing ready yet';
+  if (summary.blocked_count > 0) return 'Needs attention';
+  return 'No items eligible';
 }
 
 /**

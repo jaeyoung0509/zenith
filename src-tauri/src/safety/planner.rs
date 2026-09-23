@@ -678,6 +678,124 @@ mod tests {
     }
 
     #[test]
+    fn brave_code_cache_review_removes_only_the_named_unit() {
+        use crate::models::{CleanupEligibility, StructuredStatePolicy};
+        use crate::safety::{RevalidationOutcome, SafeTreeDeleter, SafetyValidator};
+        use crate::scanner::DirectoryScanner;
+        use zenith_platform::path_algebra::PathFlavor;
+        use zenith_platform::PlatformEnvironment;
+
+        let fixture = tempfile::tempdir().expect("disposable fixture");
+        let home = fixture.path().join("home");
+        let profile = home.join("Library/Caches/BraveSoftware/Brave-Browser/Default");
+        let cache = profile.join("Code Cache");
+        std::fs::create_dir_all(&cache).expect("cache fixture");
+        std::fs::write(cache.join("index.db"), vec![b'c'; 4096]).expect("cache database");
+        let sibling = profile.join("Cookies");
+        std::fs::write(&sibling, b"keep browser state").expect("protected sibling");
+        let http_cache = profile.join("Cache");
+        std::fs::create_dir_all(&http_cache).expect("HTTP cache fixture");
+        std::fs::write(http_cache.join("entry"), b"observed only").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(&home);
+        let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+        let signature = registry
+            .get("system.brave.code_cache")
+            .expect("reviewed code cache signature");
+        let observed = DirectoryScanner::scan_signature(
+            registry
+                .get("system.brave.http_cache")
+                .expect("HTTP cache inventory"),
+            &environment,
+            &crate::models::NeverCancelled,
+        );
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].risk, RiskTier::Manual);
+        assert!(!observed[0].is_selected);
+        let mut items = DirectoryScanner::scan_signature(
+            signature,
+            &environment,
+            &crate::models::NeverCancelled,
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].disposition.eligibility,
+            CleanupEligibility::Reviewable
+        );
+        assert!(items[0].age.is_none());
+        assert!(!items[0].is_selected);
+        items[0].is_selected = true;
+
+        let plan = SafetyPlanner::create_plan_with_environment(
+            &items,
+            &registry,
+            &environment,
+            &no_owner_providers(),
+        )
+        .expect("explicitly reviewed cache unit is plannable");
+        assert_eq!(
+            plan.targets[0].structured_state_policy,
+            StructuredStatePolicy::VerifiedRegenerableCache
+        );
+        let validated = match SafetyValidator::revalidate(&plan.targets[0], &environment) {
+            RevalidationOutcome::Validated(target) => target,
+            RevalidationOutcome::Skipped(result) | RevalidationOutcome::Failed(result) => {
+                panic!("unchanged disposable fixture must remain authorized: {result:?}")
+            }
+        };
+        let report = SafeTreeDeleter::delete_path_validated(&validated, &environment);
+        assert!(
+            report.errors.is_empty(),
+            "cleanup errors: {:?}",
+            report.errors
+        );
+        assert!(!cache.exists());
+        assert_eq!(std::fs::read(&sibling).unwrap(), b"keep browser state");
+        assert_eq!(
+            std::fs::read(http_cache.join("entry")).unwrap(),
+            b"observed only"
+        );
+    }
+
+    #[test]
+    fn brave_code_cache_with_credentials_refuses_the_whole_unit() {
+        use crate::scanner::DirectoryScanner;
+        use zenith_platform::path_algebra::PathFlavor;
+        use zenith_platform::PlatformEnvironment;
+
+        let fixture = tempfile::tempdir().expect("disposable fixture");
+        let home = fixture.path().join("home");
+        let cache = home.join("Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache");
+        std::fs::create_dir_all(&cache).expect("cache fixture");
+        let generated = cache.join("index.db");
+        let protected = cache.join("auth.json");
+        std::fs::write(&generated, b"generated cache index").unwrap();
+        std::fs::write(&protected, b"protected state").unwrap();
+
+        let environment = PlatformEnvironment::simulated(PathFlavor::current()).with_home(&home);
+        let registry = SignatureRegistry::load_embedded_with(&environment).expect("catalog");
+        let signature = registry
+            .get("system.brave.code_cache")
+            .expect("Brave cache");
+        let mut items = DirectoryScanner::scan_signature(
+            signature,
+            &environment,
+            &crate::models::NeverCancelled,
+        );
+        assert_eq!(items.len(), 1);
+        items[0].is_selected = true;
+        let plan = SafetyPlanner::create_plan_with_environment(
+            &items,
+            &registry,
+            &environment,
+            &no_owner_providers(),
+        );
+        assert!(matches!(plan, Err(ZenithError::RefusedSelection(_))));
+        assert_eq!(std::fs::read(&generated).unwrap(), b"generated cache index");
+        assert_eq!(std::fs::read(&protected).unwrap(), b"protected state");
+    }
+
+    #[test]
     fn settings_and_credentials_invalidate_a_cursor_cache_unit_before_mutation() {
         use crate::models::{CleanFailureReason, StructuredStatePolicy};
         use crate::scanner::DirectoryScanner;

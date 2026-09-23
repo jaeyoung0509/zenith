@@ -99,6 +99,8 @@
       selected
       {#if selectedBytes > 0}
         · <span class="font-mono font-semibold text-foreground"><ByteValue bytes={selectedBytes} /></span>
+      {:else if selectedCount > manualCount}
+        · <span>Amount varies by owner</span>
       {/if}
     </span>
 

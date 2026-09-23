@@ -72,6 +72,11 @@
     }
   });
   let scan = $derived(scanStore.lastScan);
+  let hasSelectedAction = $derived(
+    scan?.categories.some(category => category.items.some(
+      item => scanStore.selectedMap[item.id] && isActionable(item)
+    )) ?? false
+  );
   let showResultModal = $state(false);
   let review = $state<{ scanId: string; plan: PlanPreview } | null>(null);
   let isPreparingReview = $state(false);
@@ -225,7 +230,7 @@
         manualCount={scanStore.manualSelectedCount}
         actionLabel="Clean selected"
         onAction={handleCleanSelected}
-        isActionDisabled={!scanStore.canClean || scanStore.reclaimableBytes === 0 || isPreparingReview}
+        isActionDisabled={!scanStore.canClean || !hasSelectedAction || isPreparingReview}
         isActionLoading={scanStore.isCleaning || isPreparingReview}
         isSelectionDisabled={!scanStore.canClean}
       >

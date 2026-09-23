@@ -110,7 +110,7 @@
         <span class="min-w-0 flex-1">
           <span class="block text-xs font-semibold">Developer Artifacts</span>
           <span class="block text-caption text-muted-foreground mt-0.5">
-            Review rebuildable project environments
+            Scan projects for rebuildable artifacts
           </span>
         </span>
         <span aria-hidden="true" class="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5">

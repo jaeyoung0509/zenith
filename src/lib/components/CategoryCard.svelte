@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { CategoryResult } from '../models/types';
   import { formatBytes } from '../utils/format';
-  import { isActionable, presentedItems, summarizeCategory } from '../utils/cleanup';
+  import { emptyCategoryMessage, isActionable, presentedItems, summarizeCategory } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
   import Card from './Card.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -37,6 +37,7 @@
 
   let cleanableItems = $derived(categoryResult.items.filter(isActionable));
   let summary = $derived(summarizeCategory(categoryResult.items, scanStore.selectedMap));
+  let emptyMessage = $derived(emptyCategoryMessage(summary, categoryResult.quality, categoryResult.category));
 
   let allSelected = $derived.by(() => {
     if (cleanableItems.length === 0) return false;
@@ -91,7 +92,7 @@
       </h3>
       <p data-region="metadata" class="mt-0.5 text-xs text-muted-foreground">
         {presented.length} {presented.length === 1 ? 'item' : 'items'}
-        {#if summary.cleanable_count === 0} · Nothing to clean{/if}
+        {#if emptyMessage} · {emptyMessage}{/if}
       </p>
     </div>
 

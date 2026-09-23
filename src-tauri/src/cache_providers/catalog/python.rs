@@ -12,7 +12,9 @@ pub(super) const PIP: ProviderSpec = ProviderSpec {
     artifact_kind: CacheArtifactKind::DownloadCache,
     family: CleanerFamily::PackageManagers,
     discovery_output: DiscoveryOutput::BarePath,
-    active_processes: &["pip", "pip3", "python", "python3"],
+    // A Python interpreter running an unrelated application is not evidence
+    // that pip owns this store. The CLI names also match `python -m pip`.
+    active_processes: &["pip", "pip3"],
     runtime_dependencies: &[],
     local_toolchain_only: false,
 };

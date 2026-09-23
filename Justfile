@@ -63,9 +63,10 @@ distribute: stop clean-bin
     @echo "  - DMG Installer: target/release/bundle/dmg/"
     @echo "👉 Run directly with: just run-bin"
 
-# Build, validate, and safely replace the installed /Applications/Zenith.app.
+# Build the app only, then validate and replace /Applications/Zenith.app.
+# Distribution DMG creation is a separate `just distribute` operation.
 [macos]
-release: distribute install-release
+release: release-app install-release
 
 # Install an already-built release bundle with rollback on replacement failure.
 [macos]
@@ -136,9 +137,11 @@ test-front:
 
 # The platform-specific recipes that follow keep `just test` working on every host.
 #
-# Exercise release replacement and rollback using temporary fixture bundles only.
+# Exercise app-only recipe ordering, retained failure logs, and replacement
+# rollback using temporary fixture bundles only.
 [macos]
 test-release-installer:
+    ./scripts/test_release_workflow.sh
     ./scripts/test_install_release_app.sh
 
 [linux]

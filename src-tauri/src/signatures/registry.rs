@@ -1115,6 +1115,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn brave_code_cache_is_one_reviewed_unit_outside_generic_discovery() {
+        use crate::models::StructuredStatePolicy;
+
+        let registry = SignatureRegistry::load_embedded_catalog().expect("embedded catalog");
+        let brave = registry
+            .get("system.brave.code_cache")
+            .expect("reviewed Brave code cache");
+        assert_eq!(brave.platforms, vec![PlatformKind::Macos]);
+        assert_eq!(brave.unit_kind(), CleanupUnitKind::NamedSubtree);
+        assert_eq!(brave.min_age_days, None);
+        assert!(!brave.intensive_only);
+        assert_eq!(
+            brave.structured_state_policy(),
+            StructuredStatePolicy::VerifiedRegenerableCache
+        );
+        assert_eq!(
+            brave.paths,
+            vec!["~/Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache"]
+        );
+        assert!(registry
+            .get("system.intensive.user_app_caches")
+            .expect("generic cache discovery")
+            .exclude_prefixes
+            .iter()
+            .any(|prefix| prefix == "BraveSoftware"));
+
+        let mut broadened = brave.clone();
+        broadened.paths[0] = "~/Library/Caches/BraveSoftware/Brave-Browser/Default".into();
+        assert!(broadened.validate().is_err());
+
+        let mut unguarded = brave.clone();
+        unguarded.fail_if_running.clear();
+        assert!(unguarded.validate().is_err());
+    }
+
     /// The schema rules refuse a catalog entry that contradicts itself.
     #[test]
     fn a_contradictory_signature_is_refused() {
