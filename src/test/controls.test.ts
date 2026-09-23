@@ -128,9 +128,10 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('sm:min-w-[9rem]');
+    expect(rendered.body).toContain('data-region="metrics" class="shrink-0 text-right"');
     expect(rendered.body).toContain('whitespace-nowrap');
-    expect(rendered.body).toContain('Rebuild: 198.8 MB');
+    expect(rendered.body).toContain('198.8 MB');
+    expect(rendered.body).not.toContain('Rebuild:');
   });
 
   it('keeps long partial-category identity, metadata, and metrics in separate regions', () => {
@@ -212,15 +213,12 @@ describe('metric and action consistency contracts', () => {
     expect(rendered.body).toContain('data-region="metadata"');
     expect(rendered.body).toContain('data-region="metrics"');
     expect(rendered.body).toContain('Developer Package Managers and Language Toolchains');
-    expect(rendered.body).toContain('break-words');
+    expect(rendered.body).toContain('[overflow-wrap:normal]');
     expect(rendered.body).not.toContain('truncate');
-    expect(rendered.body).toContain('Partial');
-    expect(rendered.body).toContain('Safe: 41.6 MB');
-    expect(rendered.body).toContain('Rebuild: 261.8 MB');
-    expect(rendered.body).toContain('Manual: 913.6 MB');
-    expect(rendered.body).toContain('479 entries skipped');
-    expect(rendered.body).toContain('479 items not fully measured');
-    expect(rendered.body).toContain('Selected: 303.4 MB');
+    expect(rendered.body).toContain('303.4 MB');
+    for (const jargon of ['Partial', 'Safe:', 'Rebuild:', 'Manual:', 'entries skipped', 'items not fully measured', 'Selected:']) {
+      expect(rendered.body).not.toContain(jargon);
+    }
   });
 
   it('reports how much of a category the measurement skipped', () => {
@@ -241,8 +239,9 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('12 entries skipped');
-    expect(rendered.body).toContain('2 items not fully measured');
+    expect(rendered.body).toContain('Nothing to clean');
+    expect(rendered.body).not.toContain('entries skipped');
+    expect(rendered.body).not.toContain('not fully measured');
 
     const complete = render(CategoryCard, {
       props: {
@@ -286,10 +285,9 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('Observed range');
-    expect(rendered.body).toContain('512 B');
-    expect(rendered.body).toContain('1 KB');
-    expect(rendered.body).not.toContain('≥ 1 KB');
+    expect(rendered.body).toContain('Nothing to clean');
+    expect(rendered.body).not.toContain('Observed range');
+    expect(rendered.body).not.toContain('512 B');
   });
 
   it('does not duplicate the default safe subtotal as a Selected metric', () => {
@@ -350,7 +348,7 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('Safe: 84.9 MB');
+    expect(rendered.body).toContain('292.4 MB');
     expect(rendered.body).not.toContain('Selected:');
   });
 
@@ -412,6 +410,7 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('Selected: 200 MB');
+    expect(rendered.body).toContain('280 MB');
+    expect(rendered.body).not.toContain('Selected:');
   });
 });

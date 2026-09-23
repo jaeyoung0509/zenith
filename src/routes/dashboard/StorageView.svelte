@@ -3,17 +3,12 @@
   import CleanupReviewDialog from '../../lib/components/CleanupReviewDialog.svelte';
   import InlineNotice from '../../lib/components/InlineNotice.svelte';
   import ScanFreshnessNotice from '../../lib/components/ScanFreshnessNotice.svelte';
-  import { onMount, untrack } from 'svelte';
-  import type { CategoryResult, PlanPreview, ScanItem } from '../../lib/models/types';
+  import { onMount } from 'svelte';
+  import type { CategoryResult, PlanPreview } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
-  import { memoryStore } from '../../lib/stores/memory.svelte';
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
-  import { platformContextStore } from '../../lib/stores/platformContext.svelte';
-  import { canReveal, revealUnavailableReason, runReveal } from '../../lib/utils/reveal';
-  import { formatTimeAgo } from '../../lib/utils/format';
   import {
     tauriOpenStorageSettings,
-    tauriShowInFileManager,
   } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
@@ -21,7 +16,6 @@
   import CategoryCard from '../../lib/components/CategoryCard.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
-  import ByteValue from '../../lib/components/ByteValue.svelte';
   import SelectionToolbar from '../../lib/components/SelectionToolbar.svelte';
   import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
   import DeveloperArtifactsView from './DeveloperArtifactsView.svelte';
@@ -33,11 +27,9 @@
   import {
     RotateCw,
     Trash2,
-    ShieldCheck,
     AlertCircle,
     HardDrive,
     ExternalLink,
-    FolderOpen,
     FolderSearch,
     FileSearch,
     AppWindow,
@@ -63,10 +55,8 @@
   }: Props = $props();
 
   let activeSecondaryTab = $state<'cleanup' | 'developer-artifacts' | 'large-files' | 'applications' | 'disks'>('cleanup');
-  let revealError = $state<string | null>(null);
 
   onMount(() => {
-    void platformContextStore.load();
     void platformCapabilitiesStore.load();
   });
 
@@ -81,10 +71,9 @@
       activeSecondaryTab = initialTab;
     }
   });
-  let disk = $derived(memoryStore.disk);
   let scan = $derived(scanStore.lastScan);
   let showResultModal = $state(false);
-  let review = $state<{ scanId: string; items: ScanItem[]; plan: PlanPreview } | null>(null);
+  let review = $state<{ scanId: string; plan: PlanPreview } | null>(null);
   let isPreparingReview = $state(false);
   const storagePanelId = $props.id();
   const baseStorageTabs = [
@@ -97,17 +86,6 @@
   let storageTabs = $derived(
     baseStorageTabs.filter((tab) => tab.id !== 'applications' || isApplicationsInspectable)
   );
-  let volumes = $derived(memoryStore.volumes);
-
-  let safeSelectedBytes = $derived(scanStore.safeSelectedBytes);
-  let rebuildSelectedBytes = $derived(scanStore.rebuildSelectedBytes);
-  let manualSelectedBytes = $derived(scanStore.manualSelectedBytes);
-
-  $effect(() => {
-    // One snapshot on activation and after a scan replaces the inventory.
-    scanStore.lastScan?.scan_id;
-    untrack(() => { void memoryStore.refreshDisk(); });
-  });
 
   async function handleCleanSelected() {
     if (!scan || !scanStore.canClean) return;
@@ -118,7 +96,7 @@
     try {
       const plan = await scanStore.prepareCleanup(items);
       if (plan && scanStore.lastScan?.scan_id === scanId && scanStore.canClean) {
-        review = { scanId, items, plan };
+        review = { scanId, plan };
       }
     } finally {
       isPreparingReview = false;
@@ -177,7 +155,7 @@
       </div>
       <div>
         <h1 class="text-base font-semibold text-foreground tracking-tight">Storage</h1>
-        <p class="text-xs text-muted-foreground mt-0.5">Primary storage capacity, cleanable development caches, and tools</p>
+        <p class="text-xs text-muted-foreground mt-0.5">Find files you can clean</p>
       </div>
     </div>
     <Button
@@ -240,125 +218,16 @@
       onBack={() => (activeSecondaryTab = 'cleanup')}
     />
   {:else}
-    <!-- Storage & Cleanable Overview Card -->
-    <Card class="p-6 bg-card/70 border-border/80 relative overflow-hidden space-y-6">
-      <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <!-- Left: Primary Disk Space -->
-        <div class="min-w-0 flex-1 space-y-2">
-          <div class="flex flex-wrap justify-between items-baseline gap-x-3 gap-y-1">
-            <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-              <HardDrive size={13} class="text-cyan-400" />
-              Primary Storage
-            </span>
-            {#if disk}
-              <span class="flex flex-wrap gap-x-1 font-mono tabular-nums text-sm font-semibold text-foreground">
-                <ByteValue bytes={disk.used_bytes} />
-                <span class="whitespace-nowrap">/ <ByteValue bytes={disk.total_bytes} /></span>
-                <span class="whitespace-nowrap">({disk.percent_used?.toFixed(1) ?? '—'}%)</span>
-              </span>
-            {/if}
-          </div>
-          {#if disk}
-            <ProgressBar value={disk.percent_used ?? 0} height="h-2.5" />
-            <div class="flex flex-wrap justify-between gap-x-3 text-meta text-muted-foreground font-mono">
-              <span>Free: <ByteValue bytes={disk.free_bytes} /></span>
-              <span>Used: <ByteValue bytes={disk.used_bytes} /></span>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Divider -->
-        <div class="hidden md:block w-px h-16 bg-border/60"></div>
-
-        <!-- Right: Reclaimable Space -->
-        <div class="space-y-1 md:text-right min-w-[200px]">
-          <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Selected Reclaimable
-          </span>
-          <div class="whitespace-nowrap text-3xl font-bold font-mono text-foreground">
-            <ByteValue bytes={scanStore.reclaimableBytes} />
-          </div>
-          <div class="text-meta text-muted-foreground">
-            {#if scan}
-              <span>Last scan {formatTimeAgo(scan.finished_at)}</span>
-            {:else}
-              <span>No scan completed yet</span>
-            {/if}
-          </div>
-        </div>
-      </div>
-
-      <!-- Mounted Volumes (if multiple or external attached) -->
-      {#if volumes.length > 1}
-        <div class="pt-3 border-t border-border/40 space-y-2">
-          <div class="flex items-center justify-between">
-            <span class="text-meta font-medium text-muted-foreground uppercase tracking-wider">Mounted Volumes</span>
-            <button
-              type="button"
-              onclick={() => handleTabClick('disks')}
-              class="text-meta text-muted-foreground hover:text-foreground underline underline-offset-2"
-            >
-              View in Disks
-            </button>
-          </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {#each volumes as volume (volume.mount_point)}
-              <div class="p-2.5 rounded-lg border border-border/50 bg-secondary/20 flex items-center justify-between text-xs">
-                <div class="min-w-0 pr-2">
-                  <div class="flex items-center gap-1.5">
-                    <span class="font-medium truncate">{volume.name || volume.mount_point}</span>
-                    {#if volume.is_primary}
-                      <span class="px-1 py-0.2 rounded text-micro bg-success/10 text-success border border-success/20">Primary</span>
-                    {/if}
-                    {#if volume.is_removable}
-                      <span class="px-1 py-0.2 rounded text-micro bg-secondary text-muted-foreground border border-border">External</span>
-                    {/if}
-                  </div>
-                  <p class="flex flex-wrap gap-x-1 text-caption font-mono tabular-nums text-muted-foreground mt-0.5">
-                    <ByteValue bytes={volume.used_bytes} />
-                    <span class="whitespace-nowrap">/ <ByteValue bytes={volume.total_bytes} /></span>
-                    <span class="whitespace-nowrap">({volume.percent_used != null ? `${volume.percent_used.toFixed(1)}%` : '—'})</span>
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-6 w-6 text-muted-foreground shrink-0"
-                  disabled={!canReveal()}
-                  title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
-                  ariaLabel={`Show ${volume.name || volume.mount_point} in file manager`}
-                  onclick={() => void runReveal(() => tauriShowInFileManager(volume.mount_point), (message) => (revealError = message))}
-                >
-                  <FolderOpen size={12} />
-                </Button>
-              </div>
-            {/each}
-          </div>
-          {#if revealError}
-            <div role="alert" class="flex items-center gap-2.5 rounded-xl border border-destructive/30 bg-destructive/15 p-3.5 text-xs text-destructive">
-              <AlertCircle size={16} class="shrink-0" />
-              <span>{revealError}</span>
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      <!-- Shared Action Toolbar -->
+    <!-- One selection summary and one cleanup action. -->
       <SelectionToolbar
         selectedCount={scanStore.selectedCount}
-        selectedBytes={scanStore.reclaimableBytes + manualSelectedBytes}
-        safeBytes={safeSelectedBytes}
-        rebuildBytes={rebuildSelectedBytes}
-        manualBytes={manualSelectedBytes}
+        selectedBytes={scanStore.reclaimableBytes}
         manualCount={scanStore.manualSelectedCount}
-        onSelectSafe={() => scanStore.selectAllSafe()}
-        onDeselectAll={() => scanStore.deselectAll()}
-        actionLabel="Review cleanup"
+        actionLabel="Clean selected"
         onAction={handleCleanSelected}
         isActionDisabled={!scanStore.canClean || scanStore.reclaimableBytes === 0 || isPreparingReview}
         isActionLoading={scanStore.isCleaning || isPreparingReview}
         isSelectionDisabled={!scanStore.canClean}
-        class="mt-4"
       >
         {#snippet extraActions()}
           <Button
@@ -370,11 +239,10 @@
             ariaLabel="Open storage settings"
           >
             <ExternalLink size={12} />
-            <span>Storage Settings</span>
+            <span class="hidden lg:inline">Storage Settings</span>
           </Button>
         {/snippet}
       </SelectionToolbar>
-    </Card>
 
     <!-- Scan Progress -->
     {#if scanStore.isScanning}
@@ -443,18 +311,10 @@
 
     <!-- Categories Section -->
     <div class="space-y-3">
-      <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-foreground tracking-tight">
-          Storage Categories
-        </h2>
-        <div class="flex items-center gap-1 text-xs text-muted-foreground">
-          <ShieldCheck size={14} class="text-success" />
-          <span>Protected by Safety Engine</span>
-        </div>
-      </div>
+      <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Categories</h2>
 
       {#if scan}
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="space-y-2">
           {#each scan.categories as categoryResult (categoryResult.category)}
             <CategoryCard
               {categoryResult}
@@ -476,7 +336,6 @@
   {#if review}
     <CleanupReviewDialog
       plan={review.plan}
-      items={review.items}
       disabled={review.scanId !== scan?.scan_id || !scanStore.canClean}
       onCancel={() => (review = null)}
       onConfirm={confirmCleanup}

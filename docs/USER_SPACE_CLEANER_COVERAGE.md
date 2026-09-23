@@ -73,8 +73,10 @@ not invalidate unrelated scan or plan targets.
 - Re-download, rebuild, re-index, recompile, or first-launch performance costs
   are `Rebuild` and opt-in.
 - Advisory and Manual units remain visible but unselected.
-- A card keeps identity, badges, byte totals and selected-byte detail in
-  separate responsive grid regions.
+- The Storage overview shows each category's name, item count, and currently
+  cleanable bytes. Engine risk tiers and incomplete-measurement diagnostics do
+  not compete with that decision on the overview. The detail view explains
+  concrete consequences when a user selects an item.
 - Partial and inaccessible scans keep
   `selected_bytes <= cleanable_bytes <= observed_bytes` and state why a lower
   bound is being shown.

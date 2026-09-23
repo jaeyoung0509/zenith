@@ -58,10 +58,12 @@ pub struct PlanRefusalPreview {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupFailureScope {
-    /// The scan or plan this operation named is gone, expired, or was replaced.
+    /// The scan this operation named is gone, expired, or was replaced.
     /// The inventory it refers to must be rebuilt: an interface that keeps
     /// showing it is showing a measurement of a machine that has changed.
     InventoryStale,
+    /// The one-shot plan is gone; a still-current scan can create a new plan.
+    PlanUnavailable,
     /// One or more selected items were refused under a current policy. The
     /// inventory and every other selection remain usable, and the refusal is
     /// stated for the items it names.

@@ -260,6 +260,9 @@ impl DeletePlan {
 pub enum CleanFailureReason {
     PermissionDenied,
     ChangedSinceScan,
+    /// A reviewed one-shot plan was consumed, evicted, or expired while the
+    /// underlying scan may still be current.
+    PlanUnavailable,
     NotFound,
     InUse,
     Blacklisted,
@@ -294,6 +297,12 @@ impl CleanFailureReason {
             }
             CleanFailureReason::ChangedSinceScan => {
                 format!("{} changed on disk since the last scan. Aborted cleaning to prevent data corruption.", target_name)
+            }
+            CleanFailureReason::PlanUnavailable => {
+                format!(
+                    "The cleanup selection for {} expired. Review it again.",
+                    target_name
+                )
             }
             CleanFailureReason::NotFound => {
                 format!("{} was already removed or does not exist.", target_name)

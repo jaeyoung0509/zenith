@@ -94,7 +94,7 @@ fn plan_failure(error: ZenithError) -> CleanupFailure {
         other => CleanupFailure::new(
             CleanupFailureScope::Internal,
             CleanFailureReason::Unknown,
-            other.to_string(),
+            crate::diagnostics::sanitize_log(&other.to_string()),
         ),
     }
 }
@@ -102,7 +102,11 @@ fn plan_failure(error: ZenithError) -> CleanupFailure {
 /// Maps a plan-store refusal onto the scope the interface reacts to.
 fn store_failure(error: PlanStoreError) -> CleanupFailure {
     match error {
-        PlanStoreError::Unavailable(message) => CleanupFailure::inventory_stale(message),
+        PlanStoreError::Unavailable(message) => CleanupFailure::new(
+            CleanupFailureScope::PlanUnavailable,
+            CleanFailureReason::PlanUnavailable,
+            message,
+        ),
         PlanStoreError::Unusable(message) => CleanupFailure::new(
             CleanupFailureScope::Internal,
             CleanFailureReason::Unknown,
@@ -1017,7 +1021,7 @@ mod tests {
                     scan_id: first.result.scan_id,
                     continuation_id,
                 },
-                progress,
+                progress.clone(),
             )
             .await
             .expect("the retained pass resumes");
@@ -1039,6 +1043,13 @@ mod tests {
                 Category::System,
             ]
         );
+
+        let one_action = service
+            .start_scan_complete(ScanRequest::default(), progress)
+            .await
+            .expect("one scan action exhausts all categories");
+        assert_eq!(one_action.discovery, ScanDiscovery::Exhausted);
+        assert_eq!(one_action.result.categories.len(), 4);
     }
 
     #[tokio::test]
@@ -1276,21 +1287,31 @@ mod tests {
             Arc::new(TestCapabilitiesProvider(PlatformCapabilities::current())),
         );
 
-        let mut item = ScanItem::mock(
-            "item1",
-            "test_sig",
-            "Fixture cache",
-            Category::System,
-            RiskTier::Safe,
-            cache.to_string_lossy().to_string(),
-            FileSize::new(512, Some(512)),
-            1,
+        let published = service
+            .start_scan_complete(
+                ScanRequest {
+                    categories: Some(vec![Category::System]),
+                    ..ScanRequest::default()
+                },
+                Arc::new(|_: ScanEvent| {}),
+            )
+            .await
+            .expect("fixture scan completes");
+        assert_eq!(published.discovery, ScanDiscovery::Exhausted);
+        let item = published
+            .result
+            .categories
+            .iter()
+            .flat_map(|category| &category.items)
+            .find(|item| item.signature_id == "test_sig")
+            .expect("fixture is discovered");
+        assert_eq!(
+            item.disposition.eligibility,
+            CleanupEligibility::AutoCleanable
         );
-        item.disposition = item.derive_disposition();
-        scan_store.set(make_test_scan(vec![item]));
 
         let preview = service
-            .create_delete_plan("scan_123".to_string(), vec!["item1".to_string()])
+            .create_delete_plan(published.result.scan_id.clone(), vec![item.id.clone()])
             .await
             .expect("a reviewed item creates a plan");
         let progress: Arc<dyn CleanupProgressSink> = Arc::new(|_| {});
@@ -1309,8 +1330,10 @@ mod tests {
         // through this service or any other caller.
         let replay = service.execute_clean(preview.id, false, progress).await;
         let error = replay.expect_err("a consumed plan must be refused");
+        assert_eq!(error.scope, CleanupFailureScope::PlanUnavailable);
+        assert_eq!(error.reason, CleanFailureReason::PlanUnavailable);
         assert!(
-            error.message.contains("not found or already used"),
+            error.message.contains("Review it again"),
             "unexpected error: {}",
             error.message
         );

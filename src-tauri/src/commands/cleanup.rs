@@ -35,11 +35,10 @@ pub async fn start_scan(
         intensive_cleanup: settings.intensive_cleanup,
     };
     let progress: Arc<dyn ScanProgressSink> = Arc::new(TauriScanProgress::new(on_event));
-    if window.label() == "quick" {
-        state.cleanup.start_scan_complete(request, progress).await
-    } else {
-        state.cleanup.start_scan(request, progress).await
-    }
+    // Both surfaces now complete discovery from a single user action. The
+    // service still bounds worker concurrency and supports cancellation.
+    let _ = window;
+    state.cleanup.start_scan_complete(request, progress).await
 }
 
 /// Resumes the one-shot checkpoint owned by the current backend scan.

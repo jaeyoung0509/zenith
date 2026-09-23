@@ -835,7 +835,12 @@ export type CleanEvent_Serialize = ({ type: "Started"; plan_id: string; total_ta
  *  same way; the projection in [`crate::application::dto::cleanup`] carries it
  *  to the interface unchanged.
  */
-export type CleanFailureReason = "permission_denied" | "changed_since_scan" | "not_found" | "in_use" | "blacklisted" | 
+export type CleanFailureReason = "permission_denied" | "changed_since_scan" | 
+/**
+ *  A reviewed one-shot plan was consumed, evicted, or expired while the
+ *  underlying scan may still be current.
+ */
+"plan_unavailable" | "not_found" | "in_use" | "blacklisted" | 
 /**
  *  The target matched structured state (a database, its companions, a
  *  lock, a credential, configuration, a bundle, or an executable) that
@@ -1060,11 +1065,13 @@ export type CleanupFailure = {
  */
 export type CleanupFailureScope = 
 /**
- *  The scan or plan this operation named is gone, expired, or was replaced.
+ *  The scan this operation named is gone, expired, or was replaced.
  *  The inventory it refers to must be rebuilt: an interface that keeps
  *  showing it is showing a measurement of a machine that has changed.
  */
 "inventory_stale" | 
+/**  The one-shot plan is gone; a still-current scan can create a new plan. */
+"plan_unavailable" | 
 /**
  *  One or more selected items were refused under a current policy. The
  *  inventory and every other selection remain usable, and the refusal is

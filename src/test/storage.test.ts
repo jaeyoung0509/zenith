@@ -22,6 +22,7 @@ afterEach(() => {
   scanStore.foundItemCount = 0;
   scanStore.isCancelling = false;
   scanStore.error = null;
+  scanStore.discovery = { status: 'exhausted' };
   scanStore.refusedItems = {};
   scanStore.refusalMessage = null;
 });
@@ -101,7 +102,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     scanStore.error = null;
   });
 
-  it('renders "Review cleanup" for safe-only selections without duplicating byte count in CTA text', () => {
+  it('renders one clean action for safe-only selections without duplicating bytes in CTA text', () => {
     const mockCategory: CategoryResult = {
       category: 'ai',
       display_name: 'AI Tools',
@@ -153,22 +154,19 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       },
     });
 
-    expect(rendered.body).toContain('Review cleanup');
+    expect(rendered.body).toContain('Clean selected');
     expect(rendered.body).not.toContain('Clean Safely');
     // Ensure the CTA button strictly renders clean text without appended byte label
-    expect(rendered.body).toContain('<span>Review cleanup</span>');
-    expect(rendered.body).not.toContain('Review cleanup ·');
-    expect(rendered.body).not.toContain('Review cleanup 100 MB');
-    expect(rendered.body).not.toMatch(/Review cleanup\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
-    // Ensure summary pill renders byte count separately
-    expect(rendered.body).toMatch(/text-success[^>]*>✓ [\s\S]*?100 MB[\s\S]*? Safe<\/span>/);
+    expect(rendered.body).toContain('<span>Clean selected</span>');
+    expect(rendered.body).not.toContain('Clean selected 100 MB');
+    expect(rendered.body).not.toContain(' Safe</span>');
     // Ensure responsive toolbar classes for 960x660 baseline
     expect(rendered.body).toContain('flex flex-col sm:flex-row sm:items-center justify-between gap-3');
     expect(rendered.body).toContain('aria-label="Cleanup selection and actions"');
     expect(rendered.body).toContain('aria-label="Open storage settings"');
   });
 
-  it('renders "Review cleanup" when rebuildable items are selected', () => {
+  it('renders the same clean action when rebuildable items are selected', () => {
     const mockCategory: CategoryResult = {
       category: 'developer',
       display_name: 'Developer Caches',
@@ -221,14 +219,10 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       },
     });
 
-    expect(rendered.body).toContain('Review cleanup');
+    expect(rendered.body).toContain('Clean selected');
     // Ensure the CTA button strictly renders clean text without appended byte label
-    expect(rendered.body).toContain('<span>Review cleanup</span>');
-    expect(rendered.body).not.toContain('Review cleanup ·');
-    expect(rendered.body).not.toContain('Review cleanup 500 MB');
-    expect(rendered.body).not.toMatch(/Review cleanup\s*·?\s*\d+\s*(?:MB|GB|KB|B)/);
-    // Ensure summary pill renders rebuildable count separately
-    expect(rendered.body).toMatch(/text-warning[^>]*>↻ [\s\S]*?500 MB[\s\S]*? Rebuildable<\/span>/);
+    expect(rendered.body).toContain('<span>Clean selected</span>');
+    expect(rendered.body).not.toContain('Rebuildable');
   });
 
   it('wires zero-byte manual selections to the shared toolbar contract', () => {
@@ -291,8 +285,8 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
 
-    expect(rendered.body).toContain('1 Manual item');
-    expect(rendered.body).toContain('Manual items require their dedicated management action');
+    expect(rendered.body).toContain('1 item needs a separate action');
+    expect(rendered.body).toContain('These items need a separate action');
   });
 
   it('keeps the review action enabled for a selected provider-backed manual item', () => {
@@ -351,10 +345,10 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 
     const rendered = render(StorageView, { props: { onSelectCategory: vi.fn() } });
 
-    expect(rendered.body).not.toContain('Manual items require their dedicated management action');
+    expect(rendered.body).not.toContain('These items need a separate action');
     const action = rendered.body
       .match(/<button[^>]*>[\s\S]*?<\/button>/g)
-      ?.find(button => button.includes('Review cleanup'));
+      ?.find(button => button.includes('Clean selected'));
     expect(action).toBeDefined();
     expect(action).not.toContain('disabled=""');
   });
@@ -429,7 +423,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     const partial = render(CategoryDetailView, {
       props: { categoryResult: category, onBack: vi.fn(), onNavigateTab: vi.fn() },
     });
-    expect(partial.body).toContain('Partial scan completed');
+    expect(partial.body).toContain('Some locations could not be checked');
     expect(partial.body).not.toContain('Scan stopped before it finished');
   });
 
@@ -576,7 +570,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
 });
 
 describe('detected versus reclaimable storage copy', () => {
-  it('labels manual container storage as detected and leaves it unselected', () => {
+  it('keeps container storage unselected and explains its dedicated action', () => {
     const bytes = 6 * 1024 * 1024 * 1024;
     const category: CategoryResult = {
       category: 'container',
@@ -627,8 +621,8 @@ describe('detected versus reclaimable storage copy', () => {
       props: { categoryResult: category, onBack: vi.fn(), onNavigateTab: vi.fn() },
     });
 
-    expect(rendered.body).toContain('1 detected location');
-    expect(rendered.body).toContain('6 GB detected');
+    expect(rendered.body).toContain('1 item');
+    expect(rendered.body).toContain('Nothing to clean');
     expect(rendered.body).not.toContain('reclaimable locations');
     expect(rendered.body).toContain('Zenith reports their storage without deleting it');
     expect(scanStore.selectedMap['container.orbstack.storage']).toBe(false);
@@ -727,7 +721,7 @@ describe('StorageView scan remediation', () => {
     });
 
     expect(rendered.body).toContain('248 locations');
-    expect(rendered.body).toContain('Grant Full Disk Access to Zenith');
+    expect(rendered.body).toContain('Allow Full Disk Access');
     expect(rendered.body).toContain('Open System Settings');
     expect(rendered.body).not.toContain('Partial scan completed');
   });
@@ -767,20 +761,12 @@ describe('risk classification versus current eligibility', () => {
 
     const { body } = renderCategory(category);
 
-    // The tab keeps the risk vocabulary and still counts what was detected.
-    expect(body).toContain('All (2)');
-    expect(body).toContain('2 detected (2 KB)');
-    expect(body).toContain('0 cleanable now (0 B)');
-    // Nothing here is selectable, and the reason is the rows' own state.
-    expect(body).toContain('No rows in this tab are cleanable now: 1 advisory, 1 recently used.');
-    const selectFiltered = buttonTags(body).find((button) => button.includes('Select Filtered')) ?? '';
+    expect(body).toContain('2 items · Nothing to clean');
+    expect(body).toContain('Nothing to clean here right now.');
+    const selectFiltered = buttonTags(body).find((button) => button.includes('Select all')) ?? '';
     expect(selectFiltered).toContain('disabled');
-    expect(selectFiltered).toContain(
-      'title="No rows in this tab are cleanable now: 1 advisory, 1 recently used."'
-    );
-    expect(body).toContain('role="group"');
-    expect(body).toContain('aria-label="Filter cleanup items by risk"');
-    expect(body).toContain('aria-pressed="true"');
+    expect(body).toContain('title="Nothing to clean here right now."');
+    expect(body).not.toContain('Filter cleanup items by risk');
     expect(body).toContain('aria-label="Filter cleanup items by name or path"');
     // Inventory that is not cleanable yet is not a failure.
     expect(body).not.toContain('Scan again');
@@ -807,11 +793,10 @@ describe('risk classification versus current eligibility', () => {
     );
 
     const mixedBody = renderCategory(mixed).body;
-    expect(mixedBody).toContain('2 detected (6 KB)');
-    expect(mixedBody).toContain('1 cleanable now (4 KB)');
-    expect(mixedBody).not.toContain('No rows in this tab are cleanable now');
+    expect(mixedBody).toContain('2 items · 4 KB can be cleaned');
+    expect(mixedBody).not.toContain('Nothing to clean here right now');
     expect(
-      buttonTags(mixedBody).find((button) => button.includes('Select Filtered')) ?? ''
+      buttonTags(mixedBody).find((button) => button.includes('Select all')) ?? ''
     ).not.toContain('disabled');
 
     // Every detected row is cleanable: there is nothing to qualify.
@@ -825,7 +810,7 @@ describe('risk classification versus current eligibility', () => {
       ],
       'scan-uniform'
     );
-    expect(renderCategory(uniform).body).not.toContain('cleanable now');
+    expect(renderCategory(uniform).body).toContain('1 item · 4 KB can be cleaned');
   });
 
   it('does not claim every visible Rebuild row is removable when some are not', () => {
@@ -847,9 +832,10 @@ describe('risk classification versus current eligibility', () => {
       'scan-rebuild-mixed'
     );
 
-    expect(renderCategory(category).body).toContain(
-      'Some Rebuild rows here are not removable right now (1 recently used) and stay counted, not selectable.'
-    );
+    const mixedBody = renderCategory(category).body;
+    expect(mixedBody).toContain('2 items · 2 KB can be cleaned');
+    expect(mixedBody).toContain('Used yesterday');
+    expect(mixedBody).not.toContain('Rebuild rows');
 
     const allRemovable = publishScan(
       [
