@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { AiProviderUsage } from '../models/types';
   import { formatResetDate, formatTimeUntil } from '../utils/format';
-  import { Bot, Terminal, Zap } from '@lucide/svelte';
   import Button from './Button.svelte';
   import Card from './Card.svelte';
   import ProgressBar from './ProgressBar.svelte';
@@ -37,12 +36,7 @@
     {@const loading = isProviderLoading(provider.id)}
     <Card class="flex min-h-[190px] flex-col p-4">
       <div class="flex items-start justify-between gap-3">
-        <div class="flex items-center gap-2.5 min-w-0">
-          <div class="h-8 w-8 shrink-0 rounded-lg bg-secondary flex items-center justify-center text-foreground">
-            {#if provider.id === 'codex' || provider.id === 'openai-api'}<Zap size={16} />
-            {:else if provider.id === 'opencode' || provider.id === 'muse-code'}<Terminal size={16} />
-            {:else}<Bot size={16} />{/if}
-          </div>
+        <div class="min-w-0">
           <div class="min-w-0">
             <h3 class="truncate text-body font-semibold">
               {provider.name}{provider.model_identity ? ` · ${provider.model_identity}` : ''}

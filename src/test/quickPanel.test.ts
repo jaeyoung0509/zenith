@@ -218,6 +218,10 @@ describe('quick panel AI provider projection', () => {
       expect(body).toContain('OpenCode');
       expect(body).not.toContain('Claude Code');
       expect(body).toContain('12 local sessions');
+      const activitySection = body.match(/<section[^>]*aria-label="Active AI and services"[\s\S]*?<\/section>/)?.[0];
+      expect(activitySection).toBeDefined();
+      expect(activitySection).not.toContain('<img');
+      expect(activitySection).not.toContain('>OP<');
     } finally {
       settingsStore.settings = previousSettings;
       usageStore.snapshot = previousSnapshot;

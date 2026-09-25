@@ -50,7 +50,7 @@
   } from '@lucide/svelte';
 
   /** Keep the panel useful without turning it into an agent inventory. */
-  const AI_ROW_LIMIT = 4;
+  const AI_ROW_LIMIT = 5;
 
   let panelActive = false;
   let showResultModal = $state(false);
@@ -516,9 +516,8 @@
       {:else}
         <ul class="divide-y divide-border">
           {#each visibleAiRows as row (row.id)}
-            <li class="flex min-w-0 items-start gap-2.5 px-1 py-2">
-              <BrandIcon identity={row.identity} label={row.name} size={20} class="mt-0.5" />
-              <div class="min-w-0 flex-1">
+            <li class="min-w-0 px-1 py-1.5">
+              <div class="min-w-0">
                 <div class="flex min-w-0 items-baseline justify-between gap-2">
                   <span class="min-w-0 break-words text-meta font-medium text-foreground">{row.name}</span>
                   {#if row.sessions.length > 0}

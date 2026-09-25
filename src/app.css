@@ -197,8 +197,9 @@
    silhouette; the main window keeps the opaque page background. Without this
    the body would paint square corners behind the panel. */
 html.transparent-window,
-html.transparent-window body {
-  background: transparent;
+html.transparent-window body,
+html.transparent-window #app {
+  background-color: transparent;
 }
 
 /* Native dragging is started from the Svelte mouse handler via Tauri. */
@@ -349,8 +350,10 @@ html.transparent-window body {
 
 .quick-liquid-shell {
   border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-2xl);
   background: hsl(var(--background));
   box-shadow: 0 16px 36px hsl(var(--foreground) / 0.11);
+  clip-path: inset(0 round var(--radius-2xl));
 }
 
 .quick-liquid-chrome {

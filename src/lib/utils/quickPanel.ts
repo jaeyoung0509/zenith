@@ -177,7 +177,6 @@ export function formatQuickProviderUsage(provider: AiProviderUsage, loading: boo
 export interface QuickAiRow {
   id: string;
   name: string;
-  identity: string;
   provider: AiProviderUsage | null;
   sessions: AgentQuickSessionRow[];
 }
@@ -195,7 +194,6 @@ export function projectQuickAiRows(
     const row: QuickAiRow = {
       id: `provider-${identity}`,
       name: provider.name,
-      identity: provider.id,
       provider,
       sessions: [],
     };
@@ -212,7 +210,6 @@ export function projectQuickAiRows(
     const row: QuickAiRow = {
       id: `session-${identity}`,
       name: session.tool_name,
-      identity: session.tool_name,
       provider: null,
       sessions: [session],
     };
