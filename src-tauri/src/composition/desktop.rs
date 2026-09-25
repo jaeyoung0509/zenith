@@ -59,6 +59,12 @@ pub fn desktop_state_with_catalog(
     let memory_sampler = Arc::new(crate::metrics::MemorySampler::new());
     let memory_termination_store =
         Arc::new(Mutex::new(crate::metrics::MemoryTerminationStore::default()));
+    // The CPU sampler owns its own counters. It is built here rather than
+    // inside the service so the observation interval it keeps between two
+    // reads survives across every command that asks for it.
+    let cpu_sampler = Arc::new(crate::metrics::CpuSampler::new());
+    let battery_provider: Arc<dyn crate::power::BatteryProvider> =
+        Arc::new(crate::power::SystemBatteryProvider::new());
     let dev_port_store = Arc::new(Mutex::new(crate::dev_ports::DevelopmentPortStore::default()));
     let docker_status = Arc::new(DockerStatusCache::new());
 
@@ -191,6 +197,8 @@ pub fn desktop_state_with_catalog(
         budgets,
         memory_sampler,
         memory_termination_store,
+        cpu_sampler,
+        battery_provider,
         awake_manager,
         docker_status,
         dev_port_store,

@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 /// a permission added to `capabilities/quick.json` has to be added here too —
 /// that edit is the review, and it is the only way past
 /// [`quick_window_grants_only_reviewed_read_mostly_permissions`].
-const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
+const QUICK_WINDOW_PERMISSIONS: [&str; 19] = [
     "allow-get-ai-usage",
     "allow-get-ai-provider-descriptors",
     "allow-get-ai-control-quick-summary",
@@ -36,6 +36,8 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
     "allow-get-last-scan",
     "allow-quick-clean-safe",
     "allow-get-memory-metrics",
+    "allow-get-cpu-metrics",
+    "allow-get-battery-metrics",
     "allow-get-disk-metrics",
     "allow-get-disk-volumes",
     "allow-get-awake-state",
@@ -51,7 +53,7 @@ const QUICK_WINDOW_PERMISSIONS: [&str; 17] = [
 /// surface. Together with [`MUTATING_PERMISSIONS`] this is an exhaustive
 /// partition of the generated command surface, so a new command cannot enter a
 /// capability file before its authority is classified here.
-const READ_ONLY_PERMISSIONS: [&str; 41] = [
+const READ_ONLY_PERMISSIONS: [&str; 44] = [
     "allow-cancel-developer-artifact-scan",
     "allow-cancel-large-file-scan",
     // Cancelling a scan stops work; it does not authorize a mutation.
@@ -66,6 +68,8 @@ const READ_ONLY_PERMISSIONS: [&str; 41] = [
     "allow-get-ai-usage",
     "allow-get-app-version",
     "allow-get-awake-state",
+    "allow-get-battery-metrics",
+    "allow-get-cpu-metrics",
     "allow-get-diagnostics",
     "allow-get-disk-metrics",
     "allow-get-disk-volumes",
@@ -93,6 +97,7 @@ const READ_ONLY_PERMISSIONS: [&str; 41] = [
     "allow-show-in-file-manager",
     "allow-start-developer-artifact-scan",
     "allow-start-scan",
+    "allow-take-pending-navigation",
     "allow-toggle-quick-panel",
     "allow-run-ai-safety-scan",
 ];

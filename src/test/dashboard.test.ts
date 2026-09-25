@@ -75,7 +75,7 @@ describe('Dashboard sidebar affordances', () => {
   it('exposes Development Servers as its own dashboard route', () => {
     const rendered = render(Dashboard);
     const memorySource = readFileSync(
-      new URL('../routes/dashboard/MemoryView.svelte', import.meta.url),
+      new URL('../lib/components/performance/MemoryPanel.svelte', import.meta.url),
       'utf8'
     );
 

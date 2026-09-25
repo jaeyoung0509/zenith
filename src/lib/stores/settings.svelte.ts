@@ -2,6 +2,7 @@ import type { AiProviderId, DashboardTab, QuickPanelSection, ZenithSettings } fr
 import { tauriGetSettings, tauriSaveSettings } from '../utils/tauri';
 import { moveOrdered, reorderOrdered, toggleOrdered } from '../utils/quickPanel';
 import { serializeSettingsSnapshot } from '../utils/settings';
+import { DEFAULT_DASHBOARD_TABS, normalizeDashboardTab } from '../utils/dashboardNavigation';
 
 export class SettingsStore {
   settings = $state<ZenithSettings>({
@@ -11,13 +12,13 @@ export class SettingsStore {
     clean_docker: true,
     include_rebuild_caches: false,
     intensive_cleanup: false,
-    theme: 'system',
+    theme: 'light',
     excluded_signatures: [],
-    quick_panel_sections: ['cleanup', 'storage', 'memory', 'agent_activity'],
+    quick_panel_sections: ['cleanup', 'cpu', 'memory', 'battery', 'storage', 'agent_activity', 'awake'],
     quick_panel_ai_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
     ai_accounts_quota_providers: ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-    dashboard_tabs: ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'],
-    dashboard_tabs_revision: 5,
+    dashboard_tabs: [...DEFAULT_DASHBOARD_TABS],
+    dashboard_tabs_revision: 6,
     sidebar_collapsed: false,
     awake_rules: [
       {
@@ -123,11 +124,13 @@ export class SettingsStore {
       const normalized: ZenithSettings = {
         ...fetched,
         intensive_cleanup: fetched.intensive_cleanup ?? false,
-        quick_panel_sections: fetched.quick_panel_sections ?? ['storage', 'cleanup', 'ai_usage', 'categories', 'memory'],
+        quick_panel_sections: fetched.quick_panel_sections ?? [...this.settings.quick_panel_sections],
         quick_panel_ai_providers: fetched.quick_panel_ai_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
         ai_accounts_quota_providers: fetched.ai_accounts_quota_providers ?? ['codex', 'claude', 'opencode', 'openrouter', 'antigravity'],
-        dashboard_tabs: fetched.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'projects', 'ai_control', 'development_servers', 'usage', 'awake'],
-        dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 3,
+        dashboard_tabs: (fetched.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS).map(
+          (tab) => normalizeDashboardTab(tab) as DashboardTab
+        ),
+        dashboard_tabs_revision: fetched.dashboard_tabs_revision ?? 6,
         sidebar_collapsed: fetched.sidebar_collapsed ?? false,
         ai_control: fetched.ai_control ?? this.settings.ai_control,
       };

@@ -24,7 +24,7 @@
 </script>
 
 {#if scanStore.freshness !== 'fresh' || scanStore.discovery.status !== 'exhausted'}
-  <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-secondary/40 p-3 text-xs" role="status">
+  <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-secondary p-3 text-meta" role="status">
     <span class="min-w-0 flex-1">
       {#if scanStore.freshness === 'refreshing'}
         Checking storage…
@@ -52,7 +52,7 @@
         Scan storage to find current cleanup candidates.
       {/if}
       {#if settingsError}
-        <span class="mt-1 block text-destructive">{settingsError}</span>
+        <span class="mt-1 block text-meta text-destructive">{settingsError}</span>
       {/if}
     </span>
     <span class="flex shrink-0 flex-wrap items-center gap-2">

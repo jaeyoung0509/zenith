@@ -154,11 +154,11 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       },
     });
 
-    expect(rendered.body).toContain('Clean selected');
+    expect(rendered.body).toContain('Review selected');
     expect(rendered.body).not.toContain('Clean Safely');
     // Ensure the CTA button strictly renders clean text without appended byte label
-    expect(rendered.body).toContain('<span>Clean selected</span>');
-    expect(rendered.body).not.toContain('Clean selected 100 MB');
+    expect(rendered.body).toContain('<span>Review selected</span>');
+    expect(rendered.body).not.toContain('Review selected 100 MB');
     expect(rendered.body).not.toContain(' Safe</span>');
     // Ensure responsive toolbar classes for 960x660 baseline
     expect(rendered.body).toContain('flex flex-col sm:flex-row sm:items-center justify-between gap-3');
@@ -219,9 +219,9 @@ describe('StorageView CTA and responsive toolbar layout', () => {
       },
     });
 
-    expect(rendered.body).toContain('Clean selected');
+    expect(rendered.body).toContain('Review selected');
     // Ensure the CTA button strictly renders clean text without appended byte label
-    expect(rendered.body).toContain('<span>Clean selected</span>');
+    expect(rendered.body).toContain('<span>Review selected</span>');
     expect(rendered.body).not.toContain('Rebuildable');
   });
 
@@ -348,7 +348,7 @@ describe('StorageView CTA and responsive toolbar layout', () => {
     expect(rendered.body).not.toContain('These items need a separate action');
     const action = rendered.body
       .match(/<button[^>]*>[\s\S]*?<\/button>/g)
-      ?.find(button => button.includes('Clean selected'));
+      ?.find(button => button.includes('Review selected'));
     expect(action).toBeDefined();
     expect(action).not.toContain('disabled=""');
   });
@@ -761,12 +761,12 @@ describe('risk classification versus current eligibility', () => {
 
     const detail = renderCategory(category).body;
     expect(detail).toContain('Amount varies by owner');
-    const ownerButton = buttonTags(detail).find(button => button.includes('Run owner cleanup')) ?? '';
+    const ownerButton = buttonTags(detail).find(button => button.includes('Review owner cleanup')) ?? '';
     expect(ownerButton).not.toMatch(/\sdisabled(?:\s|=|>)/);
 
     const overview = render(StorageView, { props: { onSelectCategory: vi.fn() } }).body;
     expect(overview).toContain('Amount varies by owner');
-    const cleanButton = buttonTags(overview).find(button => button.includes('Clean selected')) ?? '';
+    const cleanButton = buttonTags(overview).find(button => button.includes('Review selected')) ?? '';
     expect(cleanButton).not.toMatch(/\sdisabled(?:\s|=|>)/);
   });
 

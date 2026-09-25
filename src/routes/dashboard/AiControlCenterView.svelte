@@ -108,7 +108,7 @@
 
   <div class="flex gap-1 rounded-lg bg-secondary/50 p-1" aria-label="Control Center sections">
     {#each [['overview', 'Overview'], ['usage', 'Usage & Budgets'], ['autopilot', 'Resource Autopilot'], ['safety', 'Safety Posture']] as section}
-      <button type="button" class="flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectedSection === section[0] ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" onclick={() => selectedSection = section[0] as typeof selectedSection}>{section[1]}</button>
+      <button type="button" class="flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {selectedSection === section[0] ? 'bg-card text-foreground' : 'text-muted-foreground hover:text-foreground'}" onclick={() => selectedSection = section[0] as typeof selectedSection}>{section[1]}</button>
     {/each}
   </div>
 

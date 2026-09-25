@@ -329,7 +329,7 @@
     />
   {/if}
 
-  <Card class="p-5 {awakeState.is_active ? 'bg-warning/10 border-warning/30 shadow-sm' : 'bg-card/60'} transition-colors duration-200">
+  <Card class="p-5 {awakeState.is_active ? 'bg-warning/10 border-warning/30' : 'bg-card'} transition-colors duration-200">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div class="space-y-1.5">
         <div class="flex items-center gap-2">
@@ -391,7 +391,7 @@
           type="button"
           aria-pressed={manualBehavior === 'prevent_system_sleep'}
           onclick={() => (manualBehavior = 'prevent_system_sleep')}
-          class="px-2.5 py-1 rounded text-meta font-medium transition-colors {manualBehavior === 'prevent_system_sleep' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="px-2.5 py-1 rounded text-meta font-medium transition-colors {manualBehavior === 'prevent_system_sleep' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
           title="Work continues while you are away; the display may turn off"
         >
           Computer awake
@@ -400,7 +400,7 @@
           type="button"
           aria-pressed={manualBehavior === 'keep_display_awake'}
           onclick={() => (manualBehavior = 'keep_display_awake')}
-          class="px-2.5 py-1 rounded text-meta font-medium transition-colors {manualBehavior === 'keep_display_awake' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+          class="px-2.5 py-1 rounded text-meta font-medium transition-colors {manualBehavior === 'keep_display_awake' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
           title="Keeps both the computer and display awake while idle"
         >
           Computer + display

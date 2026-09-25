@@ -115,9 +115,9 @@
   oncancel={(event) => { event.preventDefault(); onClose(); }}
   onclick={handleBackdropClick}
   onkeydown={handleKeydown}
-  class="m-auto w-[calc(100%-2rem)] max-w-md max-h-[calc(100%-2rem)] overflow-y-auto scroll-stable rounded-xl border border-border bg-card p-5 text-foreground shadow-2xl backdrop:bg-background/80 backdrop:backdrop-blur-sm focus:outline-none"
+  class="m-auto w-[calc(100%-2rem)] max-w-md max-h-[calc(100%-2rem)] overflow-y-auto scroll-stable rounded-2xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-foreground/30 focus:outline-none"
 >
-  <div class="flex items-center justify-between pb-3 border-b border-border/80">
+  <div class="flex items-center justify-between pb-3 border-b border-border">
     <div class="flex items-center gap-2">
       <div
         class={`h-8 w-8 rounded-full flex items-center justify-center ${
@@ -137,14 +137,14 @@
         {/if}
       </div>
       <div>
-        <h3 id={id + '-title'} class="text-sm font-semibold text-foreground">
+        <h3 id={id + '-title'} class="text-title font-semibold tracking-tight text-foreground">
           {outcome === 'success'
             ? 'Clean Complete'
             : outcome === 'partial'
               ? 'Some items could not be cleaned'
               : 'Clean Failed'}
         </h3>
-        <p id={id + '-description'} class="text-xs text-muted-foreground">
+        <p id={id + '-description'} class="text-meta text-muted-foreground">
           {outcome === 'success'
             ? movedOnly
               ? `Items were moved to ${platformContextStore.trashLabel}`
@@ -165,14 +165,14 @@
   </div>
 
   <div class="py-4 space-y-4">
-    <div class="p-3 bg-secondary/50 rounded-lg text-center">
-      <div class="text-2xl font-bold font-mono text-foreground">
+    <div class="rounded-xl bg-secondary p-3 text-center">
+      <div class="text-metric font-semibold font-mono tabular-nums text-foreground">
         {formatBytes(movedOnly ? movedToTrashBytes : result.total_reclaimed_bytes)}
       </div>
-      <div class="text-xs text-muted-foreground mt-0.5">
+      <div class="mt-0.5 text-meta text-muted-foreground">
         {movedOnly ? `Moved to ${platformContextStore.trashLabel}` : 'Disk Space Reclaimed'}
         {#if !movedOnly && outcome !== 'failed' && result.actual_disk_free_delta != null && result.actual_disk_free_delta > 0}
-          <span class="text-success ml-1">
+          <span class="ml-1 text-success tabular-nums">
             (Free space delta: +{formatBytes(result.actual_disk_free_delta)})
           </span>
         {/if}
@@ -183,18 +183,18 @@
         </div>
       {/if}
       {#if partialCount > 0 || failedCount > 0 || skippedCount > 0}
-        <div class="mt-1 text-meta font-mono text-muted-foreground">
+        <div class="mt-1 text-meta font-mono tabular-nums text-muted-foreground">
           {targetCounts}
         </div>
       {/if}
     </div>
 
     {#if !movedOnly && movedToTrashBytes > 0}
-      <div class="p-3 bg-secondary/50 rounded-lg text-center">
-        <div class="text-xl font-bold font-mono text-foreground">
+      <div class="rounded-xl bg-secondary p-3 text-center">
+        <div class="text-title font-semibold font-mono tabular-nums text-foreground">
           {formatBytes(movedToTrashBytes)}
         </div>
-        <div class="text-xs text-muted-foreground mt-0.5">
+        <div class="mt-0.5 text-meta text-muted-foreground">
           Moved to {platformContextStore.trashLabel}; recoverable until it is emptied
         </div>
       </div>
@@ -203,15 +203,15 @@
     <!-- Failed Items -->
     {#if failedItems.length > 0}
       <div class="space-y-1.5">
-        <div class="flex items-center gap-1.5 text-xs font-medium text-destructive">
+        <div class="flex items-center gap-1.5 text-meta font-medium text-destructive">
           <AlertCircle size={14} />
           <span>{failedCount} item(s) failed</span>
         </div>
-        <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
+        <div class="max-h-28 divide-y divide-destructive/15 overflow-y-auto scroll-stable rounded-xl border border-destructive/25 bg-destructive/5">
           {#each failedItems as item}
-            <div class="p-2 rounded bg-destructive/10 border border-destructive/20 text-xs">
+            <div class="p-2.5 text-meta">
               <div class="font-medium text-foreground">{item.name}</div>
-              <div class="text-meta text-muted-foreground mt-0.5">
+              <div class="mt-0.5 text-meta text-muted-foreground">
                 {item.error_message || 'Could not clean item'}
               </div>
             </div>
@@ -223,15 +223,15 @@
     <!-- Skipped Items: not removed, and nothing failed -->
     {#if skippedItems.length > 0}
       <div class="space-y-1.5">
-        <div class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <div class="flex items-center gap-1.5 text-meta font-medium text-muted-foreground">
           <CircleMinus size={14} />
           <span>{skippedCount} item(s) skipped</span>
         </div>
-        <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
+        <div class="max-h-28 divide-y divide-border overflow-y-auto scroll-stable rounded-xl border border-border bg-secondary">
           {#each skippedItems as item}
-            <div class="p-2 rounded bg-secondary/50 border border-border/60 text-xs">
+            <div class="p-2.5 text-meta">
               <div class="font-medium text-foreground">{item.name}</div>
-              <div class="text-meta text-muted-foreground mt-0.5">
+              <div class="mt-0.5 text-meta text-muted-foreground">
                 {item.error_message || 'Nothing was removed for this target'}
               </div>
             </div>
@@ -243,18 +243,18 @@
     <!-- Partial Items -->
     {#if partialItems.length > 0}
       <div class="space-y-1.5">
-        <div class="flex items-center gap-1.5 text-xs font-medium text-warning">
+        <div class="flex items-center gap-1.5 text-meta font-medium text-warning">
           <AlertTriangle size={14} />
           <span>{partialCount} {partialCount === 1 ? 'item needs' : 'items need'} attention</span>
         </div>
-        <div class="max-h-28 overflow-y-auto scroll-stable space-y-1.5">
+        <div class="max-h-28 divide-y divide-warning/15 overflow-y-auto scroll-stable rounded-xl border border-warning/25 bg-warning/5">
           {#each partialItems as item}
-            <div class="p-2 rounded bg-warning/10 border border-warning/20 text-xs">
-              <div class="flex items-center justify-between">
+            <div class="p-2.5 text-meta">
+              <div class="flex items-center justify-between gap-2">
                 <span class="font-medium text-foreground">{item.name}</span>
-                <span class="font-mono text-warning text-meta">+{formatBytes((item.moved_to_trash_bytes ?? 0) || item.bytes_reclaimed)}</span>
+                <span class="shrink-0 whitespace-nowrap font-mono tabular-nums text-meta text-warning">+{formatBytes((item.moved_to_trash_bytes ?? 0) || item.bytes_reclaimed)}</span>
               </div>
-              <div class="text-meta text-warning/80 mt-0.5">
+              <div class="mt-0.5 text-meta text-warning">
                 {item.error_message || 'Some files were locked or in use'}
               </div>
             </div>
@@ -265,23 +265,25 @@
 
     <!-- Fully Cleaned Items -->
     {#if fullSuccessItems.length > 0}
-      <div class="space-y-1.5 max-h-40 overflow-y-auto scroll-stable">
-        <span class="text-xs font-medium text-muted-foreground">Cleaned Items ({fullSuccessItems.length})</span>
-        {#each fullSuccessItems as item}
-          <div class="py-1 text-xs border-b border-border/40 last:border-0">
-            <div class="flex items-center justify-between">
-              <span class="truncate text-foreground max-w-[240px]">{item.name}</span>
-              <span class="font-mono text-muted-foreground">
-                {formatBytes((item.moved_to_trash_bytes ?? 0) || item.bytes_reclaimed)}
-              </span>
+      <div class="space-y-1.5">
+        <span class="text-meta font-medium text-muted-foreground">Cleaned Items ({fullSuccessItems.length})</span>
+        <div class="max-h-40 divide-y divide-border overflow-y-auto scroll-stable rounded-xl border border-border">
+          {#each fullSuccessItems as item}
+            <div class="px-2.5 py-2 text-meta">
+              <div class="flex items-center justify-between gap-2">
+                <span class="min-w-0 break-words text-foreground">{item.name}</span>
+                <span class="shrink-0 whitespace-nowrap font-mono tabular-nums text-muted-foreground">
+                  {formatBytes((item.moved_to_trash_bytes ?? 0) || item.bytes_reclaimed)}
+                </span>
+              </div>
+              {#if item.error_message}
+                <!-- A run that verified the target was already in the state the
+                     action promises carries its note here rather than nowhere. -->
+                <div class="mt-0.5 text-meta text-muted-foreground">{item.error_message}</div>
+              {/if}
             </div>
-            {#if item.error_message}
-              <!-- A run that verified the target was already in the state the
-                   action promises carries its note here rather than nowhere. -->
-              <div class="text-meta text-muted-foreground mt-0.5">{item.error_message}</div>
-            {/if}
-          </div>
-        {/each}
+          {/each}
+        </div>
       </div>
     {/if}
   </div>

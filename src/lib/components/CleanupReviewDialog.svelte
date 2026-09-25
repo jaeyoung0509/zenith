@@ -57,10 +57,10 @@
   aria-labelledby={id + '-title'}
   aria-describedby={id + '-description'}
   oncancel={(event) => { event.preventDefault(); handleCancel(); }}
-  class="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto scroll-stable rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50 focus:outline-none"
+  class="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[calc(100%-2rem)] overflow-y-auto scroll-stable rounded-2xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:bg-foreground/30 focus:outline-none"
 >
-  <h2 id={id + '-title'} class="text-base font-semibold">Clean {plan.targets.length} {plan.targets.length === 1 ? 'item' : 'items'}?</h2>
-  <p id={id + '-description'} class="mt-2 text-sm text-muted-foreground">
+  <h2 id={id + '-title'} class="text-title font-semibold tracking-tight">Clean {plan.targets.length} {plan.targets.length === 1 ? 'item' : 'items'}?</h2>
+  <p id={id + '-description'} class="mt-2 text-body text-muted-foreground">
     {#if hasUnknownEstimate && plan.expected_reclaim_bytes === 0}
       {actionSummary} · reclaimed amount depends on what the owner tool can prune
     {:else}
@@ -69,23 +69,23 @@
     {/if}
   </p>
   {#if hasRebuild}
-    <p class="mt-2 text-xs text-warning">Some items may download or build again later.</p>
+    <p class="mt-2 text-meta text-warning">Some items may download or build again later.</p>
   {/if}
   <ul class="my-4 divide-y divide-border">
     {#each plan.targets as target (target.item_id)}
-      <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+      <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-body">
         <div class="min-w-0 flex-1 break-words">
           <span>{target.name}</span>
           <code class="mt-0.5 block break-all text-meta text-muted-foreground">{target.path}</code>
         </div>
-        <span class="font-mono whitespace-nowrap">
+        <span class="shrink-0 whitespace-nowrap font-mono tabular-nums">
           {target.expected_bytes === 0 ? 'Varies' : formatBytes(target.expected_bytes)}
         </span>
       </li>
     {/each}
   </ul>
   {#if disabled}
-    <p role="status" class="mb-3 text-sm text-warning">This selection expired. Scan again.</p>
+    <p role="status" class="mb-3 text-meta text-warning">This selection expired. Scan again.</p>
   {/if}
   <div class="flex flex-wrap justify-end gap-2">
     <Button variant="secondary" onclick={handleCancel}>Cancel</Button>

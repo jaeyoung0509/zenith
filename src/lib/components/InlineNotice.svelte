@@ -22,7 +22,7 @@
   }: Props = $props();
 
   const variantStyles = {
-    info: "bg-secondary/60 border-border text-foreground",
+    info: "bg-secondary border-border text-foreground",
     warning: "bg-warning/10 border-warning/30 text-warning",
     error: "bg-destructive/10 border-destructive/30 text-destructive",
     destructive: "bg-destructive/10 border-destructive/30 text-destructive",
@@ -41,7 +41,7 @@
 
 <div
   role={variant === "error" || variant === "destructive" ? "alert" : "status"}
-  class="flex items-start justify-between gap-3 p-3 rounded-xl border text-xs leading-relaxed {variantStyles[variant]} {className}"
+  class="flex items-start justify-between gap-3 rounded-xl border p-3 text-meta leading-relaxed {variantStyles[variant]} {className}"
 >
   <div class="flex items-start gap-2.5 min-w-0">
     <Icon size={16} class="shrink-0 mt-0.5" />
@@ -49,7 +49,7 @@
       {#if title}
         <div class="font-semibold">{title}</div>
       {/if}
-      <div class="text-xs leading-normal break-words">{message}</div>
+      <div class="text-meta leading-normal break-words">{message}</div>
     </div>
   </div>
 
@@ -58,7 +58,7 @@
       <button
         type="button"
         onclick={onAction}
-        class="text-caption font-semibold underline underline-offset-2 hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        class="rounded-sm text-meta font-semibold underline underline-offset-2 transition-ui hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {actionLabel}
       </button>
@@ -69,9 +69,9 @@
         onclick={onDismiss}
         aria-label="Dismiss notice"
         title="Dismiss notice"
-        class="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+        class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-ui hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <X size={13} />
+        <X size={14} />
       </button>
     {/if}
   </div>

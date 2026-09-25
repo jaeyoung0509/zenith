@@ -20,20 +20,20 @@
   }: Props = $props();
 </script>
 
-<div class="p-8 text-center rounded-xl border border-dashed border-border/70 bg-card/30 flex flex-col items-center justify-center space-y-3 {className}">
+<div class="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-secondary p-8 text-center {className}">
   {#if Icon}
-    <div class="h-10 w-10 rounded-full bg-secondary/80 flex items-center justify-center text-muted-foreground">
+    <div class="h-10 w-10 rounded-full border border-border bg-card flex items-center justify-center text-muted-foreground">
       <Icon size={20} />
     </div>
   {/if}
-  <div class="space-y-1 max-w-sm">
-    <h3 class="text-xs font-semibold text-foreground">{title}</h3>
+  <div class="max-w-sm space-y-1">
+    <h3 class="text-body font-semibold text-foreground">{title}</h3>
     {#if description}
-      <p class="text-caption text-muted-foreground">{description}</p>
+      <p class="text-meta text-muted-foreground">{description}</p>
     {/if}
   </div>
   {#if actionLabel && onAction}
-    <Button variant="outline" size="xs" onclick={onAction} class="mt-2">
+    <Button variant="outline" size="sm" onclick={onAction}>
       {actionLabel}
     </Button>
   {/if}

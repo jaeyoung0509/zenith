@@ -52,7 +52,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::utils::config::WindowConfig;
 use tauri::utils::TitleBarStyle;
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, Runtime, WebviewWindow,
+    WebviewWindowBuilder,
 };
 use zenith_platform::path_algebra::PathFlavor;
 
@@ -72,7 +73,10 @@ fn platform_window_config(mut config: WindowConfig, flavor: PathFlavor) -> Windo
     config
 }
 
-pub fn ensure_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
+pub fn ensure_window<R: Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+) -> tauri::Result<WebviewWindow<R>> {
     if let Some(window) = app.get_webview_window(label) {
         return Ok(window);
     }
@@ -150,7 +154,7 @@ fn tray_toggle_action(visible: bool) -> TrayToggle {
     }
 }
 
-fn hide_quick_panel(app: &AppHandle) {
+fn hide_quick_panel<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("quick") {
         let _ = window.hide();
     }
@@ -221,7 +225,7 @@ pub fn show_main_window_or_report(app: &AppHandle) {
     }
 }
 
-pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
+pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let window = ensure_window(app, "main")?;
     let _ = window.unminimize();
     window.show()?;
@@ -541,6 +545,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::execute_clean,
             commands::quick_clean_safe,
             commands::get_memory_metrics,
+            commands::get_cpu_metrics,
+            commands::get_battery_metrics,
             commands::terminate_memory_group,
             commands::pick_keep_awake_application,
             commands::get_disk_metrics,
@@ -559,6 +565,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             commands::save_settings,
             commands::show_in_file_manager,
             commands::open_dashboard_window,
+            commands::take_pending_navigation,
             commands::get_app_version,
             commands::get_platform_capabilities,
             commands::get_platform_context,
@@ -790,12 +797,20 @@ mod tests {
     #[ignore = "code generation"]
     fn export_typescript_bindings() {
         let builder = specta_builder();
+        let path = "../src/lib/bindings/tauri.ts";
         builder
-            .export(
-                specta_typescript::Typescript::default(),
-                "../src/lib/bindings/tauri.ts",
-            )
+            .export(specta_typescript::Typescript::default(), path)
             .expect("Failed to export TypeScript bindings");
+        // Specta leaves spaces at wrapped union boundaries. Keep the generated
+        // file deterministic and clean for patch review on every export.
+        let source = std::fs::read_to_string(path).expect("read generated TypeScript bindings");
+        let clean = source
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(path, clean).expect("write generated TypeScript bindings");
     }
 
     /// Exports the capability snapshots the frontend renders.

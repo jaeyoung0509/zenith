@@ -56,7 +56,7 @@
         aria-valuemax="100"
         aria-valuenow={item.usedPercent}
       >
-        <div class="flex min-w-0 items-baseline justify-between gap-2 whitespace-nowrap font-mono text-micro">
+        <div class="flex min-w-0 items-baseline justify-between gap-2 whitespace-nowrap font-mono text-caption">
           <span class="shrink-0 text-muted-foreground">{item.label}</span>
           <span class="shrink-0 text-right tabular-nums text-foreground">
             {item.usedPercent}%
@@ -65,7 +65,7 @@
             {/if}
           </span>
         </div>
-        <ProgressBar value={item.usedPercent} height="h-1.5" color="bg-violet-400" />
+        <ProgressBar value={item.usedPercent} height="h-1.5" color="bg-ai" />
       </div>
     {/each}
   </div>

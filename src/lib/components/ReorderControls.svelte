@@ -16,7 +16,7 @@
   <Button
     variant="ghost"
     size="icon"
-    class="h-6 w-6"
+    class="h-7 w-7"
     disabled={index <= 0}
     onclick={() => void onMove(-1)}
     ariaLabel={`Move ${label} up`}
@@ -27,7 +27,7 @@
   <Button
     variant="ghost"
     size="icon"
-    class="h-6 w-6"
+    class="h-7 w-7"
     disabled={index === -1 || index >= count - 1}
     onclick={() => void onMove(1)}
     ariaLabel={`Move ${label} down`}

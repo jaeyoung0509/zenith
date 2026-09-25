@@ -3,7 +3,7 @@
   import { fade } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { prefersReducedMotion } from 'svelte/motion';
-  import type { CategoryResult, DashboardRoute, DashboardTab } from '../../lib/models/types';
+  import type { CategoryResult, DashboardRoute, DashboardTab, PlatformCapabilities } from '../../lib/models/types';
   import { scanStore } from '../../lib/stores/scan.svelte';
   import { awakeStore } from '../../lib/stores/awake.svelte';
   import { settingsStore } from '../../lib/stores/settings.svelte';
@@ -14,16 +14,17 @@
   import CategoryDetailView from './CategoryDetailView.svelte';
   import DockerView from './DockerView.svelte';
   import ModelsView from './ModelsView.svelte';
-  import MemoryView from './MemoryView.svelte';
+  import PerformanceView from './PerformanceView.svelte';
   import DevelopmentServersView from './DevelopmentServersView.svelte';
   import ProjectCockpitView from './ProjectCockpitView.svelte';
   import AiControlCenterView from './AiControlCenterView.svelte';
+  import OverviewView from './OverviewView.svelte';
   import AwakeView from './AwakeView.svelte';
   import SettingsView from './SettingsView.svelte';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import { formatBytes } from '../../lib/utils/format';
-  import { normalizeDashboardTab } from '../../lib/utils/dashboardNavigation';
-  import { tauriStartWindowDrag } from '../../lib/utils/tauri';
+  import { DEFAULT_DASHBOARD_TABS, normalizeDashboardTab } from '../../lib/utils/dashboardNavigation';
+  import { isTauri, tauriStartWindowDrag, tauriTakePendingNavigation } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
   import Card from '../../lib/components/Card.svelte';
   import {
@@ -34,6 +35,7 @@
     Container,
     ChevronsLeft,
     ChevronsRight,
+    Gauge,
     HardDrive,
     Moon,
     RotateCw,
@@ -43,7 +45,16 @@
     Sparkles,
   } from '@lucide/svelte';
 
-  type Tab = DashboardRoute | 'large-files' | 'applications' | 'developer-artifacts' | 'disks';
+  /** Routes the shell can show: persisted routes plus the storage sub-views and
+   * the Performance local tabs the Overview links into. */
+  type Tab =
+    | DashboardRoute
+    | 'large-files'
+    | 'applications'
+    | 'developer-artifacts'
+    | 'disks'
+    | 'cpu'
+    | 'battery';
 
   let currentTab = $state<Tab>('storage');
   let selectedCategory = $state<CategoryResult | null>(null);
@@ -67,44 +78,72 @@
   let overlayTitleBar = $derived(platformContextStore.overlayTitleBar);
   let fadeDuration = $derived(prefersReducedMotion.current ? 0 : 140);
 
-  type DashboardCapability =
-    | 'cleanup'
-    | 'docker'
-    | 'local_models'
-    | 'memory_metrics'
-    | 'development_ports'
-    | 'ai_integrations'
-    | 'keep_awake';
+  type DashboardCapability = keyof Omit<PlatformCapabilities, 'platform'>;
 
-  const tabDefs: Partial<Record<DashboardTab, { label: string; icon: any; capability?: DashboardCapability }>> = {
-    storage: { label: 'Storage', icon: HardDrive, capability: 'cleanup' },
-    disk: { label: 'Disks', icon: HardDrive, capability: 'cleanup' },
-    docker: { label: 'Containers', icon: Container, capability: 'docker' },
-    models: { label: 'Local Models', icon: Boxes, capability: 'local_models' },
-    memory: { label: 'Memory', icon: Activity, capability: 'memory_metrics' },
-    development_servers: { label: 'Dev Servers', icon: Server, capability: 'development_ports' },
-    projects: { label: 'AI Activity', icon: Sparkles, capability: 'ai_integrations' },
-    ai_control: { label: 'AI Control', icon: Sparkles, capability: 'ai_integrations' },
-    usage: { label: 'AI Usage', icon: ChartNoAxesCombined, capability: 'ai_integrations' },
-    awake: { label: 'Keep Awake', icon: Moon, capability: 'keep_awake' },
+  type TabDef = { label: string; icon: any };
+
+  const tabDefs: Partial<Record<Tab, TabDef>> = {
+    overview: { label: 'Overview', icon: Gauge },
+    storage: { label: 'Storage', icon: HardDrive },
+    disk: { label: 'Storage', icon: HardDrive },
+    performance: { label: 'Performance', icon: Activity },
+    memory: { label: 'Performance', icon: Activity },
+    docker: { label: 'Containers', icon: Container },
+    models: { label: 'Local Models', icon: Boxes },
+    development_servers: { label: 'Dev Servers', icon: Server },
+    projects: { label: 'AI Activity', icon: Sparkles },
+    ai_control: { label: 'AI Activity', icon: Sparkles },
+    usage: { label: 'AI Activity', icon: ChartNoAxesCombined },
+    awake: { label: 'Keep Awake', icon: Moon },
   };
 
-  const tabGroups: Record<DashboardTab, string> = {
-    storage: 'Storage',
-    disk: 'Storage',
-    docker: 'Storage',
-    models: 'Storage',
-    memory: 'Runtime',
-    development_servers: 'Runtime',
-    awake: 'Runtime',
-    projects: 'AI',
-    ai_control: 'AI',
-    usage: 'AI',
+  /**
+   * One capability per destination. A route whose adapter is missing stays
+   * closed, and `memory` shares the Performance page's adapter because it is
+   * that page's Memory detail.
+   */
+  const routeCapabilities: Record<string, DashboardCapability | null> = {
+    overview: null,
+    settings: null,
+    storage: 'cleanup',
+    'large-files': 'cleanup',
+    applications: 'cleanup',
+    'developer-artifacts': 'cleanup',
+    disks: 'cleanup',
+    performance: 'memory_metrics',
+    memory: 'memory_metrics',
+    cpu: 'cpu_metrics',
+    battery: 'battery_metrics',
+    docker: 'docker',
+    models: 'local_models',
+    development_servers: 'development_ports',
+    projects: 'ai_integrations',
+    usage: 'ai_integrations',
+    ai_control: 'ai_integrations',
+    awake: 'keep_awake',
   };
 
-  function isTabAvailable(tabId: DashboardTab): boolean {
+  // `null` keeps a destination ungrouped; the sidebar renders one heading per
+  // contiguous group exactly as it renders one separator per group break.
+  const tabGroups: Partial<Record<Tab, string | null>> = {
+    overview: null,
+    storage: null,
+    disk: null,
+    performance: null,
+    memory: null,
+    projects: null,
+    ai_control: null,
+    usage: null,
+    docker: 'Tools',
+    models: 'Tools',
+    development_servers: 'Tools',
+    awake: 'Tools',
+  };
+
+  /** Whether a destination can run on this platform right now. */
+  function isRouteAvailable(route: string): boolean {
     if (!capabilitiesReady || capabilitiesFailed) return false;
-    const capability = tabDefs[tabId]?.capability;
+    const capability = routeCapabilities[normalizeDashboardTab(route)] ?? null;
     return !capability || platformCapabilitiesStore.isAvailable(capability);
   }
 
@@ -138,14 +177,21 @@
     // A persisted tab may have become unavailable after an upgrade or on a
     // different platform. Start on the first available tab instead of
     // mounting an unsupported route.
-    const preferredTabs = settingsStore.settings.dashboard_tabs ?? [];
-    const firstAvailable = preferredTabs.find((tab) => isTabAvailable(tab as DashboardTab));
+    const preferredTabs = settingsStore.settings.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS;
+    const firstAvailable = preferredTabs.find((tab) => isRouteAvailable(tab));
     currentTab = normalizeDashboardTab(firstAvailable ?? 'settings') as Tab;
   }
 
   onMount(() => {
     void platformContextStore.load();
-    void refreshCapabilities(false);
+    void refreshCapabilities(false).then(async () => {
+      if (disposed || !isTauri()) return;
+      // The Quick Panel can ask for an exact destination; it is consumed once,
+      // after the capability matrix is known, so a cold window load cannot lose
+      // the request it was opened for.
+      const route = await tauriTakePendingNavigation().catch(() => null);
+      if (!disposed && route) selectTab(route);
+    });
 
     return () => {
       disposed = true;
@@ -154,7 +200,16 @@
   });
 
   function selectTab(tab: Tab | string) {
-    if (!isTabAvailable(tab as DashboardTab)) return;
+    if (!isRouteAvailable(tab)) return;
+
+    // The former `memory` route is the Memory detail of the Performance page,
+    // so it keeps its own destination instead of collapsing into the default
+    // CPU detail.
+    if (tab === 'memory') {
+      currentTab = 'memory';
+      selectedCategory = null;
+      return;
+    }
 
     tab = normalizeDashboardTab(tab);
     if (tab === 'developer_artifacts' || tab === 'developer-artifacts') {
@@ -165,6 +220,8 @@
       currentTab = 'applications';
     } else if (tab === 'disks') {
       currentTab = 'disks';
+    } else if (tab === 'cpu' || tab === 'battery') {
+      currentTab = tab;
     } else if (tab === 'settings') {
       currentTab = 'settings';
     } else {
@@ -185,7 +242,7 @@
   }
 </script>
 
-<div class="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans select-none relative">
+<div class="dashboard-shell flex h-screen w-full bg-background text-foreground overflow-hidden font-sans select-none relative">
   {#if overlayTitleBar}
     <!-- Window drag region for the macOS overlay title bar -->
     <div
@@ -196,7 +253,7 @@
   {/if}
   <!-- Sidebar Navigation -->
   <aside
-    class="{sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 bg-secondary/30 border-r border-border/70 flex flex-col justify-between {overlayTitleBar
+    class="liquid-sidebar {sidebarCollapsed ? 'w-16 p-2' : 'w-56 p-3'} shrink-0 border-r border-border flex flex-col justify-between {overlayTitleBar
       ? 'pt-9'
       : ''} relative transition-[width,padding] duration-150"
   >
@@ -229,38 +286,39 @@
         <Button
           variant="ghost"
           size="icon"
-          class="no-drag h-7 w-7 shrink-0 rounded-md border border-transparent bg-secondary/30 text-muted-foreground hover:border-border/70 hover:bg-secondary/80 hover:text-foreground"
+          class="no-drag h-7 w-7 shrink-0 rounded-md border border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground"
           ariaLabel={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onclick={toggleSidebar}
         >
           {#if sidebarCollapsed}
-            <ChevronsRight size={14} strokeWidth={1.8} />
+            <ChevronsRight size={15} strokeWidth={1.8} />
           {:else}
-            <ChevronsLeft size={14} strokeWidth={1.8} />
+            <ChevronsLeft size={15} strokeWidth={1.8} />
           {/if}
         </Button>
       </div>
 
       <!-- Navigation Links -->
       <nav class="space-y-0.5 no-drag" aria-label="Main Navigation">
-        {#each settings.dashboard_tabs ?? ['storage', 'docker', 'models', 'memory', 'development_servers', 'projects', 'awake'] as tabId, i}
+        {#each settings.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS as tabId, i}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
-            {@const capability = def.capability ? platformCapabilitiesStore.feature(def.capability) : null}
-            {@const tabAvailable = isTabAvailable(tabId as DashboardTab)}
-            {@const currentGroup = tabGroups[tabId as DashboardTab]}
-            {@const prevTabId = (settings.dashboard_tabs ?? [])[i - 1]}
-            {@const prevGroup = prevTabId ? tabGroups[prevTabId as DashboardTab] : null}
+            {@const capabilityName = routeCapabilities[tabId]}
+            {@const capability = capabilityName ? platformCapabilitiesStore.feature(capabilityName) : null}
+            {@const tabAvailable = isRouteAvailable(tabId)}
+            {@const currentGroup = tabGroups[tabId as DashboardTab] ?? null}
+            {@const prevTabId = (settings.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS)[i - 1]}
+            {@const prevGroup = prevTabId ? tabGroups[prevTabId as DashboardTab] ?? null : null}
             {@const showGroupHeader = !sidebarCollapsed && currentGroup && currentGroup !== prevGroup}
-            {@const isTabActive = currentTab === tabId || (tabId === 'disk' && currentTab === 'disks') || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
+            {@const isTabActive = currentTab === tabId || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
 
             {#if showGroupHeader}
-              <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
+              <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground select-none">
                 {currentGroup}
               </div>
             {:else if sidebarCollapsed && prevGroup && prevGroup !== currentGroup && i > 0}
-              <div class="my-1.5 mx-2 h-px bg-border/40" role="separator"></div>
+              <div class="my-1.5 mx-2 h-px bg-border" role="separator"></div>
             {/if}
 
             <button
@@ -271,16 +329,13 @@
                 ? `${def.label}, ${formatBytes(scanStore.reclaimableBytes)} reclaimable`
                 : def.label}
               title={tabAvailable ? (sidebarCollapsed ? def.label : undefined) : (capability?.reason ?? `${def.label} is unavailable`)}
-              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
-                ? 'bg-secondary text-foreground shadow-xs font-semibold'
+              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-lg text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
+                ? 'bg-accent text-foreground'
                 : tabAvailable
-                  ? 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-                  : 'text-muted-foreground/40 cursor-not-allowed'}"
+                  ? 'text-muted-foreground hover:text-foreground hover:bg-card'
+                  : 'text-muted-foreground/50 cursor-not-allowed'}"
             >
-              {#if isTabActive && !sidebarCollapsed}
-                <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-foreground" aria-hidden="true"></span>
-              {/if}
-              <def.icon size={15} />
+              <def.icon size={18} strokeWidth={1.7} class="shrink-0" />
               {#if !sidebarCollapsed}
                 <span class="truncate">{def.label}</span>
               {/if}
@@ -306,11 +361,11 @@
         <!-- Group Separator for Settings -->
         <div class="pt-2" role="separator">
           {#if !sidebarCollapsed}
-            <div class="px-2.5 pt-1 pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
+            <div class="px-2.5 pt-1 pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground select-none">
               Preferences
             </div>
           {:else}
-            <div class="my-1 mx-2 h-px bg-border/40"></div>
+            <div class="my-1 mx-2 h-px bg-border"></div>
           {/if}
         </div>
 
@@ -320,15 +375,12 @@
           onclick={() => selectTab('settings')}
           aria-label="Settings"
           title={sidebarCollapsed ? 'Settings' : undefined}
-          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-1.5 rounded-lg text-xs font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
+          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-lg text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
           'settings'
-            ? 'bg-secondary text-foreground shadow-xs font-semibold'
-            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+            ? 'bg-accent text-foreground'
+            : 'text-muted-foreground hover:text-foreground hover:bg-card'}"
         >
-          {#if currentTab === 'settings' && !sidebarCollapsed}
-            <span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-foreground" aria-hidden="true"></span>
-          {/if}
-          <Settings size={15} />
+          <Settings size={18} strokeWidth={1.7} class="shrink-0" />
           {#if !sidebarCollapsed}
             <span>Settings</span>
           {/if}
@@ -336,20 +388,20 @@
       </nav>
     </div>
 
-    <!-- Safety Badge & Version at bottom -->
+    <!-- Verification note & version at bottom -->
     <div class="space-y-2 {sidebarCollapsed ? 'items-center' : ''}">
       <div
-        class="{sidebarCollapsed ? 'justify-center px-0' : 'px-2.5'} py-2 rounded-lg bg-card/60 border border-border/60 text-meta text-muted-foreground flex items-center gap-2"
-        title="Path, symlink and filesystem identity are verified immediately before deletion (TOCTOU protection)."
+        class="{sidebarCollapsed ? 'justify-center px-0' : 'px-2.5'} py-2 rounded-lg bg-card/70 border border-border text-meta text-muted-foreground flex items-center gap-2"
+        title="Path, symlink and filesystem identity are re-derived immediately before deletion, and a refused item is reported instead of being removed."
       >
-        <Shield size={13} class="text-success shrink-0" />
+        <Shield size={14} class="text-muted-foreground shrink-0" />
         {#if !sidebarCollapsed}
-          <span class="truncate">Protected cleanup</span>
+          <span class="truncate">Verified on delete</span>
         {/if}
       </div>
       <PreviewModeIndicator compact={sidebarCollapsed} />
       {#if !sidebarCollapsed}
-        <div class="px-2.5 flex items-center justify-between text-caption text-muted-foreground/60 font-mono select-none">
+        <div class="px-2.5 flex items-center justify-between text-caption text-muted-foreground font-mono select-none">
           <span>Zenith</span>
           <span>{formatVersion(APP_VERSION)}</span>
         </div>
@@ -358,21 +410,21 @@
   </aside>
 
   <!-- Main Content Area with fluid native transition -->
-  <main class="min-w-0 flex-1 h-full overflow-y-auto scroll-stable p-8 {overlayTitleBar ? 'pt-10' : ''}">
+  <main class="@container min-w-0 flex-1 h-full overflow-y-auto scroll-stable {overlayTitleBar ? 'pt-10' : ''}">
     {#if !capabilitiesReady}
-      <div class="flex h-full items-center justify-center text-xs text-muted-foreground">Loading platform capabilities…</div>
+      <div class="flex h-full items-center justify-center text-body text-muted-foreground p-4 @2xl:p-6">Loading platform capabilities…</div>
     {:else if capabilitiesFailed}
-      <div class="flex h-full items-center justify-center">
-        <Card class="max-w-md p-6 space-y-3 text-center bg-card/70">
-          <div class="mx-auto h-9 w-9 rounded-full bg-destructive/10 text-destructive flex items-center justify-center">
+      <div class="flex h-full items-center justify-center p-4 @2xl:p-6">
+        <Card class="max-w-md p-6 space-y-3 text-center">
+          <div class="mx-auto h-9 w-9 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center">
             <AlertCircle size={18} />
           </div>
           <div class="space-y-1">
             <h2 class="text-sm font-semibold text-foreground">Platform capabilities unavailable</h2>
-            <p class="text-xs text-muted-foreground break-words">
+            <p class="text-body text-muted-foreground break-words">
               {platformCapabilitiesStore.error ?? 'Zenith could not read this platform\'s capability matrix from the backend.'}
             </p>
-            <p class="text-caption text-muted-foreground">
+            <p class="text-meta text-muted-foreground">
               Tabs stay closed until the backend answers so no native action runs on an unverified platform.
             </p>
           </div>
@@ -383,44 +435,51 @@
             onclick={() => void refreshCapabilities(true)}
             class="mx-auto gap-1.5"
           >
-            <RotateCw size={13} class={platformCapabilitiesStore.isLoading ? 'animate-gentle-spin' : ''} />
+            <RotateCw size={14} class={platformCapabilitiesStore.isLoading ? 'animate-gentle-spin' : ''} />
             <span>{platformCapabilitiesStore.isLoading ? 'Retrying…' : 'Retry'}</span>
           </Button>
         </Card>
       </div>
     {:else}
-      {#key selectedCategory ? selectedCategory.category : currentTab}
-        <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>
-          {#if selectedCategory}
-            <CategoryDetailView
-              categoryResult={scanStore.lastScan?.categories.find((category) => category.category === selectedCategory?.category) ?? { ...selectedCategory, items: [], total_bytes: 0, safe_bytes: 0, rebuild_bytes: 0, manual_bytes: 0 }}
-              onBack={() => (selectedCategory = null)}
-              onNavigateTab={(tab) => selectTab(tab)}
-            />
-          {:else if currentTab === 'storage' || currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'}
-            <StorageView
-              initialTab={currentTab === 'storage' ? 'cleanup' : currentTab}
-              onSelectCategory={(cat) => (selectedCategory = cat)}
-            />
-          {:else if currentTab === 'docker'}
-            <DockerView />
-          {:else if currentTab === 'models'}
-            <ModelsView />
-          {:else if currentTab === 'memory'}
-            <MemoryView />
-          {:else if currentTab === 'projects' || currentTab === 'usage'}
-            <ProjectCockpitView onNavigateTab={(tab) => selectTab(tab)} />
-          {:else if currentTab === 'ai_control'}
-            <AiControlCenterView onNavigateTab={(tab) => selectTab(tab)} />
-          {:else if currentTab === 'development_servers'}
-            <DevelopmentServersView />
-          {:else if currentTab === 'awake'}
-            <AwakeView />
-          {:else if currentTab === 'settings'}
-            <SettingsView />
-          {/if}
-        </div>
-      {/key}
+      <div class="p-4 @2xl:p-6">
+        {#key selectedCategory ? selectedCategory.category : currentTab}
+          <div in:fade={{ duration: fadeDuration, easing: cubicOut }}>
+            {#if selectedCategory}
+              <CategoryDetailView
+                categoryResult={scanStore.lastScan?.categories.find((category) => category.category === selectedCategory?.category) ?? { ...selectedCategory, items: [], total_bytes: 0, safe_bytes: 0, rebuild_bytes: 0, manual_bytes: 0 }}
+                onBack={() => (selectedCategory = null)}
+                onNavigateTab={(tab) => selectTab(tab)}
+              />
+            {:else if currentTab === 'overview'}
+              <OverviewView onNavigateTab={(tab) => selectTab(tab)} />
+            {:else if currentTab === 'storage' || currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'}
+              <StorageView
+                initialTab={currentTab === 'storage' ? 'cleanup' : currentTab}
+                onSelectCategory={(cat) => (selectedCategory = cat)}
+              />
+            {:else if currentTab === 'performance' || currentTab === 'memory' || currentTab === 'cpu' || currentTab === 'battery'}
+              <PerformanceView
+                initialTab={currentTab === 'memory' ? 'memory' : currentTab === 'battery' ? 'battery' : 'cpu'}
+                onNavigateTab={(tab) => selectTab(tab)}
+              />
+            {:else if currentTab === 'docker'}
+              <DockerView />
+            {:else if currentTab === 'models'}
+              <ModelsView />
+            {:else if currentTab === 'projects' || currentTab === 'usage'}
+              <ProjectCockpitView onNavigateTab={(tab) => selectTab(tab)} />
+            {:else if currentTab === 'ai_control'}
+              <AiControlCenterView onNavigateTab={(tab) => selectTab(tab)} />
+            {:else if currentTab === 'development_servers'}
+              <DevelopmentServersView />
+            {:else if currentTab === 'awake'}
+              <AwakeView />
+            {:else if currentTab === 'settings'}
+              <SettingsView />
+            {/if}
+          </div>
+        {/key}
+      </div>
     {/if}
   </main>
 </div>

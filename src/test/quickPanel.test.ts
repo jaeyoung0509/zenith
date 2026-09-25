@@ -3,6 +3,12 @@ import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
 import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
 import QuickUsageGauges from '../lib/components/QuickUsageGauges.svelte';
+import QuickPanel from '../routes/quick/QuickPanel.svelte';
+import { settingsStore } from '../lib/stores/settings.svelte';
+import { usageStore } from '../lib/stores/usage.svelte';
+import { scanStore } from '../lib/stores/scan.svelte';
+import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { goldenCapabilitiesByPlatform } from '../lib/models/platformCapabilities';
 import {
   handleQuickPanelFocusChanged,
   isAcceleratorPressed,
@@ -158,28 +164,25 @@ describe('quick panel AI provider projection', () => {
     expect(result.map((p) => p.id)).toEqual(['claude']);
   });
 
-  it('loads and renders every selected provider inside the consolidated agent section', () => {
-    const source = readFileSync(
-      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
-      'utf8'
-    );
-    expect(source).toContain("hasSection('ai_usage') || hasSection('agent_activity')");
-    expect(source).toContain('{#each selectedProviders as provider (provider.id)}');
-    expect(source).not.toContain('providerValue(selectedProviders[0])');
-  });
-
-  it('renders selectedProviders outside agentSummary condition so quota is visible without active sessions', () => {
-    const source = readFileSync(
-      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
-      'utf8'
-    );
-    const agentSection = source.substring(source.indexOf("section === 'agent_activity'"));
-    const providerLoopIndex = agentSection.indexOf('{#each selectedProviders as provider');
-    const agentSummaryIndex = agentSection.indexOf('agentSummary && agentSummary.active_count > 0');
-    expect(providerLoopIndex).toBeGreaterThan(0);
-    expect(agentSummaryIndex).toBeGreaterThan(0);
-    // Verify provider loop appears before agentSummary condition and is not nested inside it
-    expect(providerLoopIndex).toBeLessThan(agentSummaryIndex);
+  it('shows every configured provider even with no observed agent session', () => {
+    const previousSettings = settingsStore.settings;
+    const previousSnapshot = usageStore.snapshot;
+    try {
+      settingsStore.settings = {
+        ...previousSettings,
+        quick_panel_sections: ['agent_activity'],
+        quick_panel_ai_providers: ['codex', 'opencode'],
+      };
+      usageStore.snapshot = mockSnapshot;
+      const body = render(QuickPanel).body;
+      expect(body).toContain('Codex');
+      expect(body).toContain('OpenCode');
+      expect(body).not.toContain('Claude Code');
+      expect(body).toContain('12 sessions');
+    } finally {
+      settingsStore.settings = previousSettings;
+      usageStore.snapshot = previousSnapshot;
+    }
   });
 
   it('projects antigravity provider when present in snapshot', () => {
@@ -212,31 +215,20 @@ describe('quick panel AI provider projection', () => {
     expect(selectQuickUsageWindows([fiveHour])).toBeNull();
   });
 
-  it('renders loading, compact fallback, and dual-quota paths in both provider sections', () => {
-    const source = readFileSync(
-      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
-      'utf8'
-    );
-    expect(source).toContain('usageStore.isProviderLoading(provider.id)');
-    expect(source).toContain('RotateCw size={11}');
-    expect(source.match(/<QuickUsageGauges/g)).toHaveLength(4);
-  });
-
-  it('uses stacked provider rows so quota gauges get the full compact-panel width', () => {
-    const quickPanelSource = readFileSync(
-      new URL('../routes/quick/QuickPanel.svelte', import.meta.url),
-      'utf8'
-    );
+  it('gives a selected provider quota pair readable compact columns', () => {
     const gaugeSource = readFileSync(
       new URL('../lib/components/QuickUsageGauges.svelte', import.meta.url),
       'utf8'
     );
-
-    expect(quickPanelSource.match(/class:space-y-2=\{hasUsagePair\}/g)).toHaveLength(2);
-    expect(quickPanelSource.match(/:else if !hasUsagePair/g)).toHaveLength(2);
-    expect(quickPanelSource.match(/&& hasUsagePair/g)).toHaveLength(2);
-    expect(quickPanelSource).toContain('<span class="truncate font-medium">{provider.name}</span>');
-    expect(quickPanelSource).toContain('<span class="truncate text-muted-foreground">{provider.name}</span>');
+    const body = render(QuickUsageGauges, {
+      props: { windows: [
+        { label: '5h limit', used_percent: 45, resets_at: null },
+        { label: 'Weekly limit', used_percent: 21, resets_at: null },
+      ], fallback: 'unused' },
+    }).body;
+    expect(body).toContain('5 hours');
+    expect(body).toContain('1 week');
+    expect(body).not.toContain('unused');
     expect(gaugeSource).toContain(
       'grid-cols-[repeat(auto-fit,minmax(min(8rem,100%),1fr))]'
     );
@@ -321,5 +313,41 @@ describe('quick panel AI provider projection', () => {
     // Focus gained: activates
     handleQuickPanelFocusChanged(true, { activate, deactivate });
     expect(activate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('quick cleanup state', () => {
+  it('offers a new scan instead of cleanup when the inventory is stale', () => {
+    const previousSettings = settingsStore.settings;
+    const previousScan = scanStore.lastScan;
+    const previousCapabilities = platformCapabilitiesStore.capabilities;
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      settingsStore.settings = { ...previousSettings, quick_panel_sections: ['cleanup'] };
+      platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+      scanStore.lastScan = {
+        scan_id: 'expired-quick-scan',
+        valid_for_seconds: 1,
+        started_at: now - 120,
+        finished_at: now - 119,
+        categories: [],
+        total_bytes: 0,
+        safe_bytes: 0,
+        rebuild_bytes: 0,
+        manual_bytes: 0,
+        quality: 'fresh',
+        incomplete_reasons: [],
+      };
+      scanStore.updateFreshness();
+      const body = render(QuickPanel).body;
+      expect(body).toContain('Scan again to verify safe cleanup.');
+      expect(body).toContain('Scan Again');
+      expect(body).not.toContain('Clean Safe');
+    } finally {
+      settingsStore.settings = previousSettings;
+      scanStore.lastScan = previousScan;
+      platformCapabilitiesStore.capabilities = previousCapabilities;
+      scanStore.updateFreshness();
+    }
   });
 });

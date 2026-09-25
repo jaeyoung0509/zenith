@@ -56,9 +56,9 @@
 </script>
 
 <div
-  class="flex items-center justify-between p-3 rounded-lg border border-border/60 hover:border-border hover:bg-secondary/40 transition-colors group {isSelected
-    ? 'bg-secondary/30'
-    : ''}"
+  class="group flex min-h-[56px] items-center justify-between gap-3 rounded-xl px-3 py-2 transition-ui {isSelected
+    ? 'bg-accent'
+    : 'hover:bg-accent/40'}"
 >
   <div class="flex items-start space-x-3 flex-1 min-w-0 pr-3">
     {#if isAdvisoryItem}
@@ -67,7 +67,7 @@
         onclick={handleReveal}
         disabled={!canReveal()}
         title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
-        class="mt-0.5 px-1.5 py-0.5 rounded text-caption font-medium border border-destructive/30 text-destructive bg-destructive/10 flex items-center gap-0.5 shrink-0 hover:bg-destructive/20 transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+        class="mt-0.5 inline-flex h-7 items-center gap-1 shrink-0 rounded-md border border-border-strong bg-transparent px-2 text-caption font-medium text-muted-foreground transition-ui hover:bg-accent hover:text-foreground cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
       >
         <span>Show location</span>
         <ArrowUpRight size={10} />
@@ -85,61 +85,51 @@
 
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2">
-        <span class="text-xs font-medium text-foreground truncate">
+        <span class="text-body font-medium text-foreground break-words">
           {item.name}
         </span>
       </div>
 
       {#if refusalReason}
-        <p class="text-caption text-warning mt-0.5 line-clamp-1" title={refusalReason}>
+        <p class="text-meta text-warning mt-0.5 line-clamp-1" title={refusalReason}>
           {refusalReason}
         </p>
       {:else if item.disposition?.reason}
-        <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.disposition.reason}>
+        <p class="text-meta text-warning mt-0.5 line-clamp-1" title={item.disposition.reason}>
           {item.disposition.reason}
         </p>
       {:else if item.incomplete_reason}
-        <p class="text-caption text-warning mt-0.5 line-clamp-1" title={item.incomplete_reason}>
+        <p class="text-meta text-warning mt-0.5 line-clamp-1" title={item.incomplete_reason}>
           {item.incomplete_reason}
         </p>
       {:else if item.risk === 'rebuild' && cleanable}
-        <p class="text-caption text-muted-foreground mt-0.5">May download or build again later</p>
+        <p class="text-meta text-muted-foreground mt-0.5">May download or build again later</p>
       {/if}
 
-      <p class="text-meta text-muted-foreground mt-0.5 line-clamp-1">
-        {item.description || item.path}
+      <p class="mt-0.5 truncate text-meta text-muted-foreground">
+        {#if item.description}{item.description} · {/if}<span class="font-mono text-caption">{item.path}</span>{#if item.file_count > 0} · {item.file_count} files{/if}{#if item.last_modified} · modified {formatTimeAgo(item.last_modified)}{/if}
       </p>
-
-      <div class="flex items-center gap-2 mt-1 text-caption text-muted-foreground font-mono">
-        <span class="truncate max-w-[280px]">{item.path}</span>
-        {#if item.file_count > 0}
-          <span>• {item.file_count} files</span>
-        {/if}
-        {#if item.last_modified}
-          <span>• modified {formatTimeAgo(item.last_modified)}</span>
-        {/if}
-      </div>
     </div>
   </div>
 
-  <div class="flex items-center gap-2 shrink-0">
+  <div class="flex shrink-0 items-center gap-2">
     {#if revealError}
-      <span role="alert" class="text-caption text-destructive">{revealError}</span>
+      <span role="alert" class="text-meta text-destructive">{revealError}</span>
     {/if}
-    <span class="w-[12ch] whitespace-nowrap text-right text-xs font-mono tabular-nums font-semibold text-foreground">
+    <span class="w-[12ch] shrink-0 whitespace-nowrap text-right text-body font-mono tabular-nums font-semibold text-foreground">
       {sizePrefix}{formatBytes(item.size.allocated ?? item.size.logical)}
     </span>
 
     <Button
       variant="ghost"
       size="icon"
-      class="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+      class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
       disabled={!canReveal()}
       onclick={handleReveal}
       ariaLabel={`Show ${item.name} in file manager`}
       title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
     >
-      <FolderOpen size={13} class="text-muted-foreground" />
+      <FolderOpen size={14} class="text-muted-foreground" />
     </Button>
   </div>
 </div>

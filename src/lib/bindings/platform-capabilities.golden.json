@@ -8,7 +8,15 @@
       "reason": "This platform is not supported by the desktop application.",
       "status": "unavailable"
     },
+    "battery_metrics": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
     "cleanup": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "cpu_metrics": {
       "reason": "This platform is not supported by the desktop application.",
       "status": "unavailable"
     },
@@ -65,7 +73,13 @@
     "app_uninstall": {
       "status": "available"
     },
+    "battery_metrics": {
+      "status": "available"
+    },
     "cleanup": {
+      "status": "available"
+    },
+    "cpu_metrics": {
       "status": "available"
     },
     "developer_artifacts": {
@@ -112,7 +126,15 @@
       "reason": "This platform is not supported by the desktop application.",
       "status": "unavailable"
     },
+    "battery_metrics": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
     "cleanup": {
+      "reason": "This platform is not supported by the desktop application.",
+      "status": "unavailable"
+    },
+    "cpu_metrics": {
       "reason": "This platform is not supported by the desktop application.",
       "status": "unavailable"
     },
@@ -170,7 +192,13 @@
       "reason": "Zenith does not implement Windows application uninstallation yet; the registry UninstallString exists but is not executed.",
       "status": "unavailable"
     },
+    "battery_metrics": {
+      "status": "available"
+    },
     "cleanup": {
+      "status": "available"
+    },
+    "cpu_metrics": {
       "status": "available"
     },
     "developer_artifacts": {

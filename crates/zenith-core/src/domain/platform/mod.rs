@@ -98,6 +98,8 @@ pub enum PlatformFeature {
     LocalModels,
     Docker,
     AiIntegrations,
+    CpuMetrics,
+    BatteryMetrics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +159,8 @@ pub struct PlatformCapabilities {
     pub local_models: PlatformFeatureCapability,
     pub docker: PlatformFeatureCapability,
     pub ai_integrations: PlatformFeatureCapability,
+    pub cpu_metrics: PlatformFeatureCapability,
+    pub battery_metrics: PlatformFeatureCapability,
 }
 
 impl PlatformCapabilities {
@@ -176,6 +180,8 @@ impl PlatformCapabilities {
             PlatformFeature::LocalModels => &self.local_models,
             PlatformFeature::Docker => &self.docker,
             PlatformFeature::AiIntegrations => &self.ai_integrations,
+            PlatformFeature::CpuMetrics => &self.cpu_metrics,
+            PlatformFeature::BatteryMetrics => &self.battery_metrics,
         }
     }
 
@@ -214,6 +220,8 @@ impl PlatformCapabilities {
             local_models: PlatformFeatureCapability::available(),
             docker: PlatformFeatureCapability::available(),
             ai_integrations: PlatformFeatureCapability::available(),
+            cpu_metrics: PlatformFeatureCapability::available(),
+            battery_metrics: PlatformFeatureCapability::available(),
         }
     }
 
@@ -239,6 +247,8 @@ impl PlatformCapabilities {
             local_models: PlatformFeatureCapability::available(),
             docker: PlatformFeatureCapability::available(),
             ai_integrations: PlatformFeatureCapability::available(),
+            cpu_metrics: PlatformFeatureCapability::available(),
+            battery_metrics: PlatformFeatureCapability::available(),
         }
     }
 
@@ -265,6 +275,8 @@ impl PlatformCapabilities {
             local_models: unavailable(),
             docker: unavailable(),
             ai_integrations: unavailable(),
+            cpu_metrics: unavailable(),
+            battery_metrics: unavailable(),
         }
     }
 
@@ -304,7 +316,7 @@ mod tests {
         PlatformFeatureStatus, PlatformKind,
     };
 
-    const EVERY_FEATURE: [PlatformFeature; 14] = [
+    const EVERY_FEATURE: [PlatformFeature; 16] = [
         PlatformFeature::SystemActions,
         PlatformFeature::Cleanup,
         PlatformFeature::IntensiveCleanup,
@@ -319,6 +331,8 @@ mod tests {
         PlatformFeature::LocalModels,
         PlatformFeature::Docker,
         PlatformFeature::AiIntegrations,
+        PlatformFeature::CpuMetrics,
+        PlatformFeature::BatteryMetrics,
     ];
 
     #[test]

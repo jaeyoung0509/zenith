@@ -14,16 +14,31 @@ use super::state::DesktopState;
 use crate::blocking::run_blocking;
 use crate::events::notifications::TauriNotifications;
 use crate::models::{
-    AwakeBehavior, AwakeRule, AwakeState, DevelopmentListener, DiagnosticsSnapshot, DiskMetrics,
-    DiskVolume, DockerStatus, LocalModelInventory, MemoryMetrics, MemoryTerminationMode,
-    MemoryTerminationResult, PlatformCapabilities, PlatformContext,
-    ReleaseDevelopmentListenerResult, ReleaseMode, SelectedApplication, ZenithSettings,
+    AwakeBehavior, AwakeRule, AwakeState, BatteryMetrics, CpuMetrics, DashboardRoute,
+    DevelopmentListener, DiagnosticsSnapshot, DiskMetrics, DiskVolume, DockerStatus,
+    LocalModelInventory, MemoryMetrics, MemoryTerminationMode, MemoryTerminationResult,
+    PlatformCapabilities, PlatformContext, ReleaseDevelopmentListenerResult, ReleaseMode,
+    SelectedApplication, ZenithSettings,
 };
 
 #[tauri::command]
 #[specta::specta]
 pub async fn get_memory_metrics(state: State<'_, DesktopState>) -> Result<MemoryMetrics, String> {
     state.system.memory_metrics().await
+}
+
+/// The system-wide CPU share, with the state that says how current it is.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_cpu_metrics(state: State<'_, DesktopState>) -> Result<CpuMetrics, String> {
+    state.system.cpu_metrics().await
+}
+
+/// The machine's battery, including the machines that have none.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_battery_metrics(state: State<'_, DesktopState>) -> Result<BatteryMetrics, String> {
+    state.system.battery_metrics().await
 }
 
 #[tauri::command]
@@ -186,11 +201,42 @@ pub async fn show_in_file_manager(
     state.system.reveal_path(&path).await
 }
 
+/// Opens the dashboard, optionally on a named destination.
+///
+/// The destination is stored before the window is asked for and pulled by the
+/// window when it mounts, so a request can never race the webview load. A
+/// `None` route leaves whatever destination is already pending untouched: the
+/// caller that names none is asking only for the window.
 #[tauri::command]
 #[specta::specta]
-pub fn open_dashboard_window(app_handle: AppHandle) -> Result<(), String> {
+pub fn open_dashboard_window(
+    app_handle: AppHandle,
+    route: Option<DashboardRoute>,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    open_dashboard_window_for_runtime(app_handle, route, state)
+}
+
+fn open_dashboard_window_for_runtime<R: tauri::Runtime>(
+    app_handle: AppHandle<R>,
+    route: Option<DashboardRoute>,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    if let Some(route) = route {
+        state.set_pending_navigation(route);
+    }
     crate::show_main_window(&app_handle).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// The destination the dashboard must open on, consumed exactly once.
+///
+/// Only the main window is granted this: the quick panel asks the dashboard to
+/// open and must never consume a destination the shell meant for it.
+#[tauri::command]
+#[specta::specta]
+pub fn take_pending_navigation(state: State<'_, DesktopState>) -> Option<DashboardRoute> {
+    state.take_pending_navigation()
 }
 
 #[tauri::command]
@@ -291,5 +337,71 @@ mod tests {
                 "Expected numeric version segments"
             );
         }
+    }
+
+    /// The destination is stored before the window is asked for, so the page
+    /// that mounts later can pull it. A mock application cannot create the
+    /// window, which is exactly the ordering this asserts: the store happened
+    /// even though the window step failed.
+    #[test]
+    fn opening_the_dashboard_stores_the_destination_the_window_pulls() {
+        let app = tauri::test::mock_builder()
+            .manage(crate::composition::desktop_state(
+                std::sync::Arc::new(zenith_platform::PlatformEnvironment::native()),
+                crate::docker::adapter::ContainerHost::unstated(),
+            ))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("the mock application builds");
+
+        let opened = open_dashboard_window_for_runtime(
+            app.handle().clone(),
+            Some(DashboardRoute::Settings),
+            app.state::<DesktopState>(),
+        );
+
+        assert_eq!(
+            app.state::<DesktopState>().take_pending_navigation(),
+            Some(DashboardRoute::Settings),
+            "the destination must be stored before the window is asked for ({opened:?})"
+        );
+        assert_eq!(
+            take_pending_navigation(app.state::<DesktopState>()),
+            None,
+            "the destination is one-shot, so the page cannot be sent to it twice"
+        );
+    }
+
+    /// A caller that names no destination asks only for the window.
+    #[test]
+    fn opening_the_dashboard_without_a_route_keeps_the_pending_destination() {
+        let app = tauri::test::mock_builder()
+            .manage(crate::composition::desktop_state(
+                std::sync::Arc::new(zenith_platform::PlatformEnvironment::native()),
+                crate::docker::adapter::ContainerHost::unstated(),
+            ))
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("the mock application builds");
+
+        let named = open_dashboard_window_for_runtime(
+            app.handle().clone(),
+            Some(DashboardRoute::Memory),
+            app.state::<DesktopState>(),
+        );
+
+        // A caller that names no destination asks only for the window. A mock
+        // application cannot create one, which is why the results are not the
+        // subject here: the stored destination is.
+        let unnamed = open_dashboard_window_for_runtime(
+            app.handle().clone(),
+            None,
+            app.state::<DesktopState>(),
+        );
+
+        assert_eq!(
+            take_pending_navigation(app.state::<DesktopState>()),
+            Some(DashboardRoute::Memory),
+            "an unnamed route must not discard the destination the shell stored \
+             ({named:?} / {unnamed:?})"
+        );
     }
 }

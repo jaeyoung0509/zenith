@@ -40,9 +40,9 @@
     class="sr-only peer"
   />
   <div
-    class="h-4 w-4 rounded-[4px] border transition-colors duration-150 flex items-center justify-center peer-focus-visible:ring-2 peer-focus-visible:ring-success/40 peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-background {checked
-      ? 'bg-success border-success text-white shadow-xs'
-      : 'border-border/80 bg-secondary/40 hover:border-border text-transparent'}"
+    class="h-4 w-4 rounded-[4px] border transition-colors duration-140 flex items-center justify-center peer-focus-visible:ring-2 peer-focus-visible:ring-success/40 peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-background {checked
+      ? 'bg-success border-success text-white'
+      : 'border-border-strong bg-card hover:border-foreground text-transparent'}"
   >
     {#if checked}
       <Check size={11} strokeWidth={3} class="stroke-white" />

@@ -17,7 +17,7 @@ describe('serializeSettingsSnapshot', () => {
     quick_panel_sections: ['cleanup', 'storage', 'memory'],
     quick_panel_ai_providers: ['codex', 'claude'],
     ai_accounts_quota_providers: ['codex', 'claude'],
-    dashboard_tabs: ['storage', 'memory', 'docker'],
+    dashboard_tabs: ['storage', 'performance', 'docker'],
     dashboard_tabs_revision: 1,
     sidebar_collapsed: false,
     awake_rules: [
@@ -380,7 +380,7 @@ describe('SettingsStore persistence and lifecycle', () => {
 });
 
 describe('dashboard tab reordering and customization', () => {
-  const defaultTabs: DashboardTab[] = ['storage', 'docker', 'models', 'memory', 'development_servers', 'usage', 'awake'];
+  const defaultTabs: DashboardTab[] = ['storage', 'docker', 'models', 'performance', 'development_servers', 'usage', 'awake'];
 
   it('moves dashboard tabs up and down correctly', () => {
     const movedUp = moveOrdered(defaultTabs, 'docker', -1);
@@ -393,8 +393,8 @@ describe('dashboard tab reordering and customization', () => {
   });
 
   it('reorders dashboard tabs via drag and drop', () => {
-    const reordered = reorderOrdered(defaultTabs, 'memory', 'storage');
-    expect(reordered).toEqual(['memory', 'storage', 'docker', 'models', 'development_servers', 'usage', 'awake']);
+    const reordered = reorderOrdered(defaultTabs, 'performance', 'storage');
+    expect(reordered).toEqual(['performance', 'storage', 'docker', 'models', 'development_servers', 'usage', 'awake']);
   });
 
   it('clamps tab movement at array boundaries', () => {

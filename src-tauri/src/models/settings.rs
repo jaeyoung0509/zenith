@@ -12,34 +12,75 @@ pub enum QuickPanelSection {
     Memory,
     AiControl,
     AgentActivity,
+    Cpu,
+    Battery,
+    Awake,
 }
 
 impl QuickPanelSection {
-    pub const DEFAULTS: [Self; 4] = [
+    /// Default compact-panel order (#280): the next action first, then the
+    /// system summary pair, the disk fact, observed AI/services activity and
+    /// the keep-awake state.
+    pub const DEFAULTS: [Self; 7] = [
         Self::Cleanup,
-        Self::Storage,
+        Self::Cpu,
         Self::Memory,
+        Self::Battery,
+        Self::Storage,
         Self::AgentActivity,
+        Self::Awake,
     ];
 
-    pub const ALL: [Self; 5] = [
-        Self::Cleanup,
-        Self::Storage,
-        Self::Memory,
-        Self::Categories,
-        Self::AgentActivity,
-    ];
+    /// Sections #280 introduced. They are added to an existing saved layout
+    /// once, at their default position, without disturbing its relative order.
+    pub const ADDED_IN_REVISION_6: [Self; 3] = [Self::Cpu, Self::Battery, Self::Awake];
+}
+
+/// Adds `added` to `existing` at the position each item holds in `order`,
+/// preserving the relative order of everything the user already had. An item
+/// the payload already contains is left untouched, so a user's own placement —
+/// including deliberately hiding a new section — survives every later load.
+fn merge_ordered_additions(
+    existing: &[QuickPanelSection],
+    order: &[QuickPanelSection],
+    added: &[QuickPanelSection],
+) -> Vec<QuickPanelSection> {
+    let mut merged = existing.to_vec();
+    for candidate in added {
+        if merged.contains(candidate) {
+            continue;
+        }
+        let position = order.iter().position(|item| item == candidate);
+        let insert_at = position.map_or(merged.len(), |index| {
+            merged
+                .iter()
+                .position(|item| {
+                    order
+                        .iter()
+                        .position(|entry| entry == item)
+                        .is_some_and(|existing_index| existing_index > index)
+                })
+                .unwrap_or(merged.len())
+        });
+        merged.insert(insert_at.min(merged.len()), *candidate);
+    }
+    merged
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DashboardTab {
+    Overview,
     #[serde(alias = "disk")]
     Disk,
     Storage,
+    /// #280: the former Memory tab is the Memory detail of the Performance
+    /// page. `memory` stays a valid persisted value so an upgrade never drops
+    /// the user's placement.
+    #[serde(alias = "memory")]
+    Performance,
     Docker,
     Models,
-    Memory,
     Projects,
     DevelopmentServers,
     Usage,
@@ -50,12 +91,21 @@ pub enum DashboardTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum DashboardRoute {
+    Overview,
     #[serde(alias = "disk")]
     Disk,
     Storage,
+    /// The Performance page, Memory detail — the destination the former
+    /// `memory` route and its deep links resolve to.
+    #[serde(alias = "memory")]
+    Memory,
+    Performance,
+    /// The Performance page's other local details. They are routes rather than
+    /// tabs because a summary click must land on the exact destination.
+    Cpu,
+    Battery,
     Docker,
     Models,
-    Memory,
     Projects,
     DevelopmentServers,
     Usage,
@@ -70,11 +120,12 @@ pub enum DashboardRoute {
 impl From<DashboardTab> for DashboardRoute {
     fn from(tab: DashboardTab) -> Self {
         match tab {
+            DashboardTab::Overview => Self::Overview,
             DashboardTab::Disk => Self::Disk,
             DashboardTab::Storage => Self::Storage,
+            DashboardTab::Performance => Self::Performance,
             DashboardTab::Docker => Self::Docker,
             DashboardTab::Models => Self::Models,
-            DashboardTab::Memory => Self::Memory,
             DashboardTab::Projects => Self::Projects,
             DashboardTab::DevelopmentServers => Self::DevelopmentServers,
             DashboardTab::Usage => Self::Usage,
@@ -85,13 +136,14 @@ impl From<DashboardTab> for DashboardRoute {
 }
 
 impl DashboardTab {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
+        Self::Overview,
         Self::Storage,
+        Self::Performance,
+        Self::Projects,
         Self::Docker,
         Self::Models,
-        Self::Memory,
         Self::DevelopmentServers,
-        Self::Projects,
         Self::Awake,
     ];
 }
@@ -158,7 +210,7 @@ impl Default for ZenithSettings {
             clean_docker: true,
             include_rebuild_caches: false,
             intensive_cleanup: false,
-            theme: "system".to_string(),
+            theme: "light".to_string(),
             excluded_signatures: Vec::new(),
             awake_rules: vec![
                 AwakeRule {
@@ -256,7 +308,7 @@ impl Default for ZenithSettings {
             ai_accounts_quota_providers:
                 crate::ai_providers::ProviderRegistry::default_account_providers(),
             dashboard_tabs: DashboardTab::ALL.to_vec(),
-            dashboard_tabs_revision: 5,
+            dashboard_tabs_revision: 6,
             sidebar_collapsed: false,
             ai_control: AiControlPreferences::default(),
             agent_notifications: crate::models::AgentNotificationPreferences::default(),
@@ -287,7 +339,8 @@ impl ZenithSettings {
         }
 
         // Existing settings predate the standalone Development Servers tab.
-        // Add it once after Memory, then preserve future user hide/reorder choices.
+        // Add it once after Performance (the former Memory tab), then preserve
+        // future user hide/reorder choices.
         if self.dashboard_tabs_revision < 1 {
             if !self
                 .dashboard_tabs
@@ -296,7 +349,7 @@ impl ZenithSettings {
                 let insert_at = self
                     .dashboard_tabs
                     .iter()
-                    .position(|tab| *tab == DashboardTab::Memory)
+                    .position(|tab| *tab == DashboardTab::Performance)
                     .map_or(self.dashboard_tabs.len(), |index| index + 1);
                 self.dashboard_tabs
                     .insert(insert_at, DashboardTab::DevelopmentServers);
@@ -304,14 +357,14 @@ impl ZenithSettings {
             self.dashboard_tabs_revision = 1;
         }
 
-        // #75 adds Projects once after Memory. The revision guard preserves
+        // #75 adds Projects once after Performance. The revision guard preserves
         // any later user hide/reorder choice instead of re-inserting it.
         if self.dashboard_tabs_revision < 2 {
             if !self.dashboard_tabs.contains(&DashboardTab::Projects) {
                 let insert_at = self
                     .dashboard_tabs
                     .iter()
-                    .position(|tab| *tab == DashboardTab::Memory)
+                    .position(|tab| *tab == DashboardTab::Performance)
                     .map_or(self.dashboard_tabs.len(), |index| index + 1);
                 self.dashboard_tabs
                     .insert(insert_at, DashboardTab::Projects);
@@ -340,7 +393,7 @@ impl ZenithSettings {
                 let insert_at = self
                     .dashboard_tabs
                     .iter()
-                    .position(|tab| *tab == DashboardTab::Memory)
+                    .position(|tab| *tab == DashboardTab::Performance)
                     .map_or(self.dashboard_tabs.len(), |index| index + 1);
                 self.dashboard_tabs
                     .insert(insert_at, DashboardTab::Projects);
@@ -389,6 +442,26 @@ impl ZenithSettings {
             }
 
             self.dashboard_tabs_revision = 5;
+        }
+
+        // #280 adds the Overview control tower and turns the Memory tab into
+        // the Performance page's Memory detail. Overview joins directly after
+        // the tab that currently opens first, so an upgraded user's start page
+        // never changes, and the new compact-panel sections join at their
+        // default position. Hiding or reordering them afterwards stays
+        // authoritative, exactly like the earlier tab migrations.
+        if self.dashboard_tabs_revision < 6 {
+            if !self.dashboard_tabs.contains(&DashboardTab::Overview) {
+                let insert_at = if self.dashboard_tabs.is_empty() { 0 } else { 1 };
+                self.dashboard_tabs
+                    .insert(insert_at, DashboardTab::Overview);
+            }
+            self.quick_panel_sections = merge_ordered_additions(
+                &self.quick_panel_sections,
+                &QuickPanelSection::DEFAULTS,
+                &QuickPanelSection::ADDED_IN_REVISION_6,
+            );
+            self.dashboard_tabs_revision = 6;
         }
 
         // Retired identifiers stay invalid even if a malformed/newer settings
@@ -554,8 +627,8 @@ mod tests {
         }"#;
 
         let parsed: ZenithSettings = serde_json::from_str(raw).unwrap();
-        assert_eq!(parsed.quick_panel_sections.len(), 4);
-        assert_eq!(parsed.dashboard_tabs.len(), 7);
+        assert_eq!(parsed.quick_panel_sections.len(), 7);
+        assert_eq!(parsed.dashboard_tabs.len(), 8);
         assert_eq!(parsed.dashboard_tabs_revision, 0);
         assert_eq!(
             parsed.ai_accounts_quota_providers,
@@ -586,21 +659,94 @@ mod tests {
             migrated.dashboard_tabs,
             vec![
                 DashboardTab::Storage,
-                DashboardTab::Memory,
+                DashboardTab::Overview,
+                DashboardTab::Performance,
                 DashboardTab::Projects,
                 DashboardTab::DevelopmentServers,
             ]
         );
-        assert_eq!(migrated.dashboard_tabs_revision, 5);
+        // The legacy "memory" id keeps its slot as the Performance page, and
+        // Storage still opens first: an upgrade must not move the start page.
+        assert_eq!(
+            migrated.dashboard_tabs.first(),
+            Some(&DashboardTab::Storage)
+        );
+        assert_eq!(migrated.dashboard_tabs_revision, 6);
 
         let hidden_again = ZenithSettings {
-            dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Memory],
+            dashboard_tabs: vec![DashboardTab::Storage, DashboardTab::Performance],
             ..migrated
         }
         .sanitize();
         assert_eq!(
             hidden_again.dashboard_tabs,
-            vec![DashboardTab::Storage, DashboardTab::Memory]
+            vec![DashboardTab::Storage, DashboardTab::Performance]
+        );
+    }
+
+    #[test]
+    fn sanitize_places_overview_after_the_current_start_page_and_adds_new_panel_sections() {
+        let raw = r#"{
+            "dashboard_tabs": ["docker", "storage"],
+            "quick_panel_sections": ["storage", "cleanup", "memory"],
+            "dashboard_tabs_revision": 5,
+            "theme": "system"
+        }"#;
+
+        let migrated: ZenithSettings = serde_json::from_str::<ZenithSettings>(raw)
+            .unwrap()
+            .sanitize();
+
+        // The customized order survives, and the tab that opened first still
+        // opens first with Overview directly behind it.
+        assert_eq!(
+            migrated.dashboard_tabs,
+            vec![
+                DashboardTab::Docker,
+                DashboardTab::Overview,
+                DashboardTab::Storage,
+            ]
+        );
+        // New sections land at their default position relative to the sections
+        // the user already had, and the user's own relative order is preserved.
+        assert_eq!(
+            migrated.quick_panel_sections,
+            vec![
+                QuickPanelSection::Cpu,
+                QuickPanelSection::Battery,
+                QuickPanelSection::Storage,
+                QuickPanelSection::Cleanup,
+                QuickPanelSection::Memory,
+                QuickPanelSection::Awake,
+            ]
+        );
+
+        // A second load must not re-insert anything.
+        let again = migrated.clone().sanitize();
+        assert_eq!(again.dashboard_tabs, migrated.dashboard_tabs);
+        assert_eq!(again.quick_panel_sections, migrated.quick_panel_sections);
+    }
+
+    #[test]
+    fn sanitize_keeps_a_deliberately_hidden_new_panel_section_hidden() {
+        let raw = r#"{
+            "dashboard_tabs": ["overview", "storage"],
+            "quick_panel_sections": ["cleanup", "memory"],
+            "dashboard_tabs_revision": 6,
+            "theme": "system"
+        }"#;
+
+        let sanitized: ZenithSettings = serde_json::from_str::<ZenithSettings>(raw)
+            .unwrap()
+            .sanitize();
+
+        assert_eq!(
+            sanitized.quick_panel_sections,
+            vec![QuickPanelSection::Cleanup, QuickPanelSection::Memory]
+        );
+        assert_eq!(
+            sanitized.dashboard_tabs,
+            vec![DashboardTab::Overview, DashboardTab::Storage]
         );
     }
 

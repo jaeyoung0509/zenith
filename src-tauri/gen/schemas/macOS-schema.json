@@ -309,6 +309,18 @@
           "markdownDescription": "Enables the get_awake_state command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_battery_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-battery-metrics",
+          "markdownDescription": "Enables the get_battery_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_cpu_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-cpu-metrics",
+          "markdownDescription": "Enables the get_cpu_metrics command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_diagnostics command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-diagnostics",
@@ -579,6 +591,12 @@
           "markdownDescription": "Enables the start_scan command without any pre-configured scope."
         },
         {
+          "description": "Enables the take_pending_navigation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-take-pending-navigation",
+          "markdownDescription": "Enables the take_pending_navigation command without any pre-configured scope."
+        },
+        {
           "description": "Enables the terminate_memory_group command without any pre-configured scope.",
           "type": "string",
           "const": "allow-terminate-memory-group",
@@ -721,6 +739,18 @@
           "type": "string",
           "const": "deny-get-awake-state",
           "markdownDescription": "Denies the get_awake_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_battery_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-battery-metrics",
+          "markdownDescription": "Denies the get_battery_metrics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_cpu_metrics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-cpu-metrics",
+          "markdownDescription": "Denies the get_cpu_metrics command without any pre-configured scope."
         },
         {
           "description": "Denies the get_diagnostics command without any pre-configured scope.",
@@ -991,6 +1021,12 @@
           "type": "string",
           "const": "deny-start-scan",
           "markdownDescription": "Denies the start_scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the take_pending_navigation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-take-pending-navigation",
+          "markdownDescription": "Denies the take_pending_navigation command without any pre-configured scope."
         },
         {
           "description": "Denies the terminate_memory_group command without any pre-configured scope.",

@@ -15,11 +15,14 @@ import type {
   AwakeBehavior,
   AwakeRule,
   AwakeState,
+  BatteryMetrics,
   Category,
   CleanEvent,
   CleanResult,
   CleanupFailure,
+  CpuMetrics,
   DevelopmentListener,
+  DashboardRoute,
   DiagnosticsSnapshot,
   EnvironmentReport,
   DiskMetrics,
@@ -274,6 +277,14 @@ export const nativeApi = {
     return await unwrap(commands.pickKeepAwakeApplication());
   },
 
+  async getCpuMetrics(): Promise<CpuMetrics> {
+    return await unwrap(commands.getCpuMetrics());
+  },
+
+  async getBatteryMetrics(): Promise<BatteryMetrics> {
+    return await unwrap(commands.getBatteryMetrics());
+  },
+
   async getDiskMetrics(): Promise<DiskMetrics> {
     return await unwrap(commands.getDiskMetrics());
   },
@@ -337,8 +348,12 @@ export const nativeApi = {
     await unwrap(commands.showInFileManager(path));
   },
 
-  async openDashboard(): Promise<void> {
-    await unwrap(commands.openDashboardWindow());
+  async openDashboard(route: DashboardRoute | null = null): Promise<void> {
+    await unwrap(commands.openDashboardWindow(route));
+  },
+
+  async takePendingNavigation(): Promise<DashboardRoute | null> {
+    return await commands.takePendingNavigation();
   },
 
   async toggleQuick(): Promise<void> {

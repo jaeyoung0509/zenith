@@ -55,6 +55,9 @@
       if (disposed || generation !== loadGeneration) return;
 
       currentView = view;
+      // The quick window is transparent so its own rounded surface owns the
+      // silhouette; the main window keeps the opaque page background.
+      document.documentElement.classList.toggle('transparent-window', view === 'quick');
       ActiveComponent = component;
     }
 

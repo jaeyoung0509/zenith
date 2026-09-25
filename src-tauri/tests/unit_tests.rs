@@ -541,6 +541,13 @@ fn test_windows_platform_capabilities_batch2() {
         caps.ai_integrations.status,
         PlatformFeatureStatus::Available
     );
+    // Both readings have Windows adapters: CPU through `sysinfo`, battery
+    // through `GetSystemPowerStatus`.
+    assert_eq!(caps.cpu_metrics.status, PlatformFeatureStatus::Available);
+    assert_eq!(
+        caps.battery_metrics.status,
+        PlatformFeatureStatus::Available
+    );
 }
 
 #[test]
@@ -672,6 +679,181 @@ fn test_real_ipc_model_rejects_unsafe_u64_values() {
 
     let error = serde_json::to_string(&metrics).unwrap_err().to_string();
     assert!(error.contains("Number.MAX_SAFE_INTEGER"));
+}
+
+/// The CPU and battery readings carry the same wire rule as `DiskMetrics`:
+/// every integer crosses IPC as a JSON number inside the range JavaScript can
+/// represent, and an unsafe value is refused in both directions rather than
+/// silently losing precision.
+#[test]
+fn test_cpu_and_battery_metrics_keep_their_ipc_integers_javascript_safe() {
+    use zenith_lib::ipc_numeric::MAX_SAFE_INTEGER;
+    use zenith_lib::models::{
+        BatteryChargeState, BatteryMetrics, BatteryPresence, CpuMetrics, CpuSampleState,
+        PowerSourceType,
+    };
+
+    let measured = CpuMetrics {
+        state: CpuSampleState::Fresh,
+        usage_percent: Some(41.5),
+        sample_interval_ms: Some(1_000),
+        sampled_at: Some(1_700_000_000_000),
+        stale_after_ms: 3_000,
+        cores: 8,
+        reason: None,
+    };
+    let json = serde_json::to_value(&measured).expect("a measured reading serializes");
+    assert!(json["sample_interval_ms"].is_number());
+    assert_eq!(json["sample_interval_ms"], serde_json::json!(1_000));
+    assert_eq!(json["sampled_at"], serde_json::json!(1_700_000_000_000u64));
+    assert_eq!(json["stale_after_ms"], serde_json::json!(3_000));
+
+    // A reading that was never measured keeps its keys and reports null rather
+    // than dropping the field or filling it in.
+    let warmup = CpuMetrics {
+        state: CpuSampleState::Warmup,
+        usage_percent: None,
+        sample_interval_ms: None,
+        sampled_at: None,
+        ..measured.clone()
+    };
+    let json = serde_json::to_value(&warmup).expect("a warm-up reading serializes");
+    assert!(json["usage_percent"].is_null());
+    assert!(json["sample_interval_ms"].is_null());
+    assert!(json["sampled_at"].is_null());
+    assert_eq!(json["stale_after_ms"], serde_json::json!(3_000));
+    assert_eq!(json["state"], serde_json::json!("warmup"));
+
+    for unsafe_cpu in [
+        CpuMetrics {
+            sample_interval_ms: Some(MAX_SAFE_INTEGER + 1),
+            ..measured.clone()
+        },
+        CpuMetrics {
+            sampled_at: Some(MAX_SAFE_INTEGER + 1),
+            ..measured.clone()
+        },
+        CpuMetrics {
+            stale_after_ms: MAX_SAFE_INTEGER + 1,
+            ..measured.clone()
+        },
+    ] {
+        let error = serde_json::to_string(&unsafe_cpu)
+            .expect_err("an unsafe integer must be refused")
+            .to_string();
+        assert!(error.contains("Number.MAX_SAFE_INTEGER"), "{error}");
+    }
+
+    let at_boundary = CpuMetrics {
+        sample_interval_ms: Some(MAX_SAFE_INTEGER),
+        stale_after_ms: MAX_SAFE_INTEGER,
+        ..measured
+    };
+    let encoded = serde_json::to_string(&at_boundary).expect("the boundary is representable");
+    assert_eq!(
+        serde_json::from_str::<CpuMetrics>(&encoded).expect("the reading round-trips"),
+        at_boundary
+    );
+
+    let discharging = BatteryMetrics {
+        presence: BatteryPresence::Present,
+        charge_state: BatteryChargeState::Discharging,
+        percent: Some(72.0),
+        time_remaining_seconds: Some(4_200),
+        power_source: PowerSourceType::Battery,
+        sampled_at: Some(1_700_000_000_000),
+        reason: None,
+    };
+    let json = serde_json::to_value(&discharging).expect("a battery reading serializes");
+    assert!(json["time_remaining_seconds"].is_number());
+    assert_eq!(json["time_remaining_seconds"], serde_json::json!(4_200));
+    assert!(json["sampled_at"].is_number());
+    assert_eq!(json["power_source"], serde_json::json!("battery"));
+
+    let unsafe_battery = BatteryMetrics {
+        time_remaining_seconds: Some(MAX_SAFE_INTEGER + 1),
+        ..discharging.clone()
+    };
+    let error = serde_json::to_string(&unsafe_battery)
+        .expect_err("an unsafe estimate must be refused")
+        .to_string();
+    assert!(error.contains("Number.MAX_SAFE_INTEGER"), "{error}");
+
+    let unsafe_sampled = BatteryMetrics {
+        sampled_at: Some(MAX_SAFE_INTEGER + 1),
+        ..discharging.clone()
+    };
+    assert!(serde_json::to_string(&unsafe_sampled).is_err());
+
+    // A payload arriving from the other side is guarded the same way.
+    let payload = format!(
+        r#"{{"presence":"present","charge_state":"discharging","percent":72.0,"time_remaining_seconds":{},"power_source":"battery","sampled_at":null,"reason":null}}"#,
+        MAX_SAFE_INTEGER + 1
+    );
+    let error = serde_json::from_str::<BatteryMetrics>(&payload)
+        .expect_err("an unsafe estimate must be refused")
+        .to_string();
+    assert!(error.contains("Number.MAX_SAFE_INTEGER"), "{error}");
+
+    // The states a battery-less machine reports keep their nulls.
+    let absent = BatteryMetrics {
+        presence: BatteryPresence::Absent,
+        charge_state: BatteryChargeState::Unknown,
+        percent: None,
+        time_remaining_seconds: None,
+        ..discharging
+    };
+    let json = serde_json::to_value(&absent).expect("an absent battery serializes");
+    assert_eq!(json["presence"], serde_json::json!("absent"));
+    assert_eq!(json["charge_state"], serde_json::json!("unknown"));
+    assert!(json["percent"].is_null());
+    assert!(json["time_remaining_seconds"].is_null());
+}
+
+/// The macOS adapter must describe the machine it is running on, including the
+/// machines that have no battery at all: a desktop reports `Absent`, never a
+/// battery at zero percent.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_live_battery_provider_describes_this_machine() {
+    use zenith_lib::models::{BatteryChargeState, BatteryPresence};
+    use zenith_lib::power::{battery_metrics_from_reading, BatteryProvider, SystemBatteryProvider};
+
+    let reading = SystemBatteryProvider::new().read();
+
+    match reading.presence {
+        BatteryPresence::Present => {
+            let percent = reading
+                .percent
+                .expect("a battery the platform lists reports its charge");
+            assert!(
+                (0.0..=100.0).contains(&percent),
+                "a charge is a percentage of capacity: {percent}"
+            );
+            let metrics = battery_metrics_from_reading(reading, None);
+            assert_eq!(metrics.presence, BatteryPresence::Present);
+            assert_eq!(metrics.percent, Some(percent));
+            assert_ne!(
+                metrics.charge_state,
+                BatteryChargeState::Unknown,
+                "a present battery on macOS states whether it is charging: {metrics:?}"
+            );
+        }
+        BatteryPresence::Absent => {
+            assert_eq!(
+                reading.percent, None,
+                "a machine without a battery has no charge to report"
+            );
+            let metrics = battery_metrics_from_reading(reading, None);
+            assert_eq!(metrics.percent, None);
+            assert_eq!(metrics.charge_state, BatteryChargeState::Unknown);
+            assert_eq!(metrics.time_remaining_seconds, None);
+        }
+        BatteryPresence::Unavailable => panic!(
+            "macOS has a battery adapter, so an unavailable reading is a failed probe: {:?}",
+            reading.reason
+        ),
+    }
 }
 
 #[test]
