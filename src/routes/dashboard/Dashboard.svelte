@@ -26,6 +26,7 @@
   import { DEFAULT_DASHBOARD_TABS, normalizeDashboardTab } from '../../lib/utils/dashboardNavigation';
   import { isTauri, tauriStartWindowDrag, tauriTakePendingNavigation } from '../../lib/utils/tauri';
   import Button from '../../lib/components/Button.svelte';
+  import BrandIcon from '../../lib/components/BrandIcon.svelte';
   import Card from '../../lib/components/Card.svelte';
   import {
     Activity,
@@ -42,7 +43,6 @@
     Server,
     Settings,
     Shield,
-    Sparkles,
   } from '@lucide/svelte';
 
   /** Routes the shell can show: persisted routes plus the storage sub-views and
@@ -91,8 +91,8 @@
     docker: { label: 'Containers', icon: Container },
     models: { label: 'Local Models', icon: Boxes },
     development_servers: { label: 'Dev Servers', icon: Server },
-    projects: { label: 'AI Activity', icon: Sparkles },
-    ai_control: { label: 'AI Activity', icon: Sparkles },
+    projects: { label: 'AI Activity', icon: ChartNoAxesCombined },
+    ai_control: { label: 'AI Activity', icon: ChartNoAxesCombined },
     usage: { label: 'AI Activity', icon: ChartNoAxesCombined },
     awake: { label: 'Keep Awake', icon: Moon },
   };
@@ -267,17 +267,7 @@
           role="presentation"
           onmousedown={overlayTitleBar ? handleWindowDrag : undefined}
         >
-          <svg class="h-6 w-6 rounded-lg shrink-0 shadow-sm" viewBox="0 0 1024 1024">
-            <defs>
-              <linearGradient id="dash-bg-grad" x1="160" y1="112" x2="864" y2="912" gradientUnits="userSpaceOnUse">
-                <stop stop-color="#27272f"/>
-                <stop offset="1" stop-color="#101014"/>
-              </linearGradient>
-            </defs>
-            <rect width="1024" height="1024" rx="220" fill="url(#dash-bg-grad)"/>
-            <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
-            <circle cx="758" cy="300" r="44" fill="#34d399"/>
-          </svg>
+          <BrandIcon identity="zenith" label="Zenith" size={24} />
           {#if !sidebarCollapsed}
             <span class="text-sm font-semibold tracking-tight text-foreground">Zenith</span>
           {/if}
@@ -314,7 +304,7 @@
             {@const isTabActive = currentTab === tabId || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
 
             {#if showGroupHeader}
-              <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground select-none">
+              <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground select-none">
                 {currentGroup}
               </div>
             {:else if sidebarCollapsed && prevGroup && prevGroup !== currentGroup && i > 0}
@@ -325,17 +315,19 @@
               type="button"
               onclick={() => selectTab(tabId as Tab)}
               disabled={!tabAvailable}
+              aria-current={isTabActive ? 'page' : undefined}
               aria-label={tabId === 'storage' && scanStore.reclaimableBytes > 0
                 ? `${def.label}, ${formatBytes(scanStore.reclaimableBytes)} reclaimable`
                 : def.label}
               title={tabAvailable ? (sidebarCollapsed ? def.label : undefined) : (capability?.reason ?? `${def.label} is unavailable`)}
-              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-lg text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
-                ? 'bg-accent text-foreground'
+              class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-md text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
+                ? 'bg-accent/70 text-foreground'
                 : tabAvailable
                   ? 'text-muted-foreground hover:text-foreground hover:bg-card'
                   : 'text-muted-foreground/50 cursor-not-allowed'}"
             >
-              <def.icon size={18} strokeWidth={1.7} class="shrink-0" />
+              {#if isTabActive}<span aria-hidden="true" class="absolute left-0 inset-y-2 w-0.5 rounded-full bg-primary"></span>{/if}
+              <def.icon size={17} strokeWidth={1.75} class="shrink-0" />
               {#if !sidebarCollapsed}
                 <span class="truncate">{def.label}</span>
               {/if}
@@ -361,7 +353,7 @@
         <!-- Group Separator for Settings -->
         <div class="pt-2" role="separator">
           {#if !sidebarCollapsed}
-            <div class="px-2.5 pt-1 pb-1 text-micro font-semibold uppercase tracking-wider text-muted-foreground select-none">
+            <div class="px-2.5 pt-1 pb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground select-none">
               Preferences
             </div>
           {:else}
@@ -373,14 +365,16 @@
         <button
           type="button"
           onclick={() => selectTab('settings')}
+          aria-current={currentTab === 'settings' ? 'page' : undefined}
           aria-label="Settings"
           title={sidebarCollapsed ? 'Settings' : undefined}
-          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-lg text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
+          class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-md text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
           'settings'
-            ? 'bg-accent text-foreground'
+            ? 'bg-accent/70 text-foreground'
             : 'text-muted-foreground hover:text-foreground hover:bg-card'}"
         >
-          <Settings size={18} strokeWidth={1.7} class="shrink-0" />
+          {#if currentTab === 'settings'}<span aria-hidden="true" class="absolute left-0 inset-y-2 w-0.5 rounded-full bg-primary"></span>{/if}
+          <Settings size={17} strokeWidth={1.75} class="shrink-0" />
           {#if !sidebarCollapsed}
             <span>Settings</span>
           {/if}

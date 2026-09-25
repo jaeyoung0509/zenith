@@ -359,6 +359,28 @@ html.transparent-window body {
   backdrop-filter: blur(20px) saturate(140%);
 }
 
+/* Hallmark · pre-emit critique: P5 H4 E4 S5 R5 V4 */
+/* Hallmark · macrostructure: compact utility ledger · white canvas · mint action accent */
+.quick-list-section,
+.quick-data-row {
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.quick-list-section {
+  padding: 8px 4px;
+}
+
+.quick-data-row {
+  min-height: 48px;
+  padding: 7px 4px;
+  border-radius: 6px;
+  transition: background-color var(--duration-fast);
+}
+
+.quick-data-row:hover {
+  background: hsl(var(--accent) / 0.65);
+}
+
 @media (max-width: 379px) {
   .quick-version {
     display: none;

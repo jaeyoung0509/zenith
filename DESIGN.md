@@ -238,7 +238,7 @@ inventory is still valid.
 
 - `BrandIcon` resolves an identity through one typed registry: a reviewed local
   asset when the copyright holder's licence clearly permits redistribution, and
-  otherwise a neutral glyph beside the factual product name.
+  otherwise a neutral two-letter monogram beside the factual product name.
 - Reviewed assets live in `src/lib/assets/brands/`, are served offline from the
   bundle, keep their intrinsic proportions and colours, and are never filtered,
   recoloured, distorted, or clipped. The asset register with source URL,
@@ -248,6 +248,9 @@ inventory is still valid.
 - Tool rows use 18–20 px action glyphs and a 32 px identity slot (24 px
   artwork) so logos sit next to useful names rather than in a wall of
   promotional cards.
+- The Quick Panel and main sidebar share the same Zenith asset and restrained
+  functional navigation icons. Provider rows never borrow sparkle or rocket
+  symbols as substitute logos.
 
 ## Feature-specific patterns
 
@@ -258,6 +261,17 @@ pressure / battery tiles showing their real values with per-domain freshness, a
 compact list of active tools and services, and a compact Keep Awake control. At
 960 × 660 the next action and the core metrics are visible without scrolling;
 secondary detail scrolls. Each tile opens its exact detail page.
+
+### Quick Panel
+
+- At 320–360 px, use compact full-width reading rows. A label, current value,
+  and one supporting fact should fit in roughly 48 px; details stay in the
+  main window. The header and footer stay fixed while the body scrolls.
+- Show each AI provider once. Merge observed sessions into its identity row,
+  use a readable name and an explicit loading/stale/unavailable state, and
+  express reset times with units rather than a bare minute counter.
+- Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
+  The storage safety and freshness rules do not change with the presentation.
 
 ### Storage
 
