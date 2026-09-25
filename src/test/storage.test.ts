@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'svelte/server';
 import { readFileSync } from 'node:fs';
 import StorageView from '../routes/dashboard/StorageView.svelte';
+import StorageSummary from '../lib/components/StorageSummary.svelte';
 import CategoryDetailView from '../routes/dashboard/CategoryDetailView.svelte';
 import ItemRow from '../lib/components/ItemRow.svelte';
 import CleanResultModal from '../lib/components/CleanResultModal.svelte';
@@ -92,6 +93,39 @@ function publishScan(items: ScanItem[], scanId: string): CategoryResult {
   scanStore.updateFreshness();
   return category;
 }
+
+describe('Storage scan summary', () => {
+  it('separates observed bytes from bytes authorized for cleanup, including uncertain overlaps', () => {
+    publishScan([
+      scanItem({ id: 'cleanable', size: { logical: 2048, allocated: 2048 }, disposition: { eligibility: 'auto_cleanable', reason: null, cleanable_bytes: 1024 } }),
+      scanItem({ id: 'kept', risk: 'manual', size: { logical: 8192, allocated: 8192 }, disposition: { eligibility: 'advisory', reason: null, cleanable_bytes: 0 } }),
+    ], 'summary-overlap');
+    scanStore.lastScan!.ambiguous_overlap_bytes = 2048;
+
+    const { body } = render(StorageSummary);
+    expect(body).toContain('Available to clean');
+    expect(body).toContain('1 KB');
+    expect(body).toContain('8 KB–10 KB');
+    expect(body).toContain('Includes items that must be kept.');
+  });
+
+  it('labels an expired scan as a previous estimate', () => {
+    publishScan([scanItem({ id: 'expired' })], 'summary-expired');
+    const freshness = vi.spyOn(scanStore, 'freshness', 'get').mockReturnValue('stale');
+    const { body } = render(StorageSummary);
+    freshness.mockRestore();
+    expect(body).toContain('Last cleanup estimate');
+    expect(body).toContain('Scan again to verify these results.');
+    expect(body).not.toContain('Available to clean');
+  });
+
+  it('shows a scan prompt without implying that an idle empty scan is still running', () => {
+    const { body } = render(StorageView, { props: { onSelectCategory: vi.fn() } });
+    expect(body).toContain('Start with a storage scan');
+    expect(body).not.toContain('Scanning known development caches...');
+    expect(body).not.toContain('0 B');
+  });
+});
 
 describe('StorageView CTA and responsive toolbar layout', () => {
   beforeEach(() => {

@@ -28,7 +28,7 @@
 
   const toneClass = {
     default: 'text-foreground',
-    success: 'text-success',
+    success: 'text-foreground',
     warning: 'text-warning',
     critical: 'text-destructive',
     muted: 'text-muted-foreground',

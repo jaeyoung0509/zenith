@@ -8,9 +8,21 @@
     actionLabel: string;
     onclick: () => void;
     tone?: 'default' | 'warning' | 'critical';
+    meter?: number | null;
   }
 
-  let { label, value, detail = null, actionLabel, onclick, tone = 'default' }: Props = $props();
+  let {
+    label,
+    value,
+    detail = null,
+    actionLabel,
+    onclick,
+    tone = 'default',
+    meter = null,
+  }: Props = $props();
+  let meterValue = $derived(
+    meter == null || !Number.isFinite(meter) ? null : Math.min(100, Math.max(0, meter))
+  );
 </script>
 
 <button
@@ -24,7 +36,12 @@
     {#if detail}
       <span class="block truncate text-caption text-muted-foreground" title={detail}>{detail}</span>
     {/if}
+    {#if meterValue !== null}
+      <span class="mt-1 block h-1 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
+        <span class="block h-full rounded-full bg-primary" style={`width: ${meterValue}%`}></span>
+      </span>
+    {/if}
   </span>
-  <span class="shrink-0 text-right text-body font-semibold tabular-nums {tone === 'critical' ? 'text-destructive' : tone === 'warning' ? 'text-warning' : 'text-foreground'}">{value}</span>
+  <span class="quick-data-value shrink-0 text-right font-semibold tabular-nums {tone === 'critical' ? 'text-destructive' : tone === 'warning' ? 'text-warning' : 'text-foreground'}">{value}</span>
   <ChevronRight size={14} strokeWidth={1.75} class="shrink-0 text-muted-foreground" aria-hidden="true" />
 </button>

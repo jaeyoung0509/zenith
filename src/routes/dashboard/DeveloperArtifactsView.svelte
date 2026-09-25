@@ -665,52 +665,64 @@
   {#if sortedItems.length === 0}
     <Card class="p-8 text-center text-xs text-muted-foreground">No recognized developer artifacts yet. Add a workspace and run a scan.</Card>
   {:else}
-    <div class="space-y-2">
+    <div class="developer-artifact-list overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
       {#each sortedItems as item (item.id)}
-        <Card class={`p-4 ${item.status === 'complete' ? '' : item.status === 'measurement_incomplete' ? 'border-warning/40 bg-warning/5' : 'border-destructive/30 bg-destructive/5'}`}>
-          <div class="flex items-start gap-3">
-            <input
-              type="checkbox"
-              checked={selectedIdSet.has(item.id)}
-              onchange={() => toggleItem(item)}
-              disabled={!canManuallyClean(item) || isScanning || isExecuting}
-              aria-label={`Select ${item.project_name} ${kindLabel(item)}${item.status === 'measurement_incomplete' ? ' with partial measurement warning' : ''}`}
-              class="mt-1 accent-success"
-            />
-            <div class="min-w-0 flex-1 space-y-1.5">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-xs font-semibold">{item.project_name}</span>
-                <span class="rounded bg-secondary px-1.5 py-0.5 text-caption text-muted-foreground">{ecosystemLabel(item)} · {kindLabel(item)}</span>
-                {#if item.status !== 'complete'}
-                  <span class={`rounded border px-1.5 py-0.5 text-caption ${item.status === 'measurement_incomplete' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-destructive/30 bg-destructive/10 text-destructive'}`}>{statusLabel(item.status)}</span>
-                {/if}
-              </div>
-              <div class="truncate font-mono text-caption text-muted-foreground" title={item.path}>{item.path}</div>
-              <div class="flex flex-wrap gap-x-3 gap-y-1 text-meta text-muted-foreground">
-                <span>{formatBytes(item.allocated_bytes)} allocated</span>
-                <span>{item.file_count.toLocaleString()} files</span>
-                <span>Last changed {formatTimeAgo(item.newest_mtime ?? undefined)}</span>
-                {#if item.rebuild_hint}<span>↻ {item.rebuild_hint}</span>{/if}
-              </div>
-              <div class="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
-                <span>Cleanup scope: <span class="font-mono text-foreground">{cleanupScopeLabel(item)}</span> only · source stays</span>
-                <span>Evidence: {item.evidence.join(' · ')}</span>
-                {#if item.incomplete_reason}<span class={item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}>{item.incomplete_reason}</span>{/if}
-              </div>
+        <article
+          class={`developer-artifact-row flex items-start gap-3 border-l-2 px-4 py-3 transition-colors ${selectedIdSet.has(item.id) ? 'bg-accent/75' : 'hover:bg-secondary/55'} ${item.status === 'measurement_incomplete' ? 'border-l-warning' : item.status !== 'complete' ? 'border-l-destructive' : 'border-l-transparent'}`}
+        >
+          <input
+            type="checkbox"
+            checked={selectedIdSet.has(item.id)}
+            onchange={() => toggleItem(item)}
+            disabled={!canManuallyClean(item) || isScanning || isExecuting}
+            aria-label={`Select ${item.project_name} ${kindLabel(item)}${item.status === 'measurement_incomplete' ? ' with partial measurement warning' : ''}`}
+            class="mt-1 accent-primary"
+          />
+          <div class="min-w-0 flex-1 space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-semibold">{item.project_name}</span>
+              <span class="rounded bg-secondary px-1.5 py-0.5 text-caption text-muted-foreground">{ecosystemLabel(item)} · {kindLabel(item)}</span>
+              {#if item.status !== 'complete'}
+                <span class={`rounded border px-1.5 py-0.5 text-caption ${item.status === 'measurement_incomplete' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-destructive/30 bg-destructive/10 text-destructive'}`}>{statusLabel(item.status)}</span>
+              {/if}
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-7 w-7 shrink-0"
-              disabled={!canReveal()}
-              onclick={() => void runReveal(() => tauriShowInFileManager(item.path), (message) => (revealError = message))}
-              ariaLabel={`Show ${item.path} in file manager`}
-              title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
-            >
-              <FolderOpen size={13} />
-            </Button>
+            <div class="truncate font-mono text-caption text-muted-foreground" title={item.path}>{item.path}</div>
+            <div class="flex flex-wrap gap-x-3 gap-y-1 text-meta text-muted-foreground">
+              <span>{item.file_count.toLocaleString()} files</span>
+              <span>Last changed {formatTimeAgo(item.newest_mtime ?? undefined)}</span>
+              <span>Cleanup scope: <span class="font-mono text-foreground">{cleanupScopeLabel(item)}</span> only · source stays</span>
+            </div>
+            {#if item.incomplete_reason}
+              <p class={`text-caption ${item.status === 'measurement_incomplete' ? 'text-warning' : 'text-destructive'}`}>
+                {item.incomplete_reason}
+              </p>
+            {/if}
+            <details class="text-caption text-muted-foreground">
+              <summary class="w-fit cursor-pointer rounded-sm py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                Evidence and rebuild details
+              </summary>
+              <div class="mt-1 space-y-1 pl-2">
+                <p>Evidence: {item.evidence.join(' · ')}</p>
+                {#if item.rebuild_hint}<p>Rebuild: <span class="font-mono text-foreground">{item.rebuild_hint}</span></p>{/if}
+              </div>
+            </details>
           </div>
-        </Card>
+          <div class="min-w-24 shrink-0 pt-0.5 text-right">
+            <span class="block text-body font-semibold tabular-nums text-foreground">{formatBytes(item.allocated_bytes)}</span>
+            <span class="text-caption text-muted-foreground">allocated</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7 shrink-0"
+            disabled={!canReveal()}
+            onclick={() => void runReveal(() => tauriShowInFileManager(item.path), (message) => (revealError = message))}
+            ariaLabel={`Show ${item.path} in file manager`}
+            title={canReveal() ? platformContextStore.revealLabel : revealUnavailableReason()}
+          >
+            <FolderOpen size={13} />
+          </Button>
+        </article>
       {/each}
     </div>
   {/if}

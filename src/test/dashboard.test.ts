@@ -5,6 +5,7 @@ import Dashboard from '../routes/dashboard/Dashboard.svelte';
 import { scanStore } from '../lib/stores/scan.svelte';
 import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
 import { platformContextStore } from '../lib/stores/platformContext.svelte';
+import { settingsStore } from '../lib/stores/settings.svelte';
 import { goldenCapabilitiesByPlatform } from '../lib/models/platformCapabilities';
 import { mockApi } from '../lib/api/mock';
 
@@ -68,7 +69,7 @@ describe('Dashboard sidebar affordances', () => {
     expect(rendered.body).toContain('aria-label="Collapse sidebar"');
     expect(rendered.body).toContain('title="Collapse sidebar"');
     expect(rendered.body).toContain('rounded-md border border-transparent');
-    expect(rendered.body).toContain('text-success/85');
+    expect(rendered.body).toContain('text-caption font-mono font-medium tracking-tight text-primary');
     expect(rendered.body).toContain('14 MB');
   });
 
@@ -87,6 +88,24 @@ describe('Dashboard sidebar affordances', () => {
   it('exposes the consolidated AI Activity dashboard route', () => {
     const rendered = render(Dashboard);
     expect(rendered.body).toContain('AI Activity');
+  });
+
+  it('shows a Tools heading only once when saved tabs split the group', () => {
+    const previousTabs = settingsStore.settings.dashboard_tabs;
+    settingsStore.settings = {
+      ...settingsStore.settings,
+      dashboard_tabs: [
+        'overview', 'docker', 'storage', 'models', 'performance',
+        'development_servers', 'projects', 'awake',
+      ],
+    };
+
+    try {
+      const rendered = render(Dashboard);
+      expect(rendered.body.match(/>Tools<\/div>/g)).toHaveLength(1);
+    } finally {
+      settingsStore.settings = { ...settingsStore.settings, dashboard_tabs: previousTabs };
+    }
   });
 });
 

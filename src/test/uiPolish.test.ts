@@ -36,7 +36,7 @@ describe('compact-window layout contracts', () => {
     const rendered = render(QuickPanel);
 
     expect(rendered.body).toContain('min-h-0 flex-1 overflow-y-auto');
-    expect(rendered.body).toContain('shrink-0 pt-3 border-t');
+    expect(rendered.body).toMatch(/class="quick-liquid-chrome shrink-0 [^"]*border-t/);
     expect(rendered.body).not.toContain('backdrop-blur-xl');
   });
 

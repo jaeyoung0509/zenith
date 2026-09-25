@@ -3,7 +3,6 @@
   import { formatBytes } from '../utils/format';
   import { emptyCategoryMessage, isActionable, presentedItems, summarizeCategory } from '../utils/cleanup';
   import { scanStore } from '../stores/scan.svelte';
-  import Card from './Card.svelte';
   import Checkbox from './Checkbox.svelte';
   import {
     Bot,
@@ -50,7 +49,7 @@
   }
 </script>
 
-<Card class="group transition-ui hover:bg-accent/40">
+<div class="category-row group transition-ui hover:bg-accent/40">
   <div
     data-category-card-layout="stable"
     class="flex min-w-0 items-center gap-3"
@@ -59,6 +58,7 @@
     {#if cleanableItems.length > 0}
       <div class="shrink-0">
         <Checkbox
+          class="h-8 w-8"
           checked={allSelected}
           disabled={!scanStore.canClean}
           onchange={handleToggleCheckbox}
@@ -67,7 +67,8 @@
       </div>
     {:else}
       <div
-        class="shrink-0 h-4 w-4 rounded border border-border bg-secondary flex items-center justify-center text-caption text-muted-foreground"
+        class="shrink-0 h-8 w-8 flex items-center justify-center text-meta text-muted-foreground"
+        aria-label="No selectable items"
       >
         -
       </div>
@@ -75,7 +76,7 @@
 
     <button
       type="button"
-      class="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      class="category-detail flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
       aria-label={`Open ${categoryResult.display_name} category`}
       onclick={() => onSelectCategory?.(categoryResult)}
     >
@@ -84,7 +85,7 @@
         ? 'bg-accent'
         : 'bg-secondary'}"
     >
-      <Icon size={18} />
+      <Icon size={18} aria-hidden="true" />
     </div>
 
     <div data-region="identity" class="min-w-0 flex-1">
@@ -99,13 +100,15 @@
 
     <div
       data-region="metrics"
-      class="shrink-0 text-right"
+      class="shrink-0 text-right category-amount"
     >
       <span class="block whitespace-nowrap text-body font-semibold font-mono tabular-nums text-foreground">
         {#if summary.cleanable_bytes > 0}
           {formatBytes(summary.cleanable_bytes)}
         {:else if summary.cleanable_count > 0}
           Amount varies
+        {:else}
+          —
         {/if}
       </span>
       <span class="block whitespace-nowrap text-caption text-muted-foreground">
@@ -116,7 +119,18 @@
     <ChevronRight
       size={16}
       class="shrink-0 text-muted-foreground"
+      aria-hidden="true"
     />
     </button>
   </div>
-</Card>
+</div>
+
+<style>
+  .category-row { padding: 8px 12px 8px 8px; }
+  .category-row + :global(.category-row) { border-top: 1px solid hsl(var(--border)); }
+  .category-detail { min-height: 44px; padding: 4px; scroll-margin-block: 16px 112px; }
+  .category-amount { width: 112px; }
+  @container (max-width: 560px) {
+    .category-amount { width: 96px; }
+  }
+</style>

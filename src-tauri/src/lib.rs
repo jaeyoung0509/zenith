@@ -64,17 +64,40 @@ use zenith_platform::path_algebra::PathFlavor;
 /// a transparent undecorated window the same way, so the same configuration
 /// would reserve dead space and show alpha artifacts on Windows.
 fn platform_window_config(mut config: WindowConfig, flavor: PathFlavor) -> WindowConfig {
+    #[cfg(target_os = "macos")]
+    if config.label == "main" && !flavor.is_windows() {
+        config.transparent = true;
+        config.background_color = Some(Color(0, 0, 0, 0));
+        config.window_effects = Some(tauri::utils::config::WindowEffectsConfig {
+            effects: vec![tauri::utils::WindowEffect::Sidebar],
+            state: Some(tauri::utils::WindowEffectState::Active),
+            radius: None,
+            color: None,
+        });
+    }
     if config.label == "quick" {
         // The transparent window alone does not guarantee that WebKit clears
         // its own backing surface. A white WebView rectangle would show through
         // the CSS-rounded corners even though the native window is transparent.
         config.background_color = Some(Color(0, 0, 0, 0));
+        #[cfg(target_os = "macos")]
+        if !flavor.is_windows() {
+            // Let AppKit blur the desktop behind the panel. CSS backdrop-filter
+            // can only sample content inside the WebView, not other windows.
+            config.window_effects = Some(tauri::utils::config::WindowEffectsConfig {
+                effects: vec![tauri::utils::WindowEffect::Popover],
+                state: Some(tauri::utils::WindowEffectState::Active),
+                radius: Some(20.0),
+                color: None,
+            });
+        }
     }
     if flavor.is_windows() {
         config.title_bar_style = TitleBarStyle::Visible;
         if config.label == "quick" {
             config.transparent = false;
             config.background_color = None;
+            config.window_effects = None;
         }
     }
     config
@@ -299,6 +322,22 @@ fn quick_panel_size(desired: PhysicalSize<u32>, work_area: PhysicalSize<u32>) ->
     )
 }
 
+fn quick_panel_display_size(
+    current_size: PhysicalSize<u32>,
+    current_scale: f64,
+    configured_size: LogicalSize<f64>,
+    target_scale: f64,
+    work_area: PhysicalSize<u32>,
+) -> PhysicalSize<u32> {
+    let logical_height = f64::from(current_size.height) / current_scale;
+    let desired = LogicalSize::new(
+        configured_size.width,
+        logical_height.min(configured_size.height),
+    )
+    .to_physical(target_scale);
+    quick_panel_size(desired, work_area)
+}
+
 fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::Result<()> {
     if let Some(rect) = tray_rect {
         if let Ok(current_size) = window.outer_size() {
@@ -320,12 +359,23 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::R
                         .windows
                         .iter()
                         .find(|config| config.label == "quick")
-                        .map(|config| {
-                            LogicalSize::new(config.width, config.height)
-                                .to_physical(monitor.scale_factor())
-                        })
-                        .unwrap_or(current_size);
-                    let size = quick_panel_size(configured_size, work_area.size);
+                        .map(|config| LogicalSize::new(config.width, config.height))
+                        .unwrap_or_else(|| {
+                            LogicalSize::new(
+                                f64::from(current_size.width) / provisional_scale,
+                                f64::from(current_size.height) / provisional_scale,
+                            )
+                        });
+                    // Keep the content-fitted height across hides. The frontend
+                    // recomputes it when visible content changes; native show
+                    // converts it for this monitor and clamps to its work area.
+                    let size = quick_panel_display_size(
+                        current_size,
+                        provisional_scale,
+                        configured_size,
+                        monitor.scale_factor(),
+                        work_area.size,
+                    );
                     window.set_size(size)?;
                     quick_panel_position(anchor, size, work_area.position, work_area.size)
                 } else {
@@ -626,6 +676,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 #[cfg(test)]
 mod tests {
     use super::platform_window_config;
+    use super::quick_panel_display_size;
     use super::quick_panel_position;
     use super::quick_panel_size;
     use super::specta_builder;
@@ -635,7 +686,7 @@ mod tests {
     use tauri::utils::config::Color;
     use tauri::utils::config::WindowConfig;
     use tauri::utils::TitleBarStyle;
-    use tauri::{PhysicalPosition, PhysicalSize};
+    use tauri::{LogicalSize, PhysicalPosition, PhysicalSize};
     use zenith_platform::path_algebra::PathFlavor;
 
     #[test]
@@ -687,6 +738,42 @@ mod tests {
     }
 
     #[test]
+    fn quick_panel_keeps_its_fitted_height_when_reopened_or_moved() {
+        let configured = LogicalSize::new(400.0, 740.0);
+
+        assert_eq!(
+            quick_panel_display_size(
+                PhysicalSize::new(800, 1_040),
+                2.0,
+                configured,
+                2.0,
+                PhysicalSize::new(2_000, 1_800),
+            ),
+            PhysicalSize::new(800, 1_040),
+        );
+        assert_eq!(
+            quick_panel_display_size(
+                PhysicalSize::new(800, 1_040),
+                2.0,
+                configured,
+                1.0,
+                PhysicalSize::new(2_000, 1_800),
+            ),
+            PhysicalSize::new(400, 520),
+        );
+        assert_eq!(
+            quick_panel_display_size(
+                PhysicalSize::new(800, 1_040),
+                2.0,
+                configured,
+                1.0,
+                PhysicalSize::new(400, 480),
+            ),
+            PhysicalSize::new(384, 464),
+        );
+    }
+
+    #[test]
     fn windows_window_config_uses_the_native_caption_bar() {
         let config: WindowConfig = serde_json::from_str(
             r#"{
@@ -725,6 +812,7 @@ mod tests {
         assert!(!adapted.decorations);
         assert!(adapted.always_on_top);
         assert_eq!(adapted.background_color, None);
+        assert_eq!(adapted.window_effects, None);
     }
 
     #[test]
@@ -749,6 +837,30 @@ mod tests {
         let adapted_quick = platform_window_config(quick, PathFlavor::Posix);
         assert!(adapted_quick.transparent);
         assert_eq!(adapted_quick.background_color, Some(Color(0, 0, 0, 0)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_quick_panel_uses_rounded_native_popover_material() {
+        let quick: WindowConfig = serde_json::from_str(r#"{"label":"quick","transparent":true}"#)
+            .expect("parse quick window config");
+        let adapted = platform_window_config(quick, PathFlavor::Posix);
+        let effects = adapted.window_effects.expect("native popover material");
+        assert_eq!(effects.effects, vec![tauri::utils::WindowEffect::Popover]);
+        assert_eq!(effects.radius, Some(20.0));
+        assert_eq!(effects.state, Some(tauri::utils::WindowEffectState::Active));
+
+        let main: WindowConfig =
+            serde_json::from_str(r#"{"label":"main"}"#).expect("parse main window config");
+        let main = platform_window_config(main, PathFlavor::Posix);
+        assert!(main.transparent);
+        assert_eq!(main.title_bar_style, TitleBarStyle::Visible);
+        let main_effects = main.window_effects.expect("native sidebar material");
+        assert_eq!(
+            main_effects.effects,
+            vec![tauri::utils::WindowEffect::Sidebar]
+        );
+        assert_eq!(main_effects.radius, None, "macOS owns main window corners");
     }
 
     #[test]

@@ -3,6 +3,8 @@
   import { tauriOpenFullDiskAccessSettings } from '../utils/tauri';
   import Button from './Button.svelte';
 
+  let { compact = false }: { compact?: boolean } = $props();
+
   let settingsError = $state<string | null>(null);
 
   let fullDiskAccessGapCount = $derived(
@@ -24,7 +26,7 @@
 </script>
 
 {#if scanStore.freshness !== 'fresh' || scanStore.discovery.status !== 'exhausted'}
-  <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-secondary p-3 text-meta" role="status">
+  <div class="flex flex-wrap items-center justify-between gap-3 text-meta {compact ? 'border-b border-border py-2' : 'rounded-xl border border-border bg-secondary p-3'}" role="status">
     <span class="min-w-0 flex-1">
       {#if scanStore.freshness === 'refreshing'}
         Checking storage…

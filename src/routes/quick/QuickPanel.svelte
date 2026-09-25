@@ -20,6 +20,7 @@
     isAcceleratorPressed,
     isQuickPanelDismissShortcut,
     platformAccelerator,
+    quickPanelHeight,
     projectAiProviders,
     projectQuickAiRows,
     formatQuickProviderUsage,
@@ -101,8 +102,8 @@
   });
 
   let cleanupValue = $derived.by(() => {
-    if (cleanupState === 'unknown') return '—';
-    if (cleanupState === 'scanning') return 'Scanning…';
+    if (cleanupState === 'unknown' || cleanupState === 'stale') return 'Scan needed';
+    if (cleanupState === 'scanning' || cleanupState === 'refreshing') return 'Updating…';
     return formatBytes(quickCleanableBytes);
   });
 
@@ -135,6 +136,11 @@
 
   let stopFreshness: (() => void) | undefined;
   let metricsPolling = false;
+  let panelShell: HTMLDivElement;
+  let panelHeader: HTMLDivElement;
+  let panelFooter: HTMLDivElement;
+  let panelContent: HTMLDivElement;
+  let resizePanelToContent: (() => void) | undefined;
 
   async function activatePanel() {
     if (panelActive) return;
@@ -173,6 +179,7 @@
       await scanStore.init();
       if (panelActive && scanStore.isStale()) void scanStore.runScan();
     }
+    resizePanelToContent?.();
   }
 
   function deactivatePanel() {
@@ -190,6 +197,7 @@
   onMount(() => {
     let disposed = false;
     let unlistenFocus: (() => void) | undefined;
+    let cleanupResize: (() => void) | undefined;
 
     const closeOnShortcut = (event: KeyboardEvent) => {
       const accelerator = platformAccelerator(platformContextStore.context?.primary_accelerator);
@@ -211,14 +219,66 @@
     if (!isTauri()) {
       void activatePanel();
     } else {
-      void import('@tauri-apps/api/webviewWindow').then(async ({ getCurrentWebviewWindow }) => {
+      void Promise.all([
+        import('@tauri-apps/api/webviewWindow'),
+        import('@tauri-apps/api/dpi'),
+        import('@tauri-apps/api/window'),
+      ]).then(async ([{ getCurrentWebviewWindow }, { LogicalSize }, { currentMonitor }]) => {
+        if (disposed) return;
         const currentWindow = getCurrentWebviewWindow();
-        unlistenFocus = await currentWindow.onFocusChanged(({ payload: focused }) => {
+        let resizeTimer: number | undefined;
+        const resizeToContent = () => {
+          if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
+          resizeTimer = window.setTimeout(() => {
+            if (!panelActive || !panelShell || !panelHeader || !panelFooter || !panelContent) return;
+            void (async () => {
+              let maximumHeight = 740;
+              try {
+                const monitor = await currentMonitor();
+                if (monitor) {
+                  maximumHeight = Math.min(
+                    maximumHeight,
+                    Math.floor(monitor.workArea.size.height / monitor.scaleFactor - 24)
+                  );
+                }
+              } catch {
+                // Keep the configured maximum when the active monitor is unavailable.
+              }
+              const chromeHeight = panelHeader.offsetHeight + panelFooter.offsetHeight + 20;
+              const nextHeight = quickPanelHeight(
+                panelContent.scrollHeight,
+                chromeHeight,
+                maximumHeight
+              );
+              if (Math.abs(panelShell.clientHeight - nextHeight) >= 16) {
+                await currentWindow
+                  .setSize(new LogicalSize(panelShell.clientWidth, nextHeight))
+                  .catch(() => undefined);
+              }
+            })();
+          }, 180);
+        };
+        const observer = new ResizeObserver(resizeToContent);
+        if (panelContent) observer.observe(panelContent);
+        resizePanelToContent = resizeToContent;
+        cleanupResize = () => {
+          observer.disconnect();
+          if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
+          if (resizePanelToContent === resizeToContent) resizePanelToContent = undefined;
+        };
+
+        const unlisten = await currentWindow.onFocusChanged(({ payload: focused }) => {
           handleQuickPanelFocusChanged(focused, {
             activate: activatePanel,
             deactivate: deactivatePanel,
           });
         });
+        if (disposed) {
+          unlisten();
+          cleanupResize?.();
+          return;
+        }
+        unlistenFocus = unlisten;
         if (!disposed && await currentWindow.isVisible()) void activatePanel();
       });
     }
@@ -226,6 +286,7 @@
     return () => {
       disposed = true;
       unlistenFocus?.();
+      cleanupResize?.();
       window.removeEventListener('keydown', closeOnShortcut, true);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       deactivatePanel();
@@ -273,10 +334,11 @@
   });
 </script>
 
-<div class="quick-liquid-shell w-full h-full rounded-2xl flex flex-col select-none text-foreground font-sans overflow-hidden relative">
+<div bind:this={panelShell} data-material={isTauri() && platformContextStore.context?.platform === 'macos' ? 'native' : 'web'} class="quick-liquid-shell w-full h-full rounded-2xl flex flex-col select-none text-foreground font-sans overflow-hidden relative">
   <!-- Header — draggable, buttons are no-drag -->
   <div
-    class="quick-liquid-chrome flex shrink-0 items-center justify-between gap-2 px-4 py-3 border-b border-border relative titlebar-drag-region"
+    bind:this={panelHeader}
+    class="quick-liquid-chrome flex shrink-0 items-center justify-between gap-2 px-4 py-2.5 border-b border-border relative titlebar-drag-region"
     role="presentation"
     onmousedown={handleWindowDrag}
   >
@@ -310,25 +372,27 @@
 
   <!-- Body Content — the panel's single scrolling region -->
   <div class="min-h-0 flex-1 overflow-y-auto scroll-stable px-3 py-2">
-    {#if capabilitiesFailed}
-      <!-- A failed capability query is not an unsupported platform: offer a retry
-           instead of reporting missing features. -->
-      <InlineNotice
-        variant="error"
-        title="Platform capabilities unavailable"
-        message={platformCapabilitiesStore.error ?? 'Zenith could not read this platform\'s capability matrix from the backend.'}
-        actionLabel="Retry"
-        onAction={() => void retryCapabilities()}
-      />
-    {:else}
-      {#each settings.quick_panel_sections as section (section)}
-        {@render sectionCell(section)}
-      {/each}
-    {/if}
+    <div bind:this={panelContent} class="quick-panel-content">
+      {#if capabilitiesFailed}
+        <!-- A failed capability query is not an unsupported platform: offer a retry
+             instead of reporting missing features. -->
+        <InlineNotice
+          variant="error"
+          title="Platform capabilities unavailable"
+          message={platformCapabilitiesStore.error ?? 'Zenith could not read this platform\'s capability matrix from the backend.'}
+          actionLabel="Retry"
+          onAction={() => void retryCapabilities()}
+        />
+      {:else}
+        {#each settings.quick_panel_sections as section (section)}
+          {@render sectionCell(section)}
+        {/each}
+      {/if}
+    </div>
   </div>
 
   <!-- Footer -->
-  <div class="quick-liquid-chrome shrink-0 pt-3 border-t px-4 pb-3 flex items-center justify-between gap-2">
+  <div bind:this={panelFooter} class="quick-liquid-chrome shrink-0 pt-2 border-t px-4 pb-2 flex items-center justify-between gap-2">
     <div class="flex items-center gap-1.5 text-caption text-muted-foreground min-w-0">
       <button
         id="quick-storage-scan-button"
@@ -376,10 +440,11 @@
 
 {#snippet sectionCell(section: QuickPanelSection)}
   {#if section === 'cleanup'}
-    <section class="quick-list-section" aria-label="Cleanup">
-      <div class="flex items-start justify-between gap-2">
+    <section class="quick-list-section quick-cleanup-summary" aria-label="Cleanup">
+      <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <p class="text-meta font-semibold text-foreground">Cleanup <span class="ml-1 font-mono tabular-nums text-muted-foreground">{cleanupValue}</span></p>
+          <p class="text-caption font-semibold uppercase tracking-wide text-muted-foreground">Cleanup</p>
+          <p class="quick-cleanup-value mt-0.5 font-mono font-semibold tabular-nums text-foreground">{cleanupValue}</p>
           <p class="text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
         </div>
         <Button
@@ -394,9 +459,9 @@
           <ArrowRight size={12} aria-hidden="true" />
         </Button>
       </div>
-      {#if cleanupAvailable && (cleanupState === 'ready' || cleanupState === 'stale' || scanStore.isCleaning)}
+      {#if cleanupAvailable && (cleanupState === 'ready' || cleanupState === 'stale' || cleanupState === 'unknown' || scanStore.isCleaning)}
         <div class="mt-2 flex items-center gap-2">
-          {#if cleanupState === 'stale'}
+          {#if cleanupState === 'stale' || cleanupState === 'unknown'}
             <Button
               variant="secondary"
               size="sm"
@@ -405,7 +470,7 @@
               class="gap-1.5 text-meta"
             >
               <RefreshCw size={13} aria-hidden="true" />
-              <span>Scan Again</span>
+              <span>{cleanupState === 'stale' ? 'Scan Again' : 'Scan Now'}</span>
             </Button>
           {:else}
             <Button
@@ -471,6 +536,7 @@
     <QuickMetricRow
       label="Disk"
       value={disk ? `${Math.round(disk.percent_used ?? 0)}% used` : 'Reading…'}
+      meter={disk?.percent_used}
       detail={disk
         ? `${formatBytes(disk.available_bytes)} free of ${formatBytes(disk.total_bytes)}`
         : cleanupCapability?.reason ?? null}
@@ -496,7 +562,8 @@
   {:else if section === 'agent_activity'}
     <section class="quick-list-section" aria-label="Active AI and services">
       <div class="flex items-center justify-between gap-2 px-1 pb-1">
-        <span class="text-meta font-semibold text-foreground">
+        <span class="inline-flex items-center gap-1.5 text-meta font-semibold text-foreground">
+          <span class="h-3.5 w-0.5 rounded-full bg-primary" aria-hidden="true"></span>
           AI Activity{activeCount > 0 ? ` · ${activeCount} active` : ''}
         </span>
         <button
@@ -516,12 +583,12 @@
       {:else}
         <ul class="divide-y divide-border">
           {#each visibleAiRows as row (row.id)}
-            <li class="min-w-0 px-1 py-1.5">
+            <li class="min-w-0 px-1 py-1">
               <div class="min-w-0">
                 <div class="flex min-w-0 items-baseline justify-between gap-2">
                   <span class="min-w-0 break-words text-meta font-medium text-foreground">{row.name}</span>
                   {#if row.sessions.length > 0}
-                    <span class="shrink-0 text-caption text-success">{row.sessions.length} active</span>
+                    <span class="shrink-0 text-caption text-primary">{row.sessions.length} active</span>
                   {/if}
                 </div>
                 <p class="text-caption leading-snug text-muted-foreground">

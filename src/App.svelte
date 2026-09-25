@@ -17,6 +17,13 @@
   let currentView = $state<View | null>(null);
   let ActiveComponent = $state<Component<any> | null>(null);
 
+  $effect(() => {
+    const nativeMaterial = isTauri() && currentView === 'dashboard'
+      && platformContextStore.context?.platform === 'macos';
+    document.documentElement.classList.toggle('native-material-window', nativeMaterial);
+    return () => document.documentElement.classList.remove('native-material-window');
+  });
+
   function browserView(): View {
     const hash = window.location.hash;
     const search = window.location.search;

@@ -29,7 +29,7 @@
 
   const variantStyles = {
     primary:
-      'bg-primary text-primary-foreground hover:bg-primary/90',
+      'bg-action text-action-foreground hover:bg-action/85',
     secondary:
       'bg-secondary text-secondary-foreground hover:bg-secondary/80',
     outline:

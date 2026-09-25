@@ -1,17 +1,21 @@
 # Zenith Design System
 
 Zenith is a compact, native-feeling macOS and desktop utility for developers.
-The visual direction starts with a white working surface. Mint identifies
-selection and action, while restrained translucency gives navigation and the
-Quick Panel a native sense of depth. Technical data and cleanup decisions stay
-on legible solid surfaces; amber and red signal real caution and failure. The
-dark theme remains an option, not the primary visual reference.
+Its visual direction pairs cool near-white surfaces and ink-blue type with
+pastel periwinkle actions and cobalt navigation. Frosted translucency gives navigation and
+the Quick Panel a native sense of depth. Technical data and cleanup decisions
+stay on legible solid surfaces; amber, red, and green remain semantic signals
+for caution, failure, and observed success. The dark theme follows the same
+cool-neutral and periwinkle relationship.
 
-Celestial atmosphere gives the white interface a distinct identity: quiet blue
-light on the shell, a small original planet with orbital dust in the Overview
-summary, and a restrained spectrum on navigation chrome. The planet is purely
-decorative, never a machine-health indicator. It is a static, locally rendered
-SVG; no external artwork, animation loop, or extra polling is needed.
+Celestial atmosphere gives the interface a distinct identity: quiet cobalt and
+ice-blue light on the shell, a small original planet with orbital dust in the
+Overview summary, and a soft lavender highlight. The planet is purely
+decorative, never a machine-health indicator. Its local SVG cloud layer rotates
+over 36 seconds and the orbital dust over 48 seconds. CSS animates transforms
+only; an IntersectionObserver and document visibility pause the scene when
+hidden. Reduced motion and reduced transparency stop it. No telemetry polling
+is added for this decoration.
 
 This document is the visual contract. The executable half of it — colour,
 radius, type, and motion tokens — lives in `src/app.css` and is enforced by
@@ -19,8 +23,28 @@ radius, type, and motion tokens — lives in `src/app.css` and is enforced by
 
 ## Product character
 
+The material reference is the macOS Bluetooth popover supplied during the
+September 25, 2026 design review: one rounded translucent surface, fine internal
+dividers, and crisp text. Use this material for transient chrome and navigation;
+keep operational lists on solid working surfaces. The UI UX Pro Max glassmorphism
+and accessibility guidance informs this treatment; existing Zenith tokens and
+desktop sizing remain the source of truth.
+
+On macOS, the Quick Panel uses Tauri's native `Popover` material, always active,
+with a 20 px corner radius matching its CSS shell. The native layer blurs the
+desktop; CSS supplies a theme-aware tint and hairline edge. Browser previews
+only blur content inside the page and do not demonstrate desktop vibrancy.
+The main window uses native `Sidebar` material behind its translucent left
+column, with a solid main content background and OS-owned window corners.
+Windows retains its opaque window adapter. Reduced transparency makes the
+entire panel opaque. Foreground and supporting text remain readable over both
+black and white backgrounds after compositing the tint.
+
 - Native desktop developer utility, not a marketing dashboard.
-- Bright, technical, trustworthy. One obvious primary action per task.
+- Calm, technical, trustworthy. Ink blue carries reading text; pastel
+  periwinkle identifies primary actions, with cobalt for selected navigation.
+  One obvious primary action per task. Generic resource readings use cobalt;
+  green is reserved for a completed success or cleanup eligibility.
 - The white circular `Z` mark is the product identity. Use the template-style
   monochrome variant for the menu bar and the full app icon for Finder, Dock,
   title areas, and application menus.
@@ -46,27 +70,29 @@ targets ≥ 4.5:1 and meaningful controls, boundaries, and focus target ≥ 3:1.
 
 | Token | Light | Dark | Role |
 | --- | --- | --- | --- |
-| `--background` | `120 11% 98%` | `220 25% 8%` | Window / page |
-| `--card` | `0 0% 100%` | `217 19% 13%` | Solid content surface |
-| `--secondary` | `140 16% 96%` | `219 21% 11%` | Sidebar and subtle surface |
-| `--accent` | `147 31% 93%` | `169 39% 20%` | Selected / quiet mint |
-| `--border` | `137 13% 90%` | `194 18% 23%` | Decorative hairline separator |
-| `--border-strong` | `145 10% 52%` | `166 17% 49%` | Essential boundary (inputs, interactive chrome) |
-| `--foreground` | `153 19% 11%` | `162 23% 95%` | Primary text |
-| `--muted-foreground` | `148 6% 40%` | `174 10% 72%` | Supporting text |
-| `--primary` | `161 42% 18%` | `154 43% 76%` | Primary action surface |
-| `--primary-foreground` | `0 0% 100%` | `159 43% 9%` | Text on the primary action |
-| `--ring` | `160 45% 42%` | `164 45% 34%` | Focus outline |
+| `--background` | `230 35% 97%` | `222 24% 8%` | Cool window / page |
+| `--card` | `230 40% 99%` | `222 20% 13%` | Solid working surface |
+| `--secondary` | `230 35% 94%` | `222 20% 12%` | Sidebar and grouped surface |
+| `--accent` | `228 75% 93%` | `219 42% 24%` | Selected / quiet blue surface |
+| `--border` | `230 24% 87%` | `220 18% 25%` | Decorative hairline separator |
+| `--border-strong` | `225 13% 49%` | `220 20% 49%` | Essential boundary (inputs, interactive chrome) |
+| `--foreground` | `225 24% 17%` | `230 35% 95%` | Ink-blue primary text |
+| `--muted-foreground` | `225 13% 40%` | `220 14% 74%` | Supporting text |
+| `--primary` | `220 76% 38%` | `218 82% 76%` | Cobalt text / data accent |
+| `--action` | `225 86% 87%` | `225 66% 80%` | Pastel primary button |
+| `--action-foreground` | `225 48% 24%` | `225 48% 15%` | Text on pastel buttons |
+| `--primary-foreground` | `0 0% 100%` | `224 48% 13%` | Text on saturated cobalt surfaces |
+| `--ring` | `220 82% 36%` | `217 88% 68%` | Focus outline |
 | `--success` | `162 71% 24%` | `157 60% 29%` | Safe candidates, protected items, healthy readings |
 | `--warning` | `33 100% 27%` | `38 76% 63%` | Rebuild caches, cautionary states, elevated pressure |
 | `--destructive` | `3 71% 41%` | `4 75% 70%` | Destructive actions, kills, hard errors |
-| `--ai` | `256 51% 47%` | `258 82% 79%` | AI Activity identity, models, provider metadata |
+| `--ai` | `222 82% 37%` | `217 85% 72%` | AI metadata accent, shared cobalt family |
 
-Measured light-theme contrast: primary text 16.5:1 on white and 15.8:1 on the
-page; supporting text 5.3:1 on white; white on the primary action 10.2:1;
-focus `--ring` 3.3:1 on white, 3.1:1 on the page, 3.1:1 on the primary action,
-3.0:1 on the sidebar; essential boundaries 3.4:1 on white; status colours
-6.6–7.7:1 on white.
+Measured contrast is enforced from the executable tokens in
+`src/test/designSystem.test.ts`. Normal text targets ≥ 4.5:1 and meaningful
+controls, boundaries, and focus target ≥ 3:1 in both themes. Keep supporting
+copy readable on both the cool canvas and white working surfaces; do not rely
+on a previous palette's contrast measurements when changing a token.
 
 The dark palette is checked by the design-system contrast test whenever its
 tokens change. Translucent chrome falls back to an opaque surface when the
@@ -77,25 +103,21 @@ Reduced transparency removes atmospheric backgrounds and the planet. Narrow
 content areas hide the artwork before it can crowd text or actions. Cards and
 data tables retain solid surfaces in both themes.
 
-Two deliberate deviations from a naive mint mapping are recorded here because
-they are load-bearing:
-
-- The dark focus ring is a medium mint rather than a light one. A single token
-  has to clear 3:1 against both the charcoal page and the light-mint primary
-  action surface; a light ring would fail against the primary action.
-- The light primary action is `161 42% 18%` rather than a mid mint, so the
-  focus ring can clear 3:1 on the button surface while still clearing 3:1 on
-  white.
-
-Mint is never the only carrier of meaning: every selected, safe, or cautionary
-state also carries text, an icon, or a shape.
+The cobalt mapping deliberately uses a pale blue selected surface and pastel
+periwinkle action in light mode. Dark mode retains a light action surface and
+the same hue family. This keeps action text legible and selected state distinct
+from both the page and the action. Brand colour is never the only carrier of
+meaning: every selected, safe, or cautionary state also carries text, an icon,
+or a shape. Success remains green because it names an observed outcome, not the
+brand.
 
 ### Keyboard focus
 
-`--ring` is the single focus token in both themes, applied through
+`--ring` is the focus token in each theme, applied through
 `focus-visible:ring-2 focus-visible:ring-ring` (or the `.focus-ring` outline
-helper). A focus ring is never removed without a visible replacement, and the
-`.dark` and light values above are the measured pairs that keep it visible.
+helper). A focus ring is never removed without a visible replacement. Measure
+it against the surface immediately outside each focused control, including
+offset rings, rather than assuming every control sits on the page background.
 
 ### Typography scale
 
@@ -138,27 +160,36 @@ helper). A focus ring is never removed without a visible replacement, and the
 
 The rounded main-window silhouette is owned by macOS. Zenith keeps the real
 overlay title-bar controls, drag region, resizing, full-screen behaviour, and
-the OS shadow; the WebView is opaque and `border-radius` on it does not round
-the OS window. The Quick Panel keeps its transparent, undecorated backing and
+the OS shadow. On macOS its WebView backing is transparent so native vibrancy
+shows through the sidebar; the main content paints an opaque surface. CSS
+`border-radius` does not round the OS window. The Quick Panel keeps its transparent, undecorated backing and
 clips its own 20 px radius, which is what the shadow and hit testing follow.
 Do not simulate traffic lights in CSS and do not add private window hacks to
 chase a mockup radius.
 
 ## Motion specification
 
-Motion communicates state change; it never delays input, replays a list, or
-animates a number continuously.
+Functional motion communicates state change; it never delays input, replays a
+list, or animates a number continuously. The user-requested celestial scene is
+the single decorative animation, subject to visibility and motion preferences.
 
 ### Material and emphasis
 
 - New installations open in the light theme. A saved theme choice is retained.
 - The sidebar and Quick Panel header/footer may blur the content behind them.
-  The Overview cleanup focal surface is solid white with a single mint edge.
+  The Overview cleanup focal surface is a solid near-white surface with a
+  restrained cobalt edge.
   File lists, category rows, dialogs, warnings, and selected cleanup targets
   also use solid surfaces.
 - Keep gradients, decorative rings, inflated type, and repeated floating cards
   out of operational screens. Reduced transparency substitutes an opaque
   chrome surface, and reduced motion removes decorative movement.
+- Give each operational surface one focal point: a primary action, meaningful
+  state, or key measured value. Supporting metadata stays quieter, and
+  comparable values align to one column.
+- Use surface luminance and blue/lavender accents and surface grouping to add character before adding
+  decoration. Reserve saturated cobalt for actions, selection, focus, and a
+  small number of identity cues.
 - The cleanup workflow has one visible phase at a time: reviewed selection,
   execution, then inventory refresh. While refreshing after a completed clean,
   hide the old selection toolbar and category list. The result dialog opens
@@ -205,6 +236,9 @@ Settings          anchored at the bottom
   the `memory` route both resolve to that page, so saved layouts and deep links
   keep working; `#280`'s migration adds `Overview` **after** whichever tab the
   user starts on, so an upgrade never changes the start page.
+- Group headings name a navigation group once. Saved tab order remains
+  authoritative, including when destinations from one group become separated;
+  never repeat a heading just because a group resumes later in the list.
 - Local tab strips belong to a page's own sections. There is no second global
   Overview/Cleanup/Performance/AI strip inside a page.
 
@@ -228,6 +262,9 @@ inventory is still valid.
 - **Card / surface**: `bg-card` + 1 px `--border` + `rounded-xl`. Data rows
   remain opaque; the optional `surface="subtle"` variant groups rows on
   `--secondary`. Navigation and Quick Panel chrome carry translucency.
+- **Navigation group**: each group heading appears once, even when a saved tab
+  order separates destinations from the same group. Selected navigation uses
+  a pale blue surface, cobalt text, and a visible leading marker.
 - **Badge**: status carries text meaning beyond colour (`success`, `warning`,
   `outline`), at `text-caption` or above.
 - **ProgressBar**: 4–8 px tall, no looping shimmer, no indeterminate gradient.
@@ -236,7 +273,7 @@ inventory is still valid.
   bytes, and risk summary, with one primary action.
 - **SegmentedTabs**: `role="tablist"` with one `tabindex="0"`, `aria-selected`
   on the active tab, and `aria-controls` pointing at the panel; the selected
-  tab uses the mint `--accent` surface rather than a dark pill.
+  tab uses the pale blue `--accent` surface rather than a dark pill.
 - **Switch / Checkbox**: switches are for persistent on/off state only,
   checkboxes for selection. The enabled switch track and the selected checkbox
   use `--success` with a white check; never a plain white track.
@@ -280,9 +317,22 @@ secondary detail scrolls. Each tile opens its exact detail page.
 - At 320–400 px, use compact full-width reading rows. A label, current value,
   and one supporting fact should fit in roughly 48 px; details stay in the
   main window. The header and footer stay fixed while the body scrolls.
+- The panel height follows its visible content between a 380 px minimum and a
+  740 px maximum, capped by the active display work area. Recompute only when
+  section content changes, not on telemetry value updates; preserve tray
+  alignment when reopening the persistent window.
+- Cleanup is the lead actionable summary. A missing or stale scan shows an
+  explicit scan-needed state and `Scan Again`; it never presents stale bytes
+  as verified cleanable space. A fresh non-zero estimate may use the focal
+  value treatment.
+- Resource values align consistently and carry more visual weight than their
+  labels and metadata. Use a compact proportional indicator only when it
+  represents a measured quantity; memory pressure remains separate from used
+  memory.
 - Show each AI provider once. Merge observed sessions into its identity row,
   use a readable name and an explicit loading/stale/unavailable state, and
-  express reset times with units rather than a bare minute counter.
+  express reset times with units rather than a bare minute counter. AI activity
+  uses typography and grouping for identity, with no separate purple brand.
 - Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
   The storage safety and freshness rules do not change with the presentation.
 - Memory leads with the measured used amount. Pressure is a smaller explicit
@@ -292,14 +342,26 @@ secondary detail scrolls. Each tile opens its exact detail page.
 
 ### Storage
 
+- Cleanup reads in task order: scan summary, freshness, category selection,
+  then review. The primary figure is the cleanup estimate; observed bytes use
+  a smaller secondary figure and respect ambiguous overlap ranges. Selected
+  bytes belong to the review toolbar, not the estimate.
+- Category rows share one bordered surface, with aligned value columns and
+  descending cleanable-byte order. Local workflow tabs use an underline rather
+  than a second enclosing card. The review toolbar follows the list in keyboard
+  order and remains visible while scrolling.
+
 - Top summary separates disk capacity, observed store size, the known cleanup
   estimate, and the selected amount. Unknown prune size can still be reviewed
   and cleaned.
 - `Cleanup`: category rows with risk tiers, an actionable selection footer, and
   the existing backend eligibility, consent, and one-shot plan rules.
 - `Developer Artifacts`: workspace/project list with generated-directory
-  amounts, workspace authorization, and its own inventory freshness. No
-  automatic whole-home scan and no unreviewed project deletion.
+  amounts aligned in a fixed value column, workspace authorization, and its
+  own inventory freshness. Comparable projects share one list surface. Keep a
+  warning reason visible in the row, with evidence and rebuild guidance in an
+  accessible disclosure. No automatic whole-home scan and no unreviewed
+  project deletion.
 - `Large Files`, `Applications`, `Disks`: searchable size-sorted files,
   installed-app rows with related data, and volume capacity. No invented
   disk-map engine.
@@ -356,23 +418,6 @@ changes only after the backend confirms it.
 Focused sections for appearance, navigation and Quick Panel, cleanup,
 providers, notifications, and diagnostics. No telemetry opt-in, charge limit,
 safety buffer, or other invented setting.
-
-### Quick panel
-
-- Designed natively at 400 × 740 so the default sections and five AI rows fit
-  without scrolling. Clamp the native window to the active display's work area;
-  at narrower widths or constrained heights the body scrolls between a fixed
-  header and footer.
-- Default order: cleanup estimate and next action with `Review →`, CPU,
-  memory pressure plus used amount, battery, disk capacity/free space, active AI
-  and services with small identities and a count, Keep Awake state/duration.
-  Saved order and visibility stay authoritative. Metrics use full-width rows.
-- `Review` opens the relevant main-window review; it never deletes. The
-  existing backend-owned Safe-only quick action stays available where eligible
-  and is not broadened to models, volumes, or reviewed cache operations.
-- Every summary has a real main-application destination. Tray anchoring,
-  display clamping, native shadow, Escape/⌘W/focus dismissal, and
-  hide-not-quit behaviour are preserved. A hidden panel polls nothing.
 
 ## Data policy for system readings
 
