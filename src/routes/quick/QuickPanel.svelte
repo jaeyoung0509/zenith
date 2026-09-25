@@ -446,10 +446,10 @@
   {:else if section === 'memory'}
     <QuickMetricRow
       label="Memory"
-      value={memory ? memoryPressureLabel(memory.pressure) : memoryAvailable ? 'Reading…' : 'Unavailable'}
+      value={memory ? formatBytes(memory.used_bytes) : memoryAvailable ? 'Reading…' : 'Unavailable'}
       tone={memory?.pressure === 'critical' ? 'critical' : memory?.pressure === 'warning' ? 'warning' : 'default'}
       detail={memory
-        ? `${formatBytes(memory.used_bytes)} of ${formatBytes(memory.total_bytes)}`
+        ? `of ${formatBytes(memory.total_bytes)} · ${memoryPressureLabel(memory.pressure)} pressure`
         : platformCapabilitiesStore.feature('memory_metrics')?.reason ?? null}
       actionLabel="Open memory detail"
       onclick={() => handleOpenRoute('memory')}

@@ -46,7 +46,7 @@
   role={onclick ? 'button' : undefined}
   onclick={onclick}
   aria-label={onclick ? actionLabel ?? label : undefined}
-  class="group w-full text-left rounded-xl border border-border bg-card p-3.5 space-y-1.5 {onclick
+  class="metric-tile group flex flex-col min-w-0 w-full text-left rounded-xl border border-border bg-card shadow-sm p-3.5 space-y-1.5 {onclick
     ? 'transition-[background-color,border-color] duration-140 hover:border-border-strong hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
     : ''} {toneClass[tone]} {className}"
 >
@@ -61,9 +61,9 @@
       {/if}
     </span>
   </span>
-  <span class="block text-metric font-mono tabular-nums font-semibold whitespace-nowrap {valueClass}">{value}</span>
+  <span class="block text-metric font-sans tabular-nums font-medium tracking-tight whitespace-nowrap {valueClass}">{value}</span>
   {#if visual}
-    <span class="flex h-8 items-center">
+    <span class="flex h-8 shrink-0 items-center">
       {@render visual()}
     </span>
   {/if}

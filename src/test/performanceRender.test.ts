@@ -4,12 +4,17 @@ import CpuPanel from '../lib/components/performance/CpuPanel.svelte';
 import BatteryPanel from '../lib/components/performance/BatteryPanel.svelte';
 import MemoryPanel from '../lib/components/performance/MemoryPanel.svelte';
 import PerformanceView from '../routes/dashboard/PerformanceView.svelte';
+import OverviewView from '../routes/dashboard/OverviewView.svelte';
+import { platformCapabilitiesStore } from '../lib/stores/platformCapabilities.svelte';
+import { goldenCapabilitiesByPlatform } from '../lib/models/platformCapabilities';
 import { systemMetricsStore } from '../lib/stores/systemMetrics.svelte';
 import { memoryStore } from '../lib/stores/memory.svelte';
 
 afterEach(() => {
   systemMetricsStore.reset();
   memoryStore.memory = null;
+  memoryStore.error = null;
+  platformCapabilitiesStore.reset();
 });
 
 const cpuBase = {
@@ -21,6 +26,39 @@ const cpuBase = {
 };
 
 describe('performance readings', () => {
+  it.each([
+    ['normal', 'Low pressure'],
+    ['warning', 'Elevated pressure'],
+    ['critical', 'Critical pressure'],
+  ] as const)('Overview keeps measured memory distinct from %s pressure', (pressure, label) => {
+    memoryStore.memory = {
+      total_bytes: 16 * 1024 ** 3, used_bytes: 10 * 1024 ** 3,
+      available_bytes: 6 * 1024 ** 3, free_bytes: 1024 ** 3,
+      compressed_bytes: 0, swap_used_bytes: 0, swap_total_bytes: 0,
+      pressure, timestamp: 1_800_000_000, top_processes: [],
+    };
+    const body = render(OverviewView).body;
+    expect(body).toContain('10 GB');
+    expect(body).toContain('16 GB total');
+    expect(body).toContain(label);
+  });
+
+  it('Overview distinguishes loading, failed, and unavailable memory without inventing usage', () => {
+    platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+    expect(render(OverviewView).body).toContain('Reading memory…');
+    memoryStore.error = 'Memory probe failed';
+    expect(render(OverviewView).body).toContain('Memory probe failed');
+    memoryStore.error = null;
+    platformCapabilitiesStore.capabilities = {
+      ...goldenCapabilitiesByPlatform.macos,
+      memory_metrics: { status: 'unavailable', reason: 'No memory adapter' },
+    };
+    const body = render(OverviewView).body;
+    expect(body).toContain('No memory adapter');
+    expect(body).not.toContain('Low pressure');
+    expect(body).not.toContain('0 GB');
+  });
+
   it('cpu fresh renders the measured value, window and real history', () => {
     systemMetricsStore.cpu = { ...cpuBase, state: 'fresh', usage_percent: 37.5 };
     systemMetricsStore.cpuHistory = [
