@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { render } from 'svelte/server';
-import type { AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
+import type { AgentQuickSessionRow, AiProviderId, AiProviderUsage, AiUsageSnapshot, UsageSummary } from '../lib/models/types';
 import QuickUsageGauges from '../lib/components/QuickUsageGauges.svelte';
 import QuickPanel from '../routes/quick/QuickPanel.svelte';
 import { settingsStore } from '../lib/stores/settings.svelte';
@@ -16,6 +16,9 @@ import {
   moveOrdered,
   platformAccelerator,
   projectAiProviders,
+  projectQuickAiRows,
+  formatQuickProviderUsage,
+  formatQuickReset,
   reorderOrdered,
   selectQuickUsageWindows,
   toggleOrdered,
@@ -87,6 +90,40 @@ describe('quick panel customization', () => {
 
     const removed = toggleOrdered(withAgent, 'agent_activity', false);
     expect(removed).not.toContain('agent_activity');
+  });
+});
+
+describe('compact AI summary', () => {
+  it('combines provider usage and observed sessions under one identity', () => {
+    const provider: AiProviderUsage = {
+      id: 'codex', name: 'Codex', installed: true, connected: true,
+      auth_label: '', status_message: '', support: 'live',
+      windows: [{ label: '5h limit', used_percent: 17, resets_at: 1_800_000_000 }],
+      summary: { lifetime_tokens: null, last_7d_tokens: null, peak_daily_tokens: null,
+        current_streak_days: null, local_sessions: null, local_cost_usd: null,
+        usage_usd: null, limit_remaining_usd: null },
+      action_url: null,
+    };
+    const session: AgentQuickSessionRow = {
+      session_id: 'session-1', tool_name: 'Codex', project_name: 'Zenith',
+      status: 'working', evidence: 'process_observed', elapsed_seconds: 120,
+    };
+    const rows = projectQuickAiRows([provider], [session]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].provider?.id).toBe('codex');
+    expect(rows[0].sessions).toHaveLength(1);
+    expect(formatQuickProviderUsage(provider, false)).toContain('17% used');
+    expect(formatQuickProviderUsage(provider, true)).toBe('Updating usage…');
+    expect(formatQuickProviderUsage(provider, false, true)).toBe('Usage out of date');
+  });
+
+  it('formats long and invalid reset intervals with explicit units', () => {
+    const now = 1_800_000_000;
+    expect(formatQuickReset(now + 2 * 3600 + 15 * 60, now)).toBe('Resets in 2h 15m');
+    expect(formatQuickReset(now + 4 * 86400 + 20 * 3600, now)).toBe('Resets in 4d 20h');
+    expect(formatQuickReset(null, now)).toBe('Reset time unavailable');
+    expect(formatQuickReset(Number.NaN, now)).toBe('Reset time unavailable');
+    expect(formatQuickReset(now - 1, now)).toBe('Resets soon');
   });
 });
 
@@ -167,21 +204,67 @@ describe('quick panel AI provider projection', () => {
   it('shows every configured provider even with no observed agent session', () => {
     const previousSettings = settingsStore.settings;
     const previousSnapshot = usageStore.snapshot;
+    const previousCapabilities = platformCapabilitiesStore.capabilities;
     try {
       settingsStore.settings = {
         ...previousSettings,
         quick_panel_sections: ['agent_activity'],
         quick_panel_ai_providers: ['codex', 'opencode'],
       };
+      platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
       usageStore.snapshot = mockSnapshot;
       const body = render(QuickPanel).body;
       expect(body).toContain('Codex');
       expect(body).toContain('OpenCode');
       expect(body).not.toContain('Claude Code');
-      expect(body).toContain('12 sessions');
+      expect(body).toContain('12 local sessions');
+      const activitySection = body.match(/<section[^>]*aria-label="Active AI and services"[\s\S]*?<\/section>/)?.[0];
+      expect(activitySection).toBeDefined();
+      expect(activitySection).not.toContain('<img');
+      expect(activitySection).not.toContain('>OP<');
     } finally {
       settingsStore.settings = previousSettings;
       usageStore.snapshot = previousSnapshot;
+      platformCapabilitiesStore.capabilities = previousCapabilities;
+    }
+  });
+
+  it('keeps a long provider identity readable through loading and unavailable states', () => {
+    const previousSettings = settingsStore.settings;
+    const previousSnapshot = usageStore.snapshot;
+    const previousCapabilities = platformCapabilitiesStore.capabilities;
+    const previousLoading = usageStore.isLoading;
+    const previousLoadingProviders = usageStore.loadingProviders;
+    const longName = 'Provider With A Deliberately Long Display Name';
+    try {
+      settingsStore.settings = {
+        ...previousSettings,
+        quick_panel_sections: ['agent_activity'],
+        quick_panel_ai_providers: ['codex'],
+      };
+      platformCapabilitiesStore.capabilities = goldenCapabilitiesByPlatform.macos;
+      usageStore.snapshot = {
+        fetched_at: Math.floor(Date.now() / 1000),
+        providers: [{ ...mockSnapshot.providers[0], name: longName, connected: false }],
+      };
+      usageStore.isLoading = true;
+      usageStore.loadingProviders = ['codex'];
+      const loadingBody = render(QuickPanel).body;
+      expect(loadingBody).toContain(longName);
+      expect(loadingBody).toContain('Updating usage…');
+      expect(loadingBody.match(new RegExp(longName, 'g'))).toHaveLength(1);
+
+      usageStore.isLoading = false;
+      usageStore.loadingProviders = [];
+      const unavailableBody = render(QuickPanel).body;
+      expect(unavailableBody).toContain('Not connected');
+      expect(unavailableBody.match(new RegExp(longName, 'g'))).toHaveLength(1);
+    } finally {
+      settingsStore.settings = previousSettings;
+      usageStore.snapshot = previousSnapshot;
+      platformCapabilitiesStore.capabilities = previousCapabilities;
+      usageStore.isLoading = previousLoading;
+      usageStore.loadingProviders = previousLoadingProviders;
     }
   });
 

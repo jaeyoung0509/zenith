@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { brandFallbackGlyphs, brandIconProps, type BrandIconSize } from '../utils/brandIcons';
+  import { brandIconProps, type BrandIconSize } from '../utils/brandIcons';
 
   interface Props {
     /** Registry identity or alias; falls back to `label` when absent. */
@@ -25,9 +25,13 @@
   const ARTWORK_PX = 24;
 
   const icon = $derived(brandIconProps(identity || label));
-  const FallbackGlyph = $derived(brandFallbackGlyphs[icon.fallbackGlyph]);
   const artwork = $derived(Math.max(icon.minSizePx, Math.min(size, ARTWORK_PX)));
   const slot = $derived(Math.max(size, artwork));
+  const monogram = $derived.by(() => {
+    const words = label.trim().split(/\s+/).filter(Boolean);
+    if (words.length > 1) return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase();
+    return (words[0] ?? '?').slice(0, 2).toUpperCase();
+  });
 </script>
 
 <span
@@ -49,6 +53,10 @@
       style="height: {artwork}px; width: auto;"
     />
   {:else}
-    <FallbackGlyph size={artwork} strokeWidth={1.75} aria-hidden="true" />
+    <span
+      aria-hidden="true"
+      class="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-secondary font-semibold tracking-tight text-muted-foreground"
+      style="width: {artwork}px; height: {artwork}px; font-size: {Math.max(9, Math.floor(artwork * 0.45))}px;"
+    >{monogram}</span>
   {/if}
 </span>

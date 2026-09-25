@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type {
-    AiProviderUsage,
-    ControlCenterQuickSummary,
     DashboardRoute,
     AgentQuickSummary,
     QuickPanelSection,
@@ -15,7 +13,7 @@
   import { platformCapabilitiesStore } from '../../lib/stores/platformCapabilities.svelte';
   import { platformContextStore } from '../../lib/stores/platformContext.svelte';
   import { usageStore } from '../../lib/stores/usage.svelte';
-  import { formatBytes, formatCountdown, formatTimeAgo } from '../../lib/utils/format';
+  import { formatBytes, formatTimeAgo, formatTimeUntil } from '../../lib/utils/format';
   import { batteryChargeStateLabel, memoryPressureLabel } from '../../lib/utils/systemReadings';
   import {
     handleQuickPanelFocusChanged,
@@ -23,24 +21,20 @@
     isQuickPanelDismissShortcut,
     platformAccelerator,
     projectAiProviders,
-    selectQuickUsageWindows,
+    projectQuickAiRows,
+    formatQuickProviderUsage,
   } from '../../lib/utils/quickPanel';
   import {
     isTauri,
     tauriHideCurrentWindow,
-    tauriGetAiControlQuickSummary,
     tauriGetAgentQuickSummary,
     tauriOpenDashboard,
     tauriStartWindowDrag,
   } from '../../lib/utils/tauri';
   import { APP_VERSION, formatVersion } from '../../lib/utils/version';
   import Button from '../../lib/components/Button.svelte';
-  import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import BrandIcon from '../../lib/components/BrandIcon.svelte';
-  import MetricTile from '../../lib/components/metrics/MetricTile.svelte';
-  import MetricSparkline from '../../lib/components/metrics/MetricSparkline.svelte';
-  import BatteryIndicator from '../../lib/components/metrics/BatteryIndicator.svelte';
-  import QuickUsageGauges from '../../lib/components/QuickUsageGauges.svelte';
+  import QuickMetricRow from '../../lib/components/metrics/QuickMetricRow.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import LoadingSpinner from '../../lib/components/LoadingSpinner.svelte';
@@ -55,15 +49,11 @@
     X,
   } from '@lucide/svelte';
 
-  /** Sections that read as one compact measurement; two share a row. */
-  const METRIC_SECTIONS: QuickPanelSection[] = ['cpu', 'memory', 'battery', 'storage'];
-
-  /** How many identities the compact list shows before collapsing to "+N". */
-  const IDENTITY_LIMIT = 3;
+  /** Keep the panel useful without turning it into an agent inventory. */
+  const AI_ROW_LIMIT = 5;
 
   let panelActive = false;
   let showResultModal = $state(false);
-  let controlSummary = $state<ControlCenterQuickSummary | null>(null);
   let agentSummary = $state<AgentQuickSummary | null>(null);
   let settings = $derived(settingsStore.settings);
   let disk = $derived(memoryStore.disk);
@@ -133,67 +123,15 @@
     }
   });
 
-  let scannedAgo = $derived(scan ? formatTimeAgo(scan.finished_at) : null);
-
-  /** Consecutive metric sections pair up; everything else takes a full row. */
-  let rows = $derived.by(() => {
-    const list: { id: string; sections: QuickPanelSection[] }[] = [];
-    let pendingMetrics: QuickPanelSection[] = [];
-    const flush = () => {
-      if (pendingMetrics.length > 0) {
-        list.push({ id: pendingMetrics.join('-'), sections: pendingMetrics });
-        pendingMetrics = [];
-      }
-    };
-    for (const section of settings.quick_panel_sections) {
-      if (METRIC_SECTIONS.includes(section)) {
-        pendingMetrics.push(section);
-        if (pendingMetrics.length === 2) flush();
-      } else {
-        flush();
-        list.push({ id: section, sections: [section] });
-      }
-    }
-    flush();
-    return list;
-  });
 
   function hasSection(section: QuickPanelSection) {
     return settings.quick_panel_sections.includes(section);
   }
 
-  /** The identity list is capped so the panel shows a count, not a logo wall. */
-  let identityRows = $derived.by(() => {
-    const rows: { id: string; name: string; identity: string | null; detail: string }[] = [];
-    for (const provider of selectedProviders) {
-      const window = provider.windows[0];
-      rows.push({
-        id: `provider-${provider.id}`,
-        name: provider.name,
-        identity: provider.id,
-        detail: window ? `${Math.round(window.used_percent ?? 0)}% used` : providerValue(provider),
-      });
-    }
-    for (const session of agentSummary?.sessions ?? []) {
-      rows.push({
-        id: `session-${session.session_id}`,
-        name: session.tool_name,
-        identity: session.tool_name,
-        detail: `in ${session.project_name} · ${formatDuration(session.elapsed_seconds)}`,
-      });
-    }
-    return rows;
-  });
-
-  let visibleIdentities = $derived(identityRows.slice(0, IDENTITY_LIMIT));
-  let hiddenIdentityCount = $derived(Math.max(0, identityRows.length - IDENTITY_LIMIT));
+  let aiRows = $derived(projectQuickAiRows(selectedProviders, agentSummary?.sessions ?? []));
+  let visibleAiRows = $derived(aiRows.slice(0, AI_ROW_LIMIT));
+  let hiddenAiCount = $derived(Math.max(0, aiRows.length - AI_ROW_LIMIT));
   let activeCount = $derived(agentSummary?.active_count ?? 0);
-
-  function formatDuration(seconds: number) {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    return hours > 0 ? `${hours}h ${minutes}m` : `${Math.max(minutes, 1)}m`;
-  }
 
   let stopFreshness: (() => void) | undefined;
   let metricsPolling = false;
@@ -227,9 +165,6 @@
     if (hasSection('agent_activity') && aiAvailable) {
       void tauriGetAgentQuickSummary().then((summary) => {
         if (panelActive) agentSummary = summary;
-      });
-      void tauriGetAiControlQuickSummary().then((summary) => {
-        if (panelActive) controlSummary = summary;
       });
     }
     if ((hasSection('cleanup') || hasSection('categories')) && cleanupAvailable) {
@@ -325,43 +260,6 @@
     if (platformCapabilitiesStore.capabilities) await refreshPanelData();
   }
 
-  function providerValue(provider: AiProviderUsage) {
-    if (usageStore.isProviderLoading(provider.id)) {
-      return '';
-    }
-
-    if (provider.windows.length > 0) {
-      const window = provider.windows[0];
-      const percent = Math.round(window.used_percent ?? 0);
-      if (window.resets_at) {
-        const timeUntil = window.resets_at ? formatCountdown(Math.max(0, window.resets_at - Math.floor(Date.now() / 1000))) : null;
-        if (timeUntil) {
-          return `${percent}% · resets in ${timeUntil}`;
-        }
-      }
-      return `${percent}% used`;
-    }
-
-    if (provider.summary.local_sessions != null) return `${provider.summary.local_sessions} sessions`;
-    if (provider.summary.usage_usd != null) return `$${provider.summary.usage_usd.toFixed(2)}`;
-    return provider.connected ? 'Connected' : provider.installed ? 'Available' : 'Not installed';
-  }
-
-  function providerTitle(provider: AiProviderUsage) {
-    if (usageStore.isProviderLoading(provider.id)) {
-      return `${provider.name}: Loading live quota...`;
-    }
-    if (provider.windows.length > 0) {
-      return provider.windows
-        .map((w) => {
-          const time = w.resets_at ? ` (resets in ${formatCountdown(Math.max(0, w.resets_at - Math.floor(Date.now() / 1000)))})` : '';
-          return `${w.label}: ${Math.round(w.used_percent ?? 0)}% used${time}`;
-        })
-        .join(' · ');
-    }
-    return provider.status_message || provider.auth_label || provider.name;
-  }
-
   function handleWindowDrag(event: MouseEvent) {
     if (event.button !== 0) return;
     const target = event.target;
@@ -371,9 +269,7 @@
 
   let awakeRemaining = $derived.by(() => {
     if (!awakeState.manual_expires_at) return null;
-    return formatCountdown(
-      Math.max(0, Math.floor(awakeState.manual_expires_at / 1000) - Math.floor(Date.now() / 1000))
-    );
+    return formatTimeUntil(Math.floor(awakeState.manual_expires_at / 1000));
   });
 </script>
 
@@ -385,11 +281,7 @@
     onmousedown={handleWindowDrag}
   >
     <div class="flex items-center gap-2 min-w-0">
-      <svg class="h-5 w-5 rounded-md shrink-0" viewBox="0 0 1024 1024" aria-hidden="true">
-        <rect width="1024" height="1024" rx="220" fill="#101014"/>
-        <path d="M292 300h466v116L486 650h282v116H266V650l270-234H292z" fill="#fff"/>
-        <circle cx="758" cy="300" r="44" fill="#34d399"/>
-      </svg>
+      <BrandIcon identity="zenith" label="Zenith" size={20} />
       <span class="text-body font-semibold tracking-tight truncate">Zenith</span>
     </div>
     <div class="flex items-center gap-1 no-drag shrink-0">
@@ -417,7 +309,7 @@
   </div>
 
   <!-- Body Content — the panel's single scrolling region -->
-  <div class="min-h-0 flex-1 overflow-y-auto scroll-stable px-4 py-3 space-y-2.5">
+  <div class="min-h-0 flex-1 overflow-y-auto scroll-stable px-3 py-2">
     {#if capabilitiesFailed}
       <!-- A failed capability query is not an unsupported platform: offer a retry
            instead of reporting missing features. -->
@@ -429,16 +321,8 @@
         onAction={() => void retryCapabilities()}
       />
     {:else}
-      {#each rows as row (row.id)}
-        {#if row.sections.length > 1}
-          <div class="grid grid-cols-2 gap-2.5 items-start">
-            {#each row.sections as section (section)}
-              <div class="min-w-0">{@render sectionCell(section)}</div>
-            {/each}
-          </div>
-        {:else}
-          {@render sectionCell(row.sections[0])}
-        {/if}
+      {#each settings.quick_panel_sections as section (section)}
+        {@render sectionCell(section)}
       {/each}
     {/if}
   </div>
@@ -492,15 +376,11 @@
 
 {#snippet sectionCell(section: QuickPanelSection)}
   {#if section === 'cleanup'}
-    <section class="quick-cleanup-hero rounded-xl p-3" aria-label="Cleanup">
+    <section class="quick-list-section" aria-label="Cleanup">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
-          <p class="text-meta font-medium text-muted-foreground">Cleanup</p>
-          <p class="text-metric font-mono tabular-nums font-semibold text-foreground whitespace-nowrap">{cleanupValue}</p>
+          <p class="text-meta font-semibold text-foreground">Cleanup <span class="ml-1 font-mono tabular-nums text-muted-foreground">{cleanupValue}</span></p>
           <p class="text-caption text-muted-foreground [overflow-wrap:normal] break-words">{cleanupDetail}</p>
-          {#if scan && scannedAgo}
-            <p class="text-caption text-muted-foreground">Scanned {scannedAgo}</p>
-          {/if}
         </div>
         <Button
           variant="ghost"
@@ -514,7 +394,7 @@
           <ArrowRight size={12} aria-hidden="true" />
         </Button>
       </div>
-      {#if cleanupAvailable}
+      {#if cleanupAvailable && (cleanupState === 'ready' || cleanupState === 'stale' || scanStore.isCleaning)}
         <div class="mt-2 flex items-center gap-2">
           {#if cleanupState === 'stale'}
             <Button
@@ -544,82 +424,51 @@
               {/if}
             </Button>
           {/if}
-          {#if quickCleanableBytes === 0 && !scanStore.isScanning}
-            <span class="text-caption text-muted-foreground">Nothing eligible</span>
-          {/if}
         </div>
       {/if}
     </section>
   {:else if section === 'cpu'}
-    <MetricTile
+    <QuickMetricRow
       label="CPU"
       value={cpu?.usage_percent != null ? `${Math.round(cpu.usage_percent)}%` : cpuAvailable ? 'Warming up' : 'Unavailable'}
-      freshness={cpu?.sampled_at != null ? formatTimeAgo(Math.floor(cpu.sampled_at / 1000)) : null}
       detail={cpu && cpu.state !== 'fresh'
         ? cpu.state === 'stale'
-          ? 'Paused; last reading shown.'
+          ? 'Last reading · paused'
           : cpu.state === 'warmup'
-            ? 'Waiting for a second reading.'
+            ? 'Waiting for a second reading'
             : cpu.reason ?? cpuCapability?.reason ?? 'No CPU adapter here.'
         : cpu
-          ? `All ${cpu.cores} cores`
+          ? `All ${cpu.cores} cores · ${cpu.sampled_at != null ? formatTimeAgo(Math.floor(cpu.sampled_at / 1000)) : 'Reading'}`
           : cpuCapability?.reason ?? null}
       actionLabel="Open CPU detail"
       onclick={() => handleOpenRoute('cpu')}
-      class="h-full"
-    >
-      {#snippet visual()}
-        {#if systemMetricsStore.cpuHistory.length > 1}
-          <MetricSparkline samples={systemMetricsStore.cpuHistory} class="h-7" />
-        {/if}
-      {/snippet}
-    </MetricTile>
+    />
   {:else if section === 'memory'}
-    <MetricTile
+    <QuickMetricRow
       label="Memory"
       value={memory ? memoryPressureLabel(memory.pressure) : memoryAvailable ? 'Reading…' : 'Unavailable'}
       tone={memory?.pressure === 'critical' ? 'critical' : memory?.pressure === 'warning' ? 'warning' : 'default'}
-      freshness={memory?.timestamp != null ? formatTimeAgo(memory.timestamp) : null}
       detail={memory
         ? `${formatBytes(memory.used_bytes)} of ${formatBytes(memory.total_bytes)}`
         : platformCapabilitiesStore.feature('memory_metrics')?.reason ?? null}
       actionLabel="Open memory detail"
       onclick={() => handleOpenRoute('memory')}
-      class="h-full"
-    >
-      {#snippet visual()}
-        {#if memory && memory.total_bytes > 0}
-          <ProgressBar
-            value={(memory.used_bytes / memory.total_bytes) * 100}
-            height="h-1.5"
-            color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
-          />
-        {/if}
-      {/snippet}
-    </MetricTile>
+    />
   {:else if section === 'battery'}
     {@const batteryPresent = battery?.presence === 'present'}
     {#if !battery || batteryPresent || battery.presence === 'unavailable'}
-      <MetricTile
+      <QuickMetricRow
         label="Battery"
         value={batteryPresent && battery?.percent != null ? `${Math.round(battery.percent)}%` : battery ? batteryChargeStateLabel(battery.charge_state) : 'Reading…'}
-        freshness={battery?.sampled_at != null ? formatTimeAgo(Math.floor(battery.sampled_at / 1000)) : null}
         detail={batteryPresent
           ? batteryChargeStateLabel(battery!.charge_state)
           : battery?.reason ?? batteryCapability?.reason ?? 'No battery reported.'}
         actionLabel="Open battery detail"
         onclick={() => handleOpenRoute('battery')}
-        class="h-full"
-      >
-        {#snippet visual()}
-          {#if batteryPresent}
-            <BatteryIndicator percent={battery!.percent} chargeState={battery!.charge_state} />
-          {/if}
-        {/snippet}
-      </MetricTile>
+      />
     {/if}
   {:else if section === 'storage'}
-    <MetricTile
+    <QuickMetricRow
       label="Disk"
       value={disk ? `${Math.round(disk.percent_used ?? 0)}% used` : 'Reading…'}
       detail={disk
@@ -627,17 +476,10 @@
         : cleanupCapability?.reason ?? null}
       actionLabel="Open storage"
       onclick={() => handleOpenRoute('storage')}
-      class="h-full"
-    >
-      {#snippet visual()}
-        {#if disk}
-          <ProgressBar value={disk.percent_used ?? 0} height="h-1.5" />
-        {/if}
-      {/snippet}
-    </MetricTile>
+    />
   {:else if section === 'categories'}
     {#if scan}
-      <section class="rounded-xl border border-border divide-y divide-border overflow-hidden" aria-label="Storage categories">
+      <section class="quick-list-section divide-y divide-border" aria-label="Storage categories">
         {#each scan.categories as cat (cat.category)}
           <div class="flex items-center justify-between gap-2 px-3 py-2 text-meta">
             <span class="truncate text-foreground font-medium">{cat.display_name}</span>
@@ -652,75 +494,56 @@
       </div>
     {/if}
   {:else if section === 'agent_activity'}
-    <section class="rounded-xl border border-border bg-card p-3 space-y-2" aria-label="Active AI and services">
-      <div class="flex items-center justify-between gap-2">
-        <span class="text-meta font-medium text-muted-foreground">
-          Active AI &amp; services{activeCount > 0 ? ` · ${activeCount}` : ''}
+    <section class="quick-list-section" aria-label="Active AI and services">
+      <div class="flex items-center justify-between gap-2 px-1 pb-1">
+        <span class="text-meta font-semibold text-foreground">
+          AI Activity{activeCount > 0 ? ` · ${activeCount} active` : ''}
         </span>
         <button
           type="button"
-          class="text-caption text-muted-foreground hover:text-foreground inline-flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          class="inline-flex shrink-0 items-center gap-1 rounded text-caption text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onclick={() => handleOpenRoute('projects')}
+          aria-label="Open AI Activity in the main window"
         >
-          Open AI Activity <ArrowRight size={11} aria-hidden="true" />
+          Open <ArrowRight size={11} aria-hidden="true" />
         </button>
       </div>
 
       {#if !aiAvailable}
-        <p class="text-caption text-muted-foreground">{aiCapability?.reason ?? 'AI integrations are unavailable on this platform.'}</p>
-      {:else if identityRows.length === 0}
-        <p class="text-caption text-muted-foreground">No observed agent sessions or connected accounts.</p>
+        <p class="px-1 text-caption text-muted-foreground">{aiCapability?.reason ?? 'AI integrations are unavailable on this platform.'}</p>
+      {:else if aiRows.length === 0}
+        <p class="px-1 text-caption text-muted-foreground">No connected providers or observed sessions.</p>
       {:else}
-        <ul class="space-y-1">
-          {#each visibleIdentities as identity (identity.id)}
-            <li class="flex items-center gap-2 min-w-0">
-              <BrandIcon identity={identity.identity} label={identity.name} size={20} />
-              <span class="min-w-0 flex-1 truncate text-meta text-foreground">{identity.name}</span>
-              <span class="shrink-0 text-caption text-muted-foreground truncate max-w-[45%]">{identity.detail}</span>
+        <ul class="divide-y divide-border">
+          {#each visibleAiRows as row (row.id)}
+            <li class="min-w-0 px-1 py-1.5">
+              <div class="min-w-0">
+                <div class="flex min-w-0 items-baseline justify-between gap-2">
+                  <span class="min-w-0 break-words text-meta font-medium text-foreground">{row.name}</span>
+                  {#if row.sessions.length > 0}
+                    <span class="shrink-0 text-caption text-success">{row.sessions.length} active</span>
+                  {/if}
+                </div>
+                <p class="text-caption leading-snug text-muted-foreground">
+                  {row.provider
+                    ? formatQuickProviderUsage(
+                        row.provider,
+                        usageStore.isProviderLoading(row.provider.id),
+                        !!usageStore.snapshot && Date.now() / 1000 - usageStore.snapshot.fetched_at > 300
+                      )
+                    : `${row.sessions.length} observed session${row.sessions.length === 1 ? '' : 's'}`}
+                </p>
+              </div>
             </li>
           {/each}
-          {#if hiddenIdentityCount > 0}
-            <li class="text-caption text-muted-foreground">+{hiddenIdentityCount} more</li>
+          {#if hiddenAiCount > 0}
+            <li class="px-1 pt-1.5 text-caption text-muted-foreground">+{hiddenAiCount} more in AI Activity</li>
           {/if}
         </ul>
       {/if}
-
-      {#if controlSummary}
-        <div class="flex items-center gap-3 text-caption text-muted-foreground border-t border-border pt-2">
-          <span>{controlSummary.active_sessions} sessions</span>
-          <span>{controlSummary.budget_alerts} budget alerts</span>
-          <span>{controlSummary.safety_findings} safety findings</span>
-        </div>
-      {/if}
-
-      {#if selectedProviders.length > 0}
-        <div class="space-y-1.5 border-t border-border pt-2">
-          {#each selectedProviders as provider (provider.id)}
-            {@const hasUsagePair = selectQuickUsageWindows(provider.windows) !== null}
-            <div class="min-w-0" class:space-y-1.5={hasUsagePair} title={providerTitle(provider)}>
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <div class="flex min-w-0 items-center gap-2">
-                  <BrandIcon identity={provider.id} label={provider.name} size={20} />
-                  <span class="truncate text-meta font-medium">{provider.name}</span>
-                </div>
-                {#if usageStore.isProviderLoading(provider.id)}
-                  <span class="shrink-0 inline-flex items-center text-muted-foreground" title="Loading live quota...">
-                    <LoadingSpinner size={11} />
-                  </span>
-                {:else if !hasUsagePair}
-                  <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
-                {/if}
-              </div>
-              {#if !usageStore.isProviderLoading(provider.id) && hasUsagePair}
-                <QuickUsageGauges windows={provider.windows} fallback={providerValue(provider)} />
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
     </section>
   {:else if section === 'awake'}
-    <section class="rounded-xl border border-border bg-card p-3 flex items-center justify-between gap-2" aria-label="Keep Awake">
+    <section class="quick-list-section flex items-center justify-between gap-2" aria-label="Keep Awake">
       <div class="flex items-center gap-2 min-w-0">
         <Moon size={15} class="text-muted-foreground shrink-0" aria-hidden="true" />
         <div class="min-w-0">

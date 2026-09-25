@@ -49,10 +49,10 @@ use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::utils::config::WindowConfig;
+use tauri::utils::config::{Color, WindowConfig};
 use tauri::utils::TitleBarStyle;
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, Rect, Runtime, WebviewWindow,
+    AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Rect, Runtime, WebviewWindow,
     WebviewWindowBuilder,
 };
 use zenith_platform::path_algebra::PathFlavor;
@@ -64,10 +64,17 @@ use zenith_platform::path_algebra::PathFlavor;
 /// a transparent undecorated window the same way, so the same configuration
 /// would reserve dead space and show alpha artifacts on Windows.
 fn platform_window_config(mut config: WindowConfig, flavor: PathFlavor) -> WindowConfig {
+    if config.label == "quick" {
+        // The transparent window alone does not guarantee that WebKit clears
+        // its own backing surface. A white WebView rectangle would show through
+        // the CSS-rounded corners even though the native window is transparent.
+        config.background_color = Some(Color(0, 0, 0, 0));
+    }
     if flavor.is_windows() {
         config.title_bar_style = TitleBarStyle::Visible;
         if config.label == "quick" {
             config.transparent = false;
+            config.background_color = None;
         }
     }
     config
@@ -280,9 +287,21 @@ fn quick_panel_position(
     )
 }
 
+fn quick_panel_size(desired: PhysicalSize<u32>, work_area: PhysicalSize<u32>) -> PhysicalSize<u32> {
+    const EDGE_INSET: u32 = 16;
+    PhysicalSize::new(
+        desired
+            .width
+            .min(work_area.width.saturating_sub(EDGE_INSET)),
+        desired
+            .height
+            .min(work_area.height.saturating_sub(EDGE_INSET)),
+    )
+}
+
 fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::Result<()> {
     if let Some(rect) = tray_rect {
-        if let Ok(size) = window.outer_size() {
+        if let Ok(current_size) = window.outer_size() {
             // Logical tray rectangles need a scale factor before the monitor
             // can be selected. Use the window's factor provisionally, then
             // recompute with the tray monitor's own factor, which differs in
@@ -290,18 +309,31 @@ fn show_quick_panel(window: &WebviewWindow, tray_rect: Option<Rect>) -> tauri::R
             let provisional_scale = window.scale_factor().unwrap_or(1.0);
             let provisional_anchor = tray_anchor(&rect, provisional_scale);
             let monitors = window.available_monitors().unwrap_or_default();
-            let target = monitor_containing_point(&monitors, provisional_anchor)
-                .map(|monitor| {
+            let target =
+                if let Some(monitor) = monitor_containing_point(&monitors, provisional_anchor) {
                     let anchor = tray_anchor(&rect, monitor.scale_factor());
                     let work_area = monitor.work_area();
+                    let configured_size = window
+                        .app_handle()
+                        .config()
+                        .app
+                        .windows
+                        .iter()
+                        .find(|config| config.label == "quick")
+                        .map(|config| {
+                            LogicalSize::new(config.width, config.height)
+                                .to_physical(monitor.scale_factor())
+                        })
+                        .unwrap_or(current_size);
+                    let size = quick_panel_size(configured_size, work_area.size);
+                    window.set_size(size)?;
                     quick_panel_position(anchor, size, work_area.position, work_area.size)
-                })
-                .unwrap_or_else(|| {
+                } else {
                     PhysicalPosition::new(
-                        provisional_anchor.x.round() as i32 - size.width as i32,
+                        provisional_anchor.x.round() as i32 - current_size.width as i32,
                         provisional_anchor.y.round() as i32 + 6,
                     )
-                });
+                };
             let _ = window.set_position(target);
         }
     }
@@ -595,10 +627,12 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 mod tests {
     use super::platform_window_config;
     use super::quick_panel_position;
+    use super::quick_panel_size;
     use super::specta_builder;
     use super::tray_toggle_action;
     use super::QuickPanelVisibility;
     use super::TrayToggle;
+    use tauri::utils::config::Color;
     use tauri::utils::config::WindowConfig;
     use tauri::utils::TitleBarStyle;
     use tauri::{PhysicalPosition, PhysicalSize};
@@ -640,6 +674,19 @@ mod tests {
     }
 
     #[test]
+    fn quick_panel_grows_to_its_configured_size_and_fits_smaller_displays() {
+        let configured = PhysicalSize::new(800, 1_480);
+        assert_eq!(
+            quick_panel_size(configured, PhysicalSize::new(2_000, 1_800)),
+            configured
+        );
+        assert_eq!(
+            quick_panel_size(configured, PhysicalSize::new(700, 1_100)),
+            PhysicalSize::new(684, 1_084)
+        );
+    }
+
+    #[test]
     fn windows_window_config_uses_the_native_caption_bar() {
         let config: WindowConfig = serde_json::from_str(
             r#"{
@@ -677,6 +724,7 @@ mod tests {
         );
         assert!(!adapted.decorations);
         assert!(adapted.always_on_top);
+        assert_eq!(adapted.background_color, None);
     }
 
     #[test]
@@ -698,7 +746,9 @@ mod tests {
             r#"{"label": "quick", "title": "Zenith Quick", "transparent": true}"#,
         )
         .expect("parse window config");
-        assert!(platform_window_config(quick, PathFlavor::Posix).transparent);
+        let adapted_quick = platform_window_config(quick, PathFlavor::Posix);
+        assert!(adapted_quick.transparent);
+        assert_eq!(adapted_quick.background_color, Some(Color(0, 0, 0, 0)));
     }
 
     #[test]

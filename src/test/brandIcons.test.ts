@@ -43,11 +43,11 @@ function renderBrandIcon(identity: string | null, label: string, size?: 20 | 24 
 
 /**
  * Reads the artwork size out of rendered markup: a bundled asset pins its
- * height in the inline style, a Lucide glyph carries it as an attribute.
+ * height in the inline style, while an unresolved identity uses a monogram.
  */
 function drawnArtworkPx(body: string): number {
   const styled = /height: (\d+)px; width: auto/.exec(body)?.[1];
-  const attributed = styled ?? /height="(\d+)"/.exec(body)?.[1];
+  const attributed = styled ?? /width: \d+px; height: (\d+)px; font-size:/.exec(body)?.[1];
   return Number(attributed ?? '0');
 }
 
@@ -82,7 +82,7 @@ describe('brand identity registry', () => {
     expect(readdirSync(brandsDir).sort()).toEqual(registered);
   });
 
-  it('gives every unresolved identity a fallback glyph and no asset', () => {
+  it('gives every unresolved identity a neutral monogram and no asset', () => {
     expect(unresolved.length).toBeGreaterThan(0);
 
     for (const [identity, record] of unresolved) {
@@ -90,12 +90,13 @@ describe('brand identity registry', () => {
       expect(record.unresolvedReason ?? '', `${identity} needs a recorded reason`).not.toBe('');
 
       const body = renderBrandIcon(identity, record.label);
-      expect(body, `${identity} must render its fallback glyph`).toContain('<svg');
+      expect(body, `${identity} must render a monogram`).toContain('font-size:');
+      expect(body, `${identity} must avoid a generic symbol`).not.toContain('<svg');
       expect(body, `${identity} must not render an image`).not.toContain('<img');
       expect(brandFallbackGlyphs, `${identity} glyph is unmapped`).toHaveProperty(
         record.fallbackGlyph
       );
-      expect(body, `${identity} fallback stays decorative`).toContain('aria-hidden="true"');
+      expect(body, `${identity} monogram stays decorative`).toContain('aria-hidden="true"');
     }
   });
 
@@ -126,7 +127,7 @@ describe('brand identity registry', () => {
 
     expect(renderBrandIcon('vite', 'Vite', 20)).toContain('height: 20px; width: auto;');
     expect(renderBrandIcon('docker', 'Docker', 20)).toContain('width: 24px; height: 24px;');
-    expect(renderBrandIcon('docker', 'Docker', 20)).toContain('width="24" height="24"');
+    expect(renderBrandIcon('docker', 'Docker', 20)).toContain('>DO</span>');
   });
 });
 

@@ -1,4 +1,5 @@
-import type { AiProviderUsage, ProviderId, UsageWindow } from '../models/types';
+import type { AgentQuickSessionRow, AiProviderUsage, ProviderId, UsageWindow } from '../models/types';
+import { resolveBrandIdentity } from './brandIcons';
 
 export interface QuickUsageWindowPair {
   fiveHour: UsageWindow;
@@ -139,4 +140,81 @@ export function projectAiProviders(
   return configuredIds
     .map((id) => providers?.find((provider) => provider.id === id))
     .filter((provider): provider is AiProviderUsage => Boolean(provider));
+}
+
+export function formatQuickReset(resetsAt: number | null | undefined, now = Math.floor(Date.now() / 1000)): string {
+  if (resetsAt == null || !Number.isFinite(resetsAt) || resetsAt <= 0) return 'Reset time unavailable';
+  if (resetsAt <= now) return 'Resets soon';
+  const remaining = Math.ceil(resetsAt - now);
+  if (remaining < 60) return `Resets in ${remaining}s`;
+  if (remaining < 3600) return `Resets in ${Math.ceil(remaining / 60)}m`;
+  if (remaining < 86400) {
+    const hours = Math.floor(remaining / 3600);
+    const minutes = Math.floor((remaining % 3600) / 60);
+    return `Resets in ${hours}h${minutes ? ` ${minutes}m` : ''}`;
+  }
+  const days = Math.floor(remaining / 86400);
+  const hours = Math.floor((remaining % 86400) / 3600);
+  return `Resets in ${days}d${hours ? ` ${hours}h` : ''}`;
+}
+
+export function formatQuickProviderUsage(provider: AiProviderUsage, loading: boolean, stale = false): string {
+  if (loading) return 'Updating usage…';
+  if (stale) return 'Usage out of date';
+  if (!provider.installed) return 'Not installed';
+  if (!provider.connected) return 'Not connected';
+
+  const window = provider.windows.find((entry) => entry.used_percent != null);
+  if (window?.used_percent != null) {
+    const percent = Math.round(Math.min(100, Math.max(0, window.used_percent)));
+    return `${percent}% used · ${formatQuickReset(window.resets_at)}`;
+  }
+  if (provider.summary.local_sessions != null) return `${provider.summary.local_sessions} local sessions`;
+  if (provider.summary.usage_usd != null) return `$${provider.summary.usage_usd.toFixed(2)} local usage`;
+  return provider.support === 'manual' ? 'Manual data' : 'Usage unavailable';
+}
+
+export interface QuickAiRow {
+  id: string;
+  name: string;
+  provider: AiProviderUsage | null;
+  sessions: AgentQuickSessionRow[];
+}
+
+/** One identity row combines the configured provider with observed sessions. */
+export function projectQuickAiRows(
+  providers: readonly AiProviderUsage[],
+  sessions: readonly AgentQuickSessionRow[]
+): QuickAiRow[] {
+  const rows: QuickAiRow[] = [];
+  const byIdentity = new Map<string, QuickAiRow>();
+  for (const provider of providers) {
+    const identity = resolveBrandIdentity(provider.id) ?? provider.id.toLowerCase();
+    if (byIdentity.has(identity)) continue;
+    const row: QuickAiRow = {
+      id: `provider-${identity}`,
+      name: provider.name,
+      provider,
+      sessions: [],
+    };
+    rows.push(row);
+    byIdentity.set(identity, row);
+  }
+  for (const session of sessions) {
+    const identity = resolveBrandIdentity(session.tool_name) ?? session.tool_name.trim().toLowerCase();
+    const existing = byIdentity.get(identity);
+    if (existing) {
+      existing.sessions.push(session);
+      continue;
+    }
+    const row: QuickAiRow = {
+      id: `session-${identity}`,
+      name: session.tool_name,
+      provider: null,
+      sessions: [session],
+    };
+    rows.push(row);
+    byIdentity.set(identity, row);
+  }
+  return rows;
 }

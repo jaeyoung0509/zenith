@@ -238,7 +238,9 @@ inventory is still valid.
 
 - `BrandIcon` resolves an identity through one typed registry: a reviewed local
   asset when the copyright holder's licence clearly permits redistribution, and
-  otherwise a neutral glyph beside the factual product name.
+  otherwise a neutral two-letter monogram beside the factual product name.
+  Provider lists in the Quick Panel and AI usage view use names without identity
+  icons, so mixed asset availability never changes their hierarchy.
 - Reviewed assets live in `src/lib/assets/brands/`, are served offline from the
   bundle, keep their intrinsic proportions and colours, and are never filtered,
   recoloured, distorted, or clipped. The asset register with source URL,
@@ -248,6 +250,9 @@ inventory is still valid.
 - Tool rows use 18–20 px action glyphs and a 32 px identity slot (24 px
   artwork) so logos sit next to useful names rather than in a wall of
   promotional cards.
+- The Quick Panel and main sidebar share the same Zenith asset and restrained
+  functional navigation icons. Provider rows never borrow sparkle or rocket
+  symbols as substitute logos.
 
 ## Feature-specific patterns
 
@@ -258,6 +263,17 @@ pressure / battery tiles showing their real values with per-domain freshness, a
 compact list of active tools and services, and a compact Keep Awake control. At
 960 × 660 the next action and the core metrics are visible without scrolling;
 secondary detail scrolls. Each tile opens its exact detail page.
+
+### Quick Panel
+
+- At 320–400 px, use compact full-width reading rows. A label, current value,
+  and one supporting fact should fit in roughly 48 px; details stay in the
+  main window. The header and footer stay fixed while the body scrolls.
+- Show each AI provider once. Merge observed sessions into its identity row,
+  use a readable name and an explicit loading/stale/unavailable state, and
+  express reset times with units rather than a bare minute counter.
+- Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
+  The storage safety and freshness rules do not change with the presentation.
 
 ### Storage
 
@@ -328,13 +344,14 @@ safety buffer, or other invented setting.
 
 ### Quick panel
 
-- Designed natively at 360 × 520, tested at 320 px stress width and constrained
-  heights. Fixed header and footer with at most one internal scrolling region.
+- Designed natively at 400 × 740 so the default sections and five AI rows fit
+  without scrolling. Clamp the native window to the active display's work area;
+  at narrower widths or constrained heights the body scrolls between a fixed
+  header and footer.
 - Default order: cleanup estimate and next action with `Review →`, CPU,
   memory pressure plus used amount, battery, disk capacity/free space, active AI
   and services with small identities and a count, Keep Awake state/duration.
-  Saved order and visibility stay authoritative, and metric sections pair up
-  two-per-row while full-width sections keep their own row.
+  Saved order and visibility stay authoritative. Metrics use full-width rows.
 - `Review` opens the relevant main-window review; it never deletes. The
   existing backend-owned Safe-only quick action stays available where eligible
   and is not broadened to models, volumes, or reviewed cache operations.
