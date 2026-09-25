@@ -101,23 +101,71 @@ describe('design-system source contracts', () => {
     expect(css).toContain('scrollbar-gutter: stable');
   });
 
-  it('defines a shared focus token for both light and dark themes', () => {
+  it('keeps the brand on cool pastel neutrals and cobalt while success stays semantic', () => {
+    const css = readFileSync(`${srcRoot}/app.css`, 'utf8');
+    const light = readHslTokens(css, ':root');
+    const background = light.get('background');
+    if (!background) throw new Error('Missing light --background token');
+    expect(background[0]).toBeGreaterThanOrEqual(220);
+    expect(background[0]).toBeLessThanOrEqual(250);
+
+    for (const selector of [':root', '.dark'] as const) {
+      const tokens = readHslTokens(css, selector);
+      for (const brandRole of ['primary', 'ai']) {
+        const token = tokens.get(brandRole);
+        if (!token) throw new Error(`Missing ${selector} --${brandRole} token`);
+        expect(token[0], `${selector} --${brandRole} must stay in the cobalt family`)
+          .toBeGreaterThanOrEqual(210);
+        expect(token[0], `${selector} --${brandRole} must stay in the cobalt family`)
+          .toBeLessThanOrEqual(230);
+      }
+      const success = tokens.get('success');
+      if (!success) throw new Error(`Missing ${selector} --success token`);
+      expect(success[0]).toBeGreaterThan(100);
+      expect(success[0]).toBeLessThan(180);
+    }
+  });
+
+  it('meets role-based text, action, and focus contrast in both themes', () => {
     const css = readFileSync(`${srcRoot}/app.css`, 'utf8');
     expect(css).toContain('@custom-variant dark');
 
     for (const selector of [':root', '.dark'] as const) {
       const tokens = readHslTokens(css, selector);
-      const ringToken = tokens.get('ring');
-      if (!ringToken) throw new Error(`Missing ${selector} --ring token`);
-      const ring = hslToRgb(...ringToken);
-
-      for (const surfaceName of ['background', 'card', 'primary']) {
+      const contrastFor = (foregroundName: string, surfaceName: string) => {
+        const foregroundToken = tokens.get(foregroundName);
         const surfaceToken = tokens.get(surfaceName);
+        if (!foregroundToken) throw new Error(`Missing ${selector} --${foregroundName} token`);
         if (!surfaceToken) throw new Error(`Missing ${selector} --${surfaceName} token`);
-        expect(
-          contrastRatio(ring, hslToRgb(...surfaceToken)),
-          `${selector} --ring must contrast with --${surfaceName}`
-        ).toBeGreaterThanOrEqual(3);
+        return contrastRatio(hslToRgb(...foregroundToken), hslToRgb(...surfaceToken));
+      };
+
+      for (const surfaceName of ['background', 'card']) {
+        expect(contrastFor('foreground', surfaceName)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastFor('muted-foreground', surfaceName)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastFor('ring', surfaceName)).toBeGreaterThanOrEqual(3);
+      }
+      expect(contrastFor('primary-foreground', 'primary')).toBeGreaterThanOrEqual(4.5);
+      expect(contrastFor('action-foreground', 'action')).toBeGreaterThanOrEqual(4.5);
+      expect(contrastFor('ai', 'card')).toBeGreaterThanOrEqual(4.5);
+      expect(contrastFor('border-strong', 'card')).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('keeps frosted panel text readable over black and white backdrops', () => {
+    const css = readFileSync(`${srcRoot}/app.css`, 'utf8');
+    for (const selector of [':root', '.dark'] as const) {
+      const tokens = readHslTokens(css, selector);
+      const block = css.match(new RegExp(`${selector.replace('.', '\\.')}\\s*\\{([\\s\\S]*?)\\}`))?.[1] ?? '';
+      const opacity = Number(block.match(/--glass-opacity:\s*([\d.]+)/)?.[1]);
+      expect(opacity).toBeGreaterThan(0);
+      expect(opacity).toBeLessThan(1);
+      const surface = hslToRgb(...tokens.get('glass-surface')!);
+      for (const backdrop of [0, 1]) {
+        const composite = surface.map(channel => channel * opacity + backdrop * (1 - opacity)) as [number, number, number];
+        for (const role of ['foreground', 'glass-muted']) {
+          expect(contrastRatio(hslToRgb(...tokens.get(role)!), composite), `${selector} ${role} over ${backdrop}`).toBeGreaterThanOrEqual(4.5);
+        }
       }
     }
   });

@@ -257,7 +257,7 @@
             <ProgressBar
               value={(memory.used_bytes / memory.total_bytes) * 100}
               height="h-1.5"
-              color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
+              color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-primary'}
             />
           </span>
         {/if}

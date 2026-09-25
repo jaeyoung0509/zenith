@@ -14,6 +14,7 @@
   import Card from '../../lib/components/Card.svelte';
   import ProgressBar from '../../lib/components/ProgressBar.svelte';
   import CategoryCard from '../../lib/components/CategoryCard.svelte';
+  import StorageSummary from '../../lib/components/StorageSummary.svelte';
   import CleanResultModal from '../../lib/components/CleanResultModal.svelte';
   import DeletingDots from '../../lib/components/DeletingDots.svelte';
   import SelectionToolbar from '../../lib/components/SelectionToolbar.svelte';
@@ -23,7 +24,7 @@
   import ApplicationsView from './ApplicationsView.svelte';
   import DiskView from './DiskView.svelte';
   import { restoreFocus } from '../../lib/utils/focus';
-  import { isActionable } from '../../lib/utils/cleanup';
+  import { isActionable, summarizeCategory } from '../../lib/utils/cleanup';
   import {
     RotateCw,
     Trash2,
@@ -72,6 +73,11 @@
     }
   });
   let scan = $derived(scanStore.lastScan);
+  let orderedCategories = $derived(
+    [...(scan?.categories ?? [])].sort((a, b) =>
+      summarizeCategory(b.items).cleanable_bytes - summarizeCategory(a.items).cleanable_bytes
+    )
+  );
   let hasSelectedAction = $derived(
     scan?.categories.some(category => category.items.some(
       item => scanStore.selectedMap[item.id] && isActionable(item)
@@ -151,17 +157,12 @@
   }
 </script>
 
-<div class="space-y-6">
+<div class="storage-workspace space-y-4">
   <!-- Top Storage Header -->
-  <div class="flex flex-wrap gap-3 items-center justify-between pb-3 border-b border-border/60">
-    <div class="flex items-center gap-3">
-      <div class="h-9 w-9 rounded-lg bg-accent text-primary flex items-center justify-center shrink-0">
-        <HardDrive size={20} />
-      </div>
-      <div>
-        <h1 class="text-base font-semibold text-foreground tracking-tight">Storage</h1>
-        <p class="text-xs text-muted-foreground mt-0.5">Find files you can clean</p>
-      </div>
+  <div class="flex flex-wrap gap-3 items-center justify-between">
+    <div>
+      <h1 class="text-title font-semibold text-foreground tracking-tight">Storage</h1>
+      <p class="text-body text-muted-foreground mt-1">Make room for your next project.</p>
     </div>
     <Button
       variant="outline"
@@ -185,6 +186,7 @@
 
   <!-- Secondary Navigation Tabs -->
   <SegmentedTabs
+    appearance="underline"
     tabs={storageTabs}
     panelId={storagePanelId}
     activeTab={activeSecondaryTab}
@@ -202,7 +204,7 @@
   {/if}
 
   <div
-    class="space-y-6 outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
+    class="space-y-4 outline-none focus:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-xl"
     id={storagePanelId}
     role="tabpanel"
     aria-label={storageTabs.find(tab => tab.id === activeSecondaryTab)?.label}
@@ -223,33 +225,9 @@
       onBack={() => (activeSecondaryTab = 'cleanup')}
     />
   {:else}
-    <!-- One selection summary and one cleanup action. -->
-      {#if !scanStore.isScanning && !scanStore.isCleaning}
-      <SelectionToolbar
-        selectedCount={scanStore.selectedCount}
-        selectedBytes={scanStore.reclaimableBytes}
-        manualCount={scanStore.manualSelectedCount}
-        actionLabel="Review selected"
-        onAction={handleCleanSelected}
-        isActionDisabled={!scanStore.canClean || !hasSelectedAction || isPreparingReview}
-        isActionLoading={scanStore.isCleaning || isPreparingReview}
-        isSelectionDisabled={!scanStore.canClean}
-      >
-        {#snippet extraActions()}
-          <Button
-            variant="ghost"
-            size="xs"
-            onclick={() => tauriOpenStorageSettings()}
-            class="text-muted-foreground"
-            title="Open storage settings"
-            ariaLabel="Open storage settings"
-          >
-            <ExternalLink size={12} />
-            <span class="hidden lg:inline">Storage Settings</span>
-          </Button>
-        {/snippet}
-      </SelectionToolbar>
-      {/if}
+    {#if !scanStore.isScanning && !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
+      <StorageSummary />
+    {/if}
 
     <!-- Scan Progress -->
     {#if scanStore.isScanning}
@@ -312,18 +290,23 @@
     {/if}
 
     <!-- Scan freshness / remediation notice -->
-    {#if scanStore.freshness === 'partial' || scanStore.freshness === 'unavailable'}
-      <ScanFreshnessNotice />
+    {#if !scanStore.isScanning && !scanStore.isCleaning && scan && scanStore.freshness !== 'fresh' && scanStore.freshness !== 'failed'}
+      <ScanFreshnessNotice compact />
     {/if}
 
     <!-- Categories Section -->
     {#if !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
     <div class="space-y-3">
-      <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Categories</h2>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-sm font-semibold text-foreground tracking-tight">Storage Categories</h2>
+        {#if scan}
+          <span class="text-meta text-muted-foreground">Largest cleanup first</span>
+        {/if}
+      </div>
 
       {#if scan}
-        <div class="space-y-2">
-          {#each scan.categories as categoryResult (categoryResult.category)}
+        <div class="category-list rounded-xl border border-border bg-card">
+          {#each orderedCategories as categoryResult (categoryResult.category)}
             <CategoryCard
               {categoryResult}
               onSelectCategory={(cat) => onSelectCategory(cat)}
@@ -331,13 +314,50 @@
           {/each}
         </div>
       {:else}
-        <div class="py-12 text-center text-muted-foreground text-sm space-y-3">
-          <LoadingSpinner size={24} class="mx-auto opacity-50" />
-          <p>Scanning known development caches...</p>
+        <div class="rounded-xl border border-border bg-card px-6 py-8 text-center space-y-2">
+          {#if scanStore.isScanning}
+            <LoadingSpinner size={24} class="mx-auto text-muted-foreground" />
+            <p class="text-body text-muted-foreground">Scanning known development caches...</p>
+          {:else}
+            <HardDrive size={24} class="mx-auto mb-3 text-muted-foreground" aria-hidden="true" />
+            <p class="text-sm font-medium text-foreground">Start with a storage scan</p>
+            <p class="text-body text-muted-foreground">Find known caches, then choose what to review.</p>
+          {/if}
         </div>
       {/if}
     </div>
     {/if}
+    <!-- Review follows the list in both visual and keyboard order. -->
+      {#if scan && !scanStore.isScanning && !scanStore.isCleaning && !scanStore.isRefreshingAfterClean}
+      <div class="storage-selection">
+      <SelectionToolbar
+        selectedCount={scanStore.selectedCount}
+        selectedBytes={scanStore.reclaimableBytes}
+        manualCount={scanStore.manualSelectedCount}
+        actionLabel="Review selected"
+        onAction={handleCleanSelected}
+        isActionDisabled={!scanStore.canClean || !hasSelectedAction || isPreparingReview}
+        isActionLoading={scanStore.isCleaning || isPreparingReview}
+        isSelectionDisabled={!scanStore.canClean}
+      >
+        {#snippet extraActions()}
+          <Button
+            variant="ghost"
+            size="xs"
+            onclick={() => tauriOpenStorageSettings()}
+            class="text-muted-foreground"
+            title="Open storage settings"
+            ariaLabel="Open storage settings"
+          >
+            <ExternalLink size={12} />
+            <span class="hidden lg:inline">Storage Settings</span>
+          </Button>
+        {/snippet}
+      </SelectionToolbar>
+      <p class="mt-1 text-meta text-muted-foreground">Nothing is removed until you confirm the review.</p>
+      </div>
+      {/if}
+
   {/if}
 
   </div>
@@ -359,3 +379,15 @@
     />
   {/if}
 </div>
+
+<style>
+  .storage-workspace { container-type: inline-size; }
+  .category-list { padding: 0 4px; }
+  .storage-selection {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    padding: 8px 0;
+    background: hsl(var(--background));
+  }
+</style>

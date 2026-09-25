@@ -1,6 +1,16 @@
 import type { AgentQuickSessionRow, AiProviderUsage, ProviderId, UsageWindow } from '../models/types';
 import { resolveBrandIdentity } from './brandIcons';
 
+export function quickPanelHeight(
+  contentHeight: number,
+  chromeHeight: number,
+  maximumHeight = 740,
+  minimumHeight = 380
+): number {
+  const measuredHeight = Math.ceil(contentHeight + chromeHeight);
+  return Math.min(maximumHeight, Math.max(minimumHeight, measuredHeight));
+}
+
 export interface QuickUsageWindowPair {
   fiveHour: UsageWindow;
   weekly: UsageWindow;

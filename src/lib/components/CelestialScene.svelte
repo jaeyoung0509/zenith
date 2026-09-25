@@ -1,4 +1,22 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+
+  let scene: SVGSVGElement;
+  let motionVisible = $state(false);
+  onMount(() => {
+    let intersects = false;
+    const updateVisibility = () => { motionVisible = intersects && !document.hidden; };
+    const observer = new IntersectionObserver(([entry]) => {
+      intersects = entry.isIntersecting;
+      updateVisibility();
+    });
+    observer.observe(scene);
+    document.addEventListener('visibilitychange', updateVisibility);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', updateVisibility);
+    };
+  });
   // Fixed geometry keeps this decorative scene stable across renders and themes.
   const id = $props.id();
   const dust = Array.from({ length: 96 }, (_, index) => {
@@ -14,7 +32,7 @@
   });
 </script>
 
-<svg class="celestial-scene" viewBox="0 0 240 200" aria-hidden="true" focusable="false">
+<svg bind:this={scene} class="celestial-scene" style:--scene-play-state={motionVisible ? 'running' : 'paused'} viewBox="0 0 240 200" aria-hidden="true" focusable="false">
   <defs>
     <radialGradient id={`${id}-halo`}>
       <stop offset="0.45" stop-color="hsl(var(--cosmic-ice))" stop-opacity="0.2" />
@@ -40,18 +58,36 @@
   </defs>
   <ellipse cx="120" cy="103" rx="111" ry="90" fill={`url(#${id}-halo)`} />
   <g transform="rotate(-24 120 100)">
+    <ellipse cx="120" cy="100" rx="104" ry="58" fill="none" stroke="hsl(var(--cosmic-line))" stroke-width="0.6" opacity="0.24" />
+    <g class="orbit-dust">
     {#each dust as star}
       <circle cx={star.x} cy={star.y} r={star.radius} opacity={star.opacity}
         fill={star.warm ? 'hsl(var(--cosmic-warm))' : 'hsl(var(--cosmic-line))'} />
     {/each}
+    </g>
   </g>
   <circle cx="120" cy="100" r="60" fill="hsl(var(--cosmic-ice))" opacity="0.3" />
   <circle cx="120" cy="100" r="59" fill={`url(#${id}-planet)`} />
   <g clip-path={`url(#${id}-disc)`}>
-    <circle cx="120" cy="100" r="59" fill="hsl(var(--cosmic-highlight))" filter={`url(#${id}-clouds)`} />
+    <g class="planet-clouds">
+      <circle cx="120" cy="100" r="59" fill="hsl(var(--cosmic-highlight))" filter={`url(#${id}-clouds)`} />
+    </g>
     <circle cx="120" cy="100" r="59" fill={`url(#${id}-shade)`} />
   </g>
   <path d="M 131 42 A 59 59 0 0 1 177 85" fill="none" stroke="hsl(var(--cosmic-highlight))" stroke-width="1" opacity="0.75" />
   <circle cx="186" cy="53" r="1.6" fill="hsl(var(--cosmic-line))" />
   <circle cx="186" cy="53" r="4" fill="hsl(var(--cosmic-ice))" opacity="0.16" />
 </svg>
+
+<style>
+  .orbit-dust, .planet-clouds {
+    transform-origin: 120px 100px;
+    animation: orbit 48s linear infinite;
+    animation-play-state: var(--scene-play-state, paused);
+  }
+  .planet-clouds { animation-duration: 36s; animation-direction: reverse; }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce), (prefers-reduced-transparency: reduce) {
+    .orbit-dust, .planet-clouds { animation: none; }
+  }
+</style>

@@ -128,7 +128,7 @@ describe('metric and action consistency contracts', () => {
       },
     });
 
-    expect(rendered.body).toContain('data-region="metrics" class="shrink-0 text-right"');
+    expect(rendered.body).toMatch(/data-region="metrics" class="[^"]*\bshrink-0\b[^\"]*\btext-right\b/);
     expect(rendered.body).toContain('whitespace-nowrap');
     expect(rendered.body).toContain('198.8 MB');
     expect(rendered.body).not.toContain('Rebuild:');

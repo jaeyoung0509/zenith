@@ -46,7 +46,7 @@
   role={onclick ? 'button' : undefined}
   onclick={onclick}
   aria-label={onclick ? actionLabel ?? label : undefined}
-  class="metric-tile group flex flex-col min-w-0 w-full text-left rounded-xl border border-border bg-card shadow-sm p-3.5 space-y-1.5 {onclick
+  class="metric-tile group flex flex-col min-w-0 w-full text-left rounded-xl border border-border bg-card p-3.5 space-y-1.5 {onclick
     ? 'transition-[background-color,border-color] duration-140 hover:border-border-strong hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
     : ''} {toneClass[tone]} {className}"
 >

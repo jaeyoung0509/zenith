@@ -89,7 +89,9 @@
       </Button>
     {/if}
 
-    <div class="h-4 w-px bg-border mx-1 hidden sm:block"></div>
+    {#if onSelectSafe || onSelectAll || onDeselectAll}
+      <div class="h-4 w-px bg-border mx-1 hidden sm:block"></div>
+    {/if}
 
     <span class="text-meta text-muted-foreground">
       <span class="font-medium text-foreground">{selectedCount}</span>

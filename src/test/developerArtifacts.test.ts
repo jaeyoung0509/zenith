@@ -71,6 +71,22 @@ describe('developer artifact review workflow', () => {
     expect(rendered.body).not.toContain('Incomplete · blocked');
   });
 
+  it('aligns artifact sizes and keeps evidence behind a disclosure', async () => {
+    const result = await mockStorageApi.startDeveloperArtifactScan(
+      ['workspace-myproject'],
+      () => undefined
+    );
+    const rendered = render(DeveloperArtifactsView, {
+      props: { onBack: () => undefined, initialResult: result },
+    });
+
+    expect(rendered.body).toContain('developer-artifact-list');
+    expect(rendered.body).toContain('developer-artifact-row');
+    expect(rendered.body).toContain('allocated</span>');
+    expect(rendered.body).toContain('<details');
+    expect(rendered.body).toContain('Evidence and rebuild details');
+  });
+
   it('reports the gated Downloads folder as uninspected in the whole-home preview', async () => {
     const workspace = await mockStorageApi.registerDeveloperHomeWorkspace();
     const events: string[] = [];

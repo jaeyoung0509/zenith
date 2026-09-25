@@ -1,4 +1,4 @@
-/* Zenith · white working surface · native-first shell */
+/* Zenith · pastel blue and lavender · frosted chrome · solid working surfaces */
 /* Scan only the root app entrypoint and source tree. The onboarding site has a
    separate Tailwind build and must not inflate the desktop bundle. */
 @import "tailwindcss" source(none);
@@ -21,6 +21,8 @@
   --color-popover-foreground: hsl(var(--popover-foreground));
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-action: hsl(var(--action));
+  --color-action-foreground: hsl(var(--action-foreground));
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-muted: hsl(var(--muted));
@@ -64,33 +66,39 @@
 
 @layer base {
   :root {
-    --background: 120 11% 98%;
-    --foreground: 153 19% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 153 19% 11%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 153 19% 11%;
-    --primary: 161 42% 18%;
+    --background: 230 35% 97%;
+    --foreground: 225 24% 17%;
+    --card: 230 40% 99%;
+    --card-foreground: 225 24% 17%;
+    --popover: 230 40% 99%;
+    --popover-foreground: 225 24% 17%;
+    --primary: 220 76% 38%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 140 16% 96%;
-    --secondary-foreground: 153 19% 11%;
-    --muted: 140 16% 96%;
-    --muted-foreground: 148 6% 40%;
-    --accent: 147 31% 93%;
-    --accent-foreground: 153 19% 11%;
+    --action: 225 86% 87%;
+    --action-foreground: 225 48% 24%;
+    --secondary: 230 35% 94%;
+    --secondary-foreground: 225 24% 17%;
+    --muted: 230 35% 94%;
+    --muted-foreground: 225 13% 40%;
+    --accent: 228 75% 93%;
+    --accent-foreground: 222 38% 17%;
     --destructive: 3 71% 41%;
     --destructive-foreground: 0 0% 100%;
     --success: 162 71% 24%;
     --warning: 33 100% 27%;
-    --ai: 256 51% 47%;
-    --border: 137 13% 90%;
+    --ai: 222 82% 37%;
+    --border: 230 24% 87%;
     /* Essential boundaries (inputs, interactive chrome) clear 3:1 on white;
        decorative separators stay on --border, which is intentionally quieter. */
-    --border-strong: 145 10% 52%;
-    --input: 145 10% 52%;
-    /* Dark mint focus stays above 3:1 on the page, card, sidebar and primary. */
-    --ring: 160 45% 42%;
+    --border-strong: 225 13% 49%;
+    --input: 225 13% 49%;
+    /* Cobalt focus is visible against the warm page and white working surfaces. */
+    --ring: 220 82% 36%;
     --radius: 0.75rem;
+    --glass-surface: 230 40% 97%;
+    --glass-muted: 225 16% 25%;
+    --glass-edge: 0 0% 100%;
+    --glass-opacity: 0.78;
 
     /* Purposeful Motion Tokens (Performance-conscious & WCAG AA reduced motion compliant) */
     --duration-instant: 100ms;
@@ -101,31 +109,35 @@
   }
 
   .dark {
-    --background: 220 25% 8%;
-    --foreground: 162 23% 95%;
-    --card: 217 19% 13%;
-    --card-foreground: 162 23% 95%;
-    --popover: 217 19% 13%;
-    --popover-foreground: 162 23% 95%;
-    --primary: 154 43% 76%;
-    --primary-foreground: 159 43% 9%;
-    --secondary: 219 21% 11%;
-    --secondary-foreground: 162 23% 95%;
-    --muted: 219 16% 16%;
-    --muted-foreground: 174 10% 72%;
-    --accent: 169 39% 20%;
-    --accent-foreground: 162 23% 95%;
+    --background: 222 24% 8%;
+    --foreground: 230 35% 95%;
+    --card: 222 20% 13%;
+    --card-foreground: 230 35% 95%;
+    --popover: 222 20% 13%;
+    --popover-foreground: 230 35% 95%;
+    --primary: 218 82% 76%;
+    --primary-foreground: 224 48% 13%;
+    --action: 225 66% 80%;
+    --action-foreground: 225 48% 15%;
+    --secondary: 222 20% 12%;
+    --secondary-foreground: 230 35% 95%;
+    --muted: 222 18% 16%;
+    --muted-foreground: 220 14% 74%;
+    --accent: 219 42% 24%;
+    --accent-foreground: 230 35% 95%;
     --destructive: 4 75% 70%;
     --destructive-foreground: 159 43% 9%;
     --success: 157 60% 29%;
     --warning: 38 76% 63%;
-    --ai: 258 82% 79%;
-    --border: 194 18% 23%;
-    --border-strong: 166 17% 49%;
-    --input: 166 17% 49%;
-    /* Medium mint: clears 3:1 against the dark page, cards, sidebar and the
-       light primary action surface at the same time. */
-    --ring: 164 45% 34%;
+    --ai: 217 85% 72%;
+    --border: 220 18% 25%;
+    --border-strong: 220 20% 49%;
+    --input: 220 20% 49%;
+    --ring: 217 88% 68%;
+    --glass-surface: 222 24% 8%;
+    --glass-muted: 220 14% 84%;
+    --glass-edge: 220 20% 78%;
+    --glass-opacity: 0.86;
   }
 }
 
@@ -199,6 +211,12 @@
 html.transparent-window,
 html.transparent-window body,
 html.transparent-window #app {
+  background-color: transparent;
+}
+
+html.native-material-window,
+html.native-material-window body,
+html.native-material-window #app {
   background-color: transparent;
 }
 
@@ -312,9 +330,10 @@ html.transparent-window #app {
 }
 
 .liquid-sidebar {
+  --muted-foreground: var(--glass-muted);
   z-index: 1;
-  background: hsl(var(--secondary) / 0.86);
-  box-shadow: inset -1px 0 hsl(var(--foreground) / 0.035);
+  background: hsl(var(--glass-surface) / var(--glass-opacity));
+  box-shadow: inset -1px 0 hsl(var(--glass-edge) / 0.42);
   -webkit-backdrop-filter: blur(22px) saturate(145%);
   backdrop-filter: blur(22px) saturate(145%);
 }
@@ -344,44 +363,71 @@ html.transparent-window #app {
   letter-spacing: -0.035em;
 }
 
-.overview-readings > :first-child {
-  border-color: hsl(var(--primary) / 0.28);
-}
+.overview-readings > :first-child { border-color: hsl(var(--border)); }
 
 .quick-liquid-shell {
-  border: 1px solid hsl(var(--border));
+  --muted-foreground: var(--glass-muted);
+  border: 1px solid hsl(var(--foreground) / 0.16);
   border-radius: var(--radius-2xl);
-  background: hsl(var(--background));
-  box-shadow: 0 16px 36px hsl(var(--foreground) / 0.11);
+  background: hsl(var(--glass-surface) / var(--glass-opacity));
+  box-shadow: inset 0 1px 0 hsl(var(--glass-edge) / 0.5), 0 16px 36px hsl(var(--foreground) / 0.16);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+  backdrop-filter: blur(24px) saturate(135%);
   clip-path: inset(0 round var(--radius-2xl));
 }
 
-.quick-liquid-chrome {
-  background: hsl(var(--secondary) / 0.74);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  backdrop-filter: blur(20px) saturate(140%);
+.quick-liquid-shell[data-material='native'] {
+  /* AppKit already blurs the desktop. Avoid a second WebView compositor. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
-/* Hallmark · pre-emit critique: P5 H4 E4 S5 R5 V4 */
-/* Hallmark · macrostructure: compact utility ledger · white canvas · mint action accent */
+.quick-liquid-chrome {
+  background: hsl(var(--glass-surface) / 0.12);
+  border-color: hsl(var(--foreground) / 0.12);
+}
+
+/* Zenith · quick readings align, while cleanup owns the panel's focal point. */
 .quick-list-section,
 .quick-data-row {
-  border-bottom: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--foreground) / 0.1);
+}
+
+.quick-panel-content {
+  display: flow-root;
 }
 
 .quick-list-section {
   padding: 8px 4px;
 }
 
+.quick-cleanup-summary {
+  margin: 0 0 3px;
+  padding: 8px 4px 12px;
+  border-bottom: 1px solid hsl(var(--foreground) / 0.14);
+}
+
+.quick-cleanup-value {
+  font-size: 1.5rem;
+  line-height: 1.75rem;
+  letter-spacing: -0.035em;
+}
+
 .quick-data-row {
   min-height: 48px;
-  padding: 7px 4px;
-  border-radius: 6px;
+  padding: 6px 4px;
+  border-radius: var(--radius-md);
   transition: background-color var(--duration-fast);
 }
 
+.quick-data-value {
+  font-size: 1rem;
+  line-height: 1.25rem;
+  letter-spacing: -0.015em;
+}
+
 .quick-data-row:hover {
-  background: hsl(var(--accent) / 0.65);
+  background: hsl(var(--accent) / 0.72);
 }
 
 @media (max-width: 379px) {
@@ -392,6 +438,7 @@ html.transparent-window #app {
 
 @media (prefers-reduced-transparency: reduce) {
   .liquid-sidebar,
+  .quick-liquid-shell,
   .quick-liquid-chrome {
     background: hsl(var(--secondary));
     -webkit-backdrop-filter: none;
@@ -404,50 +451,61 @@ html.transparent-window #app {
 /* Decorative spectrum is separate from semantic status colours. No animation. */
 @layer base {
   :root {
-    --cosmic-ice: 191 72% 64%;
-    --cosmic-iris: 249 76% 70%;
-    --cosmic-rose: 325 74% 76%;
-    --cosmic-line: 241 35% 62%;
-    --cosmic-night: 220 46% 7%;
-    --cosmic-surface: 214 46% 24%;
-    --cosmic-water: 199 54% 57%;
-    --cosmic-highlight: 193 54% 92%;
-    --cosmic-warm: 30 60% 52%;
+    --cosmic-ice: 204 82% 65%;
+    --cosmic-cobalt: 221 78% 62%;
+    --cosmic-coral: 260 76% 82%;
+    --cosmic-line: 218 42% 57%;
+    --cosmic-night: 233 42% 28%;
+    --cosmic-surface: 225 60% 63%;
+    --cosmic-water: 211 85% 84%;
+    --cosmic-highlight: 238 80% 96%;
+    --cosmic-warm: 260 65% 75%;
   }
 
   .dark {
-    --cosmic-ice: 191 66% 42%;
-    --cosmic-iris: 249 68% 54%;
-    --cosmic-rose: 325 57% 48%;
-    --cosmic-line: 241 44% 73%;
+    --cosmic-ice: 205 76% 48%;
+    --cosmic-cobalt: 220 72% 60%;
+    --cosmic-coral: 260 62% 66%;
+    --cosmic-line: 218 46% 66%;
   }
 }
 
 .dashboard-shell {
   background-image:
-    radial-gradient(ellipse 65% 38% at 95% -8%, hsl(var(--cosmic-iris) / 0.15), transparent 75%),
+    radial-gradient(ellipse 65% 38% at 95% -8%, hsl(var(--cosmic-cobalt) / 0.15), transparent 75%),
     radial-gradient(ellipse 38% 28% at 66% -7%, hsl(var(--cosmic-ice) / 0.12), transparent 75%);
 }
 
 .liquid-sidebar {
   background-image:
-    radial-gradient(ellipse 120% 42% at 0% 0%, hsl(var(--cosmic-iris) / 0.13), transparent 72%),
-    radial-gradient(ellipse 100% 35% at 100% 30%, hsl(var(--cosmic-ice) / 0.09), transparent 75%);
+    linear-gradient(145deg, hsl(var(--glass-edge) / 0.18), transparent 38%),
+    radial-gradient(ellipse 120% 42% at 0% 0%, hsl(var(--cosmic-cobalt) / 0.16), transparent 72%),
+    radial-gradient(ellipse 100% 50% at 100% 70%, hsl(var(--cosmic-coral) / 0.16), transparent 75%);
 }
 
+.native-material-window .dashboard-shell { background: transparent; }
+.native-material-window .dashboard-shell > main { background: hsl(var(--background)); }
+.native-material-window .liquid-sidebar { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.liquid-sidebar nav button[aria-current='page'] {
+  color: hsl(var(--action-foreground));
+  background: hsl(var(--action) / 0.86);
+  box-shadow: inset 0 1px 0 hsl(var(--glass-edge) / 0.65), 0 2px 8px hsl(var(--primary) / 0.06);
+}
+.liquid-sidebar nav button[aria-current='page'] .text-primary { color: inherit; }
+
 .page-header {
-  border-image: linear-gradient(90deg, hsl(var(--border)), hsl(var(--cosmic-iris) / 0.32), hsl(var(--cosmic-ice) / 0.18)) 1;
+  border-image: linear-gradient(90deg, hsl(var(--border)), hsl(var(--cosmic-cobalt) / 0.32), hsl(var(--cosmic-ice) / 0.18)) 1;
 }
 
 .overview-hero {
   isolation: isolate;
   min-height: 184px;
   padding-right: 220px;
-  box-shadow: 0 5px 24px hsl(var(--cosmic-iris) / 0.06);
+  box-shadow: 0 5px 24px hsl(var(--cosmic-cobalt) / 0.06);
   background-image:
-    radial-gradient(ellipse 44% 145% at 100% 110%, hsl(var(--cosmic-iris) / 0.12), transparent 72%),
+    radial-gradient(ellipse 44% 145% at 100% 110%, hsl(var(--cosmic-cobalt) / 0.12), transparent 72%),
     radial-gradient(ellipse 36% 115% at 85% 0%, hsl(var(--cosmic-ice) / 0.13), transparent 72%),
-    radial-gradient(ellipse 30% 80% at 76% 100%, hsl(var(--cosmic-rose) / 0.08), transparent 72%);
+    radial-gradient(ellipse 30% 80% at 76% 100%, hsl(var(--cosmic-coral) / 0.08), transparent 72%);
 }
 
 .overview-celestial {
@@ -489,9 +547,7 @@ html.transparent-window #app {
 }
 
 .quick-liquid-chrome {
-  background-image:
-    radial-gradient(ellipse at 100% 0%, hsl(var(--cosmic-iris) / 0.18), transparent 65%),
-    radial-gradient(ellipse at 55% 0%, hsl(var(--cosmic-ice) / 0.13), transparent 65%);
+  background-image: none;
 }
 
 @media (prefers-reduced-transparency: reduce) {

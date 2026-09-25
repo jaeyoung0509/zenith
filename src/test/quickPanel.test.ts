@@ -19,12 +19,20 @@ import {
   projectQuickAiRows,
   formatQuickProviderUsage,
   formatQuickReset,
+  quickPanelHeight,
   reorderOrdered,
   selectQuickUsageWindows,
   toggleOrdered,
 } from '../lib/utils/quickPanel';
 
 describe('quick panel customization', () => {
+  it('sizes the panel to measured content within its native bounds', () => {
+    expect(quickPanelHeight(180, 120)).toBe(380);
+    expect(quickPanelHeight(420, 120)).toBe(540);
+    expect(quickPanelHeight(900, 120)).toBe(740);
+    expect(quickPanelHeight(420, 120, 500)).toBe(500);
+  });
+
   it('never removes the final visible section', () => {
     expect(toggleOrdered(['storage'], 'storage', true)).toEqual(['storage']);
   });
@@ -423,8 +431,10 @@ describe('quick cleanup state', () => {
       };
       scanStore.updateFreshness();
       const body = render(QuickPanel).body;
+      expect(body).toContain('Scan needed');
       expect(body).toContain('Scan again to verify safe cleanup.');
       expect(body).toContain('Scan Again');
+      expect(body).not.toContain('0 B');
       expect(body).not.toContain('Clean Safe');
     } finally {
       settingsStore.settings = previousSettings;

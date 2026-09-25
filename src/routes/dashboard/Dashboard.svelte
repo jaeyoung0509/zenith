@@ -71,6 +71,7 @@
   let workflowsMounted = false;
   let stopFreshness: (() => void) | undefined;
   let settings = $derived(settingsStore.settings);
+  let visibleTabs = $derived(settings.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS);
   let sidebarCollapsed = $derived(settings.sidebar_collapsed ?? false);
   // Only the platform that actually draws an overlay title bar reserves the top
   // band or gets a drag strip; a native caption bar would otherwise show dead
@@ -123,8 +124,8 @@
     awake: 'keep_awake',
   };
 
-  // `null` keeps a destination ungrouped; the sidebar renders one heading per
-  // contiguous group exactly as it renders one separator per group break.
+  // `null` keeps a destination ungrouped; each named group receives one
+  // heading even when saved navigation order separates its destinations.
   const tabGroups: Partial<Record<Tab, string | null>> = {
     overview: null,
     storage: null,
@@ -291,22 +292,29 @@
 
       <!-- Navigation Links -->
       <nav class="space-y-0.5 no-drag" aria-label="Main Navigation">
-        {#each settings.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS as tabId, i}
+        {#each visibleTabs as tabId, i}
           {@const def = tabDefs[tabId as DashboardTab]}
           {#if def}
             {@const capabilityName = routeCapabilities[tabId]}
             {@const capability = capabilityName ? platformCapabilitiesStore.feature(capabilityName) : null}
             {@const tabAvailable = isRouteAvailable(tabId)}
             {@const currentGroup = tabGroups[tabId as DashboardTab] ?? null}
-            {@const prevTabId = (settings.dashboard_tabs ?? DEFAULT_DASHBOARD_TABS)[i - 1]}
+            {@const prevTabId = visibleTabs[i - 1]}
             {@const prevGroup = prevTabId ? tabGroups[prevTabId as DashboardTab] ?? null : null}
-            {@const showGroupHeader = !sidebarCollapsed && currentGroup && currentGroup !== prevGroup}
+            {@const groupShownEarlier =
+              !!currentGroup &&
+              visibleTabs.slice(0, i).some(
+                (priorTabId) => tabGroups[priorTabId as DashboardTab] === currentGroup
+              )}
+            {@const showGroupHeader = !sidebarCollapsed && currentGroup && !groupShownEarlier}
             {@const isTabActive = currentTab === tabId || (tabId === 'storage' && (currentTab === 'large-files' || currentTab === 'applications' || currentTab === 'developer-artifacts' || currentTab === 'disks'))}
 
             {#if showGroupHeader}
               <div class="px-2.5 {i === 0 ? 'pt-1' : 'pt-3'} pb-1 text-caption font-medium uppercase tracking-wide text-muted-foreground select-none">
                 {currentGroup}
               </div>
+            {:else if !sidebarCollapsed && currentGroup && prevGroup !== currentGroup && groupShownEarlier}
+              <div class="mx-2 my-1 h-px bg-border/70" role="separator"></div>
             {:else if sidebarCollapsed && prevGroup && prevGroup !== currentGroup && i > 0}
               <div class="my-1.5 mx-2 h-px bg-border" role="separator"></div>
             {/if}
@@ -321,7 +329,7 @@
                 : def.label}
               title={tabAvailable ? (sidebarCollapsed ? def.label : undefined) : (capability?.reason ?? `${def.label} is unavailable`)}
               class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-md text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {isTabActive
-                ? 'bg-accent/70 text-foreground'
+                ? 'bg-accent text-primary font-semibold'
                 : tabAvailable
                   ? 'text-muted-foreground hover:text-foreground hover:bg-card'
                   : 'text-muted-foreground/50 cursor-not-allowed'}"
@@ -334,14 +342,14 @@
               {#if tabId === 'storage' && scanStore.reclaimableBytes > 0}
                 <span
                   class="{sidebarCollapsed
-                    ? 'absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-success'
-                    : 'ml-auto inline-flex items-center gap-1.5 whitespace-nowrap text-caption font-mono font-medium tracking-tight text-success/85'}"
+                    ? 'absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary'
+                    : 'ml-auto inline-flex items-center gap-1.5 whitespace-nowrap text-caption font-mono font-medium tracking-tight text-primary'}"
                   title="Reclaimable storage available"
                 >
                   {#if sidebarCollapsed}
                     <span class="sr-only">{formatBytes(scanStore.reclaimableBytes)} reclaimable</span>
                   {:else}
-                    <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-success/90"></span>
+                    <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-primary/90"></span>
                     {formatBytes(scanStore.reclaimableBytes)}
                   {/if}
                 </span>
@@ -370,7 +378,7 @@
           title={sidebarCollapsed ? 'Settings' : undefined}
           class="relative w-full flex items-center {sidebarCollapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} py-2 rounded-md text-body font-medium transition-[background-color,color] duration-140 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring {currentTab ===
           'settings'
-            ? 'bg-accent/70 text-foreground'
+            ? 'bg-accent text-primary font-semibold'
             : 'text-muted-foreground hover:text-foreground hover:bg-card'}"
         >
           {#if currentTab === 'settings'}<span aria-hidden="true" class="absolute left-0 inset-y-2 w-0.5 rounded-full bg-primary"></span>{/if}
