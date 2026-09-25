@@ -24,8 +24,9 @@
   import MetricSparkline from '../../lib/components/metrics/MetricSparkline.svelte';
   import BatteryIndicator from '../../lib/components/metrics/BatteryIndicator.svelte';
   import ResourceRow from '../../lib/components/metrics/ResourceRow.svelte';
+  import CelestialScene from '../../lib/components/CelestialScene.svelte';
   import {
-    Bot,
+    ChartNoAxesCombined,
     Boxes,
     Container,
     Gauge,
@@ -33,7 +34,6 @@
     Moon,
     RefreshCw,
     Server,
-    Sparkles,
   } from '@lucide/svelte';
 
   interface Props {
@@ -176,7 +176,8 @@
   </PageHeader>
 
   <!-- The next action, first. -->
-  <section class="overview-hero flex flex-col sm:flex-row sm:items-center justify-between gap-4" aria-label="Cleanup summary">
+  <section class="overview-hero flex flex-col items-start gap-3" aria-label="Cleanup summary">
+    <div class="overview-celestial"><CelestialScene /></div>
     <div class="min-w-0 space-y-1">
       <div class="flex items-center gap-2">
         <HardDrive size={16} class="text-primary shrink-0" aria-hidden="true" />
@@ -185,7 +186,7 @@
           <span class="text-caption font-mono text-muted-foreground">Scanned {scannedAgo}</span>
         {/if}
       </div>
-      <p class="{scan && !scanStore.isScanning ? 'overview-hero-value font-semibold' : 'text-body font-medium'} font-mono tabular-nums text-foreground whitespace-nowrap">{cleanupValue}</p>
+      <p class="{scan && !scanStore.isScanning ? 'overview-hero-value font-medium' : 'text-body font-medium'} tabular-nums text-foreground whitespace-nowrap">{cleanupValue}</p>
       <p class="text-meta text-muted-foreground break-words">{cleanupDetail}</p>
     </div>
     <div class="flex items-center gap-2 shrink-0">
@@ -237,22 +238,28 @@
 
     <MetricTile
       label="Memory"
-      value={memory ? memoryPressureLabel(memory.pressure) : memoryAvailable ? 'Reading…' : 'Unavailable'}
+      value={memory ? formatBytes(memory.used_bytes) : '—'}
       tone={memory?.pressure === 'critical' ? 'critical' : memory?.pressure === 'warning' ? 'warning' : 'default'}
       freshness={memoryFreshness}
       detail={memory
-        ? `${formatBytes(memory.used_bytes)} of ${formatBytes(memory.total_bytes)} used${memory.swap_used_bytes > 0 ? ` · swap ${formatBytes(memory.swap_used_bytes)}` : ''}`
-        : platformCapabilitiesStore.feature('memory_metrics')?.reason ?? 'Memory readings are not available on this platform.'}
+        ? `${formatBytes(memory.total_bytes)} total${memory.swap_used_bytes > 0 ? ` · ${formatBytes(memory.swap_used_bytes)} swap` : ''}`
+        : memoryStore.error ?? (memoryAvailable ? 'Reading memory…' : platformCapabilitiesStore.feature('memory_metrics')?.reason ?? 'Memory readings are not available on this platform.')}
       actionLabel="Open Performance memory detail"
       onclick={() => onNavigateTab?.('memory')}
     >
       {#snippet visual()}
         {#if memory && memory.total_bytes > 0}
-          <ProgressBar
-            value={(memory.used_bytes / memory.total_bytes) * 100}
-            height="h-1.5"
-            color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
-          />
+          <span class="flex w-full flex-col gap-1.5">
+            <span class="memory-pressure text-caption font-medium {memory.pressure === 'critical' ? 'text-destructive' : memory.pressure === 'warning' ? 'text-warning' : 'text-muted-foreground'}">
+              <span class="memory-pressure-dot" aria-hidden="true"></span>
+              {`${memoryPressureLabel(memory.pressure)} pressure`}
+            </span>
+            <ProgressBar
+              value={(memory.used_bytes / memory.total_bytes) * 100}
+              height="h-1.5"
+              color={memory.pressure === 'critical' ? 'bg-destructive' : memory.pressure === 'warning' ? 'bg-warning' : 'bg-success'}
+            />
+          </span>
         {/if}
       {/snippet}
     </MetricTile>
@@ -274,7 +281,6 @@
         {#if battery?.presence === 'present'}
           <span class="flex items-center gap-2">
             <BatteryIndicator percent={battery.percent} chargeState={battery.charge_state} />
-            <span class="text-caption text-muted-foreground">{batteryChargeStateLabel(battery.charge_state)}</span>
           </span>
         {/if}
       {/snippet}
@@ -384,11 +390,7 @@
         actionLabel="Open AI Activity"
       >
         {#snippet icon()}
-          {#if activeAgentCount > 0}
-            <Bot size={16} class="text-muted-foreground" aria-hidden="true" />
-          {:else}
-            <Sparkles size={16} class="text-muted-foreground" aria-hidden="true" />
-          {/if}
+          <ChartNoAxesCombined size={16} class="text-muted-foreground" aria-hidden="true" />
         {/snippet}
       </ResourceRow>
     </div>

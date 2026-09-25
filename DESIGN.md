@@ -7,6 +7,12 @@ Quick Panel a native sense of depth. Technical data and cleanup decisions stay
 on legible solid surfaces; amber and red signal real caution and failure. The
 dark theme remains an option, not the primary visual reference.
 
+Celestial atmosphere gives the white interface a distinct identity: quiet blue
+light on the shell, a small original planet with orbital dust in the Overview
+summary, and a restrained spectrum on navigation chrome. The planet is purely
+decorative, never a machine-health indicator. It is a static, locally rendered
+SVG; no external artwork, animation loop, or extra polling is needed.
+
 This document is the visual contract. The executable half of it — colour,
 radius, type, and motion tokens — lives in `src/app.css` and is enforced by
 `src/test/designSystem.test.ts`.
@@ -65,6 +71,11 @@ focus `--ring` 3.3:1 on white, 3.1:1 on the page, 3.1:1 on the primary action,
 The dark palette is checked by the design-system contrast test whenever its
 tokens change. Translucent chrome falls back to an opaque surface when the
 system requests reduced transparency.
+
+Decorative `--cosmic-*` tokens are separate from semantic status colours.
+Reduced transparency removes atmospheric backgrounds and the planet. Narrow
+content areas hide the artwork before it can crowd text or actions. Cards and
+data tables retain solid surfaces in both themes.
 
 Two deliberate deviations from a naive mint mapping are recorded here because
 they are load-bearing:
@@ -274,6 +285,10 @@ secondary detail scrolls. Each tile opens its exact detail page.
   express reset times with units rather than a bare minute counter.
 - Cleanup and Keep Awake keep their actions within the same flat row hierarchy.
   The storage safety and freshness rules do not change with the presentation.
+- Memory leads with the measured used amount. Pressure is a smaller explicit
+  label (`Low pressure`, `Elevated pressure`, or `Critical pressure`), not a
+  large monospace verdict. Overview follows the same hierarchy and displays
+  total capacity, swap when present, and a usage bar separately from pressure.
 
 ### Storage
 

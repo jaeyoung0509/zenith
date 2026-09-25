@@ -27,7 +27,7 @@
   }: Props = $props();
 </script>
 
-<header class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border {className}">
+<header class="page-header flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border {className}">
   <div class="flex items-center gap-3 min-w-0">
     {#if Icon}
       <div class="h-9 w-9 rounded-lg border border-border bg-accent text-accent-foreground flex items-center justify-center shrink-0">

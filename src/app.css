@@ -398,3 +398,111 @@ html.transparent-window #app {
     backdrop-filter: none;
   }
 }
+
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 */
+/* Hallmark · genre: atmospheric utility · design-system: DESIGN.md · designed-as-app */
+/* Decorative spectrum is separate from semantic status colours. No animation. */
+@layer base {
+  :root {
+    --cosmic-ice: 191 72% 64%;
+    --cosmic-iris: 249 76% 70%;
+    --cosmic-rose: 325 74% 76%;
+    --cosmic-line: 241 35% 62%;
+    --cosmic-night: 220 46% 7%;
+    --cosmic-surface: 214 46% 24%;
+    --cosmic-water: 199 54% 57%;
+    --cosmic-highlight: 193 54% 92%;
+    --cosmic-warm: 30 60% 52%;
+  }
+
+  .dark {
+    --cosmic-ice: 191 66% 42%;
+    --cosmic-iris: 249 68% 54%;
+    --cosmic-rose: 325 57% 48%;
+    --cosmic-line: 241 44% 73%;
+  }
+}
+
+.dashboard-shell {
+  background-image:
+    radial-gradient(ellipse 65% 38% at 95% -8%, hsl(var(--cosmic-iris) / 0.15), transparent 75%),
+    radial-gradient(ellipse 38% 28% at 66% -7%, hsl(var(--cosmic-ice) / 0.12), transparent 75%);
+}
+
+.liquid-sidebar {
+  background-image:
+    radial-gradient(ellipse 120% 42% at 0% 0%, hsl(var(--cosmic-iris) / 0.13), transparent 72%),
+    radial-gradient(ellipse 100% 35% at 100% 30%, hsl(var(--cosmic-ice) / 0.09), transparent 75%);
+}
+
+.page-header {
+  border-image: linear-gradient(90deg, hsl(var(--border)), hsl(var(--cosmic-iris) / 0.32), hsl(var(--cosmic-ice) / 0.18)) 1;
+}
+
+.overview-hero {
+  isolation: isolate;
+  min-height: 184px;
+  padding-right: 220px;
+  box-shadow: 0 5px 24px hsl(var(--cosmic-iris) / 0.06);
+  background-image:
+    radial-gradient(ellipse 44% 145% at 100% 110%, hsl(var(--cosmic-iris) / 0.12), transparent 72%),
+    radial-gradient(ellipse 36% 115% at 85% 0%, hsl(var(--cosmic-ice) / 0.13), transparent 72%),
+    radial-gradient(ellipse 30% 80% at 76% 100%, hsl(var(--cosmic-rose) / 0.08), transparent 72%);
+}
+
+.overview-celestial {
+  position: absolute;
+  pointer-events: none;
+  width: 220px;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.celestial-scene {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@container (max-width: 600px) {
+  .overview-hero { padding-right: 155px; }
+  .overview-celestial { width: 160px; right: -8px; }
+}
+
+@container (max-width: 430px) {
+  .overview-hero { padding-right: 24px; }
+  .overview-celestial { display: none; }
+}
+
+.memory-pressure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.memory-pressure-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.quick-liquid-chrome {
+  background-image:
+    radial-gradient(ellipse at 100% 0%, hsl(var(--cosmic-iris) / 0.18), transparent 65%),
+    radial-gradient(ellipse at 55% 0%, hsl(var(--cosmic-ice) / 0.13), transparent 65%);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .dashboard-shell,
+  .liquid-sidebar,
+  .overview-hero,
+  .quick-liquid-chrome {
+    background-image: none;
+  }
+
+  .overview-celestial {
+    display: none;
+  }
+}
